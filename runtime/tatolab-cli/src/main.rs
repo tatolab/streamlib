@@ -118,9 +118,12 @@ enum TatolabVerb {
         long_about = "The runtime compiles the stream in the project's own .venv, loads it, and \
                       records it: it runs across the runtime's restarts until `tatolab stop` or \
                       `tatolab rm`. Running the same project and function again replaces it under \
-                      the same id. Prints the stream's id and how to follow it with \
-                      `tatolab logs -f`; exits 0 once the load is accepted, and 1 naming why it \
-                      was refused."
+                      the same id. A stream whose code fails is not refused: it is recorded \
+                      failed and printed as `<id> failed: <reason>` with its traceback, until a \
+                      run of the fixed code replaces it or `tatolab start` retries it. Prints \
+                      the stream's id and how to follow it with `tatolab logs -f`; exits 0 when \
+                      every stream it loaded runs, and 1 when one is failed or the load is \
+                      refused, naming why."
     )]
     Run {
         #[command(flatten)]
@@ -129,9 +132,10 @@ enum TatolabVerb {
     /// Load this project's stream, follow its records, and load it again on every saved edit.
     #[command(
         long_about = "`run`, then the stream's records followed, plus a watch on the project's \
-                      .py files: each settled save runs the stream again, which replaces it once \
-                      the save compiles. A save the runtime refuses leaves the running stream \
-                      as it was. Ctrl-C ends dev and leaves the stream loaded. When the runtime \
+                      .py files: each settled save runs the stream again, which replaces it. A \
+                      save whose code fails records the stream failed, and dev prints its \
+                      traceback and waits for the next save. Ctrl-C ends dev and leaves the \
+                      stream loaded. When the runtime \
                       goes away, dev says so, waits for it to re-load the stream from its record, \
                       and follows it again."
     )]

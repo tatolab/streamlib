@@ -4,7 +4,8 @@
 //! `tatolab dev`: the stream loaded into the machine's runtime over a `/mcp/stdio` connection of
 //! this process's own, its records followed by sequence number — from the first again whenever a
 //! page names another load of it — and run again on every settled save, which the runtime answers
-//! by replacing the running stream once the save compiles and keeping it when the save does not.
+//! by replacing the running stream, or by recording it failed with the traceback `dev` prints
+//! when the save's code fails.
 //! Ctrl-C ends the following and leaves the stream loaded. When the runtime goes away, `dev` waits
 //! for it, waits for the restarted runtime to re-load the stream from its record, and follows it
 //! again; it never loads the stream again for a crash.
@@ -14,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListStreamsToolResult, ListedStreamState, RunStreamToolResult,
+    ListStreamsToolResult, ListedStreamState, RunStreamToolResult, RunStreamToolResultStream,
+    RunStreamToolResultStreamState,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -34,7 +36,7 @@ use crate::runtime_gone_while_following_a_stream::{
 use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
     StreamActionTool, StreamLoadArguments, StreamLoadRequest, rendered_compile_warning_lines,
-    the_running_stream_described, tool_result_from,
+    the_stream_a_run_took_in_described, tool_result_from,
 };
 use crate::stream_log_records_from_the_runtime::{
     DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, LoadedStreamInstanceBeingFollowed,
@@ -341,17 +343,34 @@ impl DevSession {
             }
         };
         write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
-        self.note(&the_running_stream_described(&run_stream_result));
-        let loaded = FollowedStreamPosition {
-            stream_instance: LoadedStreamInstanceBeingFollowed::the_load(
-                run_stream_result.stream_instance,
-            ),
-            ..FollowedStreamPosition::from_the_first_record_of(run_stream_result.stream)
+        let Some(stream) = run_stream_result.streams.into_iter().next() else {
+            self.note(NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES);
+            return DevSessionStep::WaitForTheNextSave;
         };
-        if self.project_sources_changed_during_a_call {
-            return self.run_again_after_a_save(loaded);
+        self.note(&the_stream_a_run_took_in_described(&stream));
+        match stream {
+            RunStreamToolResultStream {
+                stream,
+                state: RunStreamToolResultStreamState::Running,
+                stream_instance: Some(stream_instance),
+                ..
+            } => {
+                let loaded = FollowedStreamPosition {
+                    stream_instance: LoadedStreamInstanceBeingFollowed::the_load(stream_instance),
+                    ..FollowedStreamPosition::from_the_first_record_of(stream)
+                };
+                if self.project_sources_changed_during_a_call {
+                    return self.run_again_after_a_save(loaded);
+                }
+                DevSessionStep::Follow(loaded)
+            }
+            RunStreamToolResultStream { stream, .. } => {
+                self.note(&format!(
+                    "{stream} is failed — fix it and save again to load it"
+                ));
+                DevSessionStep::WaitForTheNextSave
+            }
         }
-        DevSessionStep::Follow(loaded)
     }
 
     /// Where the session goes after `failure` reached it: when the runtime is gone, a note naming

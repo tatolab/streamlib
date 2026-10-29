@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The stream actions a runtime takes for its owner: run a project's stream
-//! function under the stream id its location computes to, recording it; stop,
+//! function under the stream id its location computes to, recording it — failed
+//! when the project's code gives no graph or its load is refused; stop,
 //! start, remove and rename a stream; list what the runtime holds; set a port's
 //! exposure; and re-load the recorded streams at start.
 
@@ -28,7 +29,8 @@ use super::{
 use crate::core::compiler::compiler_ops::{
     processor_interpreter_describe::PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
     stream_function_compile_in_the_projects_interpreter::{
-        STREAM_FUNCTION_COMPILE_BOUND, compile_the_stream_function_in_the_projects_interpreter,
+        STREAM_FUNCTION_COMPILE_BOUND, StreamFunctionCompileInTheProjectsInterpreterReport,
+        WhatTheProjectsCodeGaveTheCompile, compile_the_stream_function_in_the_projects_interpreter,
     },
 };
 use crate::core::graph::{
@@ -74,24 +76,50 @@ pub struct RunStreamRequest {
     pub display_name: Option<String>,
 }
 
-/// A stream [`Runner::run_stream`] loaded and started.
+/// What [`Runner::run_stream`] did with a project: each stream it loaded and
+/// started, or recorded failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamRunOutcome {
+    /// The project the run was given.
+    pub project_directory: PathBuf,
+    /// Each stream the run loaded or recorded failed.
+    pub streams: Vec<StreamLoadedOrFailedByARun>,
+    /// What the compile wrote to its standard error, line by line — the
+    /// cross-floor check's warnings among it.
+    pub compile_warnings: Vec<String>,
+}
+
+/// One stream [`Runner::run_stream`] loaded and started, or recorded failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamLoadedOrFailedByARun {
     /// The stream's id, computed from its location.
     pub stream_id: String,
     /// The label the stream is shown under.
     pub display_name: String,
     /// Where the stream's code lives.
     pub stream_location: StreamLocation,
-    /// The tag of this load of it, which its `logs` pages name.
-    pub stream_tag: LoadedStreamTag,
-    /// How many nodes the loaded graph holds.
-    pub node_count: usize,
-    /// Whether the load replaced the recorded stream of the same location.
+    /// Whether it runs, or why it is failed.
+    pub state: StreamStateAfterItsRun,
+    /// Whether the run replaced the recorded stream of the same location.
     pub replaced_a_recorded_stream: bool,
-    /// What the compile wrote to its standard error, line by line — the
-    /// cross-floor check's warnings among it.
-    pub compile_warnings: Vec<String>,
+}
+
+/// Whether a stream [`Runner::run_stream`] took in runs, or why it is failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamStateAfterItsRun {
+    /// Loaded and started.
+    Running {
+        /// The tag of this load of it, which its `logs` pages name.
+        stream_tag: LoadedStreamTag,
+        /// How many nodes the loaded graph holds.
+        node_count: usize,
+    },
+    /// Recorded failed and not loaded: its code gave no graph, or its load or
+    /// start was refused.
+    Failed {
+        /// Why — a traceback, or the refusal.
+        failed_because: String,
+    },
 }
 
 /// A stream [`Runner::stop_stream`] unloaded.
@@ -259,12 +287,13 @@ struct OneStreamAStreamActionLoads<'load> {
 }
 
 impl<'load> OneStreamAStreamActionLoads<'load> {
-    /// The stream `record` records, its rulings applied.
-    fn recorded_by(record: &'load StreamRecord) -> Self {
+    /// The stream `record` records with the graph `graph_json` it holds, its
+    /// rulings applied.
+    fn recorded_by(record: &'load StreamRecord, graph_json: &'load serde_json::Value) -> Self {
         Self {
             display_name: &record.display_name,
             stream_location: &record.location,
-            graph_json: &record.graph,
+            graph_json,
             rulings: &record.exposure_rulings,
             stream_environment: record.stream_environment(),
         }
@@ -272,13 +301,12 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
 }
 
 /// The longest one stream action holds the one-action lock, in milliseconds: a
-/// replace whose load and restore are both refused — the running
-/// stream's teardown, then for each load a describe and a refused start's
-/// teardown.
+/// replace whose start is refused — the running stream's teardown, then the
+/// load's describe and the refused start's teardown.
 const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS: u128 =
     ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
-        + 2 * (PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
-            + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis());
+        + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+        + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis();
 
 /// The longest a load waits for its answer with one stream action queued ahead
 /// of it, in milliseconds: its compile runs outside the lock while the action
@@ -338,16 +366,26 @@ impl Runner {
     }
 
     /// Compile the request's stream function in its project's interpreter,
-    /// load the graph under the stream id its location — the resolved project
-    /// directory and the function's `module:qualname` — computes to, record
-    /// it, then start it; a refused load or start leaves nothing recorded.
+    /// then record and load the stream under the id its location — the
+    /// resolved project directory and the function's `module:qualname` —
+    /// computes to, and start it.
     ///
-    /// An id held by another location is refused naming both. A load of a
-    /// location already recorded replaces it under the same id, keeping its
-    /// display name unless the request gives one, and the owner's rulings. The
-    /// running stream is unloaded only once the compile succeeded, so a compile
-    /// that fails leaves it running; a refused load re-loads the previous one.
-    /// Refused before the compile on a runtime given no state directory.
+    /// A load is never refused for what the project's code does. A function
+    /// that raised while it compiled is recorded failed with its traceback and
+    /// no graph; a load or start that is refused leaves the stream recorded
+    /// failed with the reason; a named function the entry no longer defines
+    /// fails its record. An entry that does not import fails every record of
+    /// the project, or with none records the project itself failed, under
+    /// [`StreamLocation::of_a_project_whose_entry_did_not_import`], until a load
+    /// that imports forgets it.
+    ///
+    /// A load of a location already recorded replaces it under the same id,
+    /// keeping its display name unless the request gives one, and the owner's
+    /// rulings: the running stream is unloaded once the new record is written,
+    /// and never put back. Refused, with nothing changed, for what the caller
+    /// gets wrong — a project the compile refuses, a named function no record
+    /// holds, an id held by another location — and before the compile on a
+    /// runtime given no state directory.
     pub fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
         let RunStreamRequest {
             project_directory,
@@ -376,97 +414,75 @@ impl Runner {
                     project_directory.display()
                 ))
             })?;
-        let compiled = compile_the_stream_function_in_the_projects_interpreter(
+        let StreamFunctionCompileInTheProjectsInterpreterReport {
+            what_the_projects_code_gave,
+            stream_environment,
+            compile_warnings,
+        } = compile_the_stream_function_in_the_projects_interpreter(
             &project_directory,
             stream_function.as_deref(),
             lend_directory,
         )?;
-        let stream_location = compiled.stream_location;
-        let stream_id = stream_location.stream_id();
-        let stream_environment = compiled.stream_environment;
-        let graph_json = compiled.graph_json;
-        let compile_warnings = compiled.compile_warnings;
 
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
-        let loaded = self.loaded_stream_of_the_id_when_loaded(&stream_id);
-        let record = self.stream_record_of_the_id(&stream_id)?;
-        refuse_an_id_another_location_holds(
-            &stream_id,
-            &stream_location,
-            loaded.as_deref(),
-            record.as_ref(),
-        )?;
-        let record = match record {
-            Some(StreamRecordAsRead::Current(record)) => Some(record),
-            Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(_)) | None => None,
-        };
-        match (record, loaded) {
-            (_, Some(loaded))
-                if loaded.holding() == LoadedStreamHolding::LivesWithTheHostProcess =>
-            {
-                Err(a_stream_id_already_loaded_refusal(
-                    &loaded,
-                    STOP_IT_FIRST_TO_LOAD_THIS_ONE,
-                ))
-            }
-            (Some(previous_record), loaded) => {
-                let display_name = display_name_the_run_gives
-                    .unwrap_or_else(|| previous_record.display_name.clone());
-                self.replace_a_recorded_stream(
-                    stream_records,
-                    previous_record,
-                    loaded,
-                    StreamRecord::of_a_running_stream(
-                        stream_location,
-                        display_name,
-                        &stream_environment,
-                        graph_json,
-                    ),
-                    compile_warnings,
-                )
-            }
-            (None, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
-                &loaded,
-                STOP_IT_FIRST_TO_LOAD_THIS_ONE,
-            )),
-            (None, None) => {
-                let display_name_of_a_new_stream =
-                    display_name_the_run_gives.unwrap_or_else(|| {
-                        graph_json
-                            .get("stream")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or(&stream_id)
-                            .to_string()
-                    });
-                let stream_record = StreamRecord::of_a_running_stream(
+        let streams = match what_the_projects_code_gave {
+            WhatTheProjectsCodeGaveTheCompile::Compiled {
+                stream_location,
+                graph_json,
+            } => vec![self.record_and_load_one_stream_a_run_compiled(
+                stream_records,
+                StreamARunCompiled {
                     stream_location,
-                    display_name_of_a_new_stream,
-                    &stream_environment,
-                    graph_json,
-                );
-                let stream = self.load_a_stream_with_the_owners_rulings(
-                    OneStreamAStreamActionLoads::recorded_by(&stream_record),
-                )?;
-                if let Err(write_refusal) = stream_records.write(&stream_record) {
-                    unload_a_stream_an_action_took_back(&stream, "its record was not written");
-                    return Err(write_refusal);
-                }
-                if let Err(start_refusal) = stream.start() {
-                    unload_a_stream_an_action_took_back(&stream, "its start was refused");
-                    forget_the_record_a_refused_run_wrote(stream_records, &stream_record.stream_id);
-                    return Err(start_refusal);
-                }
-                Ok(StreamRunOutcome {
-                    node_count: stream.node_count(),
-                    stream_tag: stream.stream_tag(),
-                    stream_id: stream_record.stream_id,
-                    display_name: stream_record.display_name,
-                    stream_location: stream_record.location,
-                    replaced_a_recorded_stream: false,
+                    display_name_the_run_gives,
+                    stream_environment: &stream_environment,
+                    graph_or_why_none: Ok(graph_json),
+                },
+            )?],
+            WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
+                stream_location,
+                failed_because,
+            } => vec![self.record_and_load_one_stream_a_run_compiled(
+                stream_records,
+                StreamARunCompiled {
+                    stream_location,
+                    display_name_the_run_gives,
+                    stream_environment: &stream_environment,
+                    graph_or_why_none: Err(failed_because),
+                },
+            )?],
+            WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
+                stream_location,
+                not_defined_because,
+            } => vec![self.fail_the_record_of_a_stream_function_no_longer_defined(
+                stream_records,
+                stream_location,
+                display_name_the_run_gives,
+                not_defined_because,
+            )?],
+            WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
+                import_failed_because,
+            } => {
+                return Ok(StreamRunOutcome {
+                    streams: self.fail_every_record_of_a_project_whose_entry_did_not_import(
+                        stream_records,
+                        &stream_environment,
+                        display_name_the_run_gives,
+                        import_failed_because,
+                    )?,
+                    project_directory,
                     compile_warnings,
-                })
+                });
             }
-        }
+        };
+        self.forget_the_record_of_a_project_whose_entry_imports_again(
+            stream_records,
+            &stream_environment.project_directory,
+        );
+        Ok(StreamRunOutcome {
+            project_directory,
+            streams,
+            compile_warnings,
+        })
     }
 
     /// Unload the stream whose id is `stream_id`; a recorded one is recorded
@@ -546,13 +562,16 @@ impl Runner {
 
     /// Load and start the recorded stream whose id is `stream_id` from its
     /// record, the owner's rulings applied, and record it neither stopped nor
-    /// failed, its crash count reset. Refused for a stream already loaded, an
-    /// id no record holds, and a record an earlier runtime wrote. A failed
-    /// stream whose retry is refused stays failed for the retry's reason, its
-    /// crash count reset — or as it was, when the refusal was the engine's
-    /// own; one whose retry crashes the runtime stays failed as it was.
+    /// failed, its crash count reset. A record holding no graph — its compile
+    /// failed — is compiled from its location as [`Self::run_stream`] compiles
+    /// it, and the project's record of an entry that did not import is a run of
+    /// the project. Refused for a stream already loaded, an id no record holds,
+    /// and a record an earlier runtime wrote. A failed stream whose retry is
+    /// refused stays failed for the retry's reason, its crash count reset — or
+    /// as it was, when the refusal was the engine's own; one whose retry
+    /// crashes the runtime stays failed as it was.
     pub fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
-        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
+        let one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
             return Err(Error::Runtime(format!(
                 "the stream `{stream_id}` is already loaded in this runtime, {}; only a stopped \
@@ -574,7 +593,22 @@ impl Runner {
                 self.recorded_stream_ids_listed_for_a_refusal()
             )));
         };
-        let stream = match self.load_a_recorded_stream_from_its_record(&record) {
+        let Some(graph_json) = record.graph.clone() else {
+            drop(one_stream_action_at_a_time);
+            let compiled_again =
+                self.compile_and_run_a_recorded_stream_from_its_location(&record)?;
+            return match compiled_again.state {
+                StreamStateAfterItsRun::Running { node_count, .. } => Ok(StreamStartOutcome {
+                    stream_id: compiled_again.stream_id,
+                    node_count,
+                }),
+                StreamStateAfterItsRun::Failed { failed_because } => Err(Error::Runtime(format!(
+                    "the stream `{}` was compiled from {}, and is failed: {failed_because}",
+                    compiled_again.stream_id, record.location
+                ))),
+            };
+        };
+        let stream = match self.load_a_recorded_stream_from_its_record(&record, &graph_json) {
             Ok(stream) => stream,
             Err(retry_refusal)
                 if record.is_failed()
@@ -834,7 +868,8 @@ impl Runner {
     /// so each record is read again under the one-action lock and loaded from
     /// that read: a stream stopped or removed since the listing stays
     /// unloaded, one loaded since is left as it is, and the owner's rulings
-    /// recorded since hold from its load.
+    /// recorded since hold from its load. A record holding no graph is
+    /// compiled from its location as `start_stream` compiles it.
     fn reload_each_recorded_stream_listed(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
@@ -850,7 +885,7 @@ impl Runner {
                     continue;
                 }
             };
-            let _one_stream_action_at_a_time =
+            let one_stream_action_at_a_time =
                 self.stream_actions.one_stream_action_at_a_time.lock();
             let record = match stream_records.read(&stream_id) {
                 Ok(Some(StreamRecordAsRead::Current(record))) => record,
@@ -904,7 +939,13 @@ impl Runner {
                 );
                 continue;
             }
-            match self.load_a_recorded_stream_from_its_record(&record) {
+            let Some(graph_json) = record.graph.clone() else {
+                drop(one_stream_action_at_a_time);
+                reloads
+                    .push(self.reload_a_recorded_stream_holding_no_graph_by_compiling_it(&record));
+                continue;
+            };
+            match self.load_a_recorded_stream_from_its_record(&record, &graph_json) {
                 Ok(stream) => {
                     tracing::info!(
                         "the stream `{stream_id}` re-loaded from {} with {} nodes",
@@ -1118,65 +1159,338 @@ impl Runner {
         names_listed_for_a_refusal(recorded_ids, "none")
     }
 
-    /// Replace `previous_record` by `replacement`, whose compile already
-    /// succeeded writing `compile_warnings`: record it with the previous
-    /// rulings, then unload the running stream and load and start the new
-    /// graph. A record that cannot be written leaves the running stream as it
-    /// was; a refused load records the previous record again and re-loads it
-    /// when its stream was running.
-    fn replace_a_recorded_stream(
+    /// Record the stream a run compiled — failed with no graph when its
+    /// function raised — keeping the owner's rulings of the record it
+    /// replaces, then unload the running stream and load and start the new
+    /// graph. A load or start that is refused records the stream failed with
+    /// the reason, unless a machine shutdown abandoned it, when the record is
+    /// left for the next start to load. A record that cannot be written leaves
+    /// the running stream as it was.
+    fn record_and_load_one_stream_a_run_compiled(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
-        previous_record: StreamRecord,
-        previously_loaded: Option<Arc<LoadedStreamInThisRuntime>>,
-        mut replacement: StreamRecord,
-        compile_warnings: Vec<String>,
-    ) -> Result<StreamRunOutcome> {
-        replacement.exposure_rulings = previous_record.exposure_rulings.clone();
-        stream_records.write(&replacement)?;
-        let was_running = previously_loaded.is_some();
+        compiled: StreamARunCompiled<'_>,
+    ) -> Result<StreamLoadedOrFailedByARun> {
+        let StreamARunCompiled {
+            stream_location,
+            display_name_the_run_gives,
+            stream_environment,
+            graph_or_why_none,
+        } = compiled;
+        let stream_id = stream_location.stream_id();
+        let (previous_record, previously_loaded) =
+            self.the_recorded_stream_a_run_of_its_location_replaces(&stream_id, &stream_location)?;
+        let display_name = display_name_the_run_gives
+            .or_else(|| {
+                previous_record
+                    .as_ref()
+                    .map(|previous| previous.display_name.clone())
+            })
+            .unwrap_or_else(|| match &graph_or_why_none {
+                Ok(graph_json) => graph_json
+                    .get("stream")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&stream_id)
+                    .to_string(),
+                Err(_) => stream_location.stream_function_name(),
+            });
+        let mut stream_record = match graph_or_why_none {
+            Ok(graph_json) => StreamRecord::of_a_running_stream(
+                stream_location,
+                display_name,
+                stream_environment,
+                graph_json,
+            ),
+            Err(failed_because) => StreamRecord::of_a_stream_whose_compile_failed(
+                stream_location,
+                display_name,
+                stream_environment,
+                failed_because,
+            ),
+        };
+        let replaced_a_recorded_stream = previous_record.is_some();
+        if let Some(previous_record) = previous_record {
+            stream_record.exposure_rulings = previous_record.exposure_rulings;
+        }
+        stream_records.write(&stream_record)?;
         if let Some(previously_loaded) = previously_loaded {
             unload_a_stream_an_action_took_back(&previously_loaded, "its record is replaced");
         }
-        let replaced =
-            self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(&replacement));
-        if replaced.is_err()
-            && let Err(not_written) = stream_records.write(&previous_record)
-        {
-            tracing::error!(
-                "the stream `{}` was not replaced, and its previous record was not written back, \
-                 so the runtime's next start loads the refused graph: {not_written}",
-                previous_record.stream_id
-            );
-        }
-        match replaced {
-            Ok(stream) => Ok(StreamRunOutcome {
-                node_count: stream.node_count(),
-                stream_tag: stream.stream_tag(),
-                stream_id: replacement.stream_id,
-                display_name: replacement.display_name,
-                stream_location: replacement.location,
-                replaced_a_recorded_stream: true,
-                compile_warnings,
-            }),
-            Err(replace_refusal) if was_running => {
-                match self.load_a_recorded_stream_from_its_record(&previous_record) {
-                    Ok(_) => Err(replace_refusal),
-                    Err(restore_refusal) => Err(Error::Runtime(format!(
-                        "{replace_refusal}; and the stream it was to replace did not re-load \
-                         from its record: {restore_refusal}"
-                    ))),
+        let state = match &stream_record.graph {
+            Some(graph_json) => match self.load_and_start_a_stream(
+                OneStreamAStreamActionLoads::recorded_by(&stream_record, graph_json),
+            ) {
+                Ok(stream) => StreamStateAfterItsRun::Running {
+                    stream_tag: stream.stream_tag(),
+                    node_count: stream.node_count(),
+                },
+                Err(load_refusal) if is_the_machines_shutdown_requested() => {
+                    return Err(load_refusal);
                 }
+                Err(load_refusal) => {
+                    let failed_because = load_refusal.to_string();
+                    stream_record.failed_because = Some(failed_because.clone());
+                    if let Err(not_written) = stream_records.write(&stream_record) {
+                        tracing::error!(
+                            "the stream `{stream_id}` did not load, and was not recorded \
+                             failed, so the runtime's next start loads it again: \
+                             {not_written}"
+                        );
+                    }
+                    StreamStateAfterItsRun::Failed { failed_because }
+                }
+            },
+            None => StreamStateAfterItsRun::Failed {
+                failed_because: stream_record.failed_because.clone().unwrap_or_default(),
+            },
+        };
+        Ok(StreamLoadedOrFailedByARun {
+            stream_id: stream_record.stream_id,
+            display_name: stream_record.display_name,
+            stream_location: stream_record.location,
+            state,
+            replaced_a_recorded_stream,
+        })
+    }
+
+    /// The record of `stream_location` a run of it replaces, and its stream
+    /// when it is loaded. Refused naming both for an id another location
+    /// holds, and for a stream loaded under the id that no record holds.
+    fn the_recorded_stream_a_run_of_its_location_replaces(
+        &self,
+        stream_id: &str,
+        stream_location: &StreamLocation,
+    ) -> Result<(Option<StreamRecord>, Option<Arc<LoadedStreamInThisRuntime>>)> {
+        let loaded = self.loaded_stream_of_the_id_when_loaded(stream_id);
+        let record = self.stream_record_of_the_id(stream_id)?;
+        refuse_an_id_another_location_holds(
+            stream_id,
+            stream_location,
+            loaded.as_deref(),
+            record.as_ref(),
+        )?;
+        let record = match record {
+            Some(StreamRecordAsRead::Current(record)) => Some(record),
+            Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(_)) | None => None,
+        };
+        match (record, loaded) {
+            (_, Some(loaded))
+                if loaded.holding() == LoadedStreamHolding::LivesWithTheHostProcess =>
+            {
+                Err(a_stream_id_already_loaded_refusal(
+                    &loaded,
+                    STOP_IT_FIRST_TO_LOAD_THIS_ONE,
+                ))
             }
-            Err(replace_refusal) => Err(replace_refusal),
+            (None, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
+                &loaded,
+                STOP_IT_FIRST_TO_LOAD_THIS_ONE,
+            )),
+            (record, loaded) => Ok((record, loaded)),
         }
     }
 
-    /// Load and start a recorded stream from `record`, refused naming the
-    /// interpreter when the recorded one is gone.
+    /// Record failed the stream of `stream_location`, whose named function the
+    /// project's entry no longer defines, unloading it; refused with
+    /// `not_defined_because` when no record holds it.
+    fn fail_the_record_of_a_stream_function_no_longer_defined(
+        &self,
+        stream_records: &StreamRecordsInTheStateDirectory,
+        stream_location: StreamLocation,
+        display_name_the_run_gives: Option<String>,
+        not_defined_because: String,
+    ) -> Result<StreamLoadedOrFailedByARun> {
+        let stream_id = stream_location.stream_id();
+        let (Some(mut record), loaded) =
+            self.the_recorded_stream_a_run_of_its_location_replaces(&stream_id, &stream_location)?
+        else {
+            return Err(Error::NotFound(not_defined_because));
+        };
+        if let Some(display_name) = display_name_the_run_gives {
+            record.display_name = display_name;
+        }
+        record.failed_because = Some(not_defined_because.clone());
+        stream_records.write(&record)?;
+        if let Some(loaded) = loaded {
+            unload_a_stream_an_action_took_back(&loaded, "its function is no longer defined");
+        }
+        Ok(StreamLoadedOrFailedByARun {
+            stream_id: record.stream_id,
+            display_name: record.display_name,
+            stream_location: record.location,
+            state: StreamStateAfterItsRun::Failed {
+                failed_because: not_defined_because,
+            },
+            replaced_a_recorded_stream: true,
+        })
+    }
+
+    /// Record failed, with `import_failed_because`, every stream recorded from
+    /// the project whose entry did not import, unloading each one loaded; with
+    /// none, record the project itself failed under
+    /// [`StreamLocation::of_a_project_whose_entry_did_not_import`], shown under
+    /// its folder's name unless the run gives one.
+    fn fail_every_record_of_a_project_whose_entry_did_not_import(
+        &self,
+        stream_records: &StreamRecordsInTheStateDirectory,
+        stream_environment: &StreamEnvironment,
+        display_name_the_run_gives: Option<String>,
+        import_failed_because: String,
+    ) -> Result<Vec<StreamLoadedOrFailedByARun>> {
+        let records_of_the_project: Vec<StreamRecord> = stream_records
+            .read_every()
+            .into_iter()
+            .filter_map(|read| match read {
+                Ok(StreamRecordAsRead::Current(record))
+                    if record.location.project_directory
+                        == stream_environment.project_directory =>
+                {
+                    Some(record)
+                }
+                _ => None,
+            })
+            .collect();
+        if records_of_the_project.is_empty() {
+            let stream_location = StreamLocation::of_a_project_whose_entry_did_not_import(
+                stream_environment.project_directory.clone(),
+            );
+            let stream_id = stream_location.stream_id();
+            self.the_recorded_stream_a_run_of_its_location_replaces(&stream_id, &stream_location)?;
+            let display_name =
+                display_name_the_run_gives.unwrap_or_else(|| stream_location.project_folder_name());
+            let record = StreamRecord::of_a_stream_whose_compile_failed(
+                stream_location,
+                display_name,
+                stream_environment,
+                import_failed_because.clone(),
+            );
+            stream_records.write(&record)?;
+            return Ok(vec![StreamLoadedOrFailedByARun {
+                stream_id: record.stream_id,
+                display_name: record.display_name,
+                stream_location: record.location,
+                state: StreamStateAfterItsRun::Failed {
+                    failed_because: import_failed_because,
+                },
+                replaced_a_recorded_stream: false,
+            }]);
+        }
+        let mut streams_failed = Vec::with_capacity(records_of_the_project.len());
+        for mut record in records_of_the_project {
+            record.failed_because = Some(import_failed_because.clone());
+            stream_records.write(&record)?;
+            if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(&record.stream_id) {
+                unload_a_stream_an_action_took_back(&loaded, "its project's entry did not import");
+            }
+            streams_failed.push(StreamLoadedOrFailedByARun {
+                stream_id: record.stream_id,
+                display_name: record.display_name,
+                stream_location: record.location,
+                state: StreamStateAfterItsRun::Failed {
+                    failed_because: import_failed_because.clone(),
+                },
+                replaced_a_recorded_stream: true,
+            });
+        }
+        Ok(streams_failed)
+    }
+
+    /// Forget the record of the project in `project_directory` written while
+    /// its entry did not import, now that it imports; one that cannot be
+    /// removed is logged and stays listed failed.
+    fn forget_the_record_of_a_project_whose_entry_imports_again(
+        &self,
+        stream_records: &StreamRecordsInTheStateDirectory,
+        project_directory: &Path,
+    ) {
+        let stream_location = StreamLocation::of_a_project_whose_entry_did_not_import(
+            project_directory.to_path_buf(),
+        );
+        let stream_id = stream_location.stream_id();
+        let Ok(Some(StreamRecordAsRead::Current(record))) = stream_records.read(&stream_id) else {
+            return;
+        };
+        if record.location != stream_location {
+            return;
+        }
+        if let Err(not_removed) = stream_records.remove(&stream_id) {
+            tracing::error!(
+                "the project in {} imports again, and the record `{stream_id}` written while it \
+                 did not was not removed, so it stays listed failed: {not_removed}",
+                project_directory.display()
+            );
+        }
+    }
+
+    /// Compile `record`'s stream again from its location, as a run of it, and
+    /// load it — the project's run, for the record of a project whose entry
+    /// did not import.
+    fn compile_and_run_a_recorded_stream_from_its_location(
+        &self,
+        record: &StreamRecord,
+    ) -> Result<StreamLoadedOrFailedByARun> {
+        let project_directory = the_project_directory_whose_venv_holds(&record.interpreter)
+            .ok_or_else(|| {
+                Error::Configuration(format!(
+                    "the stream `{}` was not compiled: its interpreter {} is not a project's \
+                     `.venv/bin/python`",
+                    record.stream_id,
+                    record.interpreter.display()
+                ))
+            })?;
+        let run = self.run_stream(RunStreamRequest {
+            project_directory,
+            stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
+            display_name: None,
+        })?;
+        run.streams.into_iter().next().ok_or_else(|| {
+            Error::Runtime(format!(
+                "the stream `{}` was compiled from {}, and its run took in no stream",
+                record.stream_id, record.location
+            ))
+        })
+    }
+
+    /// The re-load at the runtime's start of `record`, which holds no graph:
+    /// compiled from its location, then loaded.
+    fn reload_a_recorded_stream_holding_no_graph_by_compiling_it(
+        &self,
+        record: &StreamRecord,
+    ) -> StreamReloadAtTheStart {
+        let stream_id = record.stream_id.clone();
+        let refusal = match self.compile_and_run_a_recorded_stream_from_its_location(record) {
+            Ok(StreamLoadedOrFailedByARun {
+                stream_id,
+                state: StreamStateAfterItsRun::Running { node_count, .. },
+                ..
+            }) => {
+                tracing::info!(
+                    "the stream `{stream_id}` was compiled from {} and re-loaded with \
+                     {node_count} nodes",
+                    record.location
+                );
+                return StreamReloadAtTheStart::Reloaded { stream_id };
+            }
+            Ok(StreamLoadedOrFailedByARun {
+                state: StreamStateAfterItsRun::Failed { failed_because },
+                ..
+            }) => Error::Runtime(failed_because),
+            Err(refusal) => refusal,
+        };
+        tracing::error!(
+            "the stream `{stream_id}` was compiled from {} and did not re-load: {refusal}",
+            record.location
+        );
+        StreamReloadAtTheStart::NotReloaded { stream_id, refusal }
+    }
+
+    /// Load and start a recorded stream from `record` and the graph
+    /// `graph_json` it holds, refused naming the interpreter when the recorded
+    /// one is gone.
     fn load_a_recorded_stream_from_its_record(
         &self,
         record: &StreamRecord,
+        graph_json: &serde_json::Value,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         if !record.interpreter.is_file() {
             return Err(Error::Configuration(format!(
@@ -1186,7 +1500,7 @@ impl Runner {
                 record.location.project_directory.display()
             )));
         }
-        self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(record))
+        self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(record, graph_json))
     }
 
     /// [`Self::load_a_stream_with_the_owners_rulings`], then start it; a
@@ -1309,19 +1623,44 @@ fn refuse_an_id_another_location_holds(
     }
 }
 
-/// Forget the record a run wrote before its start was refused, so a refused run
-/// leaves nothing recorded; a record that cannot be removed is logged, and the
-/// runtime's next start tries to load it.
-fn forget_the_record_a_refused_run_wrote(
-    stream_records: &StreamRecordsInTheStateDirectory,
-    stream_id: &str,
-) {
-    if let Err(not_removed) = stream_records.remove(stream_id) {
-        tracing::error!(
-            "the stream `{stream_id}` was refused at its start, and the record its run wrote \
-             was not removed: {not_removed}"
-        );
+/// The stream function a run compiled, its location and display name, and the
+/// graph it compiled to or why its code gave none.
+struct StreamARunCompiled<'run> {
+    stream_location: StreamLocation,
+    display_name_the_run_gives: Option<String>,
+    stream_environment: &'run StreamEnvironment,
+    graph_or_why_none: std::result::Result<serde_json::Value, String>,
+}
+
+/// The project directory whose `.venv/bin/python` is `interpreter`; `None` when
+/// it is not one.
+fn the_project_directory_whose_venv_holds(interpreter: &Path) -> Option<PathBuf> {
+    let venv_bin = interpreter.parent()?;
+    let venv = venv_bin.parent()?;
+    (interpreter.file_name()? == "python"
+        && venv_bin.file_name()? == "bin"
+        && venv.file_name()? == ".venv")
+        .then(|| venv.parent().map(Path::to_path_buf))
+        .flatten()
+}
+
+/// The target that compiles the stream at `location` again: none for a
+/// project whose entry did not import; the module's file and the function when
+/// the module is one file of the location's project directory — the location
+/// an entry file compiles to; the `module:qualname` otherwise.
+fn the_stream_target_that_compiles_a_location_again(location: &StreamLocation) -> Option<String> {
+    if location.is_a_project_whose_entry_did_not_import() {
+        return None;
     }
+    if let Some((module, qualname)) = location.stream_function.split_once(':')
+        && !module.contains('.')
+    {
+        let module_file = location.project_directory.join(format!("{module}.py"));
+        if module_file.is_file() {
+            return Some(format!("{}:{qualname}", module_file.display()));
+        }
+    }
+    Some(location.stream_function.clone())
 }
 
 /// Refuse a display name that is empty or only whitespace: a stream is always
@@ -1405,7 +1744,8 @@ fn refuse_a_node_the_recorded_graph_does_not_hold(record: &StreamRecord, node: &
     let node_cast = cast_exposed_name_to_url_safe(node)?;
     let recorded_node_names: Vec<&str> = record
         .graph
-        .get("nodes")
+        .as_ref()
+        .and_then(|graph_json| graph_json.get("nodes"))
         .and_then(serde_json::Value::as_array)
         .map(|nodes| {
             nodes
@@ -1595,11 +1935,64 @@ mod tests {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("main")
                 .to_string();
-            let compile_document = serde_json::json!({
-                "stream_graph": graph,
-                "project_directory": self.path(),
-                "stream_function": format!("stream:{function_name}"),
-            });
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "stream_graph": graph,
+                    "project_directory": self.path(),
+                    "stream_function": format!("stream:{function_name}"),
+                }),
+                warnings,
+            );
+        }
+
+        /// From now on, the compile answers that the function `function_name`
+        /// of `stream.py` raised, printing `traceback`.
+        fn raise_in_the_function_printing(&self, function_name: &str, traceback: &str) {
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "project_directory": self.path(),
+                    "stream_function": format!("stream:{function_name}"),
+                    "failed_because": traceback,
+                }),
+                &[],
+            );
+        }
+
+        /// From now on, the compile answers that `stream.py` defines no
+        /// `@stream` named `function_name`.
+        fn define_no_function_named(&self, function_name: &str) {
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "project_directory": self.path(),
+                    "stream_function": format!("stream:{function_name}"),
+                    "not_defined_because": format!(
+                        "`stream.py` defines no @stream function named `{function_name}`"
+                    ),
+                }),
+                &[],
+            );
+        }
+
+        /// From now on, the compile answers that `stream.py` did not import,
+        /// printing `traceback`.
+        fn fail_to_import_printing(&self, traceback: &str) {
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "project_directory": self.path(),
+                    "import_failed_because": traceback,
+                }),
+                &[],
+            );
+        }
+
+        /// From now on, the compile writes its arguments to
+        /// [`Self::the_last_compiles_arguments`], each of `warnings` on a line
+        /// of its standard error, then prints `document`.
+        fn print_the_compile_document_warning(
+            &self,
+            document: serde_json::Value,
+            warnings: &[&str],
+        ) {
             let warnings_written: String = warnings
                 .iter()
                 .map(|warning| format!("echo '{warning}' >&2\n"))
@@ -1607,9 +2000,16 @@ mod tests {
             write_an_executable_script_from_a_child_process(
                 &self.interpreter(),
                 &format!(
-                    "#!/bin/sh\n{warnings_written}cat <<'COMPILED'\n{compile_document}\nCOMPILED\n"
+                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > compile-arguments\n{warnings_written}\
+                     cat <<'COMPILED'\n{document}\nCOMPILED\n"
                 ),
             );
+        }
+
+        /// The arguments the last compile was started with, one per line.
+        fn the_last_compiles_arguments(&self) -> String {
+            std::fs::read_to_string(self.path().join("compile-arguments"))
+                .expect("a compile ran in the project")
         }
 
         /// From now on, the compile exits 1 printing `traceback`.
@@ -1618,6 +2018,11 @@ mod tests {
                 &self.interpreter(),
                 &format!("#!/bin/sh\necho \"{traceback}\" >&2\nexit 1\n"),
             );
+        }
+
+        /// Where this project is recorded while its entry does not import.
+        fn location_of_the_project(&self) -> StreamLocation {
+            StreamLocation::of_a_project_whose_entry_did_not_import(self.path().to_path_buf())
         }
 
         fn run_request(&self) -> RunStreamRequest {
@@ -1687,7 +2092,10 @@ mod tests {
         record: &StreamRecord,
     ) -> Arc<LoadedStreamInThisRuntime> {
         runner
-            .load_a_stream_with_the_owners_rulings(OneStreamAStreamActionLoads::recorded_by(record))
+            .load_a_stream_with_the_owners_rulings(OneStreamAStreamActionLoads::recorded_by(
+                record,
+                record.graph.as_ref().expect("the record holds a graph"),
+            ))
             .expect("the recorded stream loads")
     }
 
@@ -1720,6 +2128,39 @@ mod tests {
         match outcome {
             Ok(unexpected) => panic!("the action was refused, and it returned {unexpected:?}"),
             Err(refusal) => refusal.to_string(),
+        }
+    }
+
+    /// The one stream `run` took in, which runs, with its load's tag and its
+    /// node count.
+    fn the_one_running_stream_of(
+        run: &StreamRunOutcome,
+    ) -> (&StreamLoadedOrFailedByARun, LoadedStreamTag, usize) {
+        match run.streams.as_slice() {
+            [
+                stream @ StreamLoadedOrFailedByARun {
+                    state:
+                        StreamStateAfterItsRun::Running {
+                            stream_tag,
+                            node_count,
+                        },
+                    ..
+                },
+            ] => (stream, *stream_tag, *node_count),
+            streams => panic!("the run took in one running stream, and took in {streams:?}"),
+        }
+    }
+
+    /// The one stream `run` took in, which is failed, and why.
+    fn the_one_failed_stream_of(run: &StreamRunOutcome) -> (&StreamLoadedOrFailedByARun, &str) {
+        match run.streams.as_slice() {
+            [
+                stream @ StreamLoadedOrFailedByARun {
+                    state: StreamStateAfterItsRun::Failed { failed_because },
+                    ..
+                },
+            ] => (stream, failed_because),
+            streams => panic!("the run took in one failed stream, and took in {streams:?}"),
         }
     }
 
@@ -1903,7 +2344,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_run_whose_compile_fails_leaves_the_running_stream_loaded_and_its_record_untouched() {
+    fn a_run_whose_compile_is_refused_leaves_the_running_stream_loaded_and_its_record_untouched() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
@@ -1947,38 +2388,449 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_replace_whose_load_is_refused_and_whose_previous_stream_cannot_re_load_reports_both() {
+    fn a_replace_whose_load_is_refused_unloads_the_running_stream_and_records_it_failed_never_restoring_it()
+     {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(
             the_graph_of_a_function_exposing_a_port_its_node_lacks("camera"),
         );
         let camera = project.stream_id_of("camera");
-        let gone_interpreter = project.path().join("relocated-venv").join("python");
-        let previous_record = StreamRecord {
-            interpreter: gone_interpreter.clone(),
-            ..a_record_of(&project, "camera", serde_json::json!([]))
-        };
+        let mut previous_record = a_record_of(&project, "camera", serde_json::json!([]));
+        previous_record.display_name = "Front camera".to_string();
+        previous_record.record_the_owners_exposure_ruling(OwnerExposureRuling {
+            node: "source".to_string(),
+            port: "out1".to_string(),
+            level: OutputPortExposureLevel::Internal,
+        });
         let previous = a_recorded_stream_loaded_without_its_start(
             &runner,
             state_directory.path(),
             &previous_record,
         );
 
-        let refusal = refusal_of(runner.run_stream(project.run_request()));
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("a refused load is a failed stream, not a refused run");
 
-        assert!(refusal.contains("absent-port"), "{refusal}");
-        assert!(refusal.contains("did not re-load"), "{refusal}");
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(failed_because.contains("absent-port"), "{failed_because}");
+        assert_eq!(stream.stream_id, camera);
+        assert_eq!(stream.display_name, "Front camera");
+        assert!(stream.replaced_a_recorded_stream);
         assert!(
-            refusal.contains(&gone_interpreter.display().to_string()),
-            "{refusal}"
+            previous.has_ended(),
+            "the replace unloaded the running stream"
         );
-        assert!(previous.has_ended(), "the replace unloaded it first");
+        assert!(
+            runner.ids_of_the_loaded_streams().is_empty(),
+            "the previous version is not put back"
+        );
+        let recorded = the_record_of(state_directory.path(), &camera);
+        assert_eq!(
+            recorded.graph,
+            Some(the_graph_of_a_function_exposing_a_port_its_node_lacks(
+                "camera"
+            )),
+            "the record holds what the code compiles to now"
+        );
+        assert_eq!(recorded.failed_because.as_deref(), Some(failed_because));
+        assert_eq!(recorded.exposure_rulings, previous_record.exposure_rulings);
+    }
+
+    #[test]
+    #[serial]
+    fn a_function_that_raises_while_it_compiles_is_recorded_failed_with_no_graph_and_its_traceback()
+    {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv().given_a_venv_compiling_warning(
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+            &[],
+        );
+        let camera = project.stream_id_of("camera");
+        project.raise_in_the_function_printing(
+            "camera",
+            "Traceback (most recent call last):\nValueError: bad wiring",
+        );
+
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("a raising function is a failed stream, not a refused run");
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert_eq!(
+            failed_because,
+            "Traceback (most recent call last):\nValueError: bad wiring"
+        );
+        assert_eq!(stream.stream_id, camera);
+        assert_eq!(
+            stream.display_name, "camera",
+            "shown under its function's name"
+        );
+        assert_eq!(stream.stream_location, project.location_of("camera"));
+        assert!(!stream.replaced_a_recorded_stream);
+        assert_eq!(run.project_directory, project.path());
         assert!(runner.ids_of_the_loaded_streams().is_empty());
         assert_eq!(
             the_current_record_in(state_directory.path(), &camera),
-            Some(previous_record),
-            "a refused replace leaves the record as it was"
+            Some(StreamRecord::of_a_stream_whose_compile_failed(
+                project.location_of("camera"),
+                "camera",
+                &project.stream_environment(),
+                "Traceback (most recent call last):\nValueError: bad wiring",
+            ))
+        );
+        let listed = runner.list_streams();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].state, StreamListingState::Failed);
+        assert_eq!(listed[0].failed_because.as_deref(), Some(failed_because));
+    }
+
+    #[test]
+    #[serial]
+    fn a_running_stream_whose_function_now_raises_is_unloaded_and_recorded_failed_keeping_its_rulings()
+     {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        let mut previous_record = a_record_of(&project, "camera", serde_json::json!([]));
+        previous_record.record_the_owners_exposure_ruling(OwnerExposureRuling {
+            node: "source".to_string(),
+            port: "out1".to_string(),
+            level: OutputPortExposureLevel::Private,
+        });
+        let running = a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &previous_record,
+        );
+        project.raise_in_the_function_printing("camera", "NameError: name 'cmaera' is not defined");
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(failed_because.contains("cmaera"), "{failed_because}");
+        assert!(stream.replaced_a_recorded_stream);
+        assert!(running.has_ended(), "the old version is not running");
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        let recorded = the_record_of(state_directory.path(), &camera);
+        assert_eq!(recorded.graph, None);
+        assert_eq!(recorded.exposure_rulings, previous_record.exposure_rulings);
+    }
+
+    #[test]
+    #[serial]
+    fn an_entry_that_does_not_import_records_the_project_failed_until_a_load_that_imports_forgets_it()
+     {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let project_stream_id = project.location_of_the_project().stream_id();
+        let folder_name = project
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let folder_cast = cast_exposed_name_to_url_safe(&folder_name).unwrap();
+        assert_eq!(
+            project_stream_id
+                .rsplit_once('-')
+                .map(|(folder, hash)| (folder, hash.len())),
+            Some((folder_cast.as_ref(), 6)),
+            "the project's id is `<folder>-<hash>`"
+        );
+        project.fail_to_import_printing("  File \"stream.py\", line 5\nSyntaxError: expected ':'");
+
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("a project whose entry does not import is taken in failed");
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(failed_because.contains("SyntaxError"), "{failed_because}");
+        assert_eq!(stream.stream_id, project_stream_id);
+        assert_eq!(stream.display_name, folder_name);
+        assert_eq!(stream.stream_location, project.location_of_the_project());
+        let recorded = the_record_of(state_directory.path(), &project_stream_id);
+        assert_eq!(recorded.graph, None);
+        assert_eq!(recorded.failed_because.as_deref(), Some(failed_because));
+        assert_eq!(
+            runner.list_streams()[0].state,
+            StreamListingState::Failed,
+            "the brand-new broken project is listed"
+        );
+
+        project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+        let imported_again = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, _) = the_one_failed_stream_of(&imported_again);
+        assert_eq!(stream.stream_id, project.stream_id_of("camera"));
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &project_stream_id),
+            None,
+            "a load whose entry imports forgets the project's record"
+        );
+        assert_eq!(records_in(state_directory.path()).read_every().len(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn an_entry_that_does_not_import_fails_every_record_of_the_project_and_unloads_each_one_loaded()
+    {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let other_project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera", serde_json::json!([])),
+        );
+        let mut stopped_preview = a_record_of(&project, "preview", serde_json::json!([]));
+        stopped_preview.stopped = true;
+        records_in(state_directory.path())
+            .write(&stopped_preview)
+            .unwrap();
+        let other = a_record_of(&other_project, "camera", serde_json::json!([]));
+        records_in(state_directory.path()).write(&other).unwrap();
+        project.fail_to_import_printing("ValueError: bad import");
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let mut failed_ids: Vec<&str> = run
+            .streams
+            .iter()
+            .map(|stream| {
+                assert_eq!(
+                    stream.state,
+                    StreamStateAfterItsRun::Failed {
+                        failed_because: "ValueError: bad import".to_string()
+                    }
+                );
+                stream.stream_id.as_str()
+            })
+            .collect();
+        failed_ids.sort();
+        let mut expected_ids = vec![
+            project.stream_id_of("camera"),
+            project.stream_id_of("preview"),
+        ];
+        expected_ids.sort();
+        assert_eq!(failed_ids, expected_ids);
+        assert!(camera.has_ended());
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        for stream_id in &expected_ids {
+            assert_eq!(
+                the_record_of(state_directory.path(), stream_id)
+                    .failed_because
+                    .as_deref(),
+                Some("ValueError: bad import")
+            );
+        }
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &other.stream_id),
+            Some(other),
+            "another project's record is untouched"
+        );
+        assert_eq!(
+            the_current_record_in(
+                state_directory.path(),
+                &project.location_of_the_project().stream_id()
+            ),
+            None,
+            "a project with records gets no record of its own"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_named_function_no_longer_defined_fails_its_record_and_one_no_record_holds_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        let running = a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera", serde_json::json!([])),
+        );
+        project.define_no_function_named("camera");
+
+        let run = runner
+            .run_stream(RunStreamRequest {
+                stream_function: Some("stream.py:camera".to_string()),
+                ..project.run_request()
+            })
+            .expect("a recorded function no longer defined is a failed stream");
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert_eq!(stream.stream_id, camera);
+        assert!(
+            failed_because.contains("defines no @stream function named `camera`"),
+            "{failed_because}"
+        );
+        assert!(running.has_ended());
+        assert_eq!(
+            the_record_of(state_directory.path(), &camera)
+                .failed_because
+                .as_deref(),
+            Some(failed_because)
+        );
+
+        project.define_no_function_named("side");
+        let records_before = records_in(state_directory.path()).read_every();
+        let refusal = refusal_of(runner.run_stream(RunStreamRequest {
+            stream_function: Some("stream.py:side".to_string()),
+            ..project.run_request()
+        }));
+
+        assert!(
+            refusal.contains("defines no @stream function named `side`"),
+            "{refusal}"
+        );
+        assert_eq!(
+            records_in(state_directory.path()).read_every(),
+            records_before,
+            "a function nothing defines nor records is refused with nothing changed"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn starting_a_stream_whose_compile_failed_compiles_it_from_its_location() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+        runner.run_stream(project.run_request()).unwrap();
+        project.raise_in_the_function_printing("camera", "ValueError: still bad");
+
+        let refusal = refusal_of(runner.start_stream(&camera));
+
+        assert!(refusal.contains("still bad"), "{refusal}");
+        assert_eq!(
+            project.the_last_compiles_arguments(),
+            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\nstream:camera\n",
+            "the compile names the recorded location's function"
+        );
+        assert_eq!(
+            the_record_of(state_directory.path(), &camera)
+                .failed_because
+                .as_deref(),
+            Some("ValueError: still bad")
+        );
+
+        std::fs::write(project.path().join("stream.py"), "").unwrap();
+        refusal_of(runner.start_stream(&camera));
+        assert_eq!(
+            project.the_last_compiles_arguments(),
+            format!(
+                "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\n{}:camera\n",
+                project.path().join("stream.py").display()
+            ),
+            "a function of an entry file is compiled from that file"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn starting_the_record_of_a_project_whose_entry_did_not_import_runs_the_project() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let project_stream_id = project.location_of_the_project().stream_id();
+        project.fail_to_import_printing("SyntaxError: invalid syntax");
+        runner.run_stream(project.run_request()).unwrap();
+        project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+
+        let refusal = refusal_of(runner.start_stream(&project_stream_id));
+
+        assert!(refusal.contains("bad wiring"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("`{}`", project.stream_id_of("camera"))),
+            "{refusal}"
+        );
+        assert_eq!(
+            project.the_last_compiles_arguments(),
+            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\n",
+            "the project's run names no function"
+        );
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &project_stream_id),
+            None
+        );
+        assert!(
+            the_current_record_in(state_directory.path(), &project.stream_id_of("camera"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn the_reload_at_the_start_compiles_a_record_holding_no_graph_from_its_location() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        let mut graphless = StreamRecord::of_a_stream_whose_compile_failed(
+            project.location_of("camera"),
+            "camera",
+            &project.stream_environment(),
+            "an earlier failure",
+        );
+        graphless.failed_because = None;
+        records_in(state_directory.path())
+            .write(&graphless)
+            .unwrap();
+        project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+
+        let reloads = runner.reload_every_recorded_stream_neither_stopped_nor_failed();
+
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [StreamReloadAtTheStart::NotReloaded { stream_id, refusal }]
+                    if *stream_id == camera && refusal.to_string().contains("bad wiring")
+            ),
+            "{reloads:?}"
+        );
+        assert!(
+            project
+                .the_last_compiles_arguments()
+                .ends_with("stream:camera\n")
+        );
+        assert_eq!(
+            the_record_of(state_directory.path(), &camera)
+                .failed_because
+                .as_deref(),
+            Some("ValueError: bad wiring")
         );
     }
 
@@ -2102,7 +2954,10 @@ mod tests {
             |record_path, unreadable_bytes| {
                 let running = runner
                     .load_a_stream_with_the_owners_rulings(
-                        OneStreamAStreamActionLoads::recorded_by(&record),
+                        OneStreamAStreamActionLoads::recorded_by(
+                            &record,
+                            record.graph.as_ref().unwrap(),
+                        ),
                     )
                     .expect("the recorded stream loads");
 
@@ -3242,15 +4097,17 @@ mod tests {
                 "a run giving the display name of a recorded stream",
             ),
         ] {
-            let refusal = refusal_of(runner.run_stream(run_request));
+            let run = runner.run_stream(run_request).unwrap();
 
+            let (stream, failed_because) = the_one_failed_stream_of(&run);
             assert!(
-                refusal.contains("absent-port"),
-                "{what_the_run_is}: {refusal}"
+                failed_because.contains("absent-port"),
+                "{what_the_run_is}: {failed_because}"
             );
-            assert!(
-                !refusal.contains("did not re-load"),
-                "{what_the_run_is} replaced nothing: {refusal}"
+            assert_eq!(
+                stream.stream_id,
+                project.stream_id_of("studio"),
+                "{what_the_run_is}"
             );
             assert!(!hosted.has_ended(), "{what_the_run_is}");
             assert!(!recorded.has_ended(), "{what_the_run_is}");
@@ -3283,12 +4140,14 @@ mod tests {
             serde_json::json!([]),
         ));
 
-        let first = runner
+        let first_run = runner
             .run_stream(main_worktree.run_request())
             .expect("the first worktree's stream runs");
-        let second = runner
+        let second_run = runner
             .run_stream(second_worktree.run_request())
             .expect("the second worktree's stream runs beside it");
+        let (first, _, _) = the_one_running_stream_of(&first_run);
+        let (second, _, _) = the_one_running_stream_of(&second_run);
 
         assert_eq!(first.stream_id, main_worktree.stream_id_of("main"));
         assert_eq!(second.stream_id, second_worktree.stream_id_of("main"));
@@ -3308,6 +4167,7 @@ mod tests {
         let rerun = runner
             .run_stream(main_worktree.run_request())
             .expect("the first worktree runs again");
+        let (rerun, _, _) = the_one_running_stream_of(&rerun);
         assert_eq!(rerun.stream_id, first.stream_id, "a re-run keeps its id");
         assert!(rerun.replaced_a_recorded_stream);
         assert_eq!(records_in(state_directory.path()).read_every().len(), 2);
@@ -3333,12 +4193,14 @@ mod tests {
         let camera = camera_project.stream_id_of("camera");
         let preview = preview_project.stream_id_of("preview");
 
-        let camera_run = runner
+        let camera_outcome = runner
             .run_stream(camera_project.run_request())
             .expect("the camera stream runs");
-        let preview_run = runner
+        let preview_outcome = runner
             .run_stream(preview_project.run_request())
             .expect("the preview stream runs");
+        let (camera_run, _, camera_node_count) = the_one_running_stream_of(&camera_outcome);
+        let (preview_run, _, _) = the_one_running_stream_of(&preview_outcome);
 
         assert_eq!(camera_run.stream_id, camera);
         assert_eq!(
@@ -3349,13 +4211,14 @@ mod tests {
             camera_run.stream_location,
             camera_project.location_of("camera")
         );
-        assert_eq!(camera_run.node_count, 1);
+        assert_eq!(camera_node_count, 1);
         assert!(!camera_run.replaced_a_recorded_stream);
-        assert_eq!(camera_run.compile_warnings, Vec::<String>::new());
+        assert_eq!(camera_outcome.compile_warnings, Vec::<String>::new());
+        assert_eq!(camera_outcome.project_directory, camera_project.path());
         assert_eq!(preview_run.stream_id, preview);
         assert_eq!(preview_run.display_name, "preview");
         assert_eq!(
-            preview_run.compile_warnings,
+            preview_outcome.compile_warnings,
             ["tatolab: the cross-floor check found 1 thing binding this app to one floor."]
         );
         assert_eq!(
@@ -3422,7 +4285,8 @@ mod tests {
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
         ));
         let camera = project.stream_id_of("camera");
-        let first = runner.run_stream(project.run_request()).unwrap();
+        let first_run = runner.run_stream(project.run_request()).unwrap();
+        let (first, first_stream_tag, _) = the_one_running_stream_of(&first_run);
         runner.rename_stream(&camera, "Front camera").unwrap();
         runner
             .expose_port(&camera, "source", "out1", OutputPortExposureLevel::Internal)
@@ -3439,9 +4303,10 @@ mod tests {
             &["a warning of the replacing compile"],
         );
 
-        let replaced = runner
+        let replaced_run = runner
             .run_stream(project.run_request())
             .expect("the recorded stream is replaced");
+        let (replaced, replaced_stream_tag, _) = the_one_running_stream_of(&replaced_run);
 
         assert_eq!(
             first.display_name, "camera",
@@ -3454,12 +4319,12 @@ mod tests {
             "a run giving no display name keeps the renamed one"
         );
         assert_eq!(
-            replaced.compile_warnings,
+            replaced_run.compile_warnings,
             ["a warning of the replacing compile"]
         );
-        assert_ne!(replaced.stream_tag, first.stream_tag);
+        assert_ne!(replaced_stream_tag, first_stream_tag);
         let running = runner.loaded_stream_of_the_id(&camera).unwrap();
-        assert_eq!(running.stream_tag(), replaced.stream_tag);
+        assert_eq!(running.stream_tag(), replaced_stream_tag);
         assert_eq!(running.display_name(), "Front camera");
         assert_eq!(
             the_exposures_graph_renders_for(&running),
@@ -3467,7 +4332,7 @@ mod tests {
             "the owner's internal ruling wins over the changed function's public"
         );
         let recorded = the_record_of(state_directory.path(), &camera);
-        assert_eq!(recorded.graph, changed_source);
+        assert_eq!(recorded.graph, Some(changed_source));
         assert_eq!(recorded.display_name, "Front camera");
         assert_eq!(
             recorded.exposure_rulings,
@@ -3478,12 +4343,13 @@ mod tests {
             }]
         );
 
-        let renamed = runner
+        let renamed_run = runner
             .run_stream(RunStreamRequest {
                 display_name: Some("Desk camera".to_string()),
                 ..project.run_request()
             })
             .expect("the recorded stream is replaced again");
+        let (renamed, _, _) = the_one_running_stream_of(&renamed_run);
 
         assert_eq!(renamed.stream_id, camera);
         assert_eq!(renamed.display_name, "Desk camera");
@@ -3608,7 +4474,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_run_records_its_stream_before_the_start_and_a_refused_start_records_nothing() {
+    fn a_run_records_its_stream_before_the_start_and_a_refused_start_records_it_failed() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let records_seen_by_the_start = Arc::new(Mutex::new(None));
@@ -3626,16 +4492,27 @@ mod tests {
             serde_json::json!([]),
         ));
 
-        let refusal = refusal_of(runner.run_stream(project.run_request()));
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("a refused start is a failed stream, not a refused run");
 
-        assert!(refusal.contains("the setup hook refuses"), "{refusal}");
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because.contains("the setup hook refuses"),
+            "{failed_because}"
+        );
         assert_eq!(
             *records_seen_by_the_start.lock(),
             Some(1),
             "the stream is recorded before its start, so a crash in the start is counted"
         );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
-        assert!(records_in(state_directory.path()).read_every().is_empty());
+        let recorded = the_record_of(state_directory.path(), &stream.stream_id);
+        assert_eq!(recorded.failed_because.as_deref(), Some(failed_because));
+        assert!(
+            recorded.graph.is_some(),
+            "`start` retries the recorded graph"
+        );
     }
 
     #[cfg_attr(
@@ -3669,44 +4546,69 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_replace_whose_load_is_refused_after_the_unload_re_loads_the_previous_record() {
+    fn a_project_fixed_after_its_entry_did_not_import_runs_its_stream_in_place_of_its_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "main",
+            serde_json::json!([]),
+        ));
+        let project_stream_id = project.location_of_the_project().stream_id();
+        project.fail_to_import_printing("SyntaxError: invalid syntax");
+        runner.run_stream(project.run_request()).unwrap();
+        project.compile_to(the_graph_of_a_function_named("main", serde_json::json!([])));
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, _, node_count) = the_one_running_stream_of(&run);
+        assert_eq!(stream.stream_id, project.stream_id_of("main"));
+        assert_eq!(node_count, 1);
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            [project.stream_id_of("main")]
+        );
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &project_stream_id),
+            None
+        );
+        assert_eq!(records_in(state_directory.path()).read_every().len(), 1);
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn starting_a_stream_whose_compile_failed_runs_it_once_its_code_compiles() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
-            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+            serde_json::json!([]),
         ));
         let camera = project.stream_id_of("camera");
-        let first = runner.run_stream(project.run_request()).unwrap();
-        let previous_record = the_record_of(state_directory.path(), &camera);
-        project.compile_to(the_graph_of_a_function_exposing_a_port_its_node_lacks(
+        project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+        runner.run_stream(project.run_request()).unwrap();
+        project.compile_to(the_graph_of_a_function_named(
             "camera",
+            serde_json::json!([]),
         ));
 
-        let refusal = refusal_of(runner.run_stream(project.run_request()));
+        let started = runner
+            .start_stream(&camera)
+            .expect("the stream compiles from its location and starts");
 
-        assert!(refusal.contains("absent-port"), "{refusal}");
-        assert!(!refusal.contains("did not re-load"), "{refusal}");
-        let restored = runner
-            .loaded_stream_of_the_id(&camera)
-            .expect("the previous record is loaded again");
-        assert_ne!(restored.stream_tag(), first.stream_tag);
         assert_eq!(
-            restored.status(),
-            crate::core::runtime::RuntimeStatus::Started
+            started,
+            StreamStartOutcome {
+                stream_id: camera.clone(),
+                node_count: 1,
+            }
         );
-        assert_eq!(
-            restored.holding(),
-            LoadedStreamHolding::RecordedByTheRuntime
-        );
-        assert_eq!(
-            the_exposures_graph_renders_for(&restored),
-            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}])
-        );
-        assert_eq!(
-            the_current_record_in(state_directory.path(), &camera),
-            Some(previous_record)
-        );
+        let recorded = the_record_of(state_directory.path(), &camera);
+        assert!(!recorded.is_failed());
+        assert!(recorded.graph.is_some());
     }
 
     #[cfg_attr(
@@ -3724,7 +4626,8 @@ mod tests {
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
         ));
         let camera = project.stream_id_of("camera");
-        let first = runner.run_stream(project.run_request()).unwrap();
+        let first_run = runner.run_stream(project.run_request()).unwrap();
+        let (_, first_stream_tag, _) = the_one_running_stream_of(&first_run);
         let previous_record = the_record_of(&streams_directory, &camera);
         project.compile_to(the_graph_of_a_function_named(
             "camera",
@@ -3740,7 +4643,7 @@ mod tests {
         let running = runner
             .loaded_stream_of_the_id(&camera)
             .expect("the running stream stays loaded");
-        assert_eq!(running.stream_tag(), first.stream_tag);
+        assert_eq!(running.stream_tag(), first_stream_tag);
         assert_eq!(
             the_exposures_graph_renders_for(&running),
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),

@@ -7,7 +7,8 @@
 //! project's venv interpreter on `tatolab.stream`'s compile entry, in the
 //! project directory, under `-I`: the compile ignores the environment's
 //! `PYTHON*` variables and takes its import root from the compile entry. It
-//! reads the one JSON document the entry prints on its standard output.
+//! reads the one JSON document the entry prints on its standard output: the
+//! compiled graph, or why the project's code gave none.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -48,16 +49,13 @@ const COMPILE_STANDARD_ERROR_LOG_LABEL: &str = "stream-function-compile";
 /// dropped, so the compile never blocks on a full pipe.
 const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
 
-/// A project's stream function compiled in the project's own interpreter: the
-/// graph it compiled to, where the stream's code lives, and the environment its
-/// processor interpreters start in.
+/// A compile of a project's stream function in the project's own interpreter:
+/// what the project's code gave it, the environment its processor interpreters
+/// start in, and what it wrote to its standard error.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
-    /// The stream graph the compile entry printed, as it printed it.
-    pub(crate) graph_json: serde_json::Value,
-    /// The project directory and the stream function's `module:qualname` the
-    /// compile entry reported.
-    pub(crate) stream_location: StreamLocation,
+pub(crate) struct StreamFunctionCompileInTheProjectsInterpreterReport {
+    /// The graph, or why the project's code gave none.
+    pub(crate) what_the_projects_code_gave: WhatTheProjectsCodeGaveTheCompile,
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
     pub(crate) stream_environment: StreamEnvironment,
@@ -67,12 +65,90 @@ pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
     pub(crate) compile_warnings: Vec<String>,
 }
 
-/// The document the compile entry prints on its standard output.
+/// What a project's code gave a compile of one stream function.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum WhatTheProjectsCodeGaveTheCompile {
+    /// The stream function compiled to `graph_json`, as the entry printed it.
+    Compiled {
+        /// The project directory and the stream function's `module:qualname`.
+        stream_location: StreamLocation,
+        /// The stream graph.
+        graph_json: serde_json::Value,
+    },
+    /// The stream function raised while it compiled.
+    StreamFunctionRaised {
+        /// The project directory and the stream function's `module:qualname`.
+        stream_location: StreamLocation,
+        /// Its traceback, the compile entry's own frames left out.
+        failed_because: String,
+    },
+    /// The target named a function the entry does not define as a `@stream`.
+    StreamFunctionNotDefined {
+        /// The project directory and the `module:name` the function would have.
+        stream_location: StreamLocation,
+        /// What the entry defines instead, and how to name one.
+        not_defined_because: String,
+    },
+    /// The entry raised before any stream function could be chosen.
+    StreamEntryDidNotImport {
+        /// Its traceback, the compile entry's own frames left out.
+        import_failed_because: String,
+    },
+}
+
+/// The document the compile entry prints on its standard output: the project
+/// directory, then the graph or why the project's code gave none.
 #[derive(serde::Deserialize)]
 struct ProjectStreamCompileDocument {
-    stream_graph: serde_json::Value,
     project_directory: PathBuf,
-    stream_function: String,
+    stream_function: Option<String>,
+    stream_graph: Option<serde_json::Value>,
+    failed_because: Option<String>,
+    not_defined_because: Option<String>,
+    import_failed_because: Option<String>,
+}
+
+impl ProjectStreamCompileDocument {
+    /// What the document says the project's code gave; `None` for a document
+    /// holding no one answer.
+    fn what_the_projects_code_gave(self) -> Option<WhatTheProjectsCodeGaveTheCompile> {
+        let stream_location = |stream_function: String| StreamLocation {
+            project_directory: self.project_directory.clone(),
+            stream_function,
+        };
+        match (
+            self.stream_function,
+            self.stream_graph,
+            self.failed_because,
+            self.not_defined_because,
+            self.import_failed_because,
+        ) {
+            (Some(stream_function), Some(graph_json), None, None, None) => {
+                Some(WhatTheProjectsCodeGaveTheCompile::Compiled {
+                    stream_location: stream_location(stream_function),
+                    graph_json,
+                })
+            }
+            (Some(stream_function), None, Some(failed_because), None, None) => {
+                Some(WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
+                    stream_location: stream_location(stream_function),
+                    failed_because,
+                })
+            }
+            (Some(stream_function), None, None, Some(not_defined_because), None) => Some(
+                WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
+                    stream_location: stream_location(stream_function),
+                    not_defined_because,
+                },
+            ),
+            (None, None, None, None, Some(import_failed_because)) => {
+                Some(WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
+                    import_failed_because,
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
@@ -83,14 +159,16 @@ pub(crate) fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf
 
 /// Compile `stream_function` of the project in `project_directory` — or the
 /// sole `@stream` in its `stream.py` when none is named — in the project's
-/// venv interpreter.
+/// venv interpreter, answering with the graph or why the project's code gave
+/// none. Refused for the caller's own target the entry refuses, and for a
+/// compile that never reached the project's answer.
 ///
 /// A machine shutdown requested while it runs kills the compile and refuses it.
 pub(crate) fn compile_the_stream_function_in_the_projects_interpreter(
     project_directory: &Path,
     stream_function: Option<&str>,
     lend_directory: &Path,
-) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
+) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
     compile_the_stream_function_in_the_projects_interpreter_within(
         project_directory,
         stream_function,
@@ -146,7 +224,7 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     lend_directory: &Path,
     compile_bound: Duration,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
+) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
     let project = project_directory.display();
     if !project_directory.is_absolute() {
         return Err(Error::Configuration(format!(
@@ -258,34 +336,40 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     crate::core::graph_snapshot::refuse_an_integer_literal_wider_than_64_bits(
         &standard_output_text,
     )?;
-    let compile_document = serde_json::from_slice::<ProjectStreamCompileDocument>(
-        &standard_output_bytes,
-    )
-    .map_err(|not_a_compile_document| {
-        if is_a_compile_document_naming_no_stream_function(&standard_output_bytes) {
-            return Error::Configuration(format!(
-                "the stream function in {project} compiled, and the project's `tatolab-stream` \
-                 is older than this runtime: its compile document names no `stream_function`, \
-                 which the stream's id is computed from. Run `uv sync` in {project} to take a \
-                 `tatolab-stream` as new as the runtime"
-            ));
-        }
+    let not_the_compile_document = |why: &dyn std::fmt::Display| {
         Error::Runtime(format!(
-            "the stream function in {project} compiled, and `{interpreter_shown}`'s \
-                     standard output is not the compile document ({not_a_compile_document}); it \
-                     began {}. What a `sitecustomize`, `usercustomize` or `.pth` hook in the \
-                     project's environment prints lands ahead of the document.",
+            "the stream function in {project} compiled, and `{interpreter_shown}`'s standard \
+             output is not the compile document ({why}); it began {}. What a `sitecustomize`, \
+             `usercustomize` or `.pth` hook in the project's environment prints lands ahead of \
+             the document.",
             standard_output_head_as_a_refusal_quotes_it(&standard_output_bytes)
         ))
-    })?;
-    Ok(StreamFunctionCompiledInTheProjectsInterpreter {
-        graph_json: compile_document.stream_graph,
-        stream_location: StreamLocation {
-            project_directory: compile_document.project_directory.clone(),
-            stream_function: compile_document.stream_function,
-        },
+    };
+    if is_a_compile_document_naming_no_stream_function(&standard_output_bytes) {
+        return Err(Error::Configuration(format!(
+            "the stream function in {project} compiled, and the project's `tatolab-stream` is \
+             older than this runtime: its compile document names no `stream_function`, which \
+             the stream's id is computed from. Run `uv sync` in {project} to take a \
+             `tatolab-stream` as new as the runtime"
+        )));
+    }
+    let compile_document =
+        serde_json::from_slice::<ProjectStreamCompileDocument>(&standard_output_bytes)
+            .map_err(|not_a_compile_document| not_the_compile_document(&not_a_compile_document))?;
+    let project_directory = compile_document.project_directory.clone();
+    let what_the_projects_code_gave =
+        compile_document
+            .what_the_projects_code_gave()
+            .ok_or_else(|| {
+                not_the_compile_document(
+                    &"it holds no one of a graph, `failed_because`, `not_defined_because` or \
+                  `import_failed_because`",
+                )
+            })?;
+    Ok(StreamFunctionCompileInTheProjectsInterpreterReport {
+        what_the_projects_code_gave,
         stream_environment: StreamEnvironment {
-            project_directory: compile_document.project_directory,
+            project_directory,
             interpreter,
         },
         compile_warnings: standard_error_text
@@ -297,8 +381,9 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     })
 }
 
-/// Whether `standard_output` is a compile document but for its missing
-/// `stream_function`, as a `tatolab-stream` older than the runtime prints it.
+/// Whether `standard_output` is a compiled graph's document but for its
+/// missing `stream_function`, as a `tatolab-stream` older than the runtime
+/// prints it.
 fn is_a_compile_document_naming_no_stream_function(standard_output: &[u8]) -> bool {
     let Ok(document) = serde_json::from_slice::<serde_json::Value>(standard_output) else {
         return false;
@@ -359,7 +444,7 @@ mod tests {
         fn compile(
             &self,
             stream_function: Option<&str>,
-        ) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
+        ) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
             self.compile_within(stream_function, STREAM_FUNCTION_COMPILE_BOUND)
         }
 
@@ -367,7 +452,7 @@ mod tests {
             &self,
             stream_function: Option<&str>,
             compile_bound: Duration,
-        ) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
+        ) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
             compile_the_stream_function_in_the_projects_interpreter_within(
                 self.path(),
                 stream_function,
@@ -421,12 +506,14 @@ mod tests {
             .compile(None)
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
 
-        assert_eq!(compiled.graph_json, a_compiled_graph());
         assert_eq!(
-            compiled.stream_location,
-            StreamLocation {
-                project_directory: PathBuf::from(reported_project_directory),
-                stream_function: "stream:camera_preview".to_string(),
+            compiled.what_the_projects_code_gave,
+            WhatTheProjectsCodeGaveTheCompile::Compiled {
+                stream_location: StreamLocation {
+                    project_directory: PathBuf::from(reported_project_directory),
+                    stream_function: "stream:camera_preview".to_string(),
+                },
+                graph_json: a_compiled_graph(),
             }
         );
         assert_eq!(
@@ -438,6 +525,108 @@ mod tests {
             "the project directory is the one the compile entry reported, and the \
              interpreter the venv's as spelled"
         );
+    }
+
+    /// A shell body that prints `document`, then exits 0 as the compile entry does.
+    fn print_the_document(document: serde_json::Value) -> String {
+        format!("cat <<'COMPILED'\n{document}\nCOMPILED")
+    }
+
+    #[test]
+    #[serial]
+    fn a_stream_function_that_raised_is_answered_under_its_location_with_its_traceback() {
+        let project =
+            ProjectWithAStubVenvInterpreter::running(&print_the_document(serde_json::json!({
+                "project_directory": "/srv/rig",
+                "stream_function": "stream:main",
+                "failed_because": "Traceback (most recent call last):\nValueError: bad wiring",
+            })));
+
+        let compiled = project
+            .compile(None)
+            .unwrap_or_else(|refusal| panic!("a raising function is answered: {refusal}"));
+
+        assert_eq!(
+            compiled.what_the_projects_code_gave,
+            WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
+                stream_location: StreamLocation {
+                    project_directory: PathBuf::from("/srv/rig"),
+                    stream_function: "stream:main".to_string(),
+                },
+                failed_because: "Traceback (most recent call last):\nValueError: bad wiring"
+                    .to_string(),
+            }
+        );
+        assert_eq!(
+            compiled.stream_environment.project_directory,
+            PathBuf::from("/srv/rig")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_named_function_the_entry_does_not_define_is_answered_under_its_location() {
+        let project =
+            ProjectWithAStubVenvInterpreter::running(&print_the_document(serde_json::json!({
+                "project_directory": "/srv/rig",
+                "stream_function": "stream:side",
+                "not_defined_because": "`stream.py` defines no @stream function named `side`",
+            })));
+
+        let compiled = project
+            .compile(Some("stream.py:side"))
+            .unwrap_or_else(|refusal| panic!("a function not defined is answered: {refusal}"));
+
+        assert_eq!(
+            compiled.what_the_projects_code_gave,
+            WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
+                stream_location: StreamLocation {
+                    project_directory: PathBuf::from("/srv/rig"),
+                    stream_function: "stream:side".to_string(),
+                },
+                not_defined_because: "`stream.py` defines no @stream function named `side`"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn an_entry_that_did_not_import_is_answered_with_its_traceback() {
+        let project =
+            ProjectWithAStubVenvInterpreter::running(&print_the_document(serde_json::json!({
+                "project_directory": "/srv/rig",
+                "import_failed_because": "  File \"stream.py\", line 5\nSyntaxError: expected ':'",
+            })));
+
+        let compiled = project
+            .compile(None)
+            .unwrap_or_else(|refusal| panic!("an import failure is answered: {refusal}"));
+
+        assert_eq!(
+            compiled.what_the_projects_code_gave,
+            WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
+                import_failed_because: "  File \"stream.py\", line 5\nSyntaxError: expected ':'"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_document_holding_both_a_graph_and_a_failure_is_refused_as_no_compile_document() {
+        let project =
+            ProjectWithAStubVenvInterpreter::running(&print_the_document(serde_json::json!({
+                "project_directory": "/srv/rig",
+                "stream_function": "stream:main",
+                "stream_graph": a_compiled_graph(),
+                "failed_because": "Traceback",
+            })));
+
+        let refusal = project.refusal_of(None);
+
+        assert!(refusal.contains("is not the compile document"), "{refusal}");
+        assert!(refusal.contains("no one of a graph"), "{refusal}");
     }
 
     #[test]

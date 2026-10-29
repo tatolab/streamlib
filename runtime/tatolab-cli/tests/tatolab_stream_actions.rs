@@ -19,7 +19,8 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, run_stream_tool_result_text, stop_stream_tool_result_text,
+    StubToolCallTransport, failed_run_stream_tool_result_text, run_stream_tool_result_text,
+    stop_stream_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -279,6 +280,42 @@ fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
          it under another name with --name\n"
     );
     assert_eq!(standard_output_text(&refused), "");
+}
+
+/// A stream whose code fails is answered, not refused: `run` prints it failed with its traceback
+/// on its standard output, offers no `logs -f` for it, and exits 1.
+#[test]
+fn run_prints_a_failed_stream_with_its_traceback_and_exits_one() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "run_stream",
+        StubToolAnswer::tool_result(&failed_run_stream_tool_result_text(
+            "cam",
+            &canonical_project_directory,
+            "Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
+             ValueError: bad wiring",
+        )),
+    );
+
+    let finished = isolated_machine_directories.run_tatolab(&[
+        "run",
+        "--dir",
+        project_directory.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(
+        finished.status.code(),
+        Some(1),
+        "{}",
+        standard_error_text(&finished)
+    );
+    assert_eq!(standard_error_text(&finished), "");
+    assert_eq!(
+        standard_output_text(&finished),
+        "cam failed: Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
+         ValueError: bad wiring\n"
+    );
 }
 
 #[test]

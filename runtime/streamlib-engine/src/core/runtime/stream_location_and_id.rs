@@ -32,6 +32,22 @@ pub struct StreamLocation {
 }
 
 impl StreamLocation {
+    /// Where the project at `project_directory` is recorded while its entry
+    /// does not import: the project directory with no stream function, so its
+    /// stream id is `<folder>-<hash>`.
+    pub fn of_a_project_whose_entry_did_not_import(project_directory: PathBuf) -> Self {
+        Self {
+            project_directory,
+            stream_function: String::new(),
+        }
+    }
+
+    /// Whether this is where a project is recorded while its entry does not
+    /// import, holding no stream function.
+    pub fn is_a_project_whose_entry_did_not_import(&self) -> bool {
+        self.stream_function.is_empty()
+    }
+
     /// The stream id of this location, `<folder>-<function>-<hash>`: the
     /// project directory's last component and the function's name, each
     /// cast, and the first six hex digits of SHA-256 over
@@ -60,7 +76,7 @@ impl StreamLocation {
     }
 
     /// The project directory's last component, empty when it has none.
-    fn project_folder_name(&self) -> String {
+    pub(crate) fn project_folder_name(&self) -> String {
         self.project_directory
             .file_name()
             .map(|folder_name| folder_name.to_string_lossy().into_owned())
@@ -68,7 +84,7 @@ impl StreamLocation {
     }
 
     /// The function's own name: the last segment of its qualname.
-    fn stream_function_name(&self) -> String {
+    pub(crate) fn stream_function_name(&self) -> String {
         let qualname = self
             .stream_function
             .rsplit_once(':')
