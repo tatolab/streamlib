@@ -84,7 +84,7 @@ On Linux x86_64 that installs **the runtime** — `tatolabd`, the native program
 machine's streams, and `tatolab`, the CLI that loads, manages and inspects them — into
 `~/.local/share/tatolab/`, links both into `~/.local/bin`, and runs `tatolabd` as the systemd user
 service `tatolabd.service`, restarted if it fails. Re-run it to upgrade. `sh -s -- --uninstall` in
-place of `sh` removes it and leaves your kept streams and logs.
+place of `sh` removes it and leaves your streams' records and logs.
 
 **Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
 `import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
@@ -149,12 +149,13 @@ tatolab dev                 # the test pattern through a GPU lens, encoded and s
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
 `stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
-starts it, and `dev` prints the stream's records in your terminal. The stream is attached: Ctrl-C
-unloads it. Save an edit and `dev` runs the stream again: the runtime compiles the edit and only
-then replaces the running stream, so an edit that fails to compile prints the refusal and leaves the
-running stream in place until a save that compiles. `tatolab run` does the
-same once, without watching for edits, and `tatolab run -d` hands the stream to the runtime to keep:
-it runs on after the command returns, and the runtime loads it again each time it starts.
+starts it, and `dev` prints the stream's id and its records in your terminal. Save an edit and
+`dev` runs the stream again: the runtime compiles the edit and only then replaces the running
+stream, so an edit that fails to compile prints the refusal and leaves the running stream in place
+until a save that compiles. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
+loads is recorded: it runs until `tatolab stop` or `tatolab rm`, and the runtime loads it again each
+time it starts. `tatolab run` loads the stream once, without watching for edits, prints its id and
+returns; `tatolab logs -f` follows its records.
 
 ## Writing a stream
 
@@ -322,7 +323,7 @@ again replaces its stream under the same id.
 
 ```text
 tatolab new DIRECTORY
-tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [-d | --detach]
+tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME]
 tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME]
 
 tatolab streams
@@ -348,18 +349,19 @@ tatolab enable-virtual-camera [--print]
 
 - **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
   `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
-- **`run`** asks the runtime to compile the project's stream in its `.venv` and load it, attached:
-  the stream's records in your terminal, and the stream lives as long as the command — Ctrl-C, a
-  closed terminal or a killed `tatolab` unloads it. `-d` hands it to the runtime to keep instead:
-  `run` prints one line and returns, and the runtime loads the stream again at each of its own
-  starts until `stop` or `rm`. `TARGET` is `<file>.py[:<function>]` or `<module>:<function>`. Each
-  prints the stream id the other verbs take.
-- **`dev`** is `run` attached, run again on every saved edit to a `.py` file or `pyproject.toml`
-  in the project; the runtime replaces the running stream only once the edit compiles.
-  When the runtime goes away, `dev` waits for it and loads the stream again.
+- **`run`** asks the runtime to compile the project's stream in its `.venv`, load it and record it,
+  then prints `<id> running as "<display name>" (project <dir>, <module:function>)` and returns:
+  exit 0 once the load is accepted, 1 naming why it was refused. The runtime loads the stream
+  again at each of its own starts until `stop` or `rm`, and running the same project and function
+  again replaces it under the same id. `TARGET` is `<file>.py[:<function>]` or
+  `<module>:<function>`. The id it prints is the one the other verbs take.
+- **`dev`** is `run`, then the stream's records followed, run again on every saved edit to a `.py`
+  file or `pyproject.toml` in the project; the runtime replaces the running stream only once the
+  edit compiles. Ctrl-C ends `dev` and leaves the stream running. When the runtime goes away, `dev`
+  says so, waits for it to load the stream again from its record, and follows it again.
 - **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
-  attached, kept, stopped or failed, its node count, its project and its stream function, and why
-  each failed one failed. A kept
+  running, stopped or failed, its node count, its project and its stream function, and why each
+  failed one failed. A
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
@@ -368,15 +370,15 @@ tatolab enable-virtual-camera [--print]
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
   takes a stream id, and omitted it means every loaded stream.
-- **`stop`** unloads a stream; a kept one stays stopped across the runtime's restarts until
+- **`stop`** unloads a stream, which stays stopped across the runtime's restarts until
   **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads a stream and
   forgets it. **`rename`** shows a stream under another display name — any text, never part of
-  its address. A kept stream records it, so it holds across the runtime's restarts and re-loads
-  without `--name`; an attached stream keeps it for as long as that load lives.
+  its address. The stream's record holds it, across the runtime's restarts and re-loads without
+  `--name`.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
-  its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
-  is recorded and wins over what the stream function exposes, across restarts.
+  its stream). A reader the new level no longer allows is cut at once. The level is recorded and
+  wins over what the stream function exposes, across restarts.
 - **`relays`** lists the relays the runtime joins — the local relay's two listeners and each one
   added — with each one's adapter, connection state and settings, and each secret setting as set
   or unset, never its value. **`relay add`** joins a relay through an adapter, from a JSON file of
@@ -389,7 +391,8 @@ tatolab enable-virtual-camera [--print]
   trailing mDNS `.local`, cast to lowercase URL-safe.
 - **`logs`** reads a loaded stream's records from the runtime — `--stream`'s, or the one loaded
   from the working directory — rendered the way the runtime prints them; `--follow` keeps reading
-  as records land. `--list` and `RUNTIME_ID-STREAM` read a stream's JSONL log on disk instead. Run
+  as records land until Ctrl-C, which leaves the stream running, and ends with exit 1 naming the
+  runtime's log when the runtime goes away. `--list` and `RUNTIME_ID-STREAM` read a stream's JSONL log on disk instead. Run
   them in the stream's project directory, where the runtime writes each stream's log: `--list`
   shows the stream logs there, each named `<runtime_id>-<stream>`, and `RUNTIME_ID-STREAM` renders
   one. The other flags filter what either shows.
@@ -449,8 +452,8 @@ The host launches `tatolab mcp`, which sends one upgrade request on the runtime'
 then copies bytes between its own stdin and stdout and the runtime's MCP server, reading none of
 them. To reach a runtime on another machine, launch it over ssh instead, with `tatolab` on that
 machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The server belongs to the
-runtime and comes and goes with it, and a stream the host loads attached lives as long as the
-host's connection.
+runtime and comes and goes with it. A stream the host runs is recorded by the runtime and outlives
+the host's connection: an agent's next session finds it in `list_streams`.
 
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
@@ -481,15 +484,14 @@ open its local socket — only processes running as your user — can observe an
 machine's lock, so a second `tatolabd` is refused naming the first one's user, pid and executable,
 and serves its local socket at a fixed path. It keeps its state in
 `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
-Support/Tatolab/` on macOS: a record of each kept stream — its graph, project, interpreter, whether
-it is stopped, and the levels `expose` set — and its own log. At each start it loads every kept
-stream that is not stopped.
+Support/Tatolab/` on macOS: a record of each stream it runs — its graph, project, interpreter,
+whether it is stopped, and the levels `expose` set — and its own log. At each start it loads every
+recorded stream that is neither stopped nor failed.
 
 `tatolab run` asks it to load a project's stream. The runtime runs `tatolab.stream`'s compile entry
 in the project's `.venv` interpreter, which imports `stream.py`, calls the `@stream` function and
-hands back the graph it built; the CLI compiles nothing. The runtime loads that graph and starts it.
-Attached, the stream lives as long as `tatolab run`'s connection to the runtime; with `-d`, the
-runtime keeps it.
+hands back the graph it built; the CLI compiles nothing. The runtime loads that graph, starts it and
+records it, and `tatolab run` returns.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
 talk to. No Python runs in its process, and it never imports your code — it learns a Python node's

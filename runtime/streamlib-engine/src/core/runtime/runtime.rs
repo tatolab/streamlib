@@ -848,7 +848,7 @@ impl Runner {
         let stream = self.build_the_stream_a_graph_load_names(
             graph,
             load_options,
-            LoadedStreamHolding::Attached,
+            LoadedStreamHolding::LivesWithTheHostProcess,
         )?;
         self.load_the_graph_into_the_stream(&stream, graph)?;
         self.insert_a_complete_stream(stream)
@@ -867,7 +867,7 @@ impl Runner {
         self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
             graph,
             load_options,
-            LoadedStreamHolding::Attached,
+            LoadedStreamHolding::LivesWithTheHostProcess,
         )
     }
 
@@ -988,7 +988,7 @@ impl Runner {
             stream_id,
             load_options,
             teardown_watchdog_budget,
-            LoadedStreamHolding::Attached,
+            LoadedStreamHolding::LivesWithTheHostProcess,
         )?;
         self.insert_a_complete_stream(stream)
     }

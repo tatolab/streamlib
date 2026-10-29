@@ -25,7 +25,7 @@ from typing import Any, TypeVar
 
 import pytest
 
-from conftest import AttachedTatolabRun, TatolabdUnderTest
+from conftest import TatolabdUnderTest, TatolabRunOrDevOnTheRuntime
 from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
 from stream_runs_on_tatolabd import TatolabRunOfAProject
@@ -221,11 +221,11 @@ def bags_written_on(
 
 @dataclass(frozen=True)
 class PatternStreamRunning:
-    """The one-source stream, run attached on this test's `tatolabd`."""
+    """The one-source stream, run on this test's `tatolabd`."""
 
     app_directory: Path
     tatolabd: TatolabdUnderTest
-    tatolab_run: AttachedTatolabRun
+    tatolab_run: TatolabRunOrDevOnTheRuntime
     local_api: LocalApiClient
     stream_id: str
 
@@ -241,7 +241,7 @@ def start_the_pattern_stream(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}
     )
     tatolabd = start_tatolabd()
-    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    tatolab_run = tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory))
     stream_id = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_id"]
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
     return PatternStreamRunning(
@@ -428,10 +428,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     assert node_named(graph_after_remove, "second-effect")["components"]["state"] == "Running"
     assert node_named(graph_after_remove, "downstream-effect")["components"]["state"] == "Running"
 
-    pattern_stream.tatolab_run.interrupt()
-    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        pattern_stream.tatolab_run.recent_stderr()
-    )
+    assert pattern_stream.tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 # How long the slowly importing helper below sleeps at import. The calls made
@@ -553,10 +550,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         "the link connected during the import is wired once the helper is up"
     )
 
-    pattern_stream.tatolab_run.interrupt()
-    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        pattern_stream.tatolab_run.recent_stderr()
-    )
+    assert pattern_stream.tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 @pytest.mark.requires_gpu
@@ -596,7 +590,4 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     )
     assert "no_such_port" in port_refusal
 
-    pattern_stream.tatolab_run.interrupt()
-    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        pattern_stream.tatolab_run.recent_stderr()
-    )
+    assert pattern_stream.tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0

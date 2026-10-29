@@ -232,7 +232,7 @@ pub(crate) fn the_stub_runtime_takes_no_stream_action(
 /// every call naming it reaches a clone of the stub (whose state is shared
 /// behind `Arc`s); the node catalog is the native registry's,
 /// and its interpreter described nothing; the stub stream's log holds no
-/// record; it lists as attached, and every stream action is refused.
+/// record; it lists as running, and every stream action is refused.
 ///
 /// [`OperationsOnTheStreamsLoadedInThisRuntime`]: ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime
 macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
@@ -349,7 +349,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
                     display_name: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
                     stream_location: None,
-                    state: ::streamlib::sdk::runtime::StreamListingState::Attached,
+                    state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,
                 }]
@@ -366,13 +366,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "expose_port",
                 ))
-            }
-            fn unload_the_attached_stream_if_still_the_same(
-                &self,
-                _stream_id: &str,
-                _stream_tag: ::streamlib::sdk::runtime::LoadedStreamTag,
-            ) -> bool {
-                false
             }
             fn every_loaded_stream_and_the_output_ports_it_exposes(
                 &self,

@@ -5,10 +5,10 @@
 
 The runtime compiles the project's stream in the project's own venv — here a
 symlink to the suite venv, holding `tatolab-stream` and nothing of the runtime —
-and loads it attached to the `tatolab` that asked: the local API names it by
-its stream name, every observation verb reaches it through the one socket, and
-a Ctrl-C to `tatolab` unloads it while `tatolabd` keeps serving. Starting a
-stream initializes a GPU context, so the module needs a device.
+loads it and records it: the local API names it by its stream id, every
+observation verb reaches it through the one socket, and it runs on once the
+`tatolab` that loaded it has returned or been stopped, until `tatolab stop`.
+Starting a stream initializes a GPU context, so the module needs a device.
 
 The MVP minute is measured here too, with every processor in its own processor
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
@@ -37,8 +37,8 @@ import pytest
 
 from conftest import (
     TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
-    AttachedTatolabRun,
     TatolabdUnderTest,
+    TatolabRunOrDevOnTheRuntime,
     a_tcp_port_free_on_loopback,
 )
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
@@ -132,7 +132,7 @@ SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN = re.compile(
 )
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
-# How long an attached stream's source has to write its first bag on `video`.
+# How long a loaded stream's source has to write its first bag on `video`.
 FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
 #: The one stream function every project here defines, as its location names it.
@@ -148,12 +148,12 @@ def stream_id_of_the_project(app_directory: Path) -> str:
 
 
 def the_stream_stopped_log_line(stream_id: str) -> str:
-    """The engine's line once the attached stream's unload has finished."""
+    """The engine's line once the stream's unload has finished."""
     return f"[stop] The stream `{stream_id}` stopped"
 
 
 def dev_loading_again_after_a_save(stream_id: str) -> str:
-    """What `dev` says as a save makes it stop the stream and load it again."""
+    """What `dev` says as a save makes it load the stream again."""
     return f"tatolab dev: a saved change — loading {stream_id} again"
 
 
@@ -194,65 +194,75 @@ def make_scaffolded_sample_stream_project(
     return app_directory
 
 
-def attach_the_projects_stream(
+def load_the_projects_stream(
     tatolabd: TatolabdUnderTest, app_directory: Path, verb: str = "run"
-) -> AttachedTatolabRun:
+) -> TatolabRunOrDevOnTheRuntime:
     """`tatolab <verb>` from `app_directory`, started on `tatolabd`."""
-    return tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory), verb=verb)
+    return tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory), verb=verb)
 
 
 @pytest.mark.parametrize("verb", ["run", "dev"])
-def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
+def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop(
     verb: str,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The MVP minute's observable half, for both verbs.
 
-    `run` and `dev` share one attached path — `dev` only adds the load again on
-    a save — so a divergence in load, listing or unload between them is a
-    defect in the path itself.
+    `run` returns once the load is accepted and `dev` is ended by a Ctrl-C;
+    neither ends the stream, which the runtime records and runs on until
+    `tatolab stop` — so a divergence in load, listing or persistence between
+    them is a defect in the load path itself.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
     stream_id = stream_id_of_the_project(app_directory)
     tatolabd = start_tatolabd()
 
-    attached = attach_the_projects_stream(tatolabd, app_directory, verb)
-    loaded = attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    stream_run = load_the_projects_stream(tatolabd, app_directory, verb)
+    loaded = stream_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     local_api = tatolabd.local_api_client()
     running_graph = local_api.await_every_node_running(stream=stream_id)
     listed_streams = local_api.list_streams()
 
     assert loaded["stream_id"] == stream_id
-    assert int(loaded["node_count"]) == 1
+    assert loaded["display_name"] == "main"
+    assert loaded["stream_function"] == STREAM_FUNCTION_OF_EVERY_PROJECT
     assert Path(loaded["project_directory"]) == app_directory.resolve()
-    assert listed_streams == [
-        {
-            "stream": stream_id,
-            "display_name": "main",
-            "location": {
-                "project_directory": str(app_directory.resolve()),
-                "stream_function": STREAM_FUNCTION_OF_EVERY_PROJECT,
-            },
-            "state": "attached",
-            "node_count": 1,
-            "failed_because": None,
-        }
-    ]
+    listed_running = {
+        "stream": stream_id,
+        "display_name": "main",
+        "location": {
+            "project_directory": str(app_directory.resolve()),
+            "stream_function": STREAM_FUNCTION_OF_EVERY_PROJECT,
+        },
+        "state": "running",
+        "node_count": 1,
+        "failed_because": None,
+    }
+    assert listed_streams == [listed_running]
     assert running_graph["stream"] == stream_id
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1, (
         running_graph["nodes"]
     )
     assert_only_its_owner_can_open(tatolabd.local_api_socket_path)
 
-    attached.interrupt()
-    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        f"`tatolab {verb}` must exit cleanly on SIGINT; standard error:\n{attached.recent_stderr()}"
+    if verb == "dev":
+        stream_run.interrupt()
+    assert stream_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+        f"`tatolab {verb}` must exit cleanly; standard error:\n{stream_run.recent_stderr()}"
     )
+    assert local_api.list_streams() == [listed_running], (
+        f"the stream runs on once `tatolab {verb}` has ended"
+    )
+    assert the_stream_stopped_log_line(stream_id) not in tatolabd.stderr_text
+
+    assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
     tatolabd.await_stderr_containing(
         the_stream_stopped_log_line(stream_id), timeout=CLEAN_EXIT_TIMEOUT_SECONDS
     )
-    assert local_api.list_streams() == [], "a Ctrl-C to `tatolab` unloads its stream"
+    assert local_api.list_streams() == [
+        {**listed_running, "state": "stopped", "node_count": None}
+    ], "`tatolab stop` unloads the stream and records it stopped"
     assert tatolabd.process.poll() is None, "the runtime outlives the stream it unloaded"
 
 
@@ -400,13 +410,13 @@ def assert_the_scan_sees_the_unix_socket_listener_held_by(pid: int, unix_socket_
     )
 
 
-def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all(
+def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """Nothing on the network can reach the runtime's control API, and its HTTP
     listens nowhere but loopback: `tatolabd` holds one TCP socket in LISTEN, its
-    loopback HTTP on `127.0.0.1`, and the `tatolab` attached to it holds none.
+    loopback HTTP on `127.0.0.1`.
 
     The same scan — Linux's `/proc`, macOS's `lsof` — has to find the TCP
     listeners the test itself holds and the local API socket's listener, and
@@ -419,8 +429,8 @@ def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_a
         extra_environment={TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE: str(loopback_http_port)}
     )
 
-    attached = attach_the_projects_stream(tatolabd, app_directory)
-    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
+    stream_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     stream_id = stream_id_of_the_project(app_directory)
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
     assert graph["stream"] == stream_id
@@ -429,19 +439,13 @@ def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_a
     assert_the_scan_sees_the_unix_socket_listener_held_by(
         tatolabd.pid, str(tatolabd.local_api_socket_path)
     )
-    for process_name, pid, listening_tcp_sockets_it_may_hold in (
-        ("tatolabd", tatolabd.pid, {f"127.0.0.1:{loopback_http_port}"}),
-        ("tatolab", attached.pid, set()),
-    ):
-        listening_tcp_sockets_it_holds = listening_tcp_sockets_held_by(pid)
-        assert listening_tcp_sockets_it_holds == listening_tcp_sockets_it_may_hold, (
-            f"{process_name} holds TCP sockets in LISTEN "
-            f"({sorted(listening_tcp_sockets_it_holds)}); standard error ended:\n"
-            f"{tatolabd.recent_stderr()}"
-        )
+    listening_tcp_sockets_it_holds = listening_tcp_sockets_held_by(tatolabd.pid)
+    assert listening_tcp_sockets_it_holds == {f"127.0.0.1:{loopback_http_port}"}, (
+        f"tatolabd holds TCP sockets in LISTEN ({sorted(listening_tcp_sockets_it_holds)}); "
+        f"standard error ended:\n{tatolabd.recent_stderr()}"
+    )
 
-    attached.interrupt()
-    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
@@ -453,7 +457,7 @@ def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
     return completed.stdout
 
 
-def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api_socket(
+def test_every_observation_verb_reaches_a_loaded_stream_through_the_local_api_socket(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
@@ -463,8 +467,8 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     writes once a connect has wired its output."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
     tatolabd = start_tatolabd()
-    attached = attach_the_projects_stream(tatolabd, app_directory)
-    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
+    stream_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
 
     stream_id = stream_id_of_the_project(app_directory)
     listed = succeeded(run_tatolab_observation_verb("streams"))
@@ -477,7 +481,7 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
         "FUNCTION",
     ], listed
     assert re.search(
-        rf"^{re.escape(stream_id)}\s+main\s+attached\s+2\s+", listed, re.MULTILINE
+        rf"^{re.escape(stream_id)}\s+main\s+running\s+2\s+", listed, re.MULTILINE
     ), listed
 
     bags_the_source_wrote = 0
@@ -499,8 +503,7 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
 
     succeeded(run_tatolab_observation_verb("logs", "--stream", stream_id))
 
-    attached.interrupt()
-    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def iceoryx2_node_details_in(iceoryx2_domain_root: Path) -> "set[Path]":
@@ -519,7 +522,7 @@ def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_
     runtime_directory = tatolabd.machine_directories.runtime_directory
     iceoryx2_node_details_before = iceoryx2_node_details_in(runtime_directory / "iox2")
 
-    attached = attach_the_projects_stream(tatolabd, app_directory)
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
     tatolabd.await_marker(LIVE_HELPER_MARKER_NAME, timeout=NODE_READY_TIMEOUT_SECONDS)
     new_node_details = (
         iceoryx2_node_details_in(runtime_directory / "iox2") - iceoryx2_node_details_before
@@ -533,8 +536,7 @@ def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_
     assert len(iceoryx2_node_details_before) == 1, sorted(map(str, iceoryx2_node_details_before))
     assert len(list(runtime_directory.glob("surface-share-*.sock"))) == 1
 
-    attached.interrupt()
-    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, attached.recent_stderr()
+    assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def test_a_native_block_added_without_config_reaches_a_running_graph(
@@ -563,15 +565,14 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     )
     tatolabd = start_tatolabd()
 
-    attached = attach_the_projects_stream(tatolabd, app_directory)
-    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
+    stream_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     running_graph = tatolabd.local_api_client().await_every_node_running(
         stream=stream_id_of_the_project(app_directory)
     )
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1
 
-    attached.interrupt()
-    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def the_first_streams_output(tatolabd: TatolabdUnderTest, stream_id: str) -> str:
@@ -616,7 +617,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
     tatolabd = start_tatolabd()
 
-    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
+    dev = load_the_projects_stream(tatolabd, app_directory, "dev")
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     stream_id = stream_id_of_the_project(app_directory)
     live_graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
@@ -642,6 +643,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     frames_written = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
     dev.interrupt()
     assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
+    assert dev.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
     stream_output = the_first_streams_output(tatolabd, stream_id)
     assert_the_effect_carried_live_video(
@@ -675,9 +677,9 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
 
     The finding sits in a function nothing calls, so the app needs neither
     cupy nor CUDA to run: the check reads source, and this proves a finding in
-    it reaches the terminal of the user who ran `tatolab run` — ahead of the
-    note that the stream loaded — without costing the start. The runtime's log
-    carries the same block.
+    it reaches the terminal of the user who ran `tatolab run` — on its standard
+    error, beside the running line on its standard output — without costing the
+    start. The runtime's log carries the same block.
     """
     app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
@@ -690,11 +692,10 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
     )
     tatolabd = start_tatolabd()
 
-    tatolab_run = attach_the_projects_stream(tatolabd, app_directory)
-    tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolab_run = load_the_projects_stream(tatolabd, app_directory)
+    loaded = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab_run.interrupt()
-    assert tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab_run.recent_stderr()
+    assert tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
     output = tatolab_run.stderr_text
     assert f"{SCAFFOLDED_EFFECT_MODULE_PATH}:" in output and "imports `cupy`" in output, (
@@ -705,9 +706,9 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
         f"the warning block on `tatolab run`'s standard error must name the device literal; it "
         f"ended:\n{tatolab_run.recent_stderr()}"
     )
-    loaded_note = f"tatolab: {stream_id_of_the_project(app_directory)} loaded"
-    assert output.index("cross-floor check") < output.index(loaded_note), (
-        f"the warning block must come ahead of the loaded note:\n{output}"
+    assert "cross-floor check" in output, output
+    assert loaded["stream_id"] == stream_id_of_the_project(app_directory), (
+        f"the load the warning came with must still start the stream: {loaded}"
     )
     assert "imports `cupy`" in tatolabd.stderr_text, (
         f"the runtime's log must carry the compile's warning block too; it ended:\n"
@@ -775,7 +776,7 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     )
     tatolabd = start_tatolabd()
     launched_at = time.monotonic()
-    fleet = attach_the_projects_stream(tatolabd, fleet_app, "dev")
+    fleet = load_the_projects_stream(tatolabd, fleet_app, "dev")
     # Waited for on a bound far above the budget rather than on the budget
     # itself: a wait that expires exactly at the ceiling can only ever report a
     # timeout, and what a blown budget should say is how long it actually took.
@@ -800,7 +801,8 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
         f"not absorb that"
     )
     fleet.interrupt()
-    assert fleet.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+    assert fleet.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, fleet.recent_stderr()
+    assert fleet.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still unload cleanly"
     )
     tatolabd.await_stderr_containing(
@@ -873,7 +875,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     tatolabd = start_tatolabd()
     local_api = tatolabd.local_api_client()
 
-    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
+    dev = load_the_projects_stream(tatolabd, app_directory, "dev")
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
     node_ids_before_the_bad_save = node_ids_of(
@@ -901,7 +903,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert node_ids_of(local_api.graph(stream=stream_id)) == node_ids_before_the_bad_save, (
         "a bad save must leave the same load of the stream running"
     )
-    assert [listed["state"] for listed in local_api.list_streams()] == ["attached"]
+    assert [listed["state"] for listed in local_api.list_streams()] == ["running"]
     assert the_stream_stopped_log_line(stream_id) not in tatolabd.stderr_text, (
         "the stream stopped although the bad save was to leave it running"
     )
@@ -965,14 +967,14 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     )
     tatolabd = start_tatolabd()
 
-    attached = attach_the_projects_stream(tatolabd, app_directory)
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
 
-    assert attached.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1
-    output = attached.stderr_text
+    assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1
+    output = stream_run.stderr_text
     assert "Traceback (most recent call last)" not in output, (
         f"an engine-side failure must not arrive as a launcher traceback; output was:\n{output}"
     )
-    refusal = attached.refusal()
+    refusal = stream_run.refusal()
     assert refusal is not None, f"`tatolab run` must end on the runtime's refusal; output was:\n{output}"
     assert "`tatolab.stream:TestPatternSource`" in refusal, refusal
     assert "width: invalid type" in refusal, refusal
@@ -1005,18 +1007,18 @@ def test_a_stream_function_that_raises_loads_nothing(
     )
     tatolabd = start_tatolabd()
 
-    attached = attach_the_projects_stream(tatolabd, app_directory, verb)
+    stream_run = load_the_projects_stream(tatolabd, app_directory, verb)
 
     if verb == "run":
-        assert attached.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, (
+        assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, (
             f"a raising stream function must exit non-zero; standard error:\n"
-            f"{attached.recent_stderr()}"
+            f"{stream_run.recent_stderr()}"
         )
     else:
-        attached.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
-        attached.interrupt()
-        assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, attached.recent_stderr()
-    assert "ValueError: bad wiring" in attached.stderr_text, attached.recent_stderr()
+        stream_run.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
+        stream_run.interrupt()
+        assert stream_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, stream_run.recent_stderr()
+    assert "ValueError: bad wiring" in stream_run.stderr_text, stream_run.recent_stderr()
     assert tatolabd.local_api_client().list_streams() == [], (
         "a stream whose function raised must never be loaded"
     )

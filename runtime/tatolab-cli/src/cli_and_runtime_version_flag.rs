@@ -20,10 +20,8 @@ use crate::machine_runtime_local_api_socket::{
     holder_serving_another_user, local_api_socket_of_the_running_runtime,
 };
 use crate::stream_actions_on_the_runtime::tool_result_from;
+use crate::stream_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
 use crate::verb_standard_output::write_verb_standard_output;
-
-/// The local API tool `--version` reads the runtime's description from.
-const DESCRIBE_RUNTIME_TOOL_NAME: &str = "describe_runtime";
 
 /// The runtime line when nothing answers at the machine's local API socket.
 const NO_RUNTIME_ANSWERS_RUNTIME_LINE: &str = "runtime: not running";

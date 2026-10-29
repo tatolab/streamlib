@@ -116,7 +116,7 @@ def test_adding_a_processor_loads_nothing_into_the_app(
             MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE: str(module_import_record_directory)
         },
     )
-    tatolabd.await_the_latest_attached_stream_loaded()
+    tatolabd.await_the_latest_stream_loaded()
     imported_by_the_load = importing_process_ids_recorded_in(module_import_record_directory)
     tatolabd.await_marker("SINK_PID")
     imported_while_running = importing_process_ids_recorded_in(module_import_record_directory)
@@ -434,7 +434,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
         compile_stream_to_graph(stale_build_labelled_source),
         project_directory=child_startup_directory,
     )
-    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     tatolabd.await_stderr_containing(HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT)
     processor_states = {
         node["name"]: node.get("components", {}).get("state")

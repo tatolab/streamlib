@@ -3,7 +3,7 @@
 
 //! `tatolab`'s MCP client of the machine's runtime: `rmcp`'s client over the runtime's local API
 //! socket, at the latest revision — one request per call over `POST /mcp`, or a connection of its
-//! own over the `/mcp/stdio` upgrade, which an attached stream lives as long as.
+//! own over the `/mcp/stdio` upgrade, which `dev` holds for as long as it follows a stream.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -144,7 +144,7 @@ impl LocalApiMcpToolClient {
 
     /// Connect to the local API at `local_api_socket_path` over a `/mcp/stdio` upgrade of its
     /// own, through `server/discover`, bounding the upgrade, the connect and every later request
-    /// by `request_timeout`. The runtime ties every stream this connection attaches to its life.
+    /// by `request_timeout`.
     pub(crate) async fn connect_over_an_mcp_stdio_upgrade(
         local_api_socket_path: &Path,
         request_timeout: Duration,
@@ -456,7 +456,10 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             async |local_api_mcp_tool_client| {
                 let first = local_api_mcp_tool_client
-                    .call_tool("run_stream", json_object(json!({"keep": false})))
+                    .call_tool(
+                        "run_stream",
+                        json_object(json!({"project_directory": "/srv/project"})),
+                    )
                     .await
                     .unwrap();
                 let second = local_api_mcp_tool_client
@@ -481,7 +484,7 @@ mod tests {
             [
                 RecordedToolCall {
                     tool_name: "run_stream".to_owned(),
-                    tool_arguments: json!({"keep": false}),
+                    tool_arguments: json!({"project_directory": "/srv/project"}),
                     tool_call_transport: StubToolCallTransport::McpStdioConnection,
                 },
                 RecordedToolCall {

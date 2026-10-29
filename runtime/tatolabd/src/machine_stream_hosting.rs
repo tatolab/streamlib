@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Hosting the machine's streams: the engine built over the state directory,
-//! the previous run's crash counted against the kept streams, the local API
-//! served at its fixed socket, the local relay joined, every kept stream
-//! neither stopped nor failed re-loaded, the run until a machine shutdown is
+//! the previous run's crash counted against the recorded streams, the local
+//! API served at its fixed socket, the local relay joined, every recorded
+//! stream neither stopped nor failed re-loaded, the run until a machine shutdown is
 //! requested and every stream has ended, and a teardown that drops the engine
 //! — or leaves it beneath the threads a stream abandoned.
 
@@ -17,8 +17,8 @@ use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
-    HowThePreviousRuntimeRunEnded, KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime,
-    OpenDescriptorSoftLimitRaise, Runner, RunnerConstructionOptions, RuntimeRunInProgressRecord,
+    HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime, OpenDescriptorSoftLimitRaise, Runner,
+    RunnerConstructionOptions, RuntimeRunInProgressRecord, StreamReloadAtTheStart,
     note_what_the_engine_teardown_is_waiting_on,
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
@@ -86,14 +86,16 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     crate::numbered_message_writer_test_node::register_the_numbered_message_writer_test_node();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::paired_group_writer_test_node::register_the_paired_group_writer_test_node();
-    if let Err(kept_streams_refusal) = engine
-        .keep_streams_in_the_state_directory(&tatolab_state_directory.kept_streams_directory())
+    if let Err(stream_records_refusal) = engine
+        .record_streams_in_the_state_directory(&tatolab_state_directory.stream_records_directory())
     {
         return write_refusal_to_standard_error(&format!(
-            "the runtime cannot keep streams: {kept_streams_refusal}"
+            "the runtime cannot record streams: {stream_records_refusal}"
         ));
     }
-    engine.count_the_previous_runtime_runs_end_against_the_kept_streams(how_the_previous_run_ended);
+    engine.count_the_previous_runtime_runs_end_against_the_recorded_streams(
+        how_the_previous_run_ended,
+    );
     runtime_run_in_progress_record.mark_the_previous_runs_end_counted();
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
@@ -128,14 +130,13 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                     A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
                 ),
             ));
-            log_the_kept_streams_reloaded_at_the_start(
-                &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
+            log_the_recorded_streams_reloaded_at_the_start(
+                &engine.reload_every_recorded_stream_neither_stopped_nor_failed(),
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
             streams_loaded_at_or_after_the_machine_shutdown_request = engine.every_loaded_stream();
-            // First, so no call reaches a stream as it ends, and every stream a
-            // connection attached unloads with its connection.
+            // First, so no call reaches a stream as it ends.
             drop(local_api_served_for_the_engine.take());
             drop(loopback_http_listener.take());
             drop(exposed_port_publisher.take());
@@ -250,13 +251,13 @@ fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise
 
 /// One line once the start's re-loads are over, counting them; the engine has
 /// already logged each by name, and the reason for each it skipped.
-fn log_the_kept_streams_reloaded_at_the_start(reloads: &[KeptStreamReloadAtTheStart]) {
+fn log_the_recorded_streams_reloaded_at_the_start(reloads: &[StreamReloadAtTheStart]) {
     let reloaded_count = reloads
         .iter()
-        .filter(|reload| matches!(reload, KeptStreamReloadAtTheStart::Reloaded { .. }))
+        .filter(|reload| matches!(reload, StreamReloadAtTheStart::Reloaded { .. }))
         .count();
     tracing::info!(
-        "the runtime is serving: {reloaded_count} kept streams re-loaded, {} skipped; it runs \
+        "the runtime is serving: {reloaded_count} recorded streams re-loaded, {} skipped; it runs \
          until a signal stops it",
         reloads.len() - reloaded_count
     );

@@ -46,9 +46,6 @@ const LOGS_TOOL_NAME: &str = "logs";
 /// The instance the stub's stream is loaded as until a re-load names another.
 pub const STUB_FIRST_STREAM_INSTANCE: &str = "1";
 
-/// The local API tool that loads a stream, kept or attached.
-const RUN_STREAM_TOOL_NAME: &str = "run_stream";
-
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
 
@@ -107,11 +104,6 @@ impl StubToolAnswer {
         }
     }
 }
-
-/// The text the stub's `run_stream` refuses `keep: false` with over `POST /mcp`, as a runtime's
-/// local API does: only a `/mcp/stdio` connection can hold an attached stream.
-pub const STUB_ATTACHED_LOAD_OVER_POST_REFUSAL_TEXT: &str =
-    "keep: false attaches the stream to a /mcp/stdio connection; a one-shot call can only keep";
 
 /// Which transport carried a `tools/call` to the stub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,18 +289,7 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
         {
             return std::future::pending().await;
         }
-        let attached_load_over_post = request.name == RUN_STREAM_TOOL_NAME
-            && self.tool_call_transport == StubToolCallTransport::StreamableHttpPost
-            && request
-                .arguments
-                .as_ref()
-                .and_then(|arguments| arguments.get("keep"))
-                == Some(&serde_json::Value::Bool(false));
-        let answer = if attached_load_over_post {
-            StubToolAnswer::tool_failure(STUB_ATTACHED_LOAD_OVER_POST_REFUSAL_TEXT)
-        } else {
-            self.stub_state.answer_for(&request)
-        };
+        let answer = self.stub_state.answer_for(&request);
         if let Some(stub_stream_re_load) = answer.re_loads_the_stream_as.clone() {
             self.stub_state.re_load_the_stream_as(stub_stream_re_load);
         }
@@ -741,7 +722,6 @@ impl Drop for StubLocalApiServer {
 /// `compile_warnings` to its standard error.
 pub fn run_stream_tool_result_text(
     stream: &str,
-    kept: bool,
     project_directory: &Path,
     node_count: usize,
     compile_warnings: &[&str],
@@ -750,16 +730,15 @@ pub fn run_stream_tool_result_text(
         "stream": stream,
         "display_name": "main",
         "stream_instance": STUB_FIRST_STREAM_INSTANCE,
-        "kept": kept,
         "location": {"project_directory": project_directory, "stream_function": "stream:main"},
         "node_count": node_count,
-        "replaced_the_kept_record": false,
+        "replaced_a_recorded_stream": false,
         "compile_warnings": compile_warnings,
     })
     .to_string()
 }
 
 /// The text a runtime's `stop_stream` answers with.
-pub fn stop_stream_tool_result_text(stream: &str, kept: bool) -> String {
-    serde_json::json!({ "stream": stream, "stopped": true, "kept": kept }).to_string()
+pub fn stop_stream_tool_result_text(stream: &str) -> String {
+    serde_json::json!({ "stream": stream, "stopped": true }).to_string()
 }

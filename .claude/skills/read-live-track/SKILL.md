@@ -21,7 +21,7 @@ stream lab, node encoder, port encoded_video, machine desk
 ```bash
 tatolab expose lab encoder encoded_video        # private: this machine only
 ```
-Make it internal again when the read is done (`tatolab expose --remove lab encoder encoded_video`) — only a port you exposed. On a kept stream, both are recorded over what its function exposes, across restarts.
+Make it internal again when the read is done (`tatolab expose --remove lab encoder encoded_video`) — only a port you exposed. Both are recorded over what its function exposes, across restarts.
 
 ### 3. Read a bounded run of objects
 ```bash

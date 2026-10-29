@@ -13,7 +13,7 @@ Turns "a stream is running" into "this stream answers, and here is its id." A ma
 ```bash
 tatolab streams
 ```
-Read the `NAME` of the row you want (see `list-running-streams`). Only an `attached` or `kept` stream is loaded.
+Read the `ID` of the row you want (see `list-running-streams`). Only a `running` stream with a node count is loaded.
 
 ### 2. Health-check it
 ```bash
@@ -28,7 +28,7 @@ Pass the same stream id to every later verb: `graph --stream <stream id>`, `logs
 
 ## A runtime of the session's own
 
-The machine's runtime belongs to the owner: its kept streams, its state directory, and the machine lock. A session that needs a runtime to load its own stream into — a worktree build, a change under test — starts an isolated one from the test-only build instead of stopping or reusing the machine's:
+The machine's runtime belongs to the owner: its recorded streams, its state directory, and the machine lock. A session that needs a runtime to load its own stream into — a worktree build, a change under test — starts an isolated one from the test-only build instead of stopping or reusing the machine's:
 
 ```bash
 cargo xtask build-runtime --machine-directories-under-a-test-root
@@ -40,11 +40,11 @@ export TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)"
 ```
 The pid and, once it ends, the exit status land in files, because a later Bash call cannot `wait` on a process an earlier one started.
 
-- The test-only build moves the machine lock, the state directory and the runtime directory — the local API socket among them — under `TATOLAB_TEST_MACHINE_ROOT`, so it runs beside the machine's runtime and re-loads none of its kept streams. Keep the root short, under `/tmp`: socket paths must stay under 104 bytes.
+- The test-only build moves the machine lock, the state directory and the runtime directory — the local API socket among them — under `TATOLAB_TEST_MACHINE_ROOT`, so it runs beside the machine's runtime and re-loads none of its recorded streams. Keep the root short, under `/tmp`: socket paths must stay under 104 bytes.
 - A test build never binds the machine's relay or HTTP ports. It runs a local relay only with both `TATOLAB_TEST_LOCAL_RELAY_*_PORT`s set, and serves the loopback listing and `/watch` only with `TATOLAB_TEST_LOOPBACK_HTTP_PORT` set — so its tracks are read at `http://127.0.0.1:14443` and its listing is `http://127.0.0.1:14446/` above, never `4443` / `4446`, which are the machine's runtime's. Pick free ports when another session runtime holds those.
 - Drive it with its own `tatolab`, `target/tatolab-runtime/bin/tatolab` — an installed `tatolab` on PATH is a release build and reaches the machine's runtime instead. It refuses to run without `TATOLAB_TEST_MACHINE_ROOT`, and only reaches this runtime with the same value. Shell state does not persist between Bash calls, so set it on every call that runs a verb.
 - Set every stream setting on `tatolabd`, not on `tatolab run`: the runtime compiles a stream and starts its processor interpreters with its own environment, never the caller's (`STREAMLIB_CAMERA_DEVICE=/dev/videoN target/tatolab-runtime/bin/tatolabd …`).
-- Poll `tatolab streams` until it answers (`No streams in this runtime.`), then load: `tatolab run --dir <project> &` (attached) or `tatolab run -d --dir <project>` (kept, in this root's state directory only); each prints the stream id the later verbs take.
+- Poll `tatolab streams` until it answers (`No streams in this runtime.`), then load: `tatolab run --dir <project>` records the stream in this root's state directory, prints `<stream id> running as "<display name>" (…)` and returns; that id is the one the later verbs take. `tatolab logs -f --stream <stream id>` follows its records; Ctrl-C ends the following, never the stream.
 - It is a test build, never a release: the fixture drivers under the engine's `tests/fixtures/` refuse it, so rebuild with plain `cargo xtask build-runtime` before running one. End this runtime first (`stop-running-stream`): a rebuild replaces the lend its processor interpreters borrow and the binaries in `bin/`, whichever kind it builds. The devices are still the machine's — one consumer per `/dev/videoN`.
 - End it with `stop-running-stream`, then delete the root.
 

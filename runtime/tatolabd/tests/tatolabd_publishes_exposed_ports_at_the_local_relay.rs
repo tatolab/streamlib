@@ -26,9 +26,9 @@ use std::time::Duration;
 
 use common::{
     LocalRelayPortsOfATest, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    a_kept_stream_record, a_port_free_for_udp_and_tcp_on,
-    an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_staged_local_relay_executable, the_stream_id_of_the_function,
+    a_port_free_for_udp_and_tcp_on, a_stream_record, an_executable_standing_in_for_the_interpreter,
+    call_a_tool_over_the_local_api, the_local_apis_answer_to_get,
+    the_staged_local_relay_executable, the_stream_id_of_the_function,
 };
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib_relay_adapter_local::LocalRelayListener;
@@ -117,7 +117,7 @@ impl TatolabdPublishingTheStream {
         for (function, graph) in streams {
             machine_root
                 .stream_records()
-                .write(&a_kept_stream_record(
+                .write(&a_stream_record(
                     function,
                     graph.clone(),
                     &machine_root.project_directory(),

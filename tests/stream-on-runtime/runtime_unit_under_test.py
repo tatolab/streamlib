@@ -97,12 +97,12 @@ class MachineDirectoriesUnderATestRoot:
 
     @property
     def state_directory(self) -> Path:
-        """`R/state/`: the kept streams and the runtime's own log."""
+        """`R/state/`: the recorded streams and the runtime's own log."""
         return self.root / "state"
 
     @property
-    def kept_streams_directory(self) -> Path:
-        """`R/state/streams/`, one record per kept stream."""
+    def streams_directory(self) -> Path:
+        """`R/state/streams/`, one record per recorded stream."""
         return self.state_directory / "streams"
 
     @property

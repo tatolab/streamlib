@@ -252,7 +252,7 @@ pass "on macOS the installer refuses, pointing at the app"
 # --- --uninstall leaves the state directory --------------------------------
 
 as_the_test_user mkdir -p "$test_user_home/.local/state/tatolab/streams"
-as_the_test_user touch "$test_user_home/.local/state/tatolab/streams/a-kept-stream"
+as_the_test_user touch "$test_user_home/.local/state/tatolab/streams/a-recorded-stream"
 run_the_installer --uninstall
 [ "$(as_the_test_user systemctl --user is-active tatolabd.service || true)" != "active" ] ||
 	fail "tatolabd.service still runs after --uninstall"
@@ -261,6 +261,6 @@ run_the_installer --uninstall
 for executable_name in tatolab tatolabd; do
 	[ ! -L "$test_user_home/.local/bin/$executable_name" ] || fail "--uninstall left $test_user_home/.local/bin/$executable_name"
 done
-[ -e "$test_user_home/.local/state/tatolab/streams/a-kept-stream" ] ||
+[ -e "$test_user_home/.local/state/tatolab/streams/a-recorded-stream" ] ||
 	fail "--uninstall removed the state directory"
 pass "--uninstall removes the service and the files and leaves the state directory"

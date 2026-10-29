@@ -243,7 +243,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     )
 
     tatolabd = start_tatolabd()
-    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    tatolab_run = tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory))
     tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
     client = ScriptedMcpClient(tatolabd.local_api_client())
@@ -396,5 +396,4 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     )
     assert dict(EXPLICIT_ARGUMENT.findall(camera_add_step))["type"] in catalog_paths
 
-    tatolab_run.interrupt()
-    assert tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab_run.recent_stderr()
+    assert tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0

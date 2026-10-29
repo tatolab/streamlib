@@ -13,7 +13,7 @@ use common::tatolab_binary_run::{
 };
 
 #[test]
-fn the_mcp_help_names_the_launch_line_and_what_an_attached_stream_lives_as_long_as() {
+fn the_mcp_help_names_the_launch_line_and_that_a_stream_outlives_the_connection() {
     let mcp_help = run_tatolab_reading_no_runtime_directory(&["mcp", "--help"]);
 
     assert!(
@@ -26,7 +26,7 @@ fn the_mcp_help_names_the_launch_line_and_what_an_attached_stream_lives_as_long_
         "claude mcp add tatolab -- tatolab mcp",
         "ssh <machine> tatolab mcp",
         "without reading them",
-        "lives as long as this connection",
+        "outlives this connection",
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
     }

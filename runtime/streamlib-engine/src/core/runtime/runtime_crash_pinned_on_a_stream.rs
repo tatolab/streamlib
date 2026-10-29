@@ -325,7 +325,7 @@ impl RuntimeRunInProgressRecord {
         ))
     }
 
-    /// Say the previous run's end is counted against the kept streams, so
+    /// Say the previous run's end is counted against the recorded streams, so
     /// this run's end no longer puts it back.
     pub fn mark_the_previous_runs_end_counted(&mut self) {
         self.previous_runs_record_until_it_is_counted = None;

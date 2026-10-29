@@ -86,14 +86,14 @@ impl StreamRecord {
     }
 
     /// The state the stream is listed in while it is not loaded: failed
-    /// before stopped, and kept otherwise.
+    /// before stopped, and running otherwise.
     pub fn listing_state(&self) -> StreamListingState {
         if self.is_failed() {
             StreamListingState::Failed
         } else if self.stopped {
             StreamListingState::Stopped
         } else {
-            StreamListingState::Kept
+            StreamListingState::Running
         }
     }
 

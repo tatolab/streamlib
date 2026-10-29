@@ -25,15 +25,13 @@
 //! `graph` and `logs` show rather than this call.
 //!
 //! A stream action blocks — a load runs the project's compile and describes
-//! its types — so each runs on a blocking task. `run_stream` with `keep:
-//! false` attaches the stream to the `/mcp/stdio` connection that carried the
-//! call, which unloads it when it closes; a one-shot `POST /mcp` only keeps.
+//! its types — so each runs on a blocking task. Every stream `run_stream`
+//! loads is recorded, whichever connection carried the call, and outlives it.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -57,9 +55,8 @@ use streamlib::sdk::graph::{
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    LoadedStreamHolding, LoadedStreamTag, LogRecordsPageOfOneLoadedStream,
-    OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
-    StreamListingState, StreamLocation, StreamRunOutcome,
+    LoadedStreamTag, LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+    RunStreamRequest, RuntimeOperations, StreamListingState, StreamLocation,
 };
 use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -90,7 +87,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` lists them, each by its stream id with its display name and location, attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, `rename_stream` shows one under another display name — recorded, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` lists them, each by its stream id with its display name and location, running, stopped or failed — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. Every stream it loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_stream` ends it: closing the connection that carried the call unloads nothing. `stop_stream` unloads a stream and records it stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, `rename_stream` shows one under another display name — recorded, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level on the stream's record. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -108,101 +105,16 @@ const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph t
 
 /// What a stream action's `stream` argument says.
 const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
-    "The stream, by the stream id `list_streams` reports: loaded, or kept and not loaded.";
+    "The stream, by the stream id `list_streams` reports: loaded, or recorded and not loaded.";
 
-/// The tool error `run_stream` answers `keep: false` with on a one-shot `POST
-/// /mcp` call, which has no connection to attach a stream to.
-pub(crate) const RUN_STREAM_ATTACHED_OVER_A_ONE_SHOT_CALL_REFUSAL: &str = "a one-shot call can only keep (`keep: true`); an attached stream lives on a `/mcp/stdio` connection, which `tatolab run` and `tatolab mcp` hold";
-
-/// Which local API connection a handler serves, and so whether a stream can be
-/// attached to it.
-#[derive(Clone)]
+/// Which local API connection a handler serves, and so which MCP protocol
+/// versions it answers with.
+#[derive(Clone, Copy)]
 pub(crate) enum LocalApiMcpConnection {
-    /// A `POST /mcp` request, which ends with its answer: a stream it loads is
-    /// kept.
+    /// A `POST /mcp` request, which ends with its answer.
     OneShotStreamableHttpRequest,
-    /// One `/mcp/stdio` upgraded connection, which unloads the streams it
-    /// attached when it closes.
-    McpStdio(Arc<StreamsAttachedToOneMcpStdioConnection>),
-}
-
-/// The streams one `/mcp/stdio` connection attached, unloaded when it closes.
-#[derive(Default)]
-pub(crate) struct StreamsAttachedToOneMcpStdioConnection {
-    attached_streams_while_open: Mutex<Option<Vec<(String, LoadedStreamTag)>>>,
-}
-
-impl StreamsAttachedToOneMcpStdioConnection {
-    /// A connection just upgraded, which has attached nothing.
-    pub(crate) fn of_a_connection_just_opened() -> Arc<Self> {
-        Arc::new(Self {
-            attached_streams_while_open: Mutex::new(Some(Vec::new())),
-        })
-    }
-
-    /// The tags of the loads this connection attached, while it is open.
-    fn stream_tags_attached_while_open(&self) -> Vec<LoadedStreamTag> {
-        self.attached_streams_while_open
-            .lock()
-            .iter()
-            .flatten()
-            .map(|(_stream_id, stream_tag)| *stream_tag)
-            .collect()
-    }
-
-    /// Attach the stream `run` loaded to this connection, or — when the
-    /// connection closed while the load ran — unload it now, so a stream is
-    /// never left attached to a connection that is gone. Blocks.
-    fn attach_or_unload_once_closed(
-        &self,
-        operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
-        run: &StreamRunOutcome,
-    ) {
-        let mut attached_streams_while_open = self.attached_streams_while_open.lock();
-        match attached_streams_while_open.as_mut() {
-            Some(attached_streams) => {
-                attached_streams.push((run.stream_id.clone(), run.stream_tag));
-            }
-            None => {
-                drop(attached_streams_while_open);
-                operations_on_the_loaded_streams
-                    .unload_the_attached_stream_if_still_the_same(&run.stream_id, run.stream_tag);
-            }
-        }
-    }
-
-    /// Mark the connection closed and unload every stream it attached that is
-    /// still the load it attached, each on a blocking task.
-    pub(crate) async fn close_and_unload_every_attached_stream(
-        &self,
-        operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    ) {
-        let attached_streams = self
-            .attached_streams_while_open
-            .lock()
-            .take()
-            .unwrap_or_default();
-        for (stream_id, stream_tag) in attached_streams {
-            let operations_on_the_loaded_streams = Arc::clone(operations_on_the_loaded_streams);
-            let stream_id_to_unload = stream_id.clone();
-            match tokio::task::spawn_blocking(move || {
-                operations_on_the_loaded_streams
-                    .unload_the_attached_stream_if_still_the_same(&stream_id_to_unload, stream_tag)
-            })
-            .await
-            {
-                Ok(true) => tracing::info!(
-                    "the attached stream `{stream_id}` was unloaded: the `/mcp/stdio` \
-                     connection that attached it closed"
-                ),
-                Ok(false) => {}
-                Err(join_failure) => tracing::warn!(
-                    "the attached stream `{stream_id}` was not unloaded as its connection \
-                     closed: {join_failure}"
-                ),
-            }
-        }
-    }
+    /// One `/mcp/stdio` upgraded connection.
+    McpStdio,
 }
 
 /// The runtime's MCP server handler: its tools, resources and prompts over the
@@ -236,22 +148,12 @@ impl LocalApiMcpServerHandler {
         }
     }
 
-    /// This handler for one `/mcp/stdio` connection just upgraded, and the
-    /// streams that connection attaches.
-    pub(crate) fn for_one_mcp_stdio_connection(
-        &self,
-    ) -> (Self, Arc<StreamsAttachedToOneMcpStdioConnection>) {
-        let streams_attached_to_the_connection =
-            StreamsAttachedToOneMcpStdioConnection::of_a_connection_just_opened();
-        (
-            Self {
-                mcp_connection: LocalApiMcpConnection::McpStdio(Arc::clone(
-                    &streams_attached_to_the_connection,
-                )),
-                ..self.clone()
-            },
-            streams_attached_to_the_connection,
-        )
+    /// This handler for one `/mcp/stdio` connection just upgraded.
+    pub(crate) fn for_one_mcp_stdio_connection(&self) -> Self {
+        Self {
+            mcp_connection: LocalApiMcpConnection::McpStdio,
+            ..self.clone()
+        }
     }
 
     /// The operations on the stream a `tool` call names, or the refusal —
@@ -424,10 +326,6 @@ struct RunStreamToolArguments {
         description = "The display name to show the stream under, in place of the function's own. The stream id comes from the location alone."
     )]
     name: Option<String>,
-    #[schemars(
-        description = "`true` keeps the stream in the runtime, re-loaded whenever the runtime starts; a kept run of the same location replaces the kept stream. `false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes; a one-shot `POST /mcp` call can only keep."
-    )]
-    keep: bool,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -711,7 +609,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream under its stream id, `<folder>-<function>-<hash>`, which the runtime computes from its location — the resolved project directory and the function's `module:qualname` — and answers as `stream`, beside its `display_name` (the function's name, or `name`) and its `location`. An id another location holds is refused naming both. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's location replaces it, keeping its display name unless `name` is given and the owner's exposure levels; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the location of a stream this connection attached replaces it. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream under its stream id, `<folder>-<function>-<hash>`, which the runtime computes from its location — the resolved project directory and the function's `module:qualname` — and answers as `stream`, beside its `display_name` (the function's name, or `name`) and its `location`. An id another location holds is refused naming both. The stream is recorded, re-loaded whenever the runtime starts until `stop_stream` or `remove_stream` ends it, and outlives the connection that carried this call. A run of a recorded stream's location replaces it, keeping its display name unless `name` is given and the owner's exposure levels; a replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -719,7 +617,6 @@ impl LocalApiMcpServerHandler {
             project_directory,
             stream_function,
             name,
-            keep,
         }): Parameters<RunStreamToolArguments>,
     ) -> ToolCallAnswer {
         if !project_directory.is_absolute() {
@@ -728,40 +625,13 @@ impl LocalApiMcpServerHandler {
                 project_directory.display()
             ));
         }
-        let streams_attached_to_this_connection = match (&self.mcp_connection, keep) {
-            (_, true) => None,
-            (LocalApiMcpConnection::McpStdio(streams_attached_to_this_connection), false) => {
-                Some(Arc::clone(streams_attached_to_this_connection))
-            }
-            (LocalApiMcpConnection::OneShotStreamableHttpRequest, false) => {
-                return Err(RUN_STREAM_ATTACHED_OVER_A_ONE_SHOT_CALL_REFUSAL.to_string());
-            }
-        };
         let run = self
             .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                let run = operations_on_the_loaded_streams.run_stream(RunStreamRequest {
+                operations_on_the_loaded_streams.run_stream(RunStreamRequest {
                     project_directory,
                     stream_function,
                     display_name: name,
-                    holding: if keep {
-                        LoadedStreamHolding::Kept
-                    } else {
-                        LoadedStreamHolding::Attached
-                    },
-                    stream_tags_attached_to_the_caller: streams_attached_to_this_connection
-                        .as_deref()
-                        .map(
-                            StreamsAttachedToOneMcpStdioConnection::stream_tags_attached_while_open,
-                        )
-                        .unwrap_or_default(),
-                })?;
-                if let Some(streams_attached_to_this_connection) =
-                    streams_attached_to_this_connection
-                {
-                    streams_attached_to_this_connection
-                        .attach_or_unload_once_closed(operations_on_the_loaded_streams, &run);
-                }
-                Ok(run)
+                })
             })
             .await?;
         serialized_tool_result(
@@ -770,17 +640,16 @@ impl LocalApiMcpServerHandler {
                 stream: run.stream_id,
                 display_name: run.display_name,
                 stream_instance: the_instance_of_the_load_tagged(run.stream_tag),
-                kept: keep,
                 location: stream_location_on_the_wire(run.stream_location),
                 node_count: run.node_count,
-                replaced_the_kept_record: run.replaced_the_kept_record,
+                replaced_a_recorded_stream: run.replaced_a_recorded_stream,
                 compile_warnings: run.compile_warnings,
             },
         )
     }
 
     #[tool(
-        description = "Unload a stream. A kept stream is recorded stopped, so it stays unloaded across a runtime restart until `start_stream`; an attached stream is gone. A kept stream already stopped, or failed, is refused. `not_recorded_because`, present only then, says why a kept stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
+        description = "Unload a stream and record it stopped, so it stays unloaded across a runtime restart until `start_stream`. A stream already stopped, or failed, is refused. `not_recorded_because`, present only then, says why a stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
     )]
     async fn stop_stream(
         &self,
@@ -796,14 +665,13 @@ impl LocalApiMcpServerHandler {
             &StopStreamToolResult {
                 stream: stopped.stream_id,
                 stopped: true,
-                kept: stopped.kept,
                 not_recorded_because: stopped.stop_not_recorded_because,
             },
         )
     }
 
     #[tool(
-        description = "Load and start a kept stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason. An attached stream is loaded again with `run_stream`."
+        description = "Load and start a recorded stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason."
     )]
     async fn start_stream(
         &self,
@@ -824,7 +692,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Unload a stream if it is loaded, and forget it if it is kept, so the runtime no longer re-loads it."
+        description = "Unload a stream if it is loaded, and forget its record, so the runtime no longer re-loads it."
     )]
     async fn remove_stream(
         &self,
@@ -870,7 +738,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_stream` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_stream` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
     )]
     async fn list_streams(
         &self,
@@ -900,7 +768,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. On a loaded kept stream a restriction is recorded before it changes live, and refused with the live level unchanged when it cannot be recorded. `not_recorded_because`, present only when `recorded` is false on a kept stream, says why a level raised live could not be recorded, so a runtime restart puts back the level it had."
+        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a recorded stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. On a loaded stream a restriction is recorded before it changes live, and refused with the live level unchanged when it cannot be recorded. `not_recorded_because`, present only when `recorded` is false, says why a level raised live could not be recorded, so a runtime restart puts back the level it had."
     )]
     async fn expose_port(
         &self,
@@ -1022,8 +890,7 @@ impl LocalApiMcpServerHandler {
 
 fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
     match state {
-        StreamListingState::Attached => ListedStreamState::Attached,
-        StreamListingState::Kept => ListedStreamState::Kept,
+        StreamListingState::Running => ListedStreamState::Running,
         StreamListingState::Stopped => ListedStreamState::Stopped,
         StreamListingState::Failed => ListedStreamState::Failed,
     }
@@ -1070,7 +937,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
             LocalApiMcpConnection::OneShotStreamableHttpRequest => {
                 Cow::Borrowed(MCP_PROTOCOL_VERSIONS_SERVED_OVER_POST_MCP)
             }
-            LocalApiMcpConnection::McpStdio(_) => {
+            LocalApiMcpConnection::McpStdio => {
                 Cow::Borrowed(MCP_PROTOCOL_VERSIONS_SERVED_OVER_MCP_STDIO)
             }
         }
@@ -1201,6 +1068,7 @@ pub(crate) mod tests {
     use crate::control_plane_stub_support::{
         LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_ID,
     };
+    use parking_lot::Mutex;
     use rmcp::RoleClient;
     use rmcp::model::{
         CallToolRequestParams, ClientCapabilities, GetPromptRequestParams,
@@ -2392,28 +2260,24 @@ pub(crate) mod tests {
         for (tool_name, arguments, what_the_refusal_must_name) in [
             (
                 "run_stream",
-                json!({ "project_directory": absolute_project_directory }),
+                json!({ "project_directory": absolute_project_directory, "keep": true }),
                 "keep",
             ),
-            ("run_stream", json!({ "keep": true }), "project_directory"),
+            ("run_stream", json!({}), "project_directory"),
             (
                 "run_stream",
-                json!({
-                    "project_directory": absolute_project_directory,
-                    "keep": true,
-                    "detach": true,
-                }),
+                json!({ "project_directory": absolute_project_directory, "detach": true }),
                 "detach",
             ),
             (
                 "run_stream",
-                json!({ "project_directory": "projects/camera", "keep": true }),
+                json!({ "project_directory": "projects/camera" }),
                 "absolute",
             ),
             (
                 "run_stream",
-                json!({ "project_directory": absolute_project_directory, "keep": "yes" }),
-                "yes",
+                json!({ "project_directory": absolute_project_directory, "name": 7 }),
+                "7",
             ),
             ("stop_stream", json!({}), "stream"),
             (
@@ -2500,29 +2364,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A one-shot `POST /mcp` has no connection to attach a stream to, so an
-    /// attached run is refused with the text that says where one lives.
-    #[tokio::test]
-    async fn run_stream_attached_over_a_one_shot_call_is_refused_saying_a_one_shot_call_can_only_keep()
-     {
-        let body = tool_call_result(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "run_stream",
-            json!({ "project_directory": "/home/someone/projects/camera", "keep": false }),
-        )
-        .await;
-
-        assert_eq!(body["isError"], true, "{body}");
-        assert_eq!(
-            body["content"][0]["text"],
-            RUN_STREAM_ATTACHED_OVER_A_ONE_SHOT_CALL_REFUSAL
-        );
-        assert!(
-            RUN_STREAM_ATTACHED_OVER_A_ONE_SHOT_CALL_REFUSAL
-                .starts_with("a one-shot call can only keep (`keep: true`)")
-        );
-    }
-
     /// A stream action the runtime refuses reaches the caller as a tool error
     /// in the runtime's own words, nothing added.
     #[tokio::test]
@@ -2530,7 +2371,7 @@ pub(crate) mod tests {
         for (tool_name, arguments, action) in [
             (
                 "run_stream",
-                json!({ "project_directory": "/home/someone/projects/camera", "keep": true }),
+                json!({ "project_directory": "/home/someone/projects/camera" }),
                 "run_stream",
             ),
             ("stop_stream", json!({ "stream": "camera" }), "stop_stream"),
@@ -2585,7 +2426,7 @@ pub(crate) mod tests {
                         "stream": STUB_STREAM_ID,
                         "display_name": STUB_STREAM_ID,
                         "location": null,
-                        "state": "attached",
+                        "state": "running",
                         "node_count": null,
                         "failed_because": null,
                     }]
@@ -2655,7 +2496,7 @@ pub(crate) mod tests {
         };
 
         let run_stream = input_schema_of("run_stream");
-        assert_eq!(required_of(&run_stream), ["keep", "project_directory"]);
+        assert_eq!(required_of(&run_stream), ["project_directory"]);
         let mut run_stream_arguments: Vec<&String> = run_stream["properties"]
             .as_object()
             .unwrap()
@@ -2664,7 +2505,7 @@ pub(crate) mod tests {
         run_stream_arguments.sort_unstable();
         assert_eq!(
             run_stream_arguments,
-            ["keep", "name", "project_directory", "stream_function"]
+            ["name", "project_directory", "stream_function"]
         );
 
         let expose_port = input_schema_of("expose_port");
@@ -3564,8 +3405,7 @@ pub(crate) mod tests {
     #[test]
     fn each_listing_state_reaches_the_wire_under_its_own_name() {
         for (engine_state, wire_spelling) in [
-            (StreamListingState::Attached, "attached"),
-            (StreamListingState::Kept, "kept"),
+            (StreamListingState::Running, "running"),
             (StreamListingState::Stopped, "stopped"),
             (StreamListingState::Failed, "failed"),
         ] {

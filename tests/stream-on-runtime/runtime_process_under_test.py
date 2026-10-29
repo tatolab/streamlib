@@ -12,9 +12,10 @@ line lists, so neither pipe can fill and wedge the runtime while a test waits.
 output, every loaded stream's records included. A node reports with
 `log.info("MARKER:<NAME> <json>")`; the line reaches `tatolabd`'s standard error
 through the helper log drain, wrapped in a log record, and is matched anywhere
-in the line. An attached `tatolab run` prints its stream's records on standard
-output and its own notes and refusal on standard error, so the marker waits
-read `tatolabd`'s standard error.
+in the line. `tatolab run` prints the line naming the stream it loaded on
+standard output and its refusal on standard error, and `tatolab dev` follows the
+stream's records on standard output, so the marker waits read `tatolabd`'s
+standard error.
 """
 
 from __future__ import annotations

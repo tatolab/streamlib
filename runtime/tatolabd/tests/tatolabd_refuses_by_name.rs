@@ -203,7 +203,7 @@ fn a_state_directory_path_that_is_not_a_directory_is_refused_naming_it() {
 }
 
 #[test]
-fn a_kept_streams_path_that_is_not_a_directory_is_refused_naming_it() {
+fn a_streams_directory_path_that_is_not_a_directory_is_refused_naming_it() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     std::fs::create_dir_all(machine_root.state_directory()).unwrap();
@@ -217,7 +217,7 @@ fn a_kept_streams_path_that_is_not_a_directory_is_refused_naming_it() {
     let refusal = run_tatolabd_to_its_refusal(&runtime_unit, &machine_root, &[]);
 
     assert!(
-        refusal.contains("the runtime cannot keep streams"),
+        refusal.contains("the runtime cannot record streams"),
         "{refusal}"
     );
     assert!(

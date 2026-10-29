@@ -407,7 +407,7 @@ mod against_an_isolated_machine {
                 "list_streams".to_owned(),
                 vec![StubToolAnswer::tool_result(
                     &json!({"streams": [{
-                        "stream": DESK_CAMERA_STREAM_ID, "display_name": "camera", "state": "kept",
+                        "stream": DESK_CAMERA_STREAM_ID, "display_name": "camera", "state": "running",
                         "location": {"project_directory": project_directory,
                                      "stream_function": "stream:camera"},
                         "node_count": 3, "failed_because": null,

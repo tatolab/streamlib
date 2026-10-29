@@ -188,7 +188,7 @@ mod tests {
                 "hello-main-3f2a9c",
                 "Hello camera",
                 Some("/srv/hello"),
-                ListedStreamState::Kept,
+                ListedStreamState::Running,
             ),
             listed(
                 "rig-front-0a1b2c",
@@ -251,7 +251,7 @@ mod tests {
             "desk-main-112233",
             "hello-main-3f2a9c",
             Some("/srv/desk"),
-            ListedStreamState::Kept,
+            ListedStreamState::Running,
         ));
 
         assert_eq!(

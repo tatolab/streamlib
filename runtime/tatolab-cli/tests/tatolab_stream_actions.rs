@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab run -d`, `stop`, `start`, `rm`, `rename`, `streams` and `expose` run as a user runs
+//! `tatolab run`, `stop`, `start`, `rm`, `rename`, `streams` and `expose` run as a user runs
 //! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
 //! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
@@ -30,7 +30,7 @@ fn listed_stream(
     project_directory: &Path,
 ) -> serde_json::Value {
     json!({
-        "stream": stream_id, "display_name": display_name, "state": "kept",
+        "stream": stream_id, "display_name": display_name, "state": "running",
         "location": {"project_directory": project_directory, "stream_function": "stream:main"},
         "node_count": 3, "failed_because": null,
     })
@@ -101,14 +101,13 @@ fn printed_by_a_successful(
 }
 
 #[test]
-fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
+fn run_loads_the_stream_prints_its_id_and_how_to_follow_it_and_returns() {
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "run_stream",
         StubToolAnswer::tool_result(&run_stream_tool_result_text(
             "cam",
-            true,
             &canonical_project_directory,
             3,
             &[],
@@ -119,7 +118,6 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
         &isolated_machine_directories,
         &[
             "run",
-            "-d",
             "stream.py:main",
             "--dir",
             project_directory.path().to_str().unwrap(),
@@ -131,7 +129,7 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
     assert_eq!(
         printed,
         format!(
-            "cam kept (project {})\n",
+            "cam running as \"main\" (project {}, stream:main)\n  follow it: tatolab logs -f\n",
             canonical_project_directory.display()
         )
     );
@@ -143,7 +141,6 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
                 "project_directory": canonical_project_directory,
                 "stream_function": "stream.py:main",
                 "name": "cam",
-                "keep": true,
             }),
             tool_call_transport: StubToolCallTransport::StreamableHttpPost,
         }]
@@ -151,14 +148,38 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
     assert_eq!(
         stub_local_api_server.recorded_mcp_stdio_request_heads(),
         [],
-        "a kept load is one call over POST /mcp, never a connection of its own"
+        "a load is one call over POST /mcp, never a connection of its own"
     );
 }
 
-/// The compile's standard error reaches the user's terminal: each line on `tatolab`'s stderr,
-/// and the kept line alone on its stdout.
 #[test]
-fn run_detached_prints_each_line_the_compile_wrote_on_its_standard_error() {
+fn run_takes_no_detach_flag() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering("run_stream", StubToolAnswer::tool_failure("unreached"));
+
+    for detach_flag in ["-d", "--detach"] {
+        let refused = isolated_machine_directories.run_tatolab(&[
+            "run",
+            detach_flag,
+            "--dir",
+            project_directory.path().to_str().unwrap(),
+        ]);
+
+        assert_eq!(refused.status.code(), Some(2), "{detach_flag}");
+        assert!(
+            standard_error_text(&refused).contains(&format!("unexpected argument '{detach_flag}'")),
+            "{detach_flag}: {}",
+            standard_error_text(&refused)
+        );
+    }
+    assert_eq!(stub_local_api_server.recorded_tool_calls(), []);
+}
+
+/// The compile's standard error reaches the user's terminal: each line on `tatolab`'s stderr,
+/// and the running lines alone on its stdout.
+#[test]
+fn run_prints_each_line_the_compile_wrote_on_its_standard_error() {
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     let compile_warnings = [
@@ -169,7 +190,6 @@ fn run_detached_prints_each_line_the_compile_wrote_on_its_standard_error() {
         "run_stream",
         StubToolAnswer::tool_result(&run_stream_tool_result_text(
             "cam",
-            true,
             &canonical_project_directory,
             3,
             &compile_warnings,
@@ -178,7 +198,6 @@ fn run_detached_prints_each_line_the_compile_wrote_on_its_standard_error() {
 
     let finished = isolated_machine_directories.run_tatolab(&[
         "run",
-        "-d",
         "--dir",
         project_directory.path().to_str().unwrap(),
     ]);
@@ -196,21 +215,20 @@ fn run_detached_prints_each_line_the_compile_wrote_on_its_standard_error() {
     assert_eq!(
         standard_output_text(&finished),
         format!(
-            "cam kept (project {})\n",
+            "cam running as \"main\" (project {}, stream:main)\n  follow it: tatolab logs -f\n",
             canonical_project_directory.display()
         )
     );
 }
 
 #[test]
-fn run_detached_sends_a_file_as_the_stream_function() {
+fn run_sends_a_file_as_the_stream_function() {
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "run_stream",
         StubToolAnswer::tool_result(&run_stream_tool_result_text(
             "other",
-            true,
             &canonical_project_directory,
             1,
             &[],
@@ -221,7 +239,6 @@ fn run_detached_sends_a_file_as_the_stream_function() {
         &isolated_machine_directories,
         &[
             "run",
-            "--detach",
             "-f",
             "other.py",
             "--dir",
@@ -234,13 +251,12 @@ fn run_detached_sends_a_file_as_the_stream_function() {
         [json!({
             "project_directory": canonical_project_directory,
             "stream_function": "other.py",
-            "keep": true,
         })]
     );
 }
 
 #[test]
-fn a_refused_detached_load_prints_the_runtimes_refusal_and_exits_one() {
+fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
         "run_stream",
@@ -252,7 +268,6 @@ fn a_refused_detached_load_prints_the_runtimes_refusal_and_exits_one() {
 
     let refused = isolated_machine_directories.run_tatolab(&[
         "run",
-        "-d",
         "--dir",
         project_directory.path().to_str().unwrap(),
     ]);
@@ -267,10 +282,10 @@ fn a_refused_detached_load_prints_the_runtimes_refusal_and_exits_one() {
 }
 
 #[test]
-fn stop_unloads_the_stream_and_says_a_kept_one_stays_stopped() {
+fn stop_unloads_the_stream_and_says_it_stays_stopped() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam", true)),
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam")),
     );
 
     let printed = printed_by_a_successful(&isolated_machine_directories, &["stop", "cam"]);
@@ -286,14 +301,13 @@ fn stop_unloads_the_stream_and_says_a_kept_one_stays_stopped() {
 }
 
 #[test]
-fn a_kept_stop_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
+fn a_stop_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
         "stop_stream",
         StubToolAnswer::tool_result(
             &json!({
                 "stream": "cam",
                 "stopped": true,
-                "kept": true,
                 "not_recorded_because": "the record /state/streams/cam.json cannot be read",
             })
             .to_string(),
@@ -349,7 +363,7 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
         "list_streams",
         StubToolAnswer::tool_result(
             &json!({"streams": [
-                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "kept",
+                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
                  "node_count": 3},
                 {"stream": "mic-listen-9f8e7d", "display_name": "Desk mic", "state": "stopped",
@@ -365,7 +379,7 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
     assert_eq!(
         printed,
         "ID                 NAME      STATE    NODES  PROJECT   FUNCTION\n\
-         cam-main-0a1b2c    main      kept     3      /srv/cam  stream:main\n\
+         cam-main-0a1b2c    main      running  3      /srv/cam  stream:main\n\
          mic-listen-9f8e7d  Desk mic  stopped  -      /srv/mic  stream:listen\n"
     );
     assert_eq!(
@@ -426,7 +440,7 @@ fn expose_sends_private_public_or_internal_by_its_flag() {
 }
 
 #[test]
-fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
+fn an_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
         "expose_port",
         StubToolAnswer::tool_result(
@@ -459,8 +473,8 @@ fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero(
 }
 
 #[test]
-fn a_kept_restriction_the_runtime_refused_for_its_record_exits_one_printing_nothing_on_stdout() {
-    let refusal = "the port `effect/video` of the kept stream `cam` was not restricted to \
+fn a_restriction_the_runtime_refused_for_its_record_exits_one_printing_nothing_on_stdout() {
+    let refusal = "the port `effect/video` of the stream `cam` was not restricted to \
                    internal, and is still public: the owner's ruling could not be recorded";
     let (isolated_machine_directories, _stub_local_api_server) =
         a_runtime_answering("expose_port", StubToolAnswer::tool_failure(refusal));
@@ -480,7 +494,7 @@ fn a_kept_restriction_the_runtime_refused_for_its_record_exits_one_printing_noth
 fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_action() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam", true)),
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam")),
     );
 
     let refused = isolated_machine_directories.run_tatolab(&["stop", "nope"]);
@@ -539,7 +553,7 @@ fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
             listed_stream("desk-main-0a1b2c", "Desk", Path::new("/srv/desk")),
         ],
         "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c", true)),
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c")),
     );
 
     printed_by_a_successful(&isolated_machine_directories, &["stop", "Hello camera"]);
@@ -560,7 +574,7 @@ fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_n
         (
             &["stop"][..],
             "stop_stream",
-            stop_stream_tool_result_text("hello-main-3f2a9c", true),
+            stop_stream_tool_result_text("hello-main-3f2a9c"),
             json!({"stream": "hello-main-3f2a9c"}),
         ),
         (
@@ -630,7 +644,7 @@ fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_noth
             listed_stream("rig-back-9f8e7d", "back", &canonical_project_directory),
         ],
         "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("rig-front-0a1b2c", true)),
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("rig-front-0a1b2c")),
     );
 
     let refused = run_tatolab_in(

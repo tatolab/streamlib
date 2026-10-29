@@ -3,7 +3,7 @@
 
 //! `tatolabd`: the machine's runtime. Holds the machine runtime lock, serves
 //! the local API at its fixed socket, joins the machine's relays, hosts
-//! every stream loaded into it and re-loads the kept ones at its start, in the
+//! every stream loaded into it and re-loads the recorded ones at its start, in the
 //! foreground and with no Python in its process.
 
 mod bundled_vulkan_driver_environment;

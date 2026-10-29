@@ -27,7 +27,7 @@ clap = { version = "4.5", features = ["derive"] }
 # The local API tools' JSON results, read into the shapes each verb prints.
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Signal mask and sigwait: the signals that stop an attached stream, and Ctrl-C ending a read.
+# Signal mask and sigwait: the signals that end dev's following, and Ctrl-C ending a read.
 libc = { workspace = true }
 # The CLI's failure types, each carrying the failure it came from as its source.
 thiserror = { workspace = true }

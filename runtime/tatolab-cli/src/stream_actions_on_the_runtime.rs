@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The streams the machine's runtime holds, managed one call at a time: `run -d`, `stop`,
-//! `start`, `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose,
-//! and the one line or table each prints. A verb naming one stream resolves its stream argument
-//! to an id through `list_streams` first. `run` attached and `dev` share the load request.
+//! The streams the machine's runtime holds, managed one call at a time: `run`, `stop`, `start`,
+//! `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
+//! lines or table each prints. A verb naming one stream resolves its stream argument to an id
+//! through `list_streams` first. `run` and `dev` share the load request.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -31,9 +31,9 @@ use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard
 pub(crate) enum StreamActionTool {
     /// Compiles a project's stream in its own interpreter and loads it.
     RunStream,
-    /// Unloads a stream, recording a kept one as stopped.
+    /// Unloads a stream, recording it stopped.
     StopStream,
-    /// Loads a stopped kept stream again.
+    /// Loads a stopped stream again, or retries a failed one.
     StartStream,
     /// Unloads a stream and forgets its record.
     RemoveStream,
@@ -167,12 +167,8 @@ impl StreamLoadRequest {
         })
     }
 
-    /// `run_stream`'s arguments for this request: kept in the runtime's state directory, or
-    /// attached to the connection that carries the call.
-    pub(crate) fn run_stream_tool_arguments(
-        &self,
-        keep: bool,
-    ) -> serde_json::Map<String, serde_json::Value> {
+    /// `run_stream`'s arguments for this request.
+    pub(crate) fn run_stream_tool_arguments(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut run_stream_arguments = serde_json::Map::new();
         run_stream_arguments.insert(
             "project_directory".to_owned(),
@@ -185,7 +181,6 @@ impl StreamLoadRequest {
         if let Some(display_name) = &self.display_name {
             run_stream_arguments.insert("name".to_owned(), display_name.clone().into());
         }
-        run_stream_arguments.insert("keep".to_owned(), keep.into());
         run_stream_arguments
     }
 }
@@ -204,8 +199,8 @@ fn utf8_text_of(
     })
 }
 
-/// What `run`, `run -d` and `dev` write to their standard error before anything else a load
-/// says: each line its compile wrote to its own.
+/// What `run` and `dev` write to their standard error before anything else a load says: each
+/// line its compile wrote to its own.
 pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolResult) -> String {
     run_stream_result
         .compile_warnings
@@ -258,8 +253,8 @@ pub(crate) fn counted(count: usize, noun: &str) -> String {
     }
 }
 
-/// `tatolab run -d`: load the stream kept, and print the line saying so.
-pub(crate) fn run_stream_kept(
+/// `tatolab run`: load the stream, print the lines naming it and how to follow it, and return.
+pub(crate) fn run_stream(
     stream_load_arguments: &StreamLoadArguments,
     caller_working_directory: &Path,
 ) -> Result<u8, TatolabCommandFailure> {
@@ -267,17 +262,28 @@ pub(crate) fn run_stream_kept(
         StreamLoadRequest::from_arguments(stream_load_arguments, caller_working_directory)?;
     let run_stream_result: RunStreamToolResult = call_one_stream_action_tool(
         StreamActionTool::RunStream,
-        stream_load_request.run_stream_tool_arguments(true),
+        stream_load_request.run_stream_tool_arguments(),
     )?;
     write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
-    write_verb_standard_output(&rendered_kept_stream_line(&run_stream_result))
+    write_verb_standard_output(&rendered_running_stream_lines(&run_stream_result))
 }
 
-fn rendered_kept_stream_line(run_stream_result: &RunStreamToolResult) -> String {
+/// The stream `run_stream` loaded, then how to follow it.
+fn rendered_running_stream_lines(run_stream_result: &RunStreamToolResult) -> String {
     format!(
-        "{} kept (project {})\n",
+        "{}\n  follow it: tatolab logs -f\n",
+        the_running_stream_described(run_stream_result)
+    )
+}
+
+/// `<id> running as "<display name>" (project <dir>, <module:function>)`.
+pub(crate) fn the_running_stream_described(run_stream_result: &RunStreamToolResult) -> String {
+    format!(
+        "{} running as \"{}\" (project {}, {})",
         run_stream_result.stream,
-        run_stream_result.location.project_directory.display()
+        run_stream_result.display_name,
+        run_stream_result.location.project_directory.display(),
+        run_stream_result.location.stream_function
     )
 }
 
@@ -310,7 +316,7 @@ pub(crate) fn stop_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCo
 
 fn rendered_stopped_stream_line(stop_stream_result: &StopStreamToolResult) -> String {
     let stream = &stop_stream_result.stream;
-    if stop_stream_result.kept && stop_stream_result.not_recorded_because.is_none() {
+    if stop_stream_result.not_recorded_because.is_none() {
         format!(
             "{stream} stopped; it stays stopped across restarts until `tatolab start {stream}`\n"
         )
@@ -319,8 +325,8 @@ fn rendered_stopped_stream_line(stop_stream_result: &StopStreamToolResult) -> St
     }
 }
 
-/// The warning a kept stream stopped but not recorded stopped earns: a restart of the runtime
-/// loads it again.
+/// The warning a stream stopped but not recorded stopped earns: a restart of the runtime loads
+/// it again.
 fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> Option<String> {
     stop_stream_result
         .not_recorded_because
@@ -515,13 +521,13 @@ fn rendered_exposed_port_line(expose_port_result: &ExposePortToolResult) -> Stri
     } = expose_port_result;
     let what_holds_it = match (recorded, not_recorded_because) {
         (true, _) => "recorded; it holds across restarts",
-        (false, None) => "live only: an attached stream keeps no record",
+        (false, None) => "live only: a stream its host loaded is never recorded",
         (false, Some(_)) => "live only: not recorded",
     };
     format!("{stream}/{node}/{port} is {level} ({what_holds_it})\n")
 }
 
-/// The warning a kept stream's level raised live but not recorded earns: a restart of the
+/// The warning a stream's level raised live but not recorded earns: a restart of the
 /// runtime puts back the level it had. A restriction that cannot be recorded is refused, and
 /// exits non-zero as every refusal does.
 fn exposure_not_recorded_warning_line(expose_port_result: &ExposePortToolResult) -> Option<String> {
@@ -574,12 +580,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            serde_json::Value::Object(stream_load_request.run_stream_tool_arguments(false)),
+            serde_json::Value::Object(stream_load_request.run_stream_tool_arguments()),
             json!({
                 "project_directory": "/srv/project",
                 "stream_function": "stream.py:main",
                 "name": "cam",
-                "keep": false,
             })
         );
     }
@@ -598,12 +603,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            serde_json::Value::Object(from_a_file.run_stream_tool_arguments(true)),
-            json!({"project_directory": "/srv/project", "stream_function": "other.py", "keep": true})
+            serde_json::Value::Object(from_a_file.run_stream_tool_arguments()),
+            json!({"project_directory": "/srv/project", "stream_function": "other.py"})
         );
         assert_eq!(
-            serde_json::Value::Object(from_nothing.run_stream_tool_arguments(true)),
-            json!({"project_directory": "/srv/project", "keep": true})
+            serde_json::Value::Object(from_nothing.run_stream_tool_arguments()),
+            json!({"project_directory": "/srv/project"})
         );
     }
 
@@ -616,8 +621,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            serde_json::Value::Object(named_nothing.run_stream_tool_arguments(true)),
-            json!({"project_directory": "/srv/project", "name": "", "keep": true})
+            serde_json::Value::Object(named_nothing.run_stream_tool_arguments()),
+            json!({"project_directory": "/srv/project", "name": ""})
         );
     }
 
@@ -651,13 +656,12 @@ mod tests {
             stream: "project-camera-3f2a9c".to_owned(),
             display_name: "camera".to_owned(),
             stream_instance: LoadedStreamInstance("4".to_owned()),
-            kept: true,
             location: StreamLocationOnTheWire {
                 project_directory: PathBuf::from("/srv/project"),
                 stream_function: "stream:camera".to_owned(),
             },
             node_count: 3,
-            replaced_the_kept_record: false,
+            replaced_a_recorded_stream: false,
             compile_warnings: compile_warnings
                 .iter()
                 .map(|compile_warning| compile_warning.to_string())
@@ -692,10 +696,11 @@ mod tests {
     }
 
     #[test]
-    fn the_kept_line_names_the_stream_id_and_its_project() {
+    fn the_running_lines_name_the_stream_id_display_name_location_and_how_to_follow_it() {
         assert_eq!(
-            rendered_kept_stream_line(&run_stream_result_warning(&[])),
-            "project-camera-3f2a9c kept (project /srv/project)\n"
+            rendered_running_stream_lines(&run_stream_result_warning(&[])),
+            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
+             follow it: tatolab logs -f\n"
         );
     }
 
@@ -719,7 +724,7 @@ mod tests {
     fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
         assert!(
             serde_json::from_str::<RunStreamToolResult>(
-                r#"{"stream": "project-camera-3f2a9c", "display_name": "camera", "stream_instance": "4", "kept": true, "location": {"project_directory": "/srv/project", "stream_function": "stream:camera"}, "node_count": 3, "replaced_the_kept_record": false}"#
+                r#"{"stream": "project-camera-3f2a9c", "display_name": "camera", "stream_instance": "4", "location": {"project_directory": "/srv/project", "stream_function": "stream:camera"}, "node_count": 3, "replaced_a_recorded_stream": false}"#
             )
             .is_err(),
             "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"
@@ -727,33 +732,22 @@ mod tests {
     }
 
     #[test]
-    fn stop_says_whether_the_stream_stays_stopped() {
+    fn stop_says_the_stream_stays_stopped() {
         assert_eq!(
             rendered_stopped_stream_line(&StopStreamToolResult {
                 stream: "camera".to_owned(),
                 stopped: true,
-                kept: true,
                 not_recorded_because: None,
             }),
             "camera stopped; it stays stopped across restarts until `tatolab start camera`\n"
         );
-        assert_eq!(
-            rendered_stopped_stream_line(&StopStreamToolResult {
-                stream: "camera".to_owned(),
-                stopped: true,
-                kept: false,
-                not_recorded_because: None,
-            }),
-            "camera stopped\n"
-        );
     }
 
     #[test]
-    fn a_kept_stop_the_runtime_could_not_record_warns_naming_why() {
+    fn a_stop_the_runtime_could_not_record_warns_naming_why() {
         let stop_stream_result: StopStreamToolResult = serde_json::from_value(json!({
             "stream": "camera",
             "stopped": true,
-            "kept": true,
             "not_recorded_because": "the record /state/streams/camera.json cannot be read",
         }))
         .unwrap();
@@ -794,7 +788,7 @@ mod tests {
     fn the_streams_table_lists_each_stream_by_id_with_its_name_and_location() {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
-                {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "attached",
+                {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
                  "node_count": 4},
                 {"stream": "a-back-9f8e7d", "display_name": "back", "state": "stopped",
@@ -806,9 +800,9 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID               NAME         STATE     NODES  PROJECT   FUNCTION\n\
-             cam-main-0a1b2c  Desk camera  attached  4      /srv/cam  stream:main\n\
-             a-back-9f8e7d    back         stopped   -      /srv/a    rigs:back\n"
+            "ID               NAME         STATE    NODES  PROJECT   FUNCTION\n\
+             cam-main-0a1b2c  Desk camera  running  4      /srv/cam  stream:main\n\
+             a-back-9f8e7d    back         stopped  -      /srv/a    rigs:back\n"
         );
         assert_eq!(rendered_streams_table(&[]), "No streams in this runtime.\n");
     }
@@ -817,7 +811,7 @@ mod tests {
     fn the_streams_table_says_under_it_why_each_failed_stream_failed() {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
-                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "kept",
+                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
                  "node_count": 4, "failed_because": null},
                 {"stream": "main", "display_name": "main", "state": "failed", "location": null,
@@ -828,9 +822,9 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID               NAME  STATE   NODES  PROJECT   FUNCTION\n\
-             cam-main-0a1b2c  main  kept    4      /srv/cam  stream:main\n\
-             main             main  failed  -      -         -\n\
+            "ID               NAME  STATE    NODES  PROJECT   FUNCTION\n\
+             cam-main-0a1b2c  main  running  4      /srv/cam  stream:main\n\
+             main             main  failed   -      -         -\n\
              \n\
              main failed: an earlier runtime recorded it.\n"
         );
@@ -872,13 +866,13 @@ mod tests {
         );
         assert_eq!(
             rendered_exposed_port_line(&exposed(false)),
-            "camera/effect/video is public (live only: an attached stream keeps no record)\n"
+            "camera/effect/video is public (live only: a stream its host loaded is never recorded)\n"
         );
         assert_eq!(exposure_not_recorded_warning_line(&exposed(true)), None);
     }
 
     #[test]
-    fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why() {
+    fn an_exposure_the_runtime_could_not_record_warns_naming_why() {
         let expose_port_result: ExposePortToolResult = serde_json::from_value(json!({
             "stream": "camera",
             "node": "effect",

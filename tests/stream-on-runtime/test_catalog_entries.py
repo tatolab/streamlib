@@ -44,7 +44,7 @@ def test_declared_replaced_refused_and_read_downstream(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(a_keeping_source_and_a_replacing_one_read_downstream)
-    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(stream=stream_id, timeout=GRAPH_READY_TIMEOUT_SECONDS)
 

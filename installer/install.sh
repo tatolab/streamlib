@@ -228,7 +228,7 @@ install_tatolab() {
 	fi
 	say_where_the_executables_are
 	say "Tatolab $release_version is installed. Start a stream with:"
-	say "  tatolab new my-stream && cd my-stream && uv sync && tatolab run -d"
+	say "  tatolab new my-stream && cd my-stream && uv sync && tatolab run"
 }
 
 uninstall_tatolab() {
@@ -246,7 +246,7 @@ uninstall_tatolab() {
 		esac
 	done
 	rm -rf "$TATOLAB_INSTALL_DIRECTORY"
-	say "Tatolab is uninstalled. Its state directory, with your kept streams and logs, is left in place:"
+	say "Tatolab is uninstalled. Its state directory, with your streams' records and logs, is left in place:"
 	say "  ${XDG_STATE_HOME:-$HOME/.local/state}/tatolab"
 }
 

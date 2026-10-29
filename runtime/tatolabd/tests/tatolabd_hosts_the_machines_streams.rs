@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolabd` hosting the machine's streams, GPU-free: the local API at its
-//! fixed socket, the state directory and the runtime's own log, the kept
+//! fixed socket, the state directory and the runtime's own log, the recorded
 //! streams it re-loads at its start, and an interrupt's clean stop. A stream's
 //! start creates the GPU context, so every stream here is refused at its start
 //! — the Vulkan loader is left no driver — and the started stream is asserted
@@ -14,9 +14,9 @@
 mod common;
 
 use common::{
-    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_kept_stream_record,
-    a_native_only_stream_graph, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_mode_of,
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
+    a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
+    the_local_apis_answer_to_get, the_mode_of,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -73,7 +73,7 @@ fn an_interrupt_stops_a_runtime_holding_no_stream_cleanly_and_removes_its_socket
     );
 }
 
-/// The state directory and its kept-streams directory are the owner's alone,
+/// The state directory and its streams directory are the owner's alone,
 /// and the records that belong to no stream land in the runtime's own log
 /// beneath it.
 #[test]
@@ -106,32 +106,32 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
     );
 }
 
-/// At its start the runtime re-loads every kept stream neither stopped nor
+/// At its start the runtime re-loads every recorded stream neither stopped nor
 /// failed, reporting each by its id: a stopped one is left unloaded, one whose
 /// interpreter is gone is recorded failed for it, one the engine could not
-/// start — no GPU — stays kept for the next start, and a record an earlier
+/// start — no GPU — is re-loaded at the next start, and a record an earlier
 /// runtime wrote is listed failed, keyed by its file name, the runtime still up.
 #[test]
-fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_named() {
+fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_named() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let stream_records = machine_root.stream_records();
     let [front, parked, orphan] = [
-        a_kept_stream_record(
+        a_stream_record(
             "front",
             a_native_only_stream_graph("front"),
             &machine_root.project_directory(),
             &an_executable_standing_in_for_the_interpreter(),
             false,
         ),
-        a_kept_stream_record(
+        a_stream_record(
             "parked",
             a_native_only_stream_graph("parked"),
             &machine_root.project_directory(),
             &an_executable_standing_in_for_the_interpreter(),
             true,
         ),
-        a_kept_stream_record(
+        a_stream_record(
             "orphan",
             a_native_only_stream_graph("orphan"),
             &machine_root.project_directory(),
@@ -178,19 +178,19 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
             "[start] Starting the stream `{}`",
             front.stream_id
         )),
-        "the kept stream `{}` was loaded and its start begun:\n{standard_error}",
+        "the recorded stream `{}` was loaded and its start begun:\n{standard_error}",
         front.stream_id
     );
     assert!(
         standard_error.contains(&format!(
-            "the kept stream `{}` was not re-loaded, and stays kept for the runtime's next start",
+            "the stream `{}` was not re-loaded, and is re-loaded at the runtime's next start",
             front.stream_id
         )),
         "{standard_error}"
     );
     assert!(
         standard_error.contains(&format!(
-            "the kept stream `{}` is stopped, so it is not re-loaded",
+            "the stream `{}` is stopped, so it is not re-loaded",
             parked.stream_id
         )),
         "{standard_error}"
@@ -201,7 +201,7 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
     );
     assert!(
         standard_error.contains(&format!(
-            "the kept stream `{}` did not re-load, and is failed",
+            "the stream `{}` did not re-load, and is failed",
             orphan.stream_id
         )),
         "{standard_error}"
@@ -221,7 +221,7 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("0 kept streams re-loaded, 3 skipped"),
+        standard_error.contains("0 recorded streams re-loaded, 3 skipped"),
         "{standard_error}"
     );
 
@@ -250,7 +250,7 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
     assert_eq!(listed_streams.len(), 4, "{listed}");
     assert_eq!(
         listing_of(&front.stream_id),
-        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "kept", "node_count": null, "failed_because": null})
+        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "running", "node_count": null, "failed_because": null})
     );
     assert_eq!(
         listing_of(&parked.stream_id),
@@ -289,22 +289,22 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
             machine_root
                 .current_stream_record_of(&record.stream_id)
                 .is_some(),
-            "the record of `{}` was kept",
+            "the record of `{}` stayed",
             record.stream_id
         );
     }
     runtime.interrupt_and_expect_a_clean_exit();
 }
 
-/// A kept stream's record round-trips through the runtime: the owner's
+/// A recorded stream's record round-trips through the runtime: the owner's
 /// ruling it records is written owner-only, read again by the next runtime
 /// on the machine, and `remove_stream` forgets it.
 #[test]
-fn a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed() {
+fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let stream_records = machine_root.stream_records();
-    let parked = a_kept_stream_record(
+    let parked = a_stream_record(
         "parked",
         a_native_only_stream_graph("parked"),
         &machine_root.project_directory(),
@@ -339,7 +339,7 @@ fn a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     assert_eq!(the_mode_of(&record_path), 0o600);
     let recorded = machine_root
         .current_stream_record_of(&parked_stream_id)
-        .expect("the record is kept");
+        .expect("the record stays");
     assert!(recorded.stopped);
     assert_eq!(
         serde_json::to_value(&recorded.exposure_rulings).unwrap(),

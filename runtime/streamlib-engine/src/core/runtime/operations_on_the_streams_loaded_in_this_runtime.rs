@@ -111,13 +111,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         port: &str,
         level: OutputPortExposureLevel,
     ) -> Result<OutputPortExposureOutcome>;
-
-    /// [`Runner::unload_the_attached_stream_if_still_the_same`].
-    fn unload_the_attached_stream_if_still_the_same(
-        &self,
-        stream_id: &str,
-        stream_tag: LoadedStreamTag,
-    ) -> bool;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -211,13 +204,5 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         level: OutputPortExposureLevel,
     ) -> Result<OutputPortExposureOutcome> {
         Runner::expose_port(self, stream_id, node, port, level)
-    }
-
-    fn unload_the_attached_stream_if_still_the_same(
-        &self,
-        stream_id: &str,
-        stream_tag: LoadedStreamTag,
-    ) -> bool {
-        Runner::unload_the_attached_stream_if_still_the_same(self, stream_id, stream_tag)
     }
 }
