@@ -1474,7 +1474,8 @@ impl Runner {
 
     /// Compile `record`'s stream again from its location, as a run of it, and
     /// load it — the project's run, for the record of a project whose entry
-    /// did not import.
+    /// did not import. That record names no entry, so one written for an entry
+    /// other than the project's own `stream.py` is refused, naming it.
     fn compile_and_run_a_recorded_stream_from_its_location(
         &self,
         record: &StreamRecord,
@@ -1488,6 +1489,17 @@ impl Runner {
                     record.interpreter.display()
                 ))
             })?;
+        if record.location.is_a_project_whose_entry_did_not_import()
+            && !the_same_directory(&project_directory, &record.location.project_directory)
+        {
+            return Err(Error::Configuration(format!(
+                "the stream `{}` records an entry in {} that did not import, and names no file \
+                 to compile again; run that entry again with `tatolab run` in {}",
+                record.stream_id,
+                record.location.project_directory.display(),
+                project_directory.display()
+            )));
+        }
         let run = self.run_stream(RunStreamRequest {
             project_directory,
             stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
@@ -1701,6 +1713,15 @@ fn the_project_directory_whose_venv_holds(interpreter: &Path) -> Option<PathBuf>
         return None;
     }
     venv.parent().map(Path::to_path_buf)
+}
+
+/// Whether `first` and `second` name one directory, symlinks resolved; spelled
+/// alike when either cannot be resolved.
+fn the_same_directory(first: &Path, second: &Path) -> bool {
+    match (std::fs::canonicalize(first), std::fs::canonicalize(second)) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => first == second,
+    }
 }
 
 /// The target that compiles the stream at `location` again: none for a
@@ -2896,6 +2917,41 @@ mod tests {
         assert!(
             the_current_record_in(state_directory.path(), &project.stream_id_of("camera"))
                 .is_some()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn starting_the_record_of_an_entry_other_than_the_projects_stream_py_is_refused_naming_it() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let rigs = project.path().join("rigs");
+        std::fs::create_dir(&rigs).unwrap();
+        let record_of_rigs = StreamRecord::of_a_stream_whose_compile_failed(
+            StreamLocation::of_a_project_whose_entry_did_not_import(rigs.clone()),
+            "rigs",
+            &project.stream_environment(),
+            "SyntaxError: invalid syntax",
+        );
+        records_in(state_directory.path())
+            .write(&record_of_rigs)
+            .unwrap();
+
+        let refusal = refusal_of(runner.start_stream(&record_of_rigs.stream_id));
+
+        assert!(refusal.contains(&rigs.display().to_string()), "{refusal}");
+        assert!(refusal.contains("tatolab run"), "{refusal}");
+        assert!(
+            !project.path().join("compile-arguments").exists(),
+            "nothing is compiled in place of the entry that did not import"
+        );
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &record_of_rigs.stream_id),
+            Some(record_of_rigs)
         );
     }
 

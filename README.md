@@ -150,9 +150,9 @@ tatolab dev                 # the test pattern through a GPU lens, encoded and s
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
 `stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
 starts it, and `dev` prints the stream's id and its records in your terminal. Save an edit and
-`dev` runs the stream again: the runtime compiles the edit and only then replaces the running
-stream, so an edit that fails to compile prints the refusal and leaves the running stream in place
-until a save that compiles. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
+`dev` runs the stream again, and the runtime replaces the running stream with the edit. An edit
+whose code fails unloads the stream and records it failed: `dev` prints the traceback and loads
+it again on the next save. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
 loads is recorded: it runs until `tatolab stop` or `tatolab rm`, and the runtime loads it again each
 time it starts. `tatolab run` loads the stream once, without watching for edits, prints its id and
 returns; `tatolab logs -f` follows its records.
