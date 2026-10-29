@@ -1180,11 +1180,12 @@ impl Runner {
 
     /// Record the stream a run compiled — failed with no graph when its
     /// function raised — keeping the owner's rulings of the record it
-    /// replaces, then unload the running stream and load and start the new
-    /// graph. A load or start that is refused records the stream failed with
-    /// the reason, unless a machine shutdown abandoned it, when the record is
-    /// left for the next start to load. A record that cannot be written leaves
-    /// the running stream as it was.
+    /// replaces, and load and start its graph. A replace is recorded first,
+    /// then the running stream unloaded; a new stream is recorded once loaded,
+    /// before its start, so a load a machine shutdown abandons leaves nothing
+    /// recorded. A load or start that is refused records the stream failed with
+    /// the reason. A record that cannot be written leaves the running stream as
+    /// it was.
     fn record_and_load_one_stream_a_run_compiled(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
@@ -1237,15 +1238,20 @@ impl Runner {
         if let Some(previous_record) = previous_record {
             stream_record.exposure_rulings = previous_record.exposure_rulings;
         }
-        stream_records.write(&stream_record)?;
-        if let Some(previously_loaded) = previously_loaded {
-            unload_a_stream_an_action_took_back(&previously_loaded, "its record is replaced");
+        let a_new_stream_recorded_once_loaded =
+            !replaced_a_recorded_stream && failed_because_its_code_gave_no_graph.is_none();
+        if !a_new_stream_recorded_once_loaded {
+            stream_records.write(&stream_record)?;
+            if let Some(previously_loaded) = previously_loaded {
+                unload_a_stream_an_action_took_back(&previously_loaded, "its record is replaced");
+            }
         }
         let state = match failed_because_its_code_gave_no_graph {
             Some(failed_because) => StreamStateAfterItsRun::Failed { failed_because },
             None => self.load_and_start_a_recorded_stream_recording_it_failed_when_refused(
                 stream_records,
                 &mut stream_record,
+                a_new_stream_recorded_once_loaded,
             )?,
         };
         Ok(StreamLoadedOrFailedByARun::of_the_record(
@@ -1255,17 +1261,18 @@ impl Runner {
         ))
     }
 
-    /// Load and start the graph `stream_record` holds; a refused load or start
-    /// records it failed with the reason, unless a machine shutdown abandoned
-    /// it, when the refusal is returned and the record left for the next start
-    /// to load.
+    /// Load the graph `stream_record` holds — writing the record once it is
+    /// loaded when `record_it_once_loaded` — then start it. A refused load or
+    /// start records the stream failed with the reason; a record that cannot
+    /// be written unloads the stream and is refused.
     fn load_and_start_a_recorded_stream_recording_it_failed_when_refused(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
         stream_record: &mut StreamRecord,
+        record_it_once_loaded: bool,
     ) -> Result<StreamStateAfterItsRun> {
         let loaded = match &stream_record.graph {
-            Some(graph_json) => self.load_and_start_a_stream(
+            Some(graph_json) => self.load_a_stream_with_the_owners_rulings(
                 OneStreamAStreamActionLoads::recorded_by(stream_record, graph_json),
             ),
             None => Err(Error::Runtime(format!(
@@ -1273,25 +1280,24 @@ impl Runner {
                 stream_record.stream_id
             ))),
         };
-        match loaded {
-            Ok(stream) => Ok(StreamStateAfterItsRun::Running {
-                stream_tag: stream.stream_tag(),
-                node_count: stream.node_count(),
-            }),
-            Err(load_refusal) if is_the_machines_shutdown_requested() => Err(load_refusal),
+        let stream = match loaded {
+            Ok(stream) => stream,
             Err(load_refusal) => {
-                let failed_because = load_refusal.to_string();
-                stream_record.failed_because = Some(failed_because.clone());
-                if let Err(not_written) = stream_records.write(stream_record) {
-                    tracing::error!(
-                        "the stream `{}` did not load, and was not recorded failed, so the \
-                         runtime's next start loads it again: {not_written}",
-                        stream_record.stream_id
-                    );
-                }
-                Ok(StreamStateAfterItsRun::Failed { failed_because })
+                return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
             }
+        };
+        if record_it_once_loaded && let Err(not_written) = stream_records.write(stream_record) {
+            unload_a_stream_an_action_took_back(&stream, "its record was not written");
+            return Err(not_written);
         }
+        if let Err(start_refusal) = stream.start() {
+            unload_a_stream_an_action_took_back(&stream, "its start was refused");
+            return record_a_refused_load_failed(stream_records, stream_record, start_refusal);
+        }
+        Ok(StreamStateAfterItsRun::Running {
+            stream_tag: stream.stream_tag(),
+            node_count: stream.node_count(),
+        })
     }
 
     /// The record of `stream_location` a run of it replaces, and its stream
@@ -1741,6 +1747,28 @@ fn the_stream_target_that_compiles_a_location_again(location: &StreamLocation) -
         }
     }
     Some(location.stream_function.clone())
+}
+
+/// Record `stream_record` failed for `refusal`, its load or start refused, and
+/// answer it failed — unless a machine shutdown abandoned it, when the refusal
+/// is returned and the record left as it was.
+fn record_a_refused_load_failed(
+    stream_records: &StreamRecordsInTheStateDirectory,
+    stream_record: &mut StreamRecord,
+    refusal: Error,
+) -> Result<StreamStateAfterItsRun> {
+    if is_the_machines_shutdown_requested() {
+        return Err(refusal);
+    }
+    let failed_because = refusal.to_string();
+    stream_record.failed_because = Some(failed_because.clone());
+    if let Err(not_written) = stream_records.write(stream_record) {
+        tracing::error!(
+            "the stream `{}` did not load, and was not recorded failed: {not_written}",
+            stream_record.stream_id
+        );
+    }
+    Ok(StreamStateAfterItsRun::Failed { failed_because })
 }
 
 /// Refuse a display name that is empty or only whitespace: a stream is always
