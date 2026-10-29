@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.58.0](https://github.com/tatolab/streamlib/compare/v0.57.0...v0.58.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** every loaded stream persists — keep, run -d and the attached state go away ([#2965](https://github.com/tatolab/streamlib/issues/2965))
+
+### Features
+
+* **runtime:** every loaded stream persists — keep, run -d and the attached state go away ([#2965](https://github.com/tatolab/streamlib/issues/2965)) ([4b03d61](https://github.com/tatolab/streamlib/commit/4b03d6112a1bf270687a04d7cfd3b8bb2e3364fc))
+
 ## [0.57.0](https://github.com/tatolab/streamlib/compare/v0.56.0...v0.57.0) (2026-10-28)
 
 
