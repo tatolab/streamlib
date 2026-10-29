@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.59.0](https://github.com/tatolab/streamlib/compare/v0.58.0...v0.59.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** a load never refuses for code — a stream whose compile, load or start fails is recorded failed ([#2975](https://github.com/tatolab/streamlib/issues/2975))
+
+### Features
+
+* **runtime:** a load never refuses for code — a stream whose compile, load or start fails is recorded failed ([#2975](https://github.com/tatolab/streamlib/issues/2975)) ([073db98](https://github.com/tatolab/streamlib/commit/073db98dfac819f7a004108b550b837bf96ba0d3))
+
 ## [0.58.0](https://github.com/tatolab/streamlib/compare/v0.57.0...v0.58.0) (2026-10-29)
 
 
