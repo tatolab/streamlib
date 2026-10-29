@@ -16,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
 
@@ -751,23 +752,25 @@ def test_the_several_streams_suggestion_quotes_the_dir_it_was_given(tmp_path: Pa
     assert f"`tatolab dev --dir '{project_directory}' stream.py:<function>`" in message
 
 
+def not_defined_because_of(finished: "subprocess.CompletedProcess[str]") -> str:
+    """What a target naming a function the entry does not define as a stream was told."""
+    return stream_function_not_defined_document(finished)["not_defined_because"]
+
+
 @pytest.mark.parametrize(
-    "target_arguments",
-    [["my rig.py"], ["my rig.py:side"]],
+    ("target_arguments", "message_of"),
+    [(["my rig.py"], refusal_of), (["my rig.py:side"], not_defined_because_of)],
     ids=["several-streams", "a-function-the-file-lacks"],
 )
 def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
-    anchor_directory: Path, target_arguments: "list[str]"
+    anchor_directory: Path,
+    target_arguments: "list[str]",
+    message_of: "Callable[[subprocess.CompletedProcess[str]], str]",
 ):
     write_app(anchor_directory, "my rig.py", TWO_STREAM_SOURCE)
 
-    finished = run_compile_entry(
-        anchor_directory, "--dir", str(anchor_directory), *target_arguments
-    )
-    message = (
-        refusal_of(finished)
-        if finished.returncode
-        else stream_function_not_defined_document(finished)["not_defined_because"]
+    message = message_of(
+        run_compile_entry(anchor_directory, "--dir", str(anchor_directory), *target_arguments)
     )
 
     suggestion = f"tatolab run --dir {anchor_directory} 'my rig.py':<function>"

@@ -319,7 +319,9 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
 
 /// The longest one stream action holds the one-action lock, in milliseconds: a
 /// replace whose start is refused — the running stream's teardown, then the
-/// load's describe and the refused start's teardown.
+/// load's describe and the refused start's teardown. An entry that does not
+/// import unloads every stream of its project side by side, within one
+/// teardown.
 const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS: u128 =
     ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
         + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
@@ -1423,12 +1425,11 @@ impl Runner {
             )]);
         }
         let mut streams_failed = Vec::with_capacity(records_of_the_project.len());
+        let mut streams_to_unload = Vec::new();
         for mut record in records_of_the_project {
             record.failed_because = Some(import_failed_because.clone());
             stream_records.write(&record)?;
-            if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(&record.stream_id) {
-                unload_a_stream_an_action_took_back(&loaded, "its project's entry did not import");
-            }
+            streams_to_unload.extend(self.loaded_stream_of_the_id_when_loaded(&record.stream_id));
             streams_failed.push(StreamLoadedOrFailedByARun::of_the_record(
                 record,
                 StreamStateAfterItsRun::Failed {
@@ -1437,6 +1438,10 @@ impl Runner {
                 true,
             ));
         }
+        unload_every_stream_an_action_took_back(
+            &streams_to_unload,
+            "its project's entry did not import",
+        );
         Ok(streams_failed)
     }
 
@@ -1758,6 +1763,21 @@ fn the_state_a_refusal_names_a_record_by(record: &StreamRecord) -> &'static str 
         StreamListingState::Failed => " failed",
         StreamListingState::Stopped => " stopped",
         StreamListingState::Running => "",
+    }
+}
+
+/// Ask every one of `streams` for its shutdown at once, so their teardowns run
+/// side by side within one teardown's budget, then unload each as
+/// [`unload_a_stream_an_action_took_back`] does.
+fn unload_every_stream_an_action_took_back(
+    streams: &[Arc<LoadedStreamInThisRuntime>],
+    reason: &str,
+) {
+    for stream in streams {
+        stream.ask_for_this_streams_shutdown(reason);
+    }
+    for stream in streams {
+        unload_a_stream_an_action_took_back(stream, reason);
     }
 }
 
@@ -2805,6 +2825,42 @@ mod tests {
             ),
             "a function of an entry file is compiled from that file"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn starting_one_of_several_records_whose_entry_no_longer_imports_answers_for_that_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "aaa",
+            serde_json::json!([]),
+        ));
+        records_in(state_directory.path())
+            .write(&a_record_of(&project, "aaa", serde_json::json!([])))
+            .unwrap();
+        project.raise_in_the_function_printing("zzz", "ValueError: bad wiring");
+        runner
+            .run_stream(RunStreamRequest {
+                stream_function: Some("stream.py:zzz".to_string()),
+                ..project.run_request()
+            })
+            .unwrap();
+        let zzz = project.stream_id_of("zzz");
+        assert!(
+            project.stream_id_of("aaa") < zzz,
+            "the record started sorts second"
+        );
+        project.fail_to_import_printing("SyntaxError: invalid syntax");
+
+        let refusal = refusal_of(runner.start_stream(&zzz));
+
+        assert!(refusal.contains(&format!("`{zzz}`")), "{refusal}");
+        assert!(
+            !refusal.contains(&format!("`{}`", project.stream_id_of("aaa"))),
+            "{refusal}"
+        );
+        assert!(refusal.contains("SyntaxError"), "{refusal}");
     }
 
     #[test]

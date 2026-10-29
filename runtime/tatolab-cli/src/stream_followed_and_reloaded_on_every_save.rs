@@ -305,7 +305,7 @@ impl DevSession {
     }
 
     /// Run the stream over the connection; `followed_stream_the_run_replaces` is the stream
-    /// already followed, which the run replaces once its compile succeeds.
+    /// already followed, which the run replaces — failed, when the save's code fails.
     async fn run_the_stream_over_the_connection(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
@@ -391,8 +391,7 @@ impl DevSession {
     }
 
     /// Where the session goes after a refused run: it follows the stream the run was to replace,
-    /// which the runtime keeps when the save does not compile and loads again when the save
-    /// compiles and its load is refused, or waits for a save when nothing was running.
+    /// which a refused run leaves as it was, or waits for a save when nothing was running.
     fn after_a_failed_run(
         &mut self,
         run_failure: LocalApiMcpToolClientFailure,
