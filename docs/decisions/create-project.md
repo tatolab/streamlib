@@ -29,7 +29,10 @@ because its `.venv` has not been made yet.
 - The runtime unit carries a pinned uv on both floors, and the runtime makes every `.venv`
   with it: create always does, and a load of a project with no `.venv/bin/python` does it
   first. uv takes the Python the project's `.python-version` pins from the machine or fetches
-  it. A `.venv` holding `bin/python` is never touched.
+  it.
+  > ~~A `.venv` holding `bin/python` is never touched.~~ — Superseded 2026-10-29 by
+  > `load-never-refused-for-code.md`: the runtime makes the `.venv` whenever its interpreter
+  > does not run, on every load, start, restart, create and listing.
 
 ## Rejected alternatives
 
