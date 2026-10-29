@@ -138,9 +138,6 @@ FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 #: The one stream function every project here defines, as its location names it.
 STREAM_FUNCTION_OF_EVERY_PROJECT = "stream:main"
 
-# What `dev` says when a load is refused and nothing is loaded until the next save.
-DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save again"
-
 
 def stream_id_of_the_project(app_directory: Path) -> str:
     """The stream id the runtime keys and addresses the project's one stream by."""
@@ -157,12 +154,9 @@ def dev_loading_again_after_a_save(stream_id: str) -> str:
     return f"tatolab dev: a saved change — loading {stream_id} again"
 
 
-def dev_kept_the_running_stream(stream_id: str) -> str:
-    """What `dev` says once a refused save left the stream it was to replace running."""
-    return (
-        f"tatolab dev: {stream_id} keeps running the last save that loaded — fix it and save "
-        f"again"
-    )
+def dev_waits_for_a_fix_of_the_failed_stream(stream_id: str) -> str:
+    """What `dev` says once a save's code failed and the runtime recorded the stream failed."""
+    return f"tatolab dev: {stream_id} is failed — fix it and save again to load it"
 
 
 def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
@@ -860,13 +854,12 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     """The MVP edit loop: `dev` running the stream again on every save.
 
     A save is a file write, and `dev` runs the stream again over its
-    connection. The runtime compiles the save before it touches the running
-    stream, so a broken save is refused, named, and leaves the same stream —
-    the same load, still carrying live video — running; a good one replaces it
-    with the edited code. Both halves run against the same `dev` and the same
-    `tatolabd` in sequence because the first is only meaningful if the second
-    follows: a loop that survives a bad save by ignoring the file entirely
-    would pass the first alone.
+    connection. A broken save is never refused: the runtime unloads the running
+    stream and records it failed with the traceback, which `dev` prints, and the
+    next good save loads the edited code. Both halves run against the same `dev`
+    and the same `tatolabd` in sequence because the first is only meaningful if
+    the second follows: a loop that survives a bad save by ignoring the file
+    entirely would pass the first alone.
     """
     app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
@@ -888,34 +881,24 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
         dev_loading_again_after_a_save(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
     )
     dev.await_stderr_containing(
-        dev_kept_the_running_stream(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
+        dev_waits_for_a_fix_of_the_failed_stream(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
     )
-    time.sleep(
-        SCAFFOLD_OBSERVATION_WINDOW_SECONDS - SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS
-    )
+    assert f"tatolab dev: {stream_id} failed: " in dev.stderr_text, dev.recent_stderr()
     assert "SyntaxError" in dev.stderr_text, (
-        f"`dev` must show why the save was refused; standard error ended:\n{dev.recent_stderr()}"
+        f"`dev` must show why the save failed; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert DEV_NO_STREAM_IS_LOADED not in dev.stderr_text, dev.recent_stderr()
+    assert "halftone_lens_effect.py" in dev.stderr_text, dev.recent_stderr()
     assert dev.process.poll() is None, (
         f"a bad save must not take `dev` down; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert node_ids_of(local_api.graph(stream=stream_id)) == node_ids_before_the_bad_save, (
-        "a bad save must leave the same load of the stream running"
+    tatolabd.await_stderr_containing(
+        the_stream_stopped_log_line(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
     )
-    assert [listed["state"] for listed in local_api.list_streams()] == ["running"]
-    assert the_stream_stopped_log_line(stream_id) not in tatolabd.stderr_text, (
-        "the stream stopped although the bad save was to leave it running"
-    )
-    frames_written_before_the_good_save = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
+    [listed] = local_api.list_streams()
+    assert (listed["stream"], listed["state"]) == (stream_id, "failed"), listed
+    assert "SyntaxError" in listed["failed_because"], listed
 
     effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
-    assert_the_effect_carried_live_video(
-        tatolabd,
-        the_first_streams_output(tatolabd, stream_id),
-        frames_written_before_the_good_save,
-        "the stream running when the bad save landed, up to the good save",
-    )
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2)
     tatolabd.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(
@@ -930,16 +913,14 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert any(
         ENGINE_GRACEFUL_STOP_LOG_LINE in stderr_line
         for stderr_line in stderr_lines[: engine_started_line_indices[1]]
-    ), (
-        "the stream that survived the bad save did not stop gracefully before the edited one "
-        "started"
-    )
+    ), "the stream the bad save failed did not stop gracefully before the edited one started"
     node_ids_after_the_good_save = node_ids_of(
         local_api.await_every_node_running(stream=stream_id)
     )
     assert set(node_ids_after_the_good_save).isdisjoint(node_ids_before_the_bad_save), (
-        "a good save replaces the stream with a load of its own"
+        "a good save loads the stream with a load of its own"
     )
+    assert [listed["state"] for listed in local_api.list_streams()] == ["running"]
     assert tatolabd.process.poll() is None, "every load of the edit loop lands on the one runtime"
 
     dev.interrupt()
@@ -950,9 +931,9 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The runtime's load refuses a config its built-in does not take, naming
-    the node and the setting, before the engine starts. It is still the app's
-    problem, not a launcher crash."""
+    """The runtime's load fails a config its built-in does not take, naming
+    the node and the setting, before the engine starts, and records the stream
+    failed. It is still the app's problem, not a launcher crash."""
     app_directory = make_tatolab_project(
         {
             "stream.py": (
@@ -970,28 +951,32 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     stream_run = load_the_projects_stream(tatolabd, app_directory)
 
     assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1
-    output = stream_run.stderr_text
+    output = stream_run.stdout_text + stream_run.stderr_text
     assert "Traceback (most recent call last)" not in output, (
         f"an engine-side failure must not arrive as a launcher traceback; output was:\n{output}"
     )
-    refusal = stream_run.refusal()
-    assert refusal is not None, f"`tatolab run` must end on the runtime's refusal; output was:\n{output}"
-    assert "`tatolab.stream:TestPatternSource`" in refusal, refusal
-    assert "width: invalid type" in refusal, refusal
+    failed_stream = stream_run.failed_stream()
+    assert failed_stream is not None, f"`tatolab run` must print the stream failed; output was:\n{output}"
+    failed_stream_id, failed_because = failed_stream
+    assert failed_stream_id == stream_id_of_the_project(app_directory)
+    assert "`tatolab.stream:TestPatternSource`" in failed_because, failed_because
+    assert "width: invalid type" in failed_because, failed_because
     assert ENGINE_STARTED_LOG_LINE not in tatolabd.stderr_text
-    assert tatolabd.local_api_client().list_streams() == []
+    [listed] = tatolabd.local_api_client().list_streams()
+    assert (listed["stream"], listed["state"]) == (failed_stream_id, "failed"), listed
 
 
 @pytest.mark.parametrize("verb", ["run", "dev"])
-def test_a_stream_function_that_raises_loads_nothing(
+def test_a_stream_function_that_raises_is_recorded_failed_with_its_traceback_and_loads_nothing(
     verb: str,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """A graph that failed to build must not leave a stream in the runtime.
+    """A graph that failed to build loads nothing, and the runtime takes the
+    stream in failed with the function's traceback.
 
-    `run` ends with the compile's failure; `dev` reports it and waits for the
-    save that fixes it, with nothing loaded, until a Ctrl-C ends it.
+    `run` prints it failed and exits 1; `dev` prints it and waits for the save
+    that fixes it, until a Ctrl-C ends it.
     """
     app_directory = make_tatolab_project(
         {
@@ -1005,6 +990,7 @@ def test_a_stream_function_that_raises_loads_nothing(
             )
         }
     )
+    stream_id = stream_id_of_the_project(app_directory)
     tatolabd = start_tatolabd()
 
     stream_run = load_the_projects_stream(tatolabd, app_directory, verb)
@@ -1014,12 +1000,21 @@ def test_a_stream_function_that_raises_loads_nothing(
             f"a raising stream function must exit non-zero; standard error:\n"
             f"{stream_run.recent_stderr()}"
         )
+        failed_stream = stream_run.failed_stream()
+        assert failed_stream is not None, stream_run.stdout_text
+        failed_stream_id, printed_reason = failed_stream
+        assert failed_stream_id == stream_id
     else:
-        stream_run.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
+        stream_run.await_stderr_containing(
+            dev_waits_for_a_fix_of_the_failed_stream(stream_id),
+            timeout=NODE_READY_TIMEOUT_SECONDS,
+        )
         stream_run.interrupt()
         assert stream_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, stream_run.recent_stderr()
-    assert "ValueError: bad wiring" in stream_run.stderr_text, stream_run.recent_stderr()
-    assert tatolabd.local_api_client().list_streams() == [], (
-        "a stream whose function raised must never be loaded"
-    )
+        printed_reason = stream_run.stderr_text
+    assert "ValueError: bad wiring" in printed_reason, printed_reason
+    assert 'stream.py", line 6, in main' in printed_reason, printed_reason
+    [listed] = tatolabd.local_api_client().list_streams()
+    assert (listed["stream"], listed["state"]) == (stream_id, "failed"), listed
+    assert "ValueError: bad wiring" in listed["failed_because"], listed
     assert "[start] Starting the stream" not in tatolabd.stderr_text, tatolabd.recent_stderr()

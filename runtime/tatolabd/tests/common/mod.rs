@@ -390,7 +390,7 @@ pub fn a_stream_record(
         location,
         display_name: function.to_owned(),
         interpreter: interpreter.to_path_buf(),
-        graph,
+        graph: Some(graph),
         stopped,
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,

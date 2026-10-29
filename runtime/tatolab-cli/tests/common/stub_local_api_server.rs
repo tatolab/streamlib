@@ -59,7 +59,6 @@ const SHORT_SOCKET_DIRECTORY_PARENT: &str = "/tmp";
 pub struct StubToolAnswer {
     pub text: String,
     pub is_error: bool,
-    pub re_loads_the_stream_as: Option<StubStreamReLoad>,
 }
 
 /// A re-load of the stub's stream: another instance, whose records `logs` pages from 1 again.
@@ -75,7 +74,6 @@ impl StubToolAnswer {
         Self {
             text: text.to_owned(),
             is_error: false,
-            re_loads_the_stream_as: None,
         }
     }
 
@@ -84,23 +82,6 @@ impl StubToolAnswer {
         Self {
             text: text.to_owned(),
             is_error: true,
-            re_loads_the_stream_as: None,
-        }
-    }
-
-    /// This answer, given once the stream is loaded again as `stream_instance` holding
-    /// `records` — what a runtime does when a replace's load is refused after the compile.
-    pub fn re_loading_the_stream_as(
-        self,
-        stream_instance: &str,
-        records: Vec<serde_json::Value>,
-    ) -> Self {
-        Self {
-            re_loads_the_stream_as: Some(StubStreamReLoad {
-                stream_instance: stream_instance.to_owned(),
-                records,
-            }),
-            ..self
         }
     }
 }
@@ -290,9 +271,6 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
             return std::future::pending().await;
         }
         let answer = self.stub_state.answer_for(&request);
-        if let Some(stub_stream_re_load) = answer.re_loads_the_stream_as.clone() {
-            self.stub_state.re_load_the_stream_as(stub_stream_re_load);
-        }
         let content = vec![ContentBlock::text(answer.text)];
         Ok(if answer.is_error {
             CallToolResult::error(content)
@@ -718,8 +696,8 @@ impl Drop for StubLocalApiServer {
     }
 }
 
-/// The text a runtime's `run_stream` answers with, its compile having written
-/// `compile_warnings` to its standard error.
+/// The text a runtime's `run_stream` answers with when it started `stream`, its compile having
+/// written `compile_warnings` to its standard error.
 pub fn run_stream_tool_result_text(
     stream: &str,
     project_directory: &Path,
@@ -727,13 +705,42 @@ pub fn run_stream_tool_result_text(
     compile_warnings: &[&str],
 ) -> String {
     serde_json::json!({
-        "stream": stream,
-        "display_name": "main",
-        "stream_instance": STUB_FIRST_STREAM_INSTANCE,
-        "location": {"project_directory": project_directory, "stream_function": "stream:main"},
-        "node_count": node_count,
-        "replaced_a_recorded_stream": false,
+        "project_directory": project_directory,
+        "streams": [{
+            "stream": stream,
+            "display_name": "main",
+            "state": "running",
+            "stream_instance": STUB_FIRST_STREAM_INSTANCE,
+            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+            "node_count": node_count,
+            "replaced_a_recorded_stream": false,
+            "failed_because": null,
+        }],
         "compile_warnings": compile_warnings,
+    })
+    .to_string()
+}
+
+/// The text a runtime's `run_stream` answers with when it recorded `stream` failed because of
+/// `failed_because`.
+pub fn failed_run_stream_tool_result_text(
+    stream: &str,
+    project_directory: &Path,
+    failed_because: &str,
+) -> String {
+    serde_json::json!({
+        "project_directory": project_directory,
+        "streams": [{
+            "stream": stream,
+            "display_name": "main",
+            "state": "failed",
+            "stream_instance": null,
+            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+            "node_count": null,
+            "replaced_a_recorded_stream": true,
+            "failed_because": failed_because,
+        }],
+        "compile_warnings": [],
     })
     .to_string()
 }

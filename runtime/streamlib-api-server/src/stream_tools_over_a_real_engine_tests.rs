@@ -30,9 +30,10 @@ use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
     LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, OutputPortExposureOutcome, RunStreamRequest, Runner,
-    RuntimeOperations, StreamEnvironment, StreamListing, StreamLocation, StreamRecord,
-    StreamRecordAsRead, StreamRecordsInTheStateDirectory, StreamRemoveOutcome, StreamRenameOutcome,
-    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    RuntimeOperations, StreamEnvironment, StreamListing, StreamLoadedOrFailedByARun,
+    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
+    StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome, StreamStartOutcome,
+    StreamStateAfterItsRun, StreamStopOutcome,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -139,11 +140,30 @@ impl ProjectWhosePythonPrintsAGraph {
         );
     }
 
-    /// From now on, the compile exits 1 printing `traceback`.
-    fn fail_to_compile_printing(&self, traceback: &str) {
+    /// From now on, the compile answers that `stream.py` did not import,
+    /// printing `traceback`.
+    fn fail_to_import_printing(&self, traceback: &str) {
+        let compile_document = json!({
+            "project_directory": self.path(),
+            "import_failed_because": traceback,
+        });
         write_an_executable_script_from_a_child_process(
             &self.interpreter(),
-            &format!("#!/bin/sh\necho \"{traceback}\" >&2\nexit 1\n"),
+            &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
+        );
+    }
+
+    /// From now on, the compile answers that the function `function` of
+    /// `stream.py` raised, printing `traceback`.
+    fn raise_in_the_function_printing(&self, function: &str, traceback: &str) {
+        let compile_document = json!({
+            "project_directory": self.path(),
+            "stream_function": self.location_of(function).stream_function,
+            "failed_because": traceback,
+        });
+        write_an_executable_script_from_a_child_process(
+            &self.interpreter(),
+            &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
         );
     }
 
@@ -383,12 +403,17 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
                 .with_stream_id(&stream_id),
         )?;
         Ok(StreamRunOutcome {
-            stream_id: stream.stream_id().to_string(),
-            display_name: stream.display_name(),
-            stream_location,
-            stream_tag: stream.stream_tag(),
-            node_count: 0,
-            replaced_a_recorded_stream: false,
+            project_directory: stream_location.project_directory.clone(),
+            streams: vec![StreamLoadedOrFailedByARun {
+                stream_id: stream.stream_id().to_string(),
+                display_name: stream.display_name(),
+                stream_location,
+                state: StreamStateAfterItsRun::Running {
+                    stream_tag: stream.stream_tag(),
+                    node_count: 0,
+                },
+                replaced_a_recorded_stream: false,
+            }],
             compile_warnings: vec![CROSS_FLOOR_WARNING_A_COMPILE_WROTE.to_string()],
         })
     }
@@ -428,6 +453,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     }
 }
 
+/// The one stream a `run_stream` answer took in.
+fn the_one_stream_of(run: &Value) -> &Value {
+    match run["streams"].as_array().map(Vec::as_slice) {
+        Some([stream]) => stream,
+        _ => panic!("the run took in one stream: {run}"),
+    }
+}
+
 fn a_run_request_naming(stream_id: &str) -> Value {
     json!({
         "project_directory": "/home/someone/projects/camera",
@@ -449,10 +482,13 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running
         &tool_call_over_the_connection(&client, "run_stream", a_run_request_naming("camera")).await,
     )
     .expect("the run is answered");
-    assert_eq!(run["stream"], "camera");
-    assert_eq!(run["display_name"], "camera");
+    let stream = the_one_stream_of(&run);
+    assert_eq!(stream["stream"], "camera");
+    assert_eq!(stream["display_name"], "camera");
+    assert_eq!(stream["state"], "running");
+    assert_eq!(run["project_directory"], "/home/someone/projects/camera");
     assert_eq!(
-        run["location"],
+        stream["location"],
         json!({
             "project_directory": "/home/someone/projects/camera",
             "stream_function": "stream:camera",
@@ -524,7 +560,7 @@ async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_an
     };
 
     let (first_run, first_page) = run_camera_and_read_its_logs().await;
-    let first_instance = first_run["stream_instance"]
+    let first_instance = the_one_stream_of(&first_run)["stream_instance"]
         .as_str()
         .unwrap_or_else(|| panic!("the run names its instance: {first_run}"))
         .to_string();
@@ -544,8 +580,9 @@ async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_an
 
     let (re_run, re_loaded_page) = run_camera_and_read_its_logs().await;
 
-    assert_ne!(re_run["stream_instance"], first_instance.as_str());
-    assert_eq!(re_loaded_page["stream_instance"], re_run["stream_instance"]);
+    let re_run_instance = &the_one_stream_of(&re_run)["stream_instance"];
+    assert_ne!(*re_run_instance, first_instance.as_str());
+    assert_eq!(re_loaded_page["stream_instance"], *re_run_instance);
 }
 
 /// `logs` reads a stream's records by sequence number: `after` skips what was
@@ -1041,6 +1078,100 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
     assert_eq!(recorded_stream_ids, [gone], "a refused run records nothing");
 }
 
+/// A run whose function raises answers the stream failed with its traceback,
+/// not a refusal, and lists it failed under the id its location computes to.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_whose_function_raises_answers_the_stream_failed_with_its_traceback() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project =
+        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+    let camera_stream_id = project.stream_id_of("camera");
+
+    let run = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "run_stream",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a raising function is answered, not refused");
+
+    assert_eq!(
+        run,
+        json!({
+            "project_directory": project.path(),
+            "streams": [{
+                "stream": camera_stream_id,
+                "display_name": "camera",
+                "state": "failed",
+                "stream_instance": null,
+                "location": {
+                    "project_directory": project.path(),
+                    "stream_function": "stream:camera",
+                },
+                "node_count": null,
+                "replaced_a_recorded_stream": false,
+                "failed_because": "ValueError: bad wiring",
+            }],
+            "compile_warnings": [],
+        })
+    );
+    let listed = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    assert_eq!(listed["streams"][0]["stream"], camera_stream_id.as_str());
+    assert_eq!(listed["streams"][0]["state"], "failed");
+    assert_eq!(
+        listed["streams"][0]["failed_because"],
+        "ValueError: bad wiring"
+    );
+}
+
+/// A run whose `stream.py` does not import answers the project failed under
+/// `<folder>-<hash>`, shown under the folder's name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_whose_entry_does_not_import_answers_the_project_failed_under_its_folder() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project =
+        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    project.fail_to_import_printing("SyntaxError: invalid syntax");
+    let project_location =
+        StreamLocation::of_a_project_whose_entry_did_not_import(project.path().to_path_buf());
+
+    let run = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "run_stream",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a project whose entry does not import is answered, not refused");
+
+    let stream = the_one_stream_of(&run);
+    assert_eq!(stream["stream"], project_location.stream_id().as_str());
+    assert_eq!(
+        stream["display_name"],
+        project
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(stream["state"], "failed");
+    assert_eq!(stream["failed_because"], "SyntaxError: invalid syntax");
+    assert_eq!(stream["location"]["stream_function"], "");
+}
+
 // ============================================================================
 // End to end on the engine's own run — the start creates its GPU context
 // ============================================================================
@@ -1075,20 +1206,25 @@ async fn a_run_stream_end_to_end_outlives_its_connection_through_stop_start_and_
     assert_eq!(
         run,
         json!({
-            "stream": camera_stream_id,
-            "display_name": "camera",
-            "stream_instance": engine
-                .engine
-                .loaded_stream_of_the_id(&camera_stream_id)
-                .unwrap()
-                .stream_tag()
-                .to_string(),
-            "location": {
-                "project_directory": project.path(),
-                "stream_function": "stream:camera",
-            },
-            "node_count": 1,
-            "replaced_a_recorded_stream": false,
+            "project_directory": project.path(),
+            "streams": [{
+                "stream": camera_stream_id,
+                "display_name": "camera",
+                "state": "running",
+                "stream_instance": engine
+                    .engine
+                    .loaded_stream_of_the_id(&camera_stream_id)
+                    .unwrap()
+                    .stream_tag()
+                    .to_string(),
+                "location": {
+                    "project_directory": project.path(),
+                    "stream_function": "stream:camera",
+                },
+                "node_count": 1,
+                "replaced_a_recorded_stream": false,
+                "failed_because": null,
+            }],
             "compile_warnings": [CROSS_FLOOR_WARNING_A_COMPILE_WROTE],
         })
     );
@@ -1135,7 +1271,7 @@ async fn a_run_stream_end_to_end_outlives_its_connection_through_stop_start_and_
 
 /// `tatolab dev`'s reload: a run of a recorded location replaces its stream
 /// under the same id and another instance, whichever connection carries it; a
-/// run whose compile fails leaves the running stream loaded; a run of another
+/// bad save answers the stream failed and unloads it; a run of another
 /// function in the project loads beside it under its own id; and closing every
 /// connection unloads nothing.
 #[tokio::test(flavor = "multi_thread")]
@@ -1164,22 +1300,24 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
         .expect("the stream runs");
     let first_load = stream_tag_loaded_as_camera();
 
-    project.fail_to_compile_printing("SyntaxError: invalid syntax");
-    let refusal = tool_answer(
+    project.raise_in_the_function_printing("camera", "SyntaxError: invalid syntax");
+    let bad_save = tool_answer(
         &tool_call_over_the_connection(&first_connection, "run_stream", run.clone()).await,
     )
-    .expect_err("a bad save is refused");
-    assert!(refusal.contains("SyntaxError"), "{refusal}");
-    assert_eq!(
-        stream_tag_loaded_as_camera(),
-        first_load,
-        "a bad save leaves the running stream loaded"
+    .expect("a bad save is answered with the stream failed");
+    let failed = the_one_stream_of(&bad_save);
+    assert_eq!(failed["state"], "failed", "{bad_save}");
+    assert_eq!(failed["failed_because"], "SyntaxError: invalid syntax");
+    assert!(
+        engine.engine.ids_of_the_loaded_streams().is_empty(),
+        "a bad save unloads the running stream"
     );
 
     project.compile_to_warning(the_graph_of_a_function_named("camera"), &[]);
     let replaced =
         tool_answer(&tool_call_over_the_connection(&other_connection, "run_stream", run).await)
             .expect("another connection's run of the location replaces its stream");
+    let replaced = the_one_stream_of(&replaced);
     assert_eq!(replaced["stream"], camera_stream_id.as_str());
     assert_eq!(replaced["replaced_a_recorded_stream"], true);
     assert_ne!(stream_tag_loaded_as_camera(), first_load);
@@ -1200,7 +1338,10 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     )
     .expect("a run of another function loads it");
     let studio_stream_id = project.stream_id_of("studio");
-    assert_eq!(studio["stream"], studio_stream_id.as_str());
+    assert_eq!(
+        the_one_stream_of(&studio)["stream"],
+        studio_stream_id.as_str()
+    );
     let mut both_stream_ids = vec![camera_stream_id.clone(), studio_stream_id];
     both_stream_ids.sort();
     assert_eq!(engine.engine.ids_of_the_loaded_streams(), both_stream_ids);

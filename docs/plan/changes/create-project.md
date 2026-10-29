@@ -147,7 +147,9 @@ Paths are under `runtime/` unless marked otherwise.
     `{stream_function, description, failed_because}` when that function raised. In the second
     case `failed_because` is the traceback with the launcher frames stripped, as the entry strips
     them today (`:105-118`).
-  - An entry that cannot be imported still exits 1 with its traceback on stderr, as today.
+  - An entry that cannot be imported writes `{project_directory, import_failed_because}`, its
+    traceback, and exits 0, as a single-function compile does; exit 1 is the caller's own
+    refusal alone (session, 2026-10-29).
   - The runtime's parse refuses a document without `streams` as an older `tatolab-stream`, as it
     does today for one without `stream_function` (`:265-272`).
 - **Listing a project's streams.** The compile entry gains `--list-streams`, which imports the
@@ -295,7 +297,7 @@ Paths are under `runtime/` unless marked otherwise.
   - `--every-stream` writes every `@stream` in definition order, with its `stream_graph`,
     `stream_function` and `description`;
   - a raising function becomes its own `failed_because` entry while the others compile;
-  - an unimportable entry exits 1 with its traceback;
+  - an unimportable entry writes its traceback as `import_failed_because`;
   - imported and aliased streams count as today (`:544`, `:748`);
   - `--list-streams` builds no graph.
 - **Runtime suite, engine** (`ProjectWithAStubCompile`, `stream_actions_of_this_runtime.rs:1480-1630`):

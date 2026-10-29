@@ -9,12 +9,21 @@ and `tatolab dev`.
 The runtime starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
 --verb {run,dev} [TARGET] [-f FILE] [--dir DIR]`, with the anchor
 directory as the working directory; `--dir` is only how the caller's command spelled
-it. On success stdout carries exactly one JSON object,
-`{"stream_graph": ..., "project_directory": ..., "stream_function": "<module>:<qualname>"}`,
-and the exit code is 0. A refusal prints `error: <message>` to stderr and exits 1; an
-app or compile failure prints the app's own traceback to stderr and exits 1; an app's
-deliberate `SystemExit` keeps its code, so exit 0 with nothing on stdout is an app that
-chose to exit, and there is no stream to start.
+it. Whatever the project's code does, stdout carries exactly one JSON object and the
+exit code is 0. The object is one of:
+
+- `{"project_directory", "stream_function", "stream_graph"}` — the stream compiled;
+- `{"project_directory", "stream_function", "failed_because"}` — the stream function
+  raised, with its traceback;
+- `{"project_directory", "stream_function", "not_defined_because"}` — the target named
+  a function the entry does not define as a `@stream`;
+- `{"project_directory", "import_failed_because"}` — the entry raised before any stream
+  function could be chosen, with its traceback.
+
+`stream_function` is `<module>:<qualname>`. A refusal of the caller's own target prints
+`error: <message>` to stderr and exits 1 with nothing on stdout; an app's deliberate
+`SystemExit` keeps its code, so exit 0 with nothing on stdout is an app that chose to
+exit, and there is no stream to start.
 
 `-I` keeps the working directory off `sys.path` while this module and
 `tatolab.stream` import, so a project module named like a standard-library one they
@@ -44,6 +53,7 @@ from ._cross_floor_check import (
 from ._project_stream_entry_execution import (
     execute_app_entry_file,
     import_stream_entry_module,
+    named_stream_function_location,
     project_directory_the_stream_entry_imports_from,
     select_stream_function,
     stream_function_location,
@@ -53,6 +63,7 @@ from ._project_stream_entry_resolution import (
     DEFAULT_STREAM_ENTRY_FILE_NAME,
     ProjectStreamCompileRefusalError,
     ResolvedStreamEntryModule,
+    StreamFunctionNotDefinedRefusalError,
     locate_stream_entry_module,
     resolve_stream_entry,
 )
@@ -63,6 +74,9 @@ __all__ = ["main"]
 COMPILED_STREAM_GRAPH_DOCUMENT_KEY = "stream_graph"
 COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY = "project_directory"
 COMPILED_STREAM_FUNCTION_DOCUMENT_KEY = "stream_function"
+STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY = "failed_because"
+STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY = "not_defined_because"
+STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY = "import_failed_because"
 
 _PROJECT_STREAM_COMPILE_MODULE_FILE_NAMES = (
     "_project_stream_compile_entry.py",
@@ -102,20 +116,20 @@ def _launcher_source_file_names() -> frozenset[str]:
     )
 
 
-def print_app_failure(entry_described: str, app_failure: BaseException) -> None:
-    """Print an app-side failure as the app's own traceback, on stderr.
+def app_failure_described(app_failure: BaseException) -> str:
+    """An app-side failure as the app's own traceback.
 
     The launcher's frames are dropped from the head so the first line the user
     reads is in their code. A `SyntaxError` carries no frames from the file at
-    all — the file never ran — and prints as CPython prints it.
+    all — the file never ran — and reads as CPython prints it.
     """
     app_traceback = app_failure.__traceback__
     launcher_files = _launcher_source_file_names()
     while app_traceback is not None and app_traceback.tb_frame.f_code.co_filename in launcher_files:
         app_traceback = app_traceback.tb_next
-
-    print(f"error: {entry_described} failed", file=sys.stderr)
-    traceback.print_exception(type(app_failure), app_failure, app_traceback, file=sys.stderr)
+    return "".join(
+        traceback.format_exception(type(app_failure), app_failure, app_traceback)
+    ).rstrip("\n")
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -127,7 +141,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             f"interpreter, with the anchor directory as the working directory. Executes "
             f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}` from the anchor, or the file named by `-f` "
             f"or TARGET, compiles its sole @stream function (or the one TARGET names), and "
-            f"writes the stream graph and its project directory to stdout as one JSON object."
+            f"writes the stream graph, or why it has none, to stdout as one JSON object."
         ),
     )
     parser.add_argument(
@@ -211,21 +225,23 @@ def compile_the_requested_stream(
     anchor_directory_as_typed: Optional[str],
     requested_entry_file: Optional[Path],
     requested_stream_target: Optional[str],
-) -> Optional[dict[str, Any]]:
-    """The compiled document, or `None` once an app failure's traceback is printed."""
+) -> dict[str, Any]:
+    """The document the runtime records: the compiled stream, or why the project's code
+    gave none. A refusal of the caller's own target raises."""
     resolved_stream_entry = resolve_stream_entry(
         verb, anchor_directory, requested_entry_file, requested_stream_target
     )
-    entry_described = resolved_stream_entry.described_for_the_user()
 
     _print_the_cross_floor_warning_block(anchor_directory)
 
+    project_directory = project_directory_the_stream_entry_imports_from(
+        resolved_stream_entry, anchor_directory
+    )
     try:
         if isinstance(resolved_stream_entry, ResolvedStreamEntryModule):
             resolved_stream_entry = locate_stream_entry_module(
                 verb, anchor_directory, anchor_directory_as_typed, resolved_stream_entry
             )
-            entry_described = resolved_stream_entry.described_for_the_user()
             entry_namespace = import_stream_entry_module(resolved_stream_entry)
         else:
             entry_namespace = execute_app_entry_file(resolved_stream_entry.entry_file)
@@ -234,32 +250,43 @@ def compile_the_requested_stream(
     # SystemExit passes through: an app that calls `sys.exit()` at module scope
     # chose its exit code, and reporting that as a failure would override it.
     except Exception as entry_failure:  # noqa: BLE001 — reported as the app's own
-        print_app_failure(entry_described, entry_failure)
-        return None
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY: app_failure_described(entry_failure),
+        }
 
-    stream_function = select_stream_function(
-        verb,
-        resolved_stream_entry,
-        anchor_directory,
-        anchor_directory_as_typed,
-        entry_namespace,
-        stream_functions_defined_in(entry_namespace, str(entry_namespace.get("__name__", ""))),
+    try:
+        stream_function = select_stream_function(
+            verb,
+            resolved_stream_entry,
+            anchor_directory,
+            anchor_directory_as_typed,
+            entry_namespace,
+            stream_functions_defined_in(entry_namespace, str(entry_namespace.get("__name__", ""))),
+        )
+    except StreamFunctionNotDefinedRefusalError as not_defined:
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: named_stream_function_location(
+                resolved_stream_entry, project_directory
+            ),
+            STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY: str(not_defined),
+        }
+    stream_function_located = stream_function_location(
+        stream_function, resolved_stream_entry, project_directory
     )
     try:
         stream_graph = compile_stream_to_graph(stream_function)
     except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
-        print_app_failure(entry_described, compile_failure)
-        return None
-
-    project_directory = project_directory_the_stream_entry_imports_from(
-        resolved_stream_entry, anchor_directory
-    )
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
+            STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY: app_failure_described(compile_failure),
+        }
     return {
         COMPILED_STREAM_GRAPH_DOCUMENT_KEY: stream_graph,
         COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-        COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_location(
-            stream_function, resolved_stream_entry, project_directory
-        ),
+        COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
     }
 
 
@@ -283,9 +310,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except BaseException:
         os.close(compiled_document_stdout_descriptor)
         raise
-    if compiled_document is None:
-        os.close(compiled_document_stdout_descriptor)
-        return 1
 
     _write_the_compiled_document(compiled_document_stdout_descriptor, compiled_document)
     return 0

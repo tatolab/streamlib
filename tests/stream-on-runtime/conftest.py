@@ -36,7 +36,7 @@ Fixtures, each documented where it is defined:
 - `private_machine_directories` — this test's machine root, its directories and environment.
 - `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
 - `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab run`.
-- `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and refused at the GPU, or refused at the load.
+- `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and failed at the GPU, or failed or refused before it.
 - `make_tatolab_project` — a project directory whose `.venv` is the suite venv.
 - `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
 - `run_tatolab_observation_verb` — a `tatolab` verb against this test's runtime, to completion.
@@ -147,6 +147,10 @@ RUNNING_STREAM_LINE_PATTERN = re.compile(
     r'^(?:tatolab dev: )?(?P<stream_id>\S+) running as "(?P<display_name>.*)" '
     r"\(project (?P<project_directory>.+), (?P<stream_function>[^,]+)\)$"
 )
+
+#: The first line naming a stream a load recorded failed, its reason running on over the lines
+#: after it: on `tatolab run`'s standard output, or `tatolab dev`'s note on standard error.
+FAILED_STREAM_LINE_PATTERN = re.compile(r"^(?:tatolab dev: )?(?P<stream_id>\S+) failed: ")
 
 TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
 
@@ -342,8 +346,9 @@ def started_runtime_processes() -> "Iterator[StartedRuntimeProcesses]":
 
 class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
     """A started `tatolab run` or `tatolab dev`. `run` prints the line naming the
-    stream it loaded on standard output and exits — 0 once the load is accepted,
-    1 with its refusal on standard error. `dev` writes that line as a note on
+    stream it loaded on standard output and exits — 0 when it runs, 1 when it is
+    recorded failed, its reason on standard output, and 1 with its refusal on
+    standard error. `dev` writes that line as a note on
     standard error, follows the stream's records on standard output, and runs it
     again on every settled save; a Ctrl-C to it ends the following and leaves the
     stream loaded."""
@@ -378,8 +383,9 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
             assert occurrence == 1, "`tatolab run` names the one stream it loaded"
             exit_status = self.await_exit(timeout=timeout)
             assert exit_status == 0, (
-                f"`{self.command_description}` exited {exit_status}, its load refused: "
-                f"{self.refusal()}\nstandard error:\n{self.recent_stderr()}"
+                f"`{self.command_description}` exited {exit_status}, its stream failed or its "
+                f"load refused: {self.failed_because() or self.refusal()}\nstandard error:\n"
+                f"{self.recent_stderr()}"
             )
             running_lines = [
                 running_line
@@ -407,6 +413,25 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         return self._await_stderr_line_satisfying(
             observe, f"its note that the stream is running (occurrence {occurrence})", timeout
         )
+
+    def failed_stream(self) -> "tuple[str, str] | None":
+        """The stream `run` printed failed and why — its line's reason through the end of
+        standard output, a traceback running over several lines; `None` when none failed."""
+        with self._output_arrived:
+            stdout_lines = list(self.stdout_lines)
+        for line_index, stdout_line in enumerate(stdout_lines):
+            failed_line = FAILED_STREAM_LINE_PATTERN.match(stdout_line)
+            if failed_line is not None:
+                failed_because = stdout_line[failed_line.end() :] + "".join(
+                    stdout_lines[line_index + 1 :]
+                )
+                return failed_line.group("stream_id"), failed_because.rstrip("\n")
+        return None
+
+    def failed_because(self) -> "str | None":
+        """Why the stream `run` printed failed is failed; `None` when none failed."""
+        failed_stream = self.failed_stream()
+        return failed_stream[1] if failed_stream is not None else None
 
     def stop_the_stream(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> int:
         """Run `tatolab stop <id>` on the stream this load started, to its exit; return its
@@ -712,8 +737,9 @@ class StreamRunWithNoVulkanDriverOutcome:
     loaded_stream_id: "str | None"
     #: How many processors the load added, as its unload removed them.
     loaded_node_count: "int | None"
-    #: `tatolab run`'s refusal, from its `error: <reason>` line on.
-    refusal: "str | None"
+    #: Why `tatolab run`'s stream is failed, from its `<id> failed: <reason>` line on, or the
+    #: run's refusal, from its `error: <reason>` line on.
+    failed_or_refused_because: "str | None"
     tatolab_run_exit_status: int
     tatolab_run_stderr_text: str
     #: `tatolabd`'s standard error from the moment `tatolab run` started.
@@ -736,12 +762,13 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     `run_stream_on_tatolabd_with_no_vulkan_driver(stream_or_graph, *,
     display_name=None, project_directory=None, processor_interpreter=None,
     extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`. Needs no
-    device: a graph the load refuses ends `tatolab run` with that refusal; one
-    it loads is refused at its start, at the GPU, before any device opens. The
-    runtime outlives either: `tatolabd` still serves, holding no stream and no
-    record — anything else fails the test, as does a loaded stream whose run
-    ended any other way, so a driver override that did not take cannot start a
-    stream's devices unseen.
+    device: a graph the compile or the load refuses ends `tatolab run` 1 with
+    the reason; one it loads fails at its start, at the GPU, before any device
+    opens. The runtime outlives either: `tatolabd` still serves, holding at
+    most the run's own stream, recorded failed, which is removed so the next
+    run starts from nothing — anything else fails the test, as does a loaded
+    stream whose run ended any other way, so a driver override that did not
+    take cannot start a stream's devices unseen.
 
     One `tatolabd` serves every call in a test; a call with a different
     `extra_environment` (`tatolabd`'s) interrupts it and starts another.
@@ -781,8 +808,22 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         tatolabd_stderr_mark = tatolabd.stderr_line_count()
         stream_run = tatolabd.run_stream(tatolab_run)
         exit_status = stream_run.await_exit(timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS)
-        refusal = stream_run.refusal()
-        listed_streams = tatolabd.local_api_client().list_streams()
+        failed_stream = stream_run.failed_stream()
+        failed_or_refused_because = (
+            failed_stream[1] if failed_stream is not None else stream_run.refusal()
+        )
+        local_api = tatolabd.local_api_client()
+        listed_streams = local_api.list_streams()
+        if failed_stream is not None:
+            failed_stream_id = failed_stream[0]
+            assert [(listed["stream"], listed["state"]) for listed in listed_streams] == [
+                (failed_stream_id, "failed")
+            ], (
+                f"`{stream_run.command_description}` printed {failed_stream_id} failed and left "
+                f"the runtime holding {listed_streams}"
+            )
+            local_api.call_tool("remove_stream", {"stream": failed_stream_id})
+            listed_streams = local_api.list_streams()
         tatolabd_stderr_text = tatolabd.stderr_text_since(tatolabd_stderr_mark)
         start_began = STREAM_START_BEGAN_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
         unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
@@ -794,7 +835,11 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             assert ENGINE_STARTED_LOG_LINE not in tatolabd_stderr_text, (
                 f"the engine started a stream that was to end at the GPU:\n{tatolabd.recent_stderr()}"
             )
-            assert exit_status == 1 and refusal is not None and NO_VULKAN_DRIVER_REFUSAL in refusal, (
+            assert (
+                exit_status == 1
+                and failed_or_refused_because is not None
+                and NO_VULKAN_DRIVER_REFUSAL in failed_or_refused_because
+            ), (
                 f"a loaded stream was to be refused for the missing Vulkan driver; "
                 f"`{stream_run.command_description}` ended {exit_status}:\n"
                 f"{stream_run.recent_stderr()}\ntatolabd:\n{tatolabd.recent_stderr()}"
@@ -805,7 +850,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             loaded_node_count=(
                 int(unload.group("processor_count")) if start_began and unload else None
             ),
-            refusal=refusal,
+            failed_or_refused_because=failed_or_refused_because,
             tatolab_run_exit_status=exit_status,
             tatolab_run_stderr_text=stream_run.stderr_text,
             tatolabd_stderr_text_during_the_run=tatolabd_stderr_text,

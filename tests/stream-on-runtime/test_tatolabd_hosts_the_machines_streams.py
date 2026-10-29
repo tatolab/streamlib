@@ -1133,7 +1133,12 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
         return {listed["stream"]: listed for listed in agent.call_tool("list_streams")["streams"]}
 
     def run_stream(agent: McpJsonRpcClientOverTheVerb, project_directory: Path) -> "dict[str, Any]":
-        return agent.call_tool("run_stream", {"project_directory": str(project_directory)})
+        """The one stream `run_stream` took in from `project_directory`."""
+        run = agent.call_tool("run_stream", {"project_directory": str(project_directory)})
+        assert run["project_directory"] == str(project_directory), run
+        assert run["compile_warnings"] == [], run
+        [stream] = run["streams"]
+        return stream
 
     # Two projects run, both running; the owner sets one port at each level
     # live, ending on private, and nothing restarts.
@@ -1152,9 +1157,10 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
                 "project_directory": str(project_directory),
                 "stream_function": stream_function_of_the_pattern_project(stream_function_name),
             },
+            "state": "running",
             "node_count": PROJECT_STREAM_NODE_COUNT,
             "replaced_a_recorded_stream": False,
-            "compile_warnings": [],
+            "failed_because": None,
         }
         local_api.await_every_node_running(stream=stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert listed_through(agent) == {alpha_stream_id: alpha_running, bravo_stream_id: bravo_running}

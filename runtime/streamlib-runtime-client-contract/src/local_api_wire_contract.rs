@@ -80,24 +80,48 @@ pub struct StreamLocationOnTheWire {
     pub stream_function: String,
 }
 
-/// The `run_stream` tool's result: the stream a project's compile loaded and started.
+/// The `run_stream` tool's result: each stream a project's load took in, running or failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunStreamToolResult {
+    /// The project the load was given.
+    pub project_directory: PathBuf,
+    /// Each stream the load started, or recorded failed.
+    pub streams: Vec<RunStreamToolResultStream>,
+    /// Each line the compile wrote to its standard error, the cross-floor check's warnings
+    /// among them; empty when it wrote nothing.
+    pub compile_warnings: Vec<String>,
+}
+
+/// One stream of a [`RunStreamToolResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunStreamToolResultStream {
     /// The stream's id, computed from its location; every tool naming the stream takes it.
     pub stream: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// This load of it, as its `logs` pages name it.
-    pub stream_instance: LoadedStreamInstance,
+    /// Whether it runs, or is recorded failed.
+    pub state: RunStreamToolResultStreamState,
+    /// This load of it, as its `logs` pages name it; `null` for a failed stream.
+    pub stream_instance: Option<LoadedStreamInstance>,
     /// Where the stream's code lives.
     pub location: StreamLocationOnTheWire,
-    /// How many nodes the loaded graph holds.
-    pub node_count: usize,
+    /// How many nodes the loaded graph holds; `null` for a failed stream.
+    pub node_count: Option<usize>,
     /// Whether the load replaced the recorded stream of the same location.
     pub replaced_a_recorded_stream: bool,
-    /// Each line the compile wrote to its standard error, the cross-floor check's warnings
-    /// among them; empty when it wrote nothing.
-    pub compile_warnings: Vec<String>,
+    /// Why it is failed — a traceback, or the refused load's reason; `null` when it runs.
+    pub failed_because: Option<String>,
+}
+
+/// The state of one stream a `run_stream` load took in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStreamToolResultStreamState {
+    /// Loaded and started.
+    Running,
+    /// Recorded failed and not loaded; `start_stream` retries it, and a load of its fixed code
+    /// replaces it.
+    Failed,
 }
 
 /// The `stop_stream` tool's result.
@@ -466,18 +490,38 @@ mod tests {
 
         assert_eq!(
             wire_text(&RunStreamToolResult {
-                stream: "project-main-3f2a9c".to_owned(),
-                display_name: "main".to_owned(),
-                stream_instance: LoadedStreamInstance("4".to_owned()),
-                location: StreamLocationOnTheWire {
-                    project_directory: PathBuf::from("/srv/project"),
-                    stream_function: "stream:main".to_owned(),
-                },
-                node_count: 3,
-                replaced_a_recorded_stream: false,
+                project_directory: PathBuf::from("/srv/project"),
+                streams: vec![
+                    RunStreamToolResultStream {
+                        stream: "project-main-3f2a9c".to_owned(),
+                        display_name: "main".to_owned(),
+                        state: RunStreamToolResultStreamState::Running,
+                        stream_instance: Some(LoadedStreamInstance("4".to_owned())),
+                        location: StreamLocationOnTheWire {
+                            project_directory: PathBuf::from("/srv/project"),
+                            stream_function: "stream:main".to_owned(),
+                        },
+                        node_count: Some(3),
+                        replaced_a_recorded_stream: false,
+                        failed_because: None,
+                    },
+                    RunStreamToolResultStream {
+                        stream: "project-side-1b2c3d".to_owned(),
+                        display_name: "side".to_owned(),
+                        state: RunStreamToolResultStreamState::Failed,
+                        stream_instance: None,
+                        location: StreamLocationOnTheWire {
+                            project_directory: PathBuf::from("/srv/project"),
+                            stream_function: "stream:side".to_owned(),
+                        },
+                        node_count: None,
+                        replaced_a_recorded_stream: true,
+                        failed_because: Some("ValueError: bad wiring".to_owned()),
+                    },
+                ],
                 compile_warnings: vec!["tatolab: one warning".to_owned()],
             }),
-            r#"{"stream":"project-main-3f2a9c","display_name":"main","stream_instance":"4","location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_a_recorded_stream":false,"compile_warnings":["tatolab: one warning"]}"#
+            r#"{"project_directory":"/srv/project","streams":[{"stream":"project-main-3f2a9c","display_name":"main","state":"running","stream_instance":"4","location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_a_recorded_stream":false,"failed_because":null},{"stream":"project-side-1b2c3d","display_name":"side","state":"failed","stream_instance":null,"location":{"project_directory":"/srv/project","stream_function":"stream:side"},"node_count":null,"replaced_a_recorded_stream":true,"failed_because":"ValueError: bad wiring"}],"compile_warnings":["tatolab: one warning"]}"#
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {

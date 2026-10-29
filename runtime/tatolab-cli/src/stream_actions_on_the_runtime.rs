@@ -14,9 +14,9 @@ use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult,
-    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
-    StartStreamToolResult, StopStreamToolResult,
+    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult, RunStreamToolResultStream,
+    RunStreamToolResultStreamState, STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
+    STREAM_LOAD_TOOL_CALL_TIMEOUT, StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
@@ -253,7 +253,8 @@ pub(crate) fn counted(count: usize, noun: &str) -> String {
     }
 }
 
-/// `tatolab run`: load the stream, print the lines naming it and how to follow it, and return.
+/// `tatolab run`: load the stream, print the lines naming each stream the load took in and how to
+/// follow it, and return 0 when every one runs, 1 when any is failed.
 pub(crate) fn run_stream(
     stream_load_arguments: &StreamLoadArguments,
     caller_working_directory: &Path,
@@ -265,26 +266,59 @@ pub(crate) fn run_stream(
         stream_load_request.run_stream_tool_arguments(),
     )?;
     write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
-    write_verb_standard_output(&rendered_running_stream_lines(&run_stream_result))
+    let output_written =
+        write_verb_standard_output(&rendered_run_stream_lines(&run_stream_result))?;
+    let any_stream_failed = run_stream_result
+        .streams
+        .iter()
+        .any(|stream| stream.state == RunStreamToolResultStreamState::Failed);
+    Ok(if any_stream_failed {
+        RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED
+    } else {
+        output_written
+    })
 }
 
-/// The stream `run_stream` loaded, then how to follow it.
-fn rendered_running_stream_lines(run_stream_result: &RunStreamToolResult) -> String {
-    format!(
-        "{}\n  follow it: tatolab logs -f\n",
-        the_running_stream_described(run_stream_result)
-    )
+/// What `run` exits with when a stream its load took in is failed, as it does when the load is
+/// refused.
+const RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED: u8 = 1;
+
+/// Each stream `run_stream` took in, then how to follow the one running.
+fn rendered_run_stream_lines(run_stream_result: &RunStreamToolResult) -> String {
+    run_stream_result
+        .streams
+        .iter()
+        .map(|stream| {
+            let follow_it = if stream.state == RunStreamToolResultStreamState::Running {
+                "\n  follow it: tatolab logs -f"
+            } else {
+                ""
+            };
+            format!(
+                "{}{follow_it}\n",
+                the_stream_a_run_took_in_described(stream)
+            )
+        })
+        .collect()
 }
 
-/// `<id> running as "<display name>" (project <dir>, <module:function>)`.
-pub(crate) fn the_running_stream_described(run_stream_result: &RunStreamToolResult) -> String {
-    format!(
-        "{} running as \"{}\" (project {}, {})",
-        run_stream_result.stream,
-        run_stream_result.display_name,
-        run_stream_result.location.project_directory.display(),
-        run_stream_result.location.stream_function
-    )
+/// `<id> running as "<display name>" (project <dir>, <module:function>)`, or
+/// `<id> failed: <reason>` for a stream the load recorded failed.
+pub(crate) fn the_stream_a_run_took_in_described(stream: &RunStreamToolResultStream) -> String {
+    match stream.state {
+        RunStreamToolResultStreamState::Running => format!(
+            "{} running as \"{}\" (project {}, {})",
+            stream.stream,
+            stream.display_name,
+            stream.location.project_directory.display(),
+            stream.location.stream_function
+        ),
+        RunStreamToolResultStreamState::Failed => format!(
+            "{} failed: {}",
+            stream.stream,
+            stream.failed_because.as_deref().unwrap_or_default()
+        ),
+    }
 }
 
 /// `{"stream": stream}`, the arguments of every tool that names one stream and nothing else.
@@ -653,15 +687,20 @@ mod tests {
 
     fn run_stream_result_warning(compile_warnings: &[&str]) -> RunStreamToolResult {
         RunStreamToolResult {
-            stream: "project-camera-3f2a9c".to_owned(),
-            display_name: "camera".to_owned(),
-            stream_instance: LoadedStreamInstance("4".to_owned()),
-            location: StreamLocationOnTheWire {
-                project_directory: PathBuf::from("/srv/project"),
-                stream_function: "stream:camera".to_owned(),
-            },
-            node_count: 3,
-            replaced_a_recorded_stream: false,
+            project_directory: PathBuf::from("/srv/project"),
+            streams: vec![RunStreamToolResultStream {
+                stream: "project-camera-3f2a9c".to_owned(),
+                display_name: "camera".to_owned(),
+                state: RunStreamToolResultStreamState::Running,
+                stream_instance: Some(LoadedStreamInstance("4".to_owned())),
+                location: StreamLocationOnTheWire {
+                    project_directory: PathBuf::from("/srv/project"),
+                    stream_function: "stream:camera".to_owned(),
+                },
+                node_count: Some(3),
+                replaced_a_recorded_stream: false,
+                failed_because: None,
+            }],
             compile_warnings: compile_warnings
                 .iter()
                 .map(|compile_warning| compile_warning.to_string())
@@ -698,9 +737,26 @@ mod tests {
     #[test]
     fn the_running_lines_name_the_stream_id_display_name_location_and_how_to_follow_it() {
         assert_eq!(
-            rendered_running_stream_lines(&run_stream_result_warning(&[])),
+            rendered_run_stream_lines(&run_stream_result_warning(&[])),
             "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
              follow it: tatolab logs -f\n"
+        );
+    }
+
+    #[test]
+    fn a_failed_stream_is_a_line_naming_its_id_and_why() {
+        let mut run_stream_result = run_stream_result_warning(&[]);
+        let stream = &mut run_stream_result.streams[0];
+        stream.state = RunStreamToolResultStreamState::Failed;
+        stream.stream_instance = None;
+        stream.node_count = None;
+        stream.failed_because =
+            Some("Traceback (most recent call last):\nValueError: bad wiring".to_owned());
+
+        assert_eq!(
+            rendered_run_stream_lines(&run_stream_result),
+            "project-camera-3f2a9c failed: Traceback (most recent call last):\n\
+             ValueError: bad wiring\n"
         );
     }
 
@@ -724,7 +780,7 @@ mod tests {
     fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
         assert!(
             serde_json::from_str::<RunStreamToolResult>(
-                r#"{"stream": "project-camera-3f2a9c", "display_name": "camera", "stream_instance": "4", "location": {"project_directory": "/srv/project", "stream_function": "stream:camera"}, "node_count": 3, "replaced_a_recorded_stream": false}"#
+                r#"{"project_directory": "/srv/project", "streams": []}"#
             )
             .is_err(),
             "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"

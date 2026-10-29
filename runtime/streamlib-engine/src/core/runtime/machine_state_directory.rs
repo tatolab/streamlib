@@ -41,8 +41,10 @@ pub struct StreamRecord {
     pub display_name: String,
     /// The project's venv interpreter, as it was spelled at the load.
     pub interpreter: PathBuf,
-    /// The graph compiled at the load, before any ruling was applied.
-    pub graph: serde_json::Value,
+    /// The graph compiled at the load, before any ruling was applied; `None`
+    /// for a stream whose compile failed, which `start_stream` compiles from
+    /// its location.
+    pub graph: Option<serde_json::Value>,
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
     pub stopped: bool,
     /// Why the stream is failed, so the runtime's start skips it until
@@ -72,11 +74,32 @@ impl StreamRecord {
             location,
             display_name: display_name.into(),
             interpreter: stream_environment.interpreter.clone(),
-            graph,
+            graph: Some(graph),
             stopped: false,
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             exposure_rulings: Vec::new(),
+        }
+    }
+
+    /// A record of the stream at `location`, shown as `display_name`, whose
+    /// compile in `stream_environment` gave no graph: failed because of
+    /// `failed_because`, implicated in no crash, and carrying no ruling.
+    pub fn of_a_stream_whose_compile_failed(
+        location: StreamLocation,
+        display_name: impl Into<String>,
+        stream_environment: &StreamEnvironment,
+        failed_because: impl Into<String>,
+    ) -> Self {
+        Self {
+            graph: None,
+            failed_because: Some(failed_because.into()),
+            ..Self::of_a_running_stream(
+                location,
+                display_name,
+                stream_environment,
+                serde_json::Value::Null,
+            )
         }
     }
 
@@ -686,6 +709,63 @@ mod tests {
     }
 
     #[test]
+    fn a_schema_3_record_holding_a_graph_reads_it_as_present() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        let schema_3_file = serde_json::json!({
+            "schema_version": 3,
+            "stream_id": record.stream_id,
+            "location": record.location,
+            "display_name": "preview",
+            "interpreter": record.interpreter,
+            "graph": {
+                "stream": "preview",
+                "nodes": [{"name": "camera", "type": "tatolab.stream:CameraSource", "config": {}}],
+                "links": [],
+                "exposed": [{"node": "camera", "port": "video", "level": "private"}],
+            },
+            "stopped": false,
+            "failed_because": null,
+            "runtime_crashes_in_a_row_implicating_it": 0,
+            "exposure_rulings": [],
+        });
+        std::fs::write(
+            state_directory
+                .path()
+                .join(format!("{}.json", record.stream_id)),
+            serde_json::to_vec(&schema_3_file).unwrap(),
+        )
+        .unwrap();
+
+        let read = records.read(&record.stream_id).unwrap();
+
+        assert_eq!(read, Some(current(record)));
+    }
+
+    #[test]
+    fn a_record_of_a_stream_whose_compile_failed_holds_no_graph_and_reads_back_whole() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let compiled = a_record_of("camera-app", "preview");
+        let record = StreamRecord::of_a_stream_whose_compile_failed(
+            compiled.location.clone(),
+            "preview",
+            &compiled.stream_environment(),
+            "Traceback (most recent call last):\nValueError: bad wiring",
+        );
+
+        records.write(&record).unwrap();
+
+        assert_eq!(record.graph, None);
+        assert_eq!(record.listing_state(), StreamListingState::Failed);
+        assert_eq!(
+            records.read(&record.stream_id).unwrap(),
+            Some(current(record))
+        );
+    }
+
+    #[test]
     fn a_record_whose_id_begins_with_a_dot_is_read_like_any_other() {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
@@ -1070,7 +1150,7 @@ mod tests {
             ]
         );
         let split = the_owners_exposure_rulings_split_around_the_load(
-            &record.graph,
+            record.graph.as_ref().unwrap(),
             &record.exposure_rulings,
         );
         assert_eq!(

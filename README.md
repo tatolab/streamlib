@@ -150,9 +150,9 @@ tatolab dev                 # the test pattern through a GPU lens, encoded and s
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
 `stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
 starts it, and `dev` prints the stream's id and its records in your terminal. Save an edit and
-`dev` runs the stream again: the runtime compiles the edit and only then replaces the running
-stream, so an edit that fails to compile prints the refusal and leaves the running stream in place
-until a save that compiles. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
+`dev` runs the stream again, and the runtime replaces the running stream with the edit. An edit
+whose code fails unloads the stream and records it failed: `dev` prints the traceback and loads
+it again on the next save. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
 loads is recorded: it runs until `tatolab stop` or `tatolab rm`, and the runtime loads it again each
 time it starts. `tatolab run` loads the stream once, without watching for edits, prints its id and
 returns; `tatolab logs -f` follows its records.
@@ -350,14 +350,16 @@ tatolab enable-virtual-camera [--print]
 - **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
   `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
 - **`run`** asks the runtime to compile the project's stream in its `.venv`, load it and record it,
-  then prints `<id> running as "<display name>" (project <dir>, <module:function>)` and returns:
-  exit 0 once the load is accepted, 1 naming why it was refused. The runtime loads the stream
-  again at each of its own starts until `stop` or `rm`, and running the same project and function
-  again replaces it under the same id. `TARGET` is `<file>.py[:<function>]` or
+  then prints `<id> running as "<display name>" (project <dir>, <module:function>)` and returns
+  0. A stream whose code fails is not refused: the runtime records it failed and `run` prints
+  `<id> failed: <reason>` with its traceback and exits 1, as it does naming why when the load is
+  refused. The runtime loads the stream again at each of its own starts until `stop` or `rm`,
+  and running the same project and function again replaces it under the same id — a failed one
+  included. `TARGET` is `<file>.py[:<function>]` or
   `<module>:<function>`. The id it prints is the one the other verbs take.
 - **`dev`** is `run`, then the stream's records followed, run again on every saved edit to a `.py`
-  file or `pyproject.toml` in the project; the runtime replaces the running stream only once the
-  edit compiles. Ctrl-C ends `dev` and leaves the stream running. When the runtime goes away, `dev`
+  file or `pyproject.toml` in the project; the runtime replaces the running stream, and an edit
+  whose code fails unloads it and records it failed, its traceback printed, until the next save. Ctrl-C ends `dev` and leaves the stream running. When the runtime goes away, `dev`
   says so, waits for it to load the stream again from its record, and follows it again.
 - **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
   running, stopped or failed, its node count, its project and its stream function, and why each
@@ -680,9 +682,13 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
   import it from there.
-- **`tatolab dev: no stream is loaded — fix it and save again`** — the edit failed to compile
-  with no earlier save running, or the earlier save could not be loaded again; the runtime's
-  refusal, with its traceback, is printed just above.
+- **`<id> failed: <traceback>`** from `run`, or **`tatolab dev: <id> is failed — fix it and save
+  again to load it`** — the stream's code raised, or its load was refused; the runtime lists it
+  `failed` with that reason. Fix the code and run or save again; `tatolab start <id>` retries it.
+  A `stream.py` that does not import fails every stream of the project, or with none lists the
+  project as `<folder>-<hash>`.
+- **`tatolab dev: no stream is loaded — fix it and save again`** — the runtime refused the load
+  itself, with nothing running before it; its refusal is printed just above.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
   (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that

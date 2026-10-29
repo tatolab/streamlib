@@ -22,7 +22,8 @@ use common::running_tatolab::{RunningTatolab, wait_until};
 use common::runtime_log_line_fixtures::a_log_record;
 use common::stub_local_api_server::{
     StubLocalApiScript, StubLocalApiServer, StubMcpStdioUpgradeAnswer, StubStreamLogRecords,
-    StubToolAnswer, StubToolCallTransport, run_stream_tool_result_text,
+    StubToolAnswer, StubToolCallTransport, failed_run_stream_tool_result_text,
+    run_stream_tool_result_text,
 };
 
 /// The stream every load here is loaded as.
@@ -406,9 +407,9 @@ fn a_refused_first_load_waits_for_a_save_and_loads_again_on_it() {
     );
 }
 
-/// A save runs the stream again over the same connection, never stopping it first: the runtime
-/// replaces the running stream once the save compiles, so a save it refuses leaves that stream
-/// running, and `dev` follows it on from the record it had reached.
+/// A save runs the stream again over the same connection, never stopping it first: a save the
+/// runtime refuses leaves the running stream as it was, and `dev` follows it on from the record
+/// it had reached.
 #[test]
 fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refused_save() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
@@ -418,7 +419,9 @@ fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refuse
         &scratch_project.canonical_path(),
         vec![
             loaded_answer(&scratch_project.canonical_path()),
-            StubToolAnswer::tool_failure("SyntaxError: invalid syntax (stream.py, line 1)"),
+            StubToolAnswer::tool_failure(
+                "the project's `tatolab-stream` is older than this runtime",
+            ),
             loaded_answer(&scratch_project.canonical_path()),
         ],
         vec![a_log_record(json!({"message": "before the bad save"}))],
@@ -433,7 +436,7 @@ fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refuse
 
     scratch_project.save_stream_py("this is not python (\n");
     running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: run_stream failed: SyntaxError: invalid syntax (stream.py, line 1)",
+        "tatolab dev: run_stream failed: the project's `tatolab-stream` is older than this runtime",
     );
     running_tatolab.wait_for_standard_error_line_containing(
         "tatolab dev: cam keeps running the last save that loaded — fix it and save again",
@@ -475,59 +478,59 @@ fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refuse
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_stream");
 }
 
-/// A save that compiles and whose load the runtime refuses leaves the previous graph loaded again
-/// as another instance, numbering its records from 1: `dev` follows that instance from its first
-/// record, not from where it had read the stream the save was to replace.
+/// A save whose code fails comes back as the stream failed: `dev` prints its traceback, says
+/// it waits for a fix, and loads the stream again on the next save.
 #[test]
-fn dev_follows_the_stream_loaded_again_after_a_refused_save_that_compiled_from_its_first_record() {
+fn dev_prints_a_failed_saves_traceback_and_loads_again_on_the_fixed_save() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
+    let traceback = "Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
+                     ValueError: bad wiring";
     let stub_local_api_server = a_runtime_holding(
         &isolated_machine_directories,
         &scratch_project.canonical_path(),
         vec![
             loaded_answer(&scratch_project.canonical_path()),
-            StubToolAnswer::tool_failure(
-                "the stream `cam` was not loaded: no output port `absent-port` on node `source`",
-            )
-            .re_loading_the_stream_as(
-                "2",
-                vec![a_log_record(json!({"message": "the re-load starts"}))],
-            ),
+            StubToolAnswer::tool_result(&failed_run_stream_tool_result_text(
+                STREAM_ID,
+                &scratch_project.canonical_path(),
+                traceback,
+            )),
+            loaded_answer(&scratch_project.canonical_path()),
         ],
-        vec![
-            a_log_record(json!({"message": "first"})),
-            a_log_record(json!({"message": "second"})),
-            a_log_record(json!({"message": "third"})),
-        ],
+        vec![a_log_record(json!({"message": "before the bad save"}))],
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    for message in ["first", "second", "third"] {
-        assert_eq!(
-            running_tatolab.next_standard_output_line(message),
-            rendered_line(message)
-        );
-    }
-
-    scratch_project.save_stream_py("# a save whose load is refused, longer than the first\n");
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: run_stream failed: the stream `cam` was not loaded",
-    );
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam was loaded again — following it from its first record",
-    );
-
     assert_eq!(
-        running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
-        rendered_line("the re-load starts"),
-        "the re-loaded stream's records are followed from its first"
+        running_tatolab.next_standard_output_line("the record before the bad save"),
+        rendered_line("before the bad save")
     );
+
+    scratch_project.save_stream_py("# a save whose function raises, longer than the first\n");
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: cam failed: Traceback (most recent call last):",
+    );
+    running_tatolab.wait_for_standard_error_line_containing("ValueError: bad wiring");
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: cam is failed — fix it and save again to load it",
+    );
+    assert!(
+        running_tatolab.is_still_running(),
+        "a failed save ends nothing"
+    );
+
+    scratch_project.save_stream_py("# the fixed version, longer than every save before it\n");
+    wait_until("the run after the fixed save", || {
+        calls_to(&stub_local_api_server, "run_stream") == 3
+    });
+    running_tatolab
+        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["run_stream", "run_stream"]
+        ["run_stream", "run_stream", "run_stream"]
     );
 }
 

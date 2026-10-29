@@ -26,6 +26,7 @@ __all__ = [
     "ResolvedStreamEntryFile",
     "ResolvedStreamEntryModule",
     "STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE",
+    "StreamFunctionNotDefinedRefusalError",
     "locate_stream_entry_module",
     "resolve_app_entry_file",
     "resolve_stream_entry",
@@ -56,6 +57,10 @@ STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
 
 class ProjectStreamCompileRefusalError(Exception):
     """A compile refused before the stream's graph exists, with a message shaped for a terminal."""
+
+
+class StreamFunctionNotDefinedRefusalError(ProjectStreamCompileRefusalError):
+    """A target naming a function the imported entry does not define as a `@stream`."""
 
 
 @dataclass(frozen=True)

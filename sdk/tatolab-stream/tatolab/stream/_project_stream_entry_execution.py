@@ -21,6 +21,7 @@ from ._project_stream_entry_resolution import (
     ResolvedStreamEntry,
     ResolvedStreamEntryFile,
     ResolvedStreamEntryModule,
+    StreamFunctionNotDefinedRefusalError,
     stream_target_forms,
     tatolab_command_as_typed,
 )
@@ -29,6 +30,7 @@ from ._stream_graph_builder import is_stream_function
 __all__ = [
     "execute_app_entry_file",
     "import_stream_entry_module",
+    "named_stream_function_location",
     "project_directory_the_stream_entry_imports_from",
     "select_stream_function",
     "stream_function_location",
@@ -156,20 +158,20 @@ def select_stream_function(
     if is_stream_function(named_value):
         return named_value
     if stream_function_name in entry_namespace:
-        raise ProjectStreamCompileRefusalError(
+        raise StreamFunctionNotDefinedRefusalError(
             f"`{stream_function_name}` in {entry_described} is not a @stream function: "
             f"decorate it with `@stream` — a module-level `def "
             f"{stream_function_name}(stream_builder: StreamBuilder) -> None:` that adds "
             f"its nodes."
         )
     if stream_functions:
-        raise ProjectStreamCompileRefusalError(
+        raise StreamFunctionNotDefinedRefusalError(
             f"{entry_described} defines no @stream function named "
             f"`{stream_function_name}`; it defines:\n"
             f"{_stream_function_listing(stream_functions)}\n"
             f"Name one of them: `{tatolab_command} {entry_as_typed}:<function>`."
         )
-    raise ProjectStreamCompileRefusalError(
+    raise StreamFunctionNotDefinedRefusalError(
         f"{entry_described} defines no @stream function named "
         f"`{stream_function_name}`, nor any other. Make `{stream_function_name}` one: "
         f"`@stream` above a module-level `def {stream_function_name}(stream_builder: "
@@ -216,8 +218,30 @@ def stream_function_location(
     if module_name == _ENTRY_FILE_RUN_MODULE_NAME and isinstance(
         resolved_stream_entry, ResolvedStreamEntryFile
     ):
-        entry_file_in_the_project = resolved_stream_entry.entry_file.resolve().relative_to(
-            project_directory
-        )
-        module_name = ".".join(entry_file_in_the_project.with_suffix("").parts)
+        module_name = _entry_file_module_name(resolved_stream_entry, project_directory)
     return f"{module_name}:{stream_function.__qualname__}"
+
+
+def named_stream_function_location(
+    resolved_stream_entry: ResolvedStreamEntry, project_directory: Path
+) -> str:
+    """The location the target's named function has when the entry defines it, as
+    `module:name` — what a target naming a function the entry no longer defines is
+    recorded under."""
+    stream_function_name = resolved_stream_entry.stream_function_name
+    if stream_function_name is None:
+        raise ValueError("a target that names no function has no named location")
+    if isinstance(resolved_stream_entry, ResolvedStreamEntryFile):
+        module_name = _entry_file_module_name(resolved_stream_entry, project_directory)
+    else:
+        module_name = resolved_stream_entry.entry_module_name
+    return f"{module_name}:{stream_function_name}"
+
+
+def _entry_file_module_name(
+    resolved_stream_entry: ResolvedStreamEntryFile, project_directory: Path
+) -> str:
+    entry_file_in_the_project = resolved_stream_entry.entry_file.resolve().relative_to(
+        project_directory
+    )
+    return ".".join(entry_file_in_the_project.with_suffix("").parts)
