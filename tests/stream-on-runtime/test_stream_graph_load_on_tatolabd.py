@@ -9,9 +9,10 @@ loads the graph that compile printed. A graph written here by hand goes
 through a project whose interpreter prints it as the compile document, so the
 runtime parses exactly the text a test wrote; a `@stream` function is compiled
 from the suite project. Every run here but the rig's is on a `tatolabd` that
-reaches no Vulkan driver: a refused load ends `tatolab run` with its refusal,
-a load that succeeds is refused at its start, at the GPU, before any device
-opens — and the runtime keeps serving either way, holding nothing.
+reaches no Vulkan driver: a compile the runtime refuses, or a load it records
+failed, ends `tatolab run` 1 with the reason; a load that succeeds fails at
+its start, at the GPU, before any device opens — and the runtime keeps serving
+either way.
 
 A Python node type is described in a processor interpreter started from the
 suite venv, which holds `tatolab-stream` and nothing of the runtime.
@@ -123,20 +124,20 @@ def empty_graph() -> "dict[str, Any]":
 
 
 def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
-    """A refused load's reason; fails if the graph loaded."""
+    """Why the run refused the graph or failed its load; fails if the graph loaded."""
     assert not run_outcome.loaded, (
         f"the graph loaded; it should have been refused:\n"
         f"{run_outcome.tatolabd_stderr_text_during_the_run[-4000:]}"
     )
     assert run_outcome.tatolab_run_exit_status == 1, run_outcome.tatolab_run_stderr_text
-    assert run_outcome.refusal is not None, run_outcome.tatolab_run_stderr_text
-    return run_outcome.refusal
+    assert run_outcome.failed_or_refused_because is not None, run_outcome.tatolab_run_stderr_text
+    return run_outcome.failed_or_refused_because
 
 
 def loaded_with(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> int:
     """How many of the stream's nodes a load that succeeded loaded; fails if it was refused."""
     assert run_outcome.loaded, (
-        f"the graph was refused: {run_outcome.refusal}\n"
+        f"the graph was refused: {run_outcome.failed_or_refused_because}\n"
         f"{run_outcome.tatolabd_stderr_text_during_the_run[-4000:]}"
     )
     assert run_outcome.loaded_node_count is not None, run_outcome.tatolabd_stderr_text_during_the_run

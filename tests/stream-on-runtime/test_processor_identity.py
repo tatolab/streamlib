@@ -16,7 +16,7 @@ processors wearing one name.
 
 Every arm is observed at the load, which is where identity is derived — before
 the engine would initialize a GPU context. Each runs on a `tatolabd` that
-reaches no Vulkan driver, so a stream that loads is refused at the GPU, before
+reaches no Vulkan driver, so a stream that loads fails at the GPU, before
 any device opens, and the identities are read off `tatolabd`'s own log.
 """
 
@@ -145,7 +145,7 @@ def test_a_processor_declared_in_the_entry_file_is_refused(
         run_stream_on_tatolabd_with_no_vulkan_driver,
         {"stream.py": ENTRY_FILE_PROCESSOR_STREAM_SOURCE},
     )
-    refusal = run_outcome.refusal or ""
+    refusal = run_outcome.failed_or_refused_because or ""
 
     assert run_outcome.tatolab_run_exit_status != 0, run_outcome.tatolab_run_stderr_text
     assert "__main__:EntryFileProcessor" in refusal, (
@@ -167,7 +167,7 @@ def test_a_processor_declared_inside_a_function_is_refused(
         run_stream_on_tatolabd_with_no_vulkan_driver,
         {"stream.py": FUNCTION_LOCAL_PROCESSOR_STREAM_SOURCE},
     )
-    refusal = run_outcome.refusal or ""
+    refusal = run_outcome.failed_or_refused_because or ""
 
     assert run_outcome.tatolab_run_exit_status != 0, run_outcome.tatolab_run_stderr_text
     assert "<locals>" in refusal, (
@@ -196,7 +196,7 @@ def test_the_same_class_in_an_importable_module_is_accepted(
     assert run_outcome.loaded, (
         f"an importable class must not be refused:\n{run_outcome.tatolab_run_stderr_text}"
     )
-    assert NO_VULKAN_DRIVER_REFUSAL in (run_outcome.refusal or ""), run_outcome.tatolab_run_stderr_text
+    assert NO_VULKAN_DRIVER_REFUSAL in (run_outcome.failed_or_refused_because or ""), run_outcome.tatolab_run_stderr_text
 
 
 def identity_under(
