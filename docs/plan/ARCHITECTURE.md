@@ -47,7 +47,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   builder is a `StreamBuilder`, its API `add`/`connect`/`expose`.
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2618,
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
-  #2682; stream-identity-and-persistence — SHIPPED #2962]
+  #2682; stream-identity-and-persistence — SHIPPED #2962; amended by project-loads-every-stream:
+  `dev`/`run` load every `@stream` in `stream.py`]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -125,7 +126,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
   moq-relays — SHIPPED #2871; runtime-description; stream-identity-and-persistence — SHIPPED
-  #2965]
+  #2965; amended by create-project: `new` is a local-API call whose scaffold the runtime
+  writes, and a project with no `.venv/bin/python` gets one from the runtime's uv instead of a
+  refusal; amended by project-loads-every-stream: `run_stream` with no `stream_function` loads
+  every `@stream` in `stream.py`]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
@@ -234,7 +238,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream id. A restriction is recorded before it changes live, so a crash can only tighten a
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
-  stream-identity-and-persistence — SHIPPED #2960, #2962, #2965]
+  stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; amended by create-project:
+  `create_project`]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -255,7 +260,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   or unmatched argument, or a directory with none or several, is refused listing the
   candidates' ids and display names. `run_stream` returns the id and the display name;
   `list_streams` lists each stream's id, display name, location, state (and why, when failed)
-  and node count. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED #2960, #2962]
+  and node count. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED #2960, #2962;
+  amended by create-project: a created project's display name is its folder's name]
   Rejected: a stream named by its function, a second load of the name refused with `--name` the
   way out — every scaffolded `main` collides once every load persists (owner, 2026-10-27).
   Rejected: the display name in the address — a rename would cut off every reader of the
@@ -278,6 +284,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2965]
   Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
   read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
+- **DECIDED** — Creating a project. The runtime creates a project in one operation: it writes
+  the embedded scaffold, makes the project's `.venv` with its own uv, then loads and records the
+  scaffold's one stream as every load is. `tatolab new [directory]`, the local-API tool `create_project
+  {project_directory}` and `Tatolab.app`'s Add stream › Create all call it, and none scaffolds
+  or syncs on its own. The tool takes the directory absolute, as `run_stream` does, and `new`
+  resolves a relative one against the working directory. With none, the runtime draws an
+  adjective-noun name (`quiet-otter`) from word lists it embeds and creates `~/streams/<name>`,
+  drawing again while that directory exists and refusing by name after a few draws; it never
+  appends a suffix. A created project's display name is its folder's name, and a rename never
+  moves the folder. Create refuses, before writing anything, a directory holding any file the
+  scaffold writes, naming them; a directory that already holds a project is added by loading it.
+  The runtime unit carries a pinned uv on both floors; the runtime makes every `.venv` with it,
+  uv taking the Python `.python-version` pins from the machine or fetching it. A load of a
+  project with no `.venv/bin/python` makes one first, an existing `.venv` is never touched, a
+  failed sync removes the half-made `.venv`, and uv's refusal comes back in its own words.
+  The tool and `new` return the stream id, the display name and the project directory. Owner,
+  2026-10-28. [create-project]
+  Rejected: `hello`, then `hello-2`, `hello-3`, … as the default project — a prototype's
+  placeholder (owner, 2026-10-28).
+  Rejected: uv from the user's `PATH`, refused when absent — an agent with no terminal could not
+  create a project (owner, 2026-10-28).
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
   `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
   as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
@@ -288,7 +315,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (owner, 2026-10-01); `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
   package declaring its streams under an entry-point group is the packs OPEN's.
   [one-runtime-per-machine; stream-graph — SHIPPED #2618; authoring-names — SHIPPED #2682;
-  stream-identity-and-persistence — SHIPPED #2962]
+  stream-identity-and-persistence — SHIPPED #2962; amended by project-loads-every-stream: `run`
+  with no argument loads every `@stream` in `stream.py`]
+- **DECIDED** — Loading a project loads every stream in it. A load naming no stream function —
+  `tatolab run` or `tatolab dev` with no argument, `run_stream` with no `stream_function`,
+  `Tatolab.app`'s Add, and create — loads every `@stream` in the project's `stream.py`, each as
+  its own stream: its own location, stream id, display name, record, logs and lifecycle, so
+  `stop`, `start`, `rm` and `rename` act on one. Naming a function loads that one alone. The
+  project compiles once; a failed compile refuses the whole load and leaves every stream of the
+  project as it was. `--name` and `run_stream {name}` are refused when the load would load more
+  than one stream. A re-load of the project replaces each of its streams in place, and a recorded
+  stream of the project whose function `stream.py` no longer defines is unloaded and recorded
+  `failed`, naming the missing function, never forgotten. `dev` follows every stream it loaded,
+  each record prefixed with its display name, and re-loads them on save. The local-API tool
+  `list_project_streams {project_directory}` returns each `@stream` in the project as
+  `module:function` with its docstring, and its stream id and state when loaded; `run_stream` and
+  the CLI return every stream a load loaded. Owner, 2026-10-28. [project-loads-every-stream]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream id>/<node>/<port>`; no group label and no nested
@@ -686,8 +728,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a project, or into a default project the runtime manages when there is none, and never beside
   the runtime; `run <url-or-zip>` fetches the project into the runtime's state directory, runs
   `uv sync` there (uv creating the venv and fetching a missing Python), and loads it like any
-  project, recorded as every load is (§Product) — and a project with no venv gets `uv sync`
-  first. Environments are provisioned by the
+  project, recorded as every load is (§Product). Environments are provisioned by the
   standard toolchain only — `pyproject.toml`, uv, a package index, git — never by machinery of
   streamlib's, which is what importable-python-library deleted. The runtime process imports
   nothing from a pack or a project; their code runs only in processor interpreters started from
@@ -3410,7 +3451,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pointing at the app. The tarball carries the Vulkan loader and the software device in
   `tatolab/runtime/_vulkan_driver/`, and `install.sh` refuses a tarball without the driver's
   manifest. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722; optional-accelerators —
-  SHIPPED #2761]
+  SHIPPED #2761; amended by create-project: the tarball carries a pinned uv]
 - **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
   private — and is a Tauri app registering its agent through `objc2-service-management`. On
@@ -3443,7 +3484,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the runtime, and with no service the app points at the installer. Beyond its live stream
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02, 2026-10-11 and 2026-10-24. [runtime-hosting — SHIPPED #2721;
-  machine-lock-without-administrator — SHIPPED #2929]
+  machine-lock-without-administrator — SHIPPED #2929; amended by create-project: the bundle
+  carries the runtime unit's pinned uv, and the app neither scaffolds nor syncs a project]
 
 ## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields)
 
