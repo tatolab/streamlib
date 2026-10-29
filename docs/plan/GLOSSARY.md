@@ -27,6 +27,11 @@ Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "d
 "workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
 stream persists).
 
+**Project** _(user)_: a directory with `pyproject.toml` and one venv whose `stream.py` defines
+one or more streams; `tatolab new` and `create_project` make one, its scaffold holding one
+stream. Loading a project loads every stream in it, each its own unit.
+_Avoid_: "stream project" (a project holds many streams), "app".
+
 **Location** _(crosses)_: what a stream is — its project directory and its stream function.
 Loading the same location again replaces the stream; a moved directory is a new stream.
 _Avoid_: "source" (the relay source node's word), "origin" (MoQ's), "path" alone.
