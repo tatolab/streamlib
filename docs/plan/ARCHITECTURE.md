@@ -224,7 +224,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   second mode unless it solves a real problem; it runs on very low-power devices; a stream
   that exposes devices stays long-running. Testing a stream without a full runtime is separate
   work, outside this pivot. Owner, 2026-10-01. [one-runtime-per-machine; runtime-hosting —
-  SHIPPED #2711, #2713; stream-identity-and-persistence — SHIPPED #2965]
+  SHIPPED #2711, #2713; stream-identity-and-persistence — SHIPPED #2965; amended by
+  load-never-refused-for-code: a first load whose code fails is recorded `failed`, and a venv
+  that does not run is made again rather than failing a re-load]
 - **DECIDED** — The stream actions, as built. `run_stream` records the stream and loads it,
   whichever connection carries the call, and the stream outlives that connection. `logs
   {stream, after}` pages a stream's records, `after` a record sequence number. The tools:
@@ -281,7 +283,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   following, never the stream. A runtime crash ends `logs -f` with an error naming it; `dev`
   names the crash and keeps running, waits for the runtime, which re-loads the stream from its
   record, and follows again. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED
-  #2965]
+  #2965; amended by load-never-refused-for-code: a load whose code fails records the stream
+  `failed` instead of re-loading the previous version, and `run` exits 1 when a stream it loaded
+  is `failed`]
   Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
   read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
 - **DECIDED** — Creating a project. The runtime creates a project in one operation: it writes
@@ -296,10 +300,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   moves the folder. Create refuses, before writing anything, a directory holding any file the
   scaffold writes, naming them; a directory that already holds a project is added by loading it.
   The runtime unit carries a pinned uv on both floors; the runtime makes every `.venv` with it,
-  uv taking the Python `.python-version` pins from the machine or fetching it. A load of a
-  project with no `.venv/bin/python` makes one first, a `.venv` holding `bin/python` is never
-  touched, a
-  failed sync removes the half-made `.venv`, and uv's refusal comes back in its own words.
+  uv taking the Python `.python-version` pins from the machine or fetching it, and makes it
+  whenever `.venv/bin/python` does not run (the entry below).
   The tool and `new` return the stream id, the display name and the project directory. Owner,
   2026-10-28. [create-project]
   Rejected: `hello`, then `hello-2`, `hello-3`, … as the default project — a prototype's
@@ -323,8 +325,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `Tatolab.app`'s Add, and create — loads every `@stream` in the project's `stream.py`, each as
   its own stream: its own location, stream id, display name, record, logs and lifecycle, so
   `stop`, `start`, `rm` and `rename` act on one. Naming a function loads that one alone. The
-  project compiles once; a failed compile refuses the whole load and leaves every stream of the
-  project as it was. `--name` and `run_stream {name}` are refused when the load would load more
+  project compiles once, and a stream whose part of the compile fails is recorded `failed` (the
+  entry below). `--name` and `run_stream {name}` are refused when the load would load more
   than one stream. A re-load of the project replaces each of its streams in place, and a recorded
   stream of the project whose function `stream.py` no longer defines is unloaded and recorded
   `failed`, naming the missing function, never forgotten. `dev` follows every stream it loaded,
@@ -332,6 +334,32 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `list_project_streams {project_directory}` returns each `@stream` in the project as
   `module:function` with its docstring, and its stream id and state when loaded; `run_stream` and
   the CLI return every stream a load loaded. Owner, 2026-10-28. [project-loads-every-stream]
+- **DECIDED** — A load is never refused for what a project's code or environment does. Every
+  load — `run`, `dev`, `run_stream`, `create_project`, `Tatolab.app`'s Add, `start`, and the
+  runtime's re-load at start — takes the project in. A stream whose venv, compile, describe or
+  start fails is recorded `failed`, with the reason in `list_streams` and the traceback in its
+  logs, and a replaced stream's running version is unloaded. When `stream.py` cannot be
+  imported, every stream recorded from the project is recorded `failed` with the traceback. A
+  project with none gets one failed record for `stream.py`, its location the project directory
+  with no function, so its id is `<folder>-<hash>`. The next load that imports `stream.py`
+  replaces it with the project's streams. A load refuses only what its own arguments get wrong:
+  - a directory that does not exist or is not absolute;
+  - a folder with neither `stream.py` nor `pyproject.toml`;
+  - a named function that `stream.py` does not define and no record holds;
+  - `--name` across several streams;
+  - an id held by another location;
+  - create into a directory holding a file the scaffold writes.
+
+  `start` of a failed stream whose record holds no graph compiles it from its location.
+  `tatolab run` exits 0 when every stream it loaded is running, and exits 1 naming each reason
+  when any is `failed` or the load is refused. The runtime makes a project's `.venv` whenever
+  `.venv/bin/python` does not run: on a load, `start`, the runtime's re-load at start, create
+  and `list_project_streams`. It removes a `.venv` whose interpreter does not run first, and
+  never touches one whose interpreter runs. A failed sync records the stream `failed` in uv's
+  own words. `list_project_streams` on a project whose `stream.py` cannot be imported answers
+  with the traceback in place of its streams. Owner, 2026-10-29. [load-never-refused-for-code]
+  Rejected: refusing a load whose code fails, or putting the previous version back — a person or
+  an agent could load only finished code (owner, 2026-10-29).
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream id>/<node>/<port>`; no group label and no nested

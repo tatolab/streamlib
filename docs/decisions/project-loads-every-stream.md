@@ -17,8 +17,10 @@ before making `--name` or a display name stand for more than one stream.
 - Each `@stream` stays its own unit: its own location, id, display name, record, logs and
   lifecycle. Loading together never ties lifecycles together; `stop`, `start`, `rm` and
   `rename` act on one stream.
-- The project compiles once, and a failed compile refuses the whole load, leaving every stream
-  of the project as it was, as a refused load already does for one stream.
+- The project compiles once.
+  > ~~A failed compile refuses the whole load, leaving every stream of the project as it was,
+  > as a refused load already does for one stream.~~ — Superseded 2026-10-29 by
+  > `load-never-refused-for-code.md`: a stream whose compile fails is recorded `failed`.
 - A display name given at a load names one stream, so `--name` is refused when a load would load
   several.
 - A stream whose function was deleted from `stream.py` is unloaded and recorded `failed` on the
