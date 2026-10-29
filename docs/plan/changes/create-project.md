@@ -1,5 +1,7 @@
 # create-project
 
+> **Approved by the owner, 2026-10-29:** "Approved, merge the pr" (PR #2969).
+
 Built from #2951 and the aligns merged in #2968 and #2970. It builds three §Product entries:
 - "Creating a project" (ADR `docs/decisions/create-project.md`);
 - "Loading a project loads every stream in it" (ADR `docs/decisions/project-loads-every-stream.md`);
