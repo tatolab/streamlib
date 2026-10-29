@@ -5,8 +5,9 @@
 `tatolab dev`.
 
 Each test runs it as the runtime does: `python -I -m` in a child, with the anchor as
-the working directory, reading the one JSON document on stdout, the refusals and
-tracebacks on stderr, and the exit code. Nothing here needs a runtime.
+the working directory, reading the one JSON document on stdout — a compiled stream, or
+the traceback of the code that gave none — the refusals on stderr, and the exit code.
+Nothing here needs a runtime.
 """
 
 import json
@@ -110,13 +111,43 @@ def run_compile_entry(
     )
 
 
-def compiled_document(finished: "subprocess.CompletedProcess[str]") -> "dict[str, Any]":
-    """The one JSON object a compile that succeeded writes to stdout."""
+def the_one_document_of(
+    finished: "subprocess.CompletedProcess[str]", document_keys: "set[str]"
+) -> "dict[str, Any]":
+    """The one JSON object the compile wrote to stdout, holding exactly `document_keys`."""
     assert finished.returncode == 0, finished.stderr
     assert finished.stdout.count("\n") == 1 and finished.stdout.endswith("\n"), finished.stdout
     document = json.loads(finished.stdout)
-    assert set(document) == {"stream_graph", "project_directory", "stream_function"}, document
+    assert set(document) == document_keys, document
     return document
+
+
+def compiled_document(finished: "subprocess.CompletedProcess[str]") -> "dict[str, Any]":
+    """The one JSON object a compile that succeeded writes to stdout."""
+    return the_one_document_of(finished, {"stream_graph", "project_directory", "stream_function"})
+
+
+def stream_function_failure_document(
+    finished: "subprocess.CompletedProcess[str]",
+) -> "dict[str, Any]":
+    """The document of a stream function that raised while it compiled."""
+    return the_one_document_of(finished, {"failed_because", "project_directory", "stream_function"})
+
+
+def stream_function_not_defined_document(
+    finished: "subprocess.CompletedProcess[str]",
+) -> "dict[str, Any]":
+    """The document of a target naming a function the entry does not define as a stream."""
+    return the_one_document_of(
+        finished, {"not_defined_because", "project_directory", "stream_function"}
+    )
+
+
+def import_failure_of(finished: "subprocess.CompletedProcess[str]") -> str:
+    """The traceback of an entry that raised before any stream function was chosen."""
+    return the_one_document_of(finished, {"import_failed_because", "project_directory"})[
+        "import_failed_because"
+    ]
 
 
 def refusal_of(finished: "subprocess.CompletedProcess[str]") -> str:
@@ -348,10 +379,9 @@ def test_a_file_entry_in_a_subdirectory_cannot_import_from_the_anchor(anchor_dir
         "import helpers\n" + MINIMAL_STREAM_SOURCE,
     )
 
-    finished = run_compile_entry(anchor_directory, "rigs/desk.py")
+    import_failure = import_failure_of(run_compile_entry(anchor_directory, "rigs/desk.py"))
 
-    assert finished.returncode == 1, finished.stdout + finished.stderr
-    assert "ModuleNotFoundError: No module named 'helpers'" in finished.stderr
+    assert "ModuleNotFoundError: No module named 'helpers'" in import_failure
 
 
 def test_the_app_does_not_see_the_launchers_arguments(anchor_directory: Path):
@@ -643,28 +673,33 @@ def test_a_module_targets_raising_parent_package_is_the_first_frame_of_its_trace
     )
     write_app(anchor_directory, "raising_parent_rigs/desk.py", MINIMAL_STREAM_SOURCE)
 
-    finished = run_compile_entry(anchor_directory, "raising_parent_rigs.desk:main")
+    import_failure = import_failure_of(
+        run_compile_entry(anchor_directory, "raising_parent_rigs.desk:main")
+    )
 
-    assert finished.returncode == 1, finished.stderr
-    assert finished.stdout == ""
-    assert "ValueError: bad package" in finished.stderr
-    first_frame = finished.stderr.index("File ")
-    assert finished.stderr.startswith(
+    assert "ValueError: bad package" in import_failure
+    first_frame = import_failure.index("File ")
+    assert import_failure.startswith(
         f'File "{anchor_directory / "raising_parent_rigs" / "__init__.py"}", line 1, in <module>',
         first_frame,
-    ), finished.stderr
-    assert "importlib" not in finished.stderr, finished.stderr
+    ), import_failure
+    assert "importlib" not in import_failure, import_failure
 
 
-def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(anchor_directory: Path):
+def test_a_module_targets_function_it_lacks_names_the_file_its_module_resolved_to(
+    anchor_directory: Path,
+):
     write_app(anchor_directory, "refusal_naming_rigs/__init__.py", "")
     write_app(anchor_directory, "refusal_naming_rigs/desk.py", TWO_STREAM_SOURCE)
 
-    message = refusal_of(
+    document = stream_function_not_defined_document(
         run_compile_entry(
             anchor_directory, "--dir", str(anchor_directory), "refusal_naming_rigs.desk:side"
         )
     )
+    message = document["not_defined_because"]
+
+    assert document["stream_function"] == "refusal_naming_rigs.desk:side"
 
     assert (
         f"`refusal_naming_rigs.desk` (`{anchor_directory / 'refusal_naming_rigs' / 'desk.py'}`) "
@@ -726,8 +761,13 @@ def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
 ):
     write_app(anchor_directory, "my rig.py", TWO_STREAM_SOURCE)
 
-    message = refusal_of(
-        run_compile_entry(anchor_directory, "--dir", str(anchor_directory), *target_arguments)
+    finished = run_compile_entry(
+        anchor_directory, "--dir", str(anchor_directory), *target_arguments
+    )
+    message = (
+        refusal_of(finished)
+        if finished.returncode
+        else stream_function_not_defined_document(finished)["not_defined_because"]
     )
 
     suggestion = f"tatolab run --dir {anchor_directory} 'my rig.py':<function>"
@@ -775,10 +815,18 @@ def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(anchor_directo
     assert "tatolab dev <file>.py:<function>" in message
 
 
-def test_a_named_function_the_file_lacks_is_refused_listing_its_streams(anchor_directory: Path):
+def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_its_streams(
+    anchor_directory: Path,
+):
     write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
 
-    message = refusal_of(run_compile_entry(anchor_directory, "stream.py:side"))
+    document = stream_function_not_defined_document(
+        run_compile_entry(anchor_directory, "stream.py:side")
+    )
+    message = document["not_defined_because"]
+
+    assert document["stream_function"] == "stream:side"
+    assert document["project_directory"] == str(anchor_directory)
 
     assert "defines no @stream function named `side`" in message
     assert "    front — Front pattern, encoded to H.264.\n" in message
@@ -796,12 +844,17 @@ def test_an_app_py_named_by_the_file_flag_that_defines_only_setup_defines_no_str
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
 
 
-def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorator(
+def test_a_named_function_in_a_file_with_no_stream_is_reported_naming_the_decorator(
     anchor_directory: Path,
 ):
     write_app(anchor_directory, "stream.py", "PIPELINE = 1\n")
 
-    message = refusal_of(run_compile_entry(anchor_directory, "stream.py:main"))
+    document = stream_function_not_defined_document(
+        run_compile_entry(anchor_directory, "stream.py:main")
+    )
+    message = document["not_defined_because"]
+
+    assert document["stream_function"] == "stream:main"
 
     assert "defines no @stream function named `main`, nor any other" in message
     assert (
@@ -810,7 +863,7 @@ def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorat
     )
 
 
-def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(anchor_directory: Path):
+def test_a_named_function_that_is_not_a_stream_is_reported_naming_the_fix(anchor_directory: Path):
     write_app(
         anchor_directory,
         "stream.py",
@@ -818,7 +871,9 @@ def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(anchor_
         + "\n\ndef helper(stream_builder: StreamBuilder) -> None:\n    pass\n",
     )
 
-    message = refusal_of(run_compile_entry(anchor_directory, "stream.py:helper"))
+    message = stream_function_not_defined_document(
+        run_compile_entry(anchor_directory, "stream.py:helper")
+    )["not_defined_because"]
 
     assert "`helper` in" in message and "is not a @stream function" in message
     assert "decorate it with `@stream`" in message
@@ -869,7 +924,7 @@ def test_a_package_target_compiles_a_stream_its_init_re_exports(anchor_directory
     assert document["stream_graph"] == FRONT_STREAM_GRAPH
 
 
-def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_the_fix(
+def test_a_package_target_naming_a_value_that_is_not_a_stream_is_reported_naming_the_fix(
     anchor_directory: Path,
 ):
     write_app(
@@ -883,9 +938,12 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_
         "def wire_cameras(stream_builder):\n    pass\n",
     )
 
-    message = refusal_of(
+    document = stream_function_not_defined_document(
         run_compile_entry(anchor_directory, "re_exporting_helper_rover:wire_cameras")
     )
+    message = document["not_defined_because"]
+
+    assert document["stream_function"] == "re_exporting_helper_rover:wire_cameras"
 
     assert "`wire_cameras` in" in message and "is not a @stream function" in message
     assert "decorate it with `@stream`" in message
@@ -921,7 +979,9 @@ def test_a_stream_that_adds_nothing_compiles_and_is_the_runtimes_to_refuse(
     assert document["stream_graph"] == {"stream": "main", "nodes": [], "links": [], "exposed": []}
 
 
-def test_a_raising_stream_function_prints_its_traceback(anchor_directory: Path):
+def test_a_raising_stream_function_is_reported_under_its_location_with_its_traceback(
+    anchor_directory: Path,
+):
     write_app(
         anchor_directory,
         "stream.py",
@@ -933,18 +993,18 @@ def test_a_raising_stream_function_prints_its_traceback(anchor_directory: Path):
         "    raise ValueError('bad wiring')\n",
     )
 
-    finished = run_compile_entry(anchor_directory, verb="dev")
+    document = stream_function_failure_document(run_compile_entry(anchor_directory, verb="dev"))
+    failed_because = document["failed_because"]
 
-    assert finished.returncode == 1, finished.stdout + finished.stderr
-    assert finished.stdout == ""
-    assert f"error: `{anchor_directory / 'stream.py'}` failed" in finished.stderr
-    assert "ValueError: bad wiring" in finished.stderr
-    assert "Traceback (most recent call last)" in finished.stderr
-    assert "_project_stream" not in finished.stderr, "the compile entry's frames are stripped"
-    assert "_stream_graph_builder.py" not in finished.stderr, (
+    assert document["stream_function"] == "stream:main"
+    assert document["project_directory"] == str(anchor_directory)
+    assert failed_because.startswith("Traceback (most recent call last)"), failed_because
+    assert failed_because.endswith("ValueError: bad wiring"), failed_because
+    assert "_project_stream" not in failed_because, "the compile entry's frames are stripped"
+    assert "_stream_graph_builder.py" not in failed_because, (
         "the compile call into the stream function is the launcher's, not the author's"
     )
-    assert f'File "{anchor_directory / "stream.py"}", line 6, in main' in finished.stderr
+    assert f'File "{anchor_directory / "stream.py"}", line 6, in main' in failed_because
 
 
 def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: Path):
@@ -960,14 +1020,15 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: 
         '    stream_builder.add(TestPatternSource, name="pattern")\n',
     )
 
-    finished = run_compile_entry(anchor_directory)
+    failed_because = stream_function_failure_document(run_compile_entry(anchor_directory))[
+        "failed_because"
+    ]
 
-    assert finished.returncode == 1, finished.stderr
-    first_frame = finished.stderr.index("File ")
-    assert finished.stderr.startswith(
+    first_frame = failed_because.index("File ")
+    assert failed_because.startswith(
         f'File "{anchor_directory / "stream.py"}", line 7, in main', first_frame
-    ), finished.stderr
-    assert "casts to `pattern`" in finished.stderr
+    ), failed_because
+    assert "casts to `pattern`" in failed_because
 
 
 # ---------------------------------------------------------------------------
@@ -975,7 +1036,7 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: 
 # ---------------------------------------------------------------------------
 
 
-def test_a_syntax_error_prints_the_apps_traceback(anchor_directory: Path):
+def test_a_syntax_error_is_reported_as_the_apps_traceback(anchor_directory: Path):
     write_app(
         anchor_directory,
         "stream.py",
@@ -987,14 +1048,10 @@ def test_a_syntax_error_prints_the_apps_traceback(anchor_directory: Path):
         "    pass\n",
     )
 
-    finished = run_compile_entry(anchor_directory, verb="dev")
+    import_failure = import_failure_of(run_compile_entry(anchor_directory, verb="dev"))
 
-    assert finished.returncode == 1, f"stderr was:\n{finished.stderr}"
-    assert finished.stdout == ""
-    assert "SyntaxError" in finished.stderr, (
-        f"the user's own error must be the headline; stderr was:\n{finished.stderr}"
-    )
-    assert "stream.py" in finished.stderr, "the traceback must name the file"
+    assert "SyntaxError" in import_failure, import_failure
+    assert "stream.py" in import_failure, "the traceback must name the file"
 
 
 def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tmp_path: Path):
@@ -1011,14 +1068,11 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tm
         "def process(self ctx:\n    this does not parse\n"
     )
 
-    finished = run_compile_entry(app_directory, verb="dev")
+    import_failure = import_failure_of(run_compile_entry(app_directory, verb="dev"))
 
-    assert finished.returncode == 1, f"stderr was:\n{finished.stderr}"
-    assert "SyntaxError" in finished.stderr, (
-        f"the user's own error must be the headline; stderr was:\n{finished.stderr}"
-    )
-    assert "halftone_lens_effect.py" in finished.stderr, (
-        f"the traceback must name the module the user edited; stderr was:\n{finished.stderr}"
+    assert "SyntaxError" in import_failure, import_failure
+    assert "halftone_lens_effect.py" in import_failure, (
+        f"the traceback must name the module the user edited:\n{import_failure}"
     )
 
 
@@ -1027,9 +1081,9 @@ def test_a_raise_at_import_time_surfaces_as_the_apps_traceback(anchor_directory:
 
     finished = run_compile_entry(anchor_directory)
 
-    assert finished.returncode == 1
-    assert finished.stdout == ""
-    assert "ValueError: bad wiring" in finished.stderr
+    assert "ValueError: bad wiring" in import_failure_of(finished)
+    assert json.loads(finished.stdout)["project_directory"] == str(anchor_directory)
+    assert "bad wiring" not in finished.stderr, "the traceback is the document's alone"
 
 
 def test_a_missing_entry_exits_without_a_python_traceback(anchor_directory: Path):
@@ -1049,18 +1103,18 @@ def test_the_apps_traceback_carries_none_of_the_launchers_frames(anchor_director
     """
     write_app(anchor_directory, "stream.py", "raise ValueError('bad wiring')\n")
 
-    finished = run_compile_entry(anchor_directory)
+    import_failure = import_failure_of(run_compile_entry(anchor_directory))
 
-    assert "runpy" not in finished.stderr, (
-        f"no launcher frame may appear in the app's traceback; stderr was:\n{finished.stderr}"
+    assert "runpy" not in import_failure, (
+        f"no launcher frame may appear in the app's traceback:\n{import_failure}"
     )
-    assert "_project_stream" not in finished.stderr, (
-        f"the compile entry's own frames must be stripped; stderr was:\n{finished.stderr}"
+    assert "_project_stream" not in import_failure, (
+        f"the compile entry's own frames must be stripped:\n{import_failure}"
     )
-    first_frame = finished.stderr.index("File ")
-    assert finished.stderr.startswith(
+    first_frame = import_failure.index("File ")
+    assert import_failure.startswith(
         f'File "{anchor_directory / "stream.py"}", line 1, in <module>', first_frame
-    ), finished.stderr
+    ), import_failure
 
 
 def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(anchor_directory: Path):
