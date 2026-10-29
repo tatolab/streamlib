@@ -1,35 +1,38 @@
 # create-project
 
-Built from #2951 and the align merged in #2968. It builds two §Product entries:
+Built from #2951 and the aligns merged in #2968 and #2970. It builds three §Product entries:
 - "Creating a project" (ADR `docs/decisions/create-project.md`);
-- "Loading a project loads every stream in it" (ADR `docs/decisions/project-loads-every-stream.md`).
+- "Loading a project loads every stream in it" (ADR `docs/decisions/project-loads-every-stream.md`);
+- "A load is never refused for what a project's code or environment does" (ADR
+  `docs/decisions/load-never-refused-for-code.md`).
 
-Today `tatolab new <dir>` writes the scaffold in the CLI and loads nothing. A load needs a
-`.venv` someone else made. A load naming no function takes the sole `@stream` and refuses
-when there are several. Tatolab.app works around all three in its own code.
+Today `tatolab new <dir>` scaffolds in the CLI and loads nothing; a load needs a `.venv`
+someone else made and takes only the sole `@stream`; a first load whose code fails is refused,
+and a failed replace puts the previous version back. Tatolab.app works around the first three.
 
 **After this change:**
 - **Create.** The runtime creates a project in one call: it scaffolds, makes the `.venv` with
   the uv it carries, then loads. `tatolab new`, a new `create_project` tool and the app share
   that call. With no directory it creates `~/streams/<adjective-noun>`.
-- **Load.** Every load of a project with no `.venv/bin/python` makes one first. A load naming
-  no function loads every `@stream` in `stream.py`, each as its own stream.
+- **Load.** The runtime makes the `.venv` whenever `.venv/bin/python` does not run. A load
+  naming no function loads every `@stream` in `stream.py`, each as its own stream.
+- **Failure.** A stream whose code or environment fails is recorded `failed` with its traceback,
+  never refused and never rolled back.
 - **List.** `list_project_streams` lists a project's streams.
 
-**Scale gate — this skill. Both ADRs already exist from the align.**
-- **Contracts changed:**
-  - the local API: `run_stream`'s result, and two new tools;
-  - the CLI's `new`, `run` and `dev`;
-  - the compile document the runtime reads from the project's interpreter;
-  - the runtime unit's contents, on both floors.
+**Scale gate — this skill. The three ADRs already exist from the aligns.**
+- **Contracts changed:** the local API (`run_stream`'s result, two new tools); the CLI's `new`,
+  `run` and `dev`; the compile document; the runtime unit's contents on both floors.
 - **Not touched:** the RHI, the iceoryx2 wire, the processor model, `@stream` and the rest of
-  the authoring API, the stream record's schema and the stream id.
+  the authoring API, the stream id, and the stream record's schema version (its `graph` becomes
+  nullable, which a schema-3 file already satisfies).
 
 **Precondition.** Every touched section is DECIDED: §Product, §Distribution & versioning (the
 Linux installer and `Tatolab.app`) and §Control plane (the tool inventory). Each carries
-`amended by create-project` or `amended by project-loads-every-stream`.
+`amended by create-project`, `amended by project-loads-every-stream` or `amended by
+load-never-refused-for-code`.
 
-## Current state (recon, 2026-10-28, `main` `96030eb5b`)
+## Current state (recon, 2026-10-28 and 2026-10-29, `main` `96df35cfc`)
 
 Paths are under `runtime/` unless marked otherwise.
 
@@ -39,7 +42,6 @@ Paths are under `runtime/` unless marked otherwise.
   - names the distribution after the folder (`:90-131`);
   - refuses before writing when any scaffolded path exists (`:146-160`);
   - prints "Created a Tatolab stream project … uv sync / tatolab dev" (`:182-186`).
-  - The templates are embedded in the CLI binary only.
 - **The load.** `Runner::run_stream` (`streamlib-engine/src/core/runtime/stream_actions_of_this_runtime.rs:351-470`):
   - It runs one compile (`:379-383`), which yields one location, id, graph and set of warnings.
   - It takes the one-action lock after the compile (`:390`).
@@ -52,6 +54,16 @@ Paths are under `runtime/` unless marked otherwise.
   in {project}" (`compiler_ops/stream_function_compile_in_the_projects_interpreter.rs:157-162`).
   A start or re-load from a record refuses "its interpreter {} is gone; run `uv sync` in {}"
   (`stream_actions_of_this_runtime.rs:1177-1190`). No runtime code runs `uv`.
+- **The record.** `StreamRecord` (`streamlib-engine/src/core/runtime/machine_state_directory.rs:23-56`):
+  - schema 3, `graph: serde_json::Value` (`:45`), `failed_because: Option<String>` (`:50`);
+  - `location: StreamLocation`, with `stream_function: String`
+    (`stream_location_and_id.rs:27-31`). A function that casts to nothing is already left out
+    of the id (`:35-55`).
+  - `start_stream` (`stream_actions_of_this_runtime.rs:554-590`) re-loads from the recorded
+    graph, and a refused retry stays failed (`:586`).
+  - The re-load at start, `reload_each_recorded_stream_listed` (`:838-1000`), takes the
+    one-action lock per record (`:853`) and marks a record that will not re-load `failed`
+    (`:938`, `:996`).
 - **The compile.** `<project>/.venv/bin/python -I -m tatolab.stream._project_stream_compile_entry
   --verb run [fn]` (`:107-138`, bound 60s `:39`). It writes one document,
   `{stream_graph, project_directory, stream_function}` (`:71-76`; Python
@@ -116,34 +128,36 @@ Paths are under `runtime/` unless marked otherwise.
   - A unit without it refuses every venv-making call: "the runtime unit carries no uv; rebuild it
     with `cargo xtask build-runtime`".
 - **Making the venv.** `streamlib-engine/src/core/runtime/project_venv_made_with_the_runtime_unit_uv.rs`:
-  `make_the_projects_venv(project_directory)` runs `<uv> sync` in the project directory.
+  `make_the_projects_venv_unless_its_interpreter_runs(project_directory)`.
+  - It first runs `.venv/bin/python -I -c ""` under a 10s bound. If that exits 0 it returns,
+    leaving the venv untouched.
+  - Otherwise it removes `.venv` and runs `<uv> sync` in the project directory.
   - It strips `VIRTUAL_ENV`, `PYTHON*` and `UV_PROJECT_ENVIRONMENT`, so uv takes
     `.python-version` and fetches a missing Python. uv's own cache and Python store stay at their
     defaults, shared with any uv the user runs.
   - It is bounded by `PROJECT_VENV_SYNC_BOUND` (240s), and uses the compile's spawn, reader,
     wait and kill pattern.
-  - A non-zero exit removes `.venv` only if this call created it, and is refused with uv's
-    stderr tail verbatim.
+  - A non-zero exit removes the half-made `.venv` and returns uv's stderr tail verbatim as the
+    reason the caller records.
 - **Every `@stream` in one compile.** The compile entry gains `--every-stream`. With it the
-  document is `{project_directory, streams: [{stream_graph, stream_function, description}]}`,
-  in definition order. A failure of any one stream's function refuses the whole compile, naming
-  it. The runtime's parse refuses a document without `streams` as an older `tatolab-stream`,
-  as it does today for one without `stream_function` (`:265-272`).
+  document is `{project_directory, streams: [...]}`, in definition order.
+  - Each entry is `{stream_function, description, stream_graph}`, or
+    `{stream_function, description, failed_because}` when that function raised. In the second
+    case `failed_because` is the traceback with the launcher frames stripped, as the entry strips
+    them today (`:105-118`).
+  - An entry that cannot be imported still exits 1 with its traceback on stderr, as today.
+  - The runtime's parse refuses a document without `streams` as an older `tatolab-stream`, as it
+    does today for one without `stream_function` (`:265-272`).
 - **Listing a project's streams.** The compile entry gains `--list-streams`, which imports the
   entry and writes `{project_directory, streams: [{stream_function, description}]}` without
   building any graph.
-  - The tool `list_project_streams {project_directory}` runs it and returns each stream's
-    `stream_function`, its `description`, and its `stream` id and `state` when the runtime
-    holds it.
+  - The tool `list_project_streams {project_directory}` makes the venv first, then runs it. It
+    returns each stream's `stream_function`, its `description`, and its `stream` id and `state`
+    when the runtime holds it.
+  - If the entry cannot be imported, it returns `{project_directory, import_failed_because}`,
+    the traceback, in place of `streams`.
   - Types: `ListProjectStreamsToolResult` and `ListProjectStreamsToolResultStream` in the wire
     contract.
-  - [NEEDS DECISION — `list_project_streams` on a project with no `.venv`. The import needs the
-    project's interpreter.]:
-    - **A.** Refuse it, naming the project and that a load makes the venv. Listing stays a read
-      with no side effect. *(recommended — the app's Add loads every stream anyway, so it needs
-      no listing first)*
-    - **B.** Make the venv, then list. One call always answers, but a read tool writes to disk
-      and can take minutes.
 - **The project name.** `streamlib-engine/src/core/runtime/new_project_name_drawing.rs`
   embeds two lowercase ASCII word lists, adjectives and nouns, of a few hundred words each,
   each word already a fixed point of the exposed-name cast.
@@ -153,6 +167,18 @@ Paths are under `runtime/` unless marked otherwise.
     concurrent create, draws again. After 8 draws it refuses, naming the root.
   - `streams_root` is `$HOME/streams`, created if missing, or a directory under the test root
     behind the `machine-directories-under-a-test-root` feature.
+- **A failed stream with no graph.**
+  - `StreamRecord.graph` becomes `Option<serde_json::Value>`. A schema-3 file's present value
+    reads as `Some`, so the schema version stays 3.
+  - `None` is a stream whose compile failed. `start_stream` and the re-load at start compile a
+    graphless record from its location instead of loading a graph.
+- **The project placeholder.** When the project's venv cannot be made or its entry cannot be
+  imported, and no record holds the project, the load writes one `failed` record.
+  - Its location is the project directory with `stream_function` empty, so its id is
+    `<folder>-<hash>`. Its display name is the folder's name, and its `failed_because` is the
+    traceback or uv's tail.
+  - A later load of the project that compiles replaces it with the project's streams and
+    forgets it. `start_stream` on it is a load of the project.
 - **The scaffold, in the runtime.** `streamlib-engine/src/core/runtime/new_project_scaffold.rs`
   holds `render_scaffold_template_files` and `python_distribution_name_for`. These move whole
   from the CLI, with their tests and their refusal of a directory that already holds a
@@ -164,8 +190,8 @@ Paths are under `runtime/` unless marked otherwise.
   3. write the scaffold;
   4. `make_the_projects_venv`;
   5. `run_stream` with no function and the folder's name as the display name.
-  - A refusal after step 3 leaves the written project in place, unrecorded, and names it so a
-    later `run_stream` can retry. The reply is the run's result plus `project_directory`.
+  - After step 3 nothing refuses: a failed venv or compile is the placeholder or failed records
+    of step 5. The reply is the run's result plus `project_directory`.
   - The tool is `create_project {project_directory?}`; a relative directory is refused, as
     `run_stream` refuses one. `CreateProjectToolResult` goes in the wire contract.
   - The budget, `PROJECT_VENV_SYNC_BOUND` plus the compile and load bounds, sits under a new
@@ -174,50 +200,62 @@ Paths are under `runtime/` unless marked otherwise.
 
 ## MODIFIED
 
-- **`run_stream` loads a project.** `Runner::run_stream` (`:351-470`):
-  - With no function, it compiles with `--every-stream` and loads each stream the document
-    holds under one acquisition of the one-action lock.
-  - Each stream gets its own id, record and logs, and replaces its recorded stream in place, as
-    today.
+- **`run_stream` loads a project and never refuses for code.** `Runner::run_stream` (`:351-470`):
+  - It runs `make_the_projects_venv_unless_its_interpreter_runs`, then the compile. With no
+    function named, the compile is `--every-stream`. The load budget grows by
+    `PROJECT_VENV_SYNC_BOUND`, and the compile op's missing-interpreter refusal goes.
+  - It holds one acquisition of the one-action lock for every stream the document lists. Each
+    stream gets its own id, record and logs:
+    - a stream with a graph is loaded and started, replacing its recorded stream in place;
+    - a stream whose function raised, or whose describe or start fails, is recorded `failed`
+      with the reason, and its previous running version is unloaded.
+  - `replace_a_recorded_stream`'s restore of the previous record on failure (`:1162-1169`) goes.
+  - When the venv cannot be made or the entry cannot be imported:
+    - every record whose location is this project is unloaded and recorded `failed` with the
+      reason;
+    - with none, the placeholder is written.
   - A recorded stream whose `project_directory` is this one and whose function's module is the
     entry module, but which the document no longer holds, is unloaded and recorded `failed`:
     "`<module:function>` is no longer defined in stream.py".
-  - A display name given with no function is refused when the document holds more than one
-    stream.
-  - With a function named, the load behaves as today.
-  - `.venv/bin/python` absent → `make_the_projects_venv` first, then the compile, inside the load
-    budget, which grows by `PROJECT_VENV_SYNC_BOUND`. The compile op's missing-interpreter
-    refusal goes.
-  - [NEEDS DECISION — a project load whose compile succeeds but one stream's load fails
-    (a node type that will not describe, a processor interpreter that will not start)]:
-    - **A.** All or nothing: every stream the call touched returns to its prior state, as one
-      stream's refused replace does today. *(recommended — "a refused load leaves every stream
-      as it was" stays true at the project level)*
-    - **B.** Each stream on its own: the loads that succeeded stay and the failed one is refused
-      in the reply.
+  - Refused, with nothing changed (the §Product list):
+    - a directory that is missing or relative;
+    - a folder with neither `stream.py` nor `pyproject.toml`;
+    - a named function the document does not hold and no record holds;
+    - a display name when the document holds more than one stream;
+    - an id held by another location.
+  - A named function no longer defined but recorded becomes `failed`, as above.
+- **`start_stream`, and the re-load at start** (`:554-590`, `:838-1000`):
+  - Each first runs `make_the_projects_venv_unless_its_interpreter_runs`. A sync failure records
+    the stream `failed` in uv's words.
+  - A graphless record, or the placeholder, is compiled from its location.
+  - `load_a_recorded_stream_from_its_record`'s "is gone; run `uv sync`" refusal (`:1177-1190`)
+    goes. The re-load at start syncs inline, one record at a time under the lock, as it loads
+    today.
 - **`run_stream`'s result.** `RunStreamToolResult` becomes `{project_directory, streams:
-  [RunStreamToolResultStream], compile_warnings}`. Each stream carries today's per-stream
-  fields: `stream`, `display_name`, `stream_instance`, `location`, `node_count`,
-  `replaced_a_recorded_stream`. `StreamRunOutcome` follows. The descriptions of `run_stream`,
-  its arguments and the server instructions (`mcp.rs:90,318,322,612`) drop "sole" and
-  "`uv sync`".
-- **A start or re-load from a record with no interpreter** stays `failed`, as §Product decides.
-  The reason (`stream_actions_of_this_runtime.rs:1183`) points at `tatolab run` in the project,
-  which now makes the venv, instead of `uv sync`.
+  [RunStreamToolResultStream], compile_warnings}`.
+  - Each stream carries today's per-stream fields (`stream`, `display_name`, `stream_instance`,
+    `location`, `node_count`, `replaced_a_recorded_stream`) plus `state`, `running` or `failed`,
+    and `failed_because`. A failed stream has no `stream_instance` or `node_count`.
+  - `StreamRunOutcome` follows.
+  - The descriptions of `run_stream`, its arguments and the server instructions
+    (`mcp.rs:90,318,322,612`) drop "sole" and "`uv sync`", and say that a failed stream is
+    returned, not refused.
 - **`tatolab new [DIRECTORY]`** (`main.rs:112-115,289-291`): the directory becomes optional and
   resolves against the working directory. The verb is a `create_project` call, and like every
   verb it fails with no runtime. It prints the `run` line for the stream, then
   `follow it: cd <dir> && tatolab dev`. The CLI no longer embeds the templates.
-- **`tatolab run`** prints one line per stream loaded, then `follow it: tatolab logs -f`. A
-  `--name` with no target in a project of several streams is refused by the runtime.
+- **`tatolab run`** prints one line per stream loaded, a failed one as `<id> failed: <reason>`,
+  then `follow it: tatolab logs -f`.
+  - It exits 0 when every stream is running, and 1 when any is `failed` or the load is refused
+    (`main.rs:118-123` long_about).
+  - A `--name` with no target in a project of several streams is refused by the runtime.
 - **`tatolab dev`** follows every stream its load returned. `FollowedStreamPosition` becomes one
   per stream id, each with its own `after`, and each record prints prefixed `[<display name>] `.
   On save it re-loads the project with one `run_stream`, then follows the streams that load
-  returned. A stream the re-load recorded `failed` prints its reason once and is dropped from
-  following.
-- **`tatolab logs -f` without a stream argument**, in a directory holding several streams, keeps
-  today's refusal listing them
-  (`stream_argument_resolution_through_the_listing.rs:20-60`).
+  returned, failed ones included, so a traceback shows in the followed records. A stream that
+  vanished from `stream.py` prints its reason once and is dropped from following.
+- **`tatolab logs -f` without a stream argument** in a several-stream directory keeps today's
+  refusal (`stream_argument_resolution_through_the_listing.rs:20-60`).
 - **The scaffold's `stream.py`** module docstring (`scaffold_template/stream.py:6-8`) says
   `tatolab dev` loads every `@stream` below. `test_scaffold_template.py:126-138` still pins one
   stream, `main`.
@@ -228,7 +266,7 @@ Paths are under `runtime/` unless marked otherwise.
   - `reusable-macos-runtime-unit.yml:103-108`.
 - **`README.md`**'s `uv sync` before `tatolab dev` and its missing-venv line describe the new
   path.
-- **Plan text** when this ships: the pointers on the six amended entries fold in, and the
+- **Plan text** when this ships: every `amended by` pointer of the three decisions folds in, and the
   §Control plane inventory names `create_project` and `list_project_streams` as stream actions.
 
 ## REMOVED
@@ -241,9 +279,10 @@ Paths are under `runtime/` unless marked otherwise.
 - REMOVED: has no .venv/bin/python
   The compile op's refusal, its tests, the CLI test at `tatolab_dev_and_logs_follow.rs:374`,
   and `README.md`.
+- REMOVED: is gone; run
+  The record re-load's missing-interpreter refusal (`stream_actions_of_this_runtime.rs:1183`).
 - REMOVED: @stream functions:
-  The several-streams refusal in `select_stream_function`. A load naming no function takes
-  every stream.
+  The several-streams refusal in `select_stream_function`.
 - REMOVED: test_several_streams_are_refused_listing_each_with_its_description
 - REMOVED: test_the_several_streams_suggestion_quotes_the_dir_it_was_given
 - REMOVED: test_the_several_streams_suggestion_names_no_dir_when_none_was_given
@@ -251,54 +290,61 @@ Paths are under `runtime/` unless marked otherwise.
 ## Test plan
 
 - **Stream suite** (`sdk/tatolab-stream/tests/test_project_stream_compile_entry.py`):
-  - `--every-stream` writes every `@stream` in definition order, each with its graph, location
-    and docstring;
-  - one failing function refuses the whole document, naming it;
-  - an imported or aliased stream counts as today (`:544`, `:748`);
-  - `--list-streams` builds no graph;
-  - an entry with no stream is still refused with the sample (`:766`).
+  - `--every-stream` writes every `@stream` in definition order, with its graph, location and
+    docstring;
+  - a raising function becomes its own `failed_because` entry while the others compile;
+  - an unimportable entry exits 1 with its traceback;
+  - imported and aliased streams count as today (`:544`, `:748`);
+  - `--list-streams` builds no graph.
 - **Runtime suite, engine** (`ProjectWithAStubCompile`, `stream_actions_of_this_runtime.rs:1480-1630`):
-  - a project of three stubs loads three streams, three records and three ids;
-  - a re-load with one function gone leaves it `failed`, naming the function, and replaces the
-    others;
-  - `--name` across several streams is refused;
-  - a failed compile leaves every stream as it was;
-  - a missing `.venv` runs a stub `uv` before the compile;
-  - a stub uv's non-zero exit is refused verbatim, and the `.venv` it made is removed while a
-    pre-existing one is kept;
-  - the decided case of the NEEDS DECISION block.
+  - Loading:
+    - three stubs load as three streams, records and ids;
+    - one raising stub is `failed` while two run;
+    - a stub whose describe fails is `failed`, and its old version is unloaded, not restored;
+    - a re-load with one function gone records it `failed`, naming it;
+    - `--name` across several streams, a relative directory and an unknown, unrecorded function
+      are refused with nothing changed.
+  - Import failure:
+    - an unimportable entry marks every recorded stream of the project `failed`;
+    - with none recorded, it writes the `<folder>-<hash>` placeholder, which the next good load
+      replaces.
+  - The venv:
+    - a missing `.venv`, or one whose `bin/python` does not run, runs a stub `uv` first;
+    - one that runs is untouched;
+    - a stub uv failure records `failed` in its words and removes the half-made `.venv`;
+    - `start_stream` and the re-load at start do the same, and compile a graphless record.
+  - The record: a schema-3 file reads with `graph` as `Some`, and `None` round-trips.
 - **Runtime suite, name drawing:**
   - every word is a cast fixed point;
-  - an existing directory draws again;
+  - a taken directory draws again;
   - 8 taken draws refuse;
-  - a racing pair of creates gets two directories.
+  - two racing creates get two directories.
 - **Runtime suite, api-server** (stub runtime):
-  - `create_project` with a directory, with none (under the test root), with a scaffold file
-    present (refused, nothing written), and with a relative path (refused);
-  - `list_project_streams` with loaded and unloaded streams;
-  - `run_stream`'s new result shape;
-  - `CONTROL_TOOL_NAMES` and the schema property pins.
+  - `create_project`: with a directory; with none (under the test root); over a scaffold file
+    (refused, nothing written); with a relative path (refused); with a failing stub compile
+    (a failed stream returned, not a refusal);
+  - `list_project_streams`: loaded and unloaded streams, no venv, and import failure;
+  - `run_stream`'s result with running and failed streams;
+  - the `CONTROL_TOOL_NAMES` and schema pins.
 - **CLI tests** (`tests/tatolab_new_and_help.rs`, `tatolab_stream_actions.rs`,
   `tatolab_dev_and_logs_follow.rs`):
-  - `new` with and without a directory against a stub runtime;
-  - `run` printing several streams;
-  - `dev` following two streams with prefixed records, and dropping one deleted from
-    `stream.py` on save.
-- **Runtime unit:** the portability gate, `install.sh`'s check and the macOS codesign step each
-  refuse a unit without `bin/uv`.
-- **Integration suite** (`tests/stream-on-runtime/`, GPU-free half, both lanes):
+  - `new` with and without a directory;
+  - `run` printing several streams, and exiting 1 with one failed;
+  - `dev` following two prefixed streams, showing a failed stream's traceback, and dropping one
+    deleted from `stream.py`.
+- **Runtime unit:** the portability gate, `install.sh` and the macOS codesign step each refuse a
+  unit without `bin/uv`.
+- **Integration suite** (`tests/stream-on-runtime/`, GPU-free half, both lanes, no uv on `PATH`):
   1. over `tatolab mcp`, `create_project` with no directory;
-  2. close the connection and reconnect;
-  3. `list_streams` shows it running under its folder's name, and `list_project_streams` shows
-     `main`;
-  4. add a second `@stream` and `run_stream` the project;
-  5. two streams are listed.
-  The runtime unit's own uv makes the venv, and the CI runner has no uv on `PATH` for this test.
+  2. reconnect; `list_streams` shows it running under its folder's name;
+  3. delete `.venv` and `start_stream`: it is made again;
+  4. add a second `@stream` that raises and `run_stream`: one `running`, one `failed` with the
+     traceback in `logs`.
 
 ## Out of scope
 
 - Tatolab.app's move onto `create_project` and `list_project_streams`, and the retirement of its
-  own uv, Python and Python picker: tatolab-app #100. After this change the app's
-  `run_stream {stream_function}` calls still work. Its read of `RunStreamToolResult` breaks on
-  the new shape, which is that issue's work.
-- A call that proposes the default name before creating, which #100 notes as a gap.
+  own uv, Python and Python picker: tatolab-app #100. Its `run_stream {stream_function}` calls
+  keep working, but its read of `RunStreamToolResult` breaks on the new shape; that is #100's
+  work.
+- A call that proposes the default name before creating (the gap #100 notes).
