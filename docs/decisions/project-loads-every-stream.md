@@ -13,7 +13,9 @@ before making `--name` or a display name stand for more than one stream.
 
 - A project is the directory; its `stream.py` may define any number of `@stream`s. A load that
   names no function — `tatolab run`, `tatolab dev`, `run_stream` without `stream_function`,
-  `Tatolab.app`'s Add, create — loads all of them. Naming a function loads that one alone.
+  `Tatolab.app`'s Add, create — loads all of them.
+  > ~~Naming a function loads that one alone.~~ — Superseded 2026-10-30 by
+  > `queued-stream-actions.md`: every load takes the project and loads all of its streams.
 - Each `@stream` stays its own unit: its own location, id, display name, record, logs and
   lifecycle. Loading together never ties lifecycles together; `stop`, `start`, `rm` and
   `rename` act on one stream.
@@ -21,8 +23,7 @@ before making `--name` or a display name stand for more than one stream.
   > ~~A failed compile refuses the whole load, leaving every stream of the project as it was,
   > as a refused load already does for one stream.~~ — Superseded 2026-10-29 by
   > `load-never-refused-for-code.md`: a stream whose compile fails is recorded `failed`.
-- A display name given at a load names one stream, so `--name` is refused when a load would load
-  several.
+- > ~~A display name given at a load names one stream, so `--name` is refused when a load would load several.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: a load gives no display name; `rename` sets one.
 - A stream whose function was deleted from `stream.py` is unloaded and recorded `failed` on the
   project's next load, naming the missing function. Only `rm` forgets a stream, so a deletion
   never silently forgets one.
