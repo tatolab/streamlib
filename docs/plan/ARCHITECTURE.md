@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, create-project; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, create-project, failed-load-logs; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -3525,7 +3525,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   machine-lock-without-administrator — SHIPPED #2929; amended by create-project: the bundle
   carries the runtime unit's pinned uv, and the app neither scaffolds nor syncs a project]
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, create-project)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, create-project, failed-load-logs)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
