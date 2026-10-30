@@ -111,13 +111,14 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
         )))
     };
     let interpreter = the_projects_venv_interpreter(project_directory);
-    let why_the_interpreter_does_not_run = match why_the_venv_interpreter_does_not_run(
+    let why_the_interpreter_does_not_run = match probe_the_venv_interpreter(
         &interpreter,
         project_directory,
         is_interrupted_by_the_host,
     ) {
-        None => return Ok(()),
-        Some(why_the_interpreter_does_not_run) => why_the_interpreter_does_not_run,
+        VenvInterpreterProbe::Runs => return Ok(()),
+        VenvInterpreterProbe::CutShortByTheHost => return Err(a_shutdown_refusal()),
+        VenvInterpreterProbe::DoesNotRun { why } => why,
     };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
         return Err(ProjectVenvNotMade::Failed {
@@ -183,13 +184,23 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     Err(ProjectVenvNotMade::Failed { failed_because })
 }
 
-/// Why `interpreter` does not start and exit successfully within
-/// [`PROJECT_VENV_INTERPRETER_PROBE_BOUND`]; `None` when it does.
-fn why_the_venv_interpreter_does_not_run(
+/// What a probe of a venv's interpreter found.
+enum VenvInterpreterProbe {
+    /// It started and exited successfully within the probe's bound.
+    Runs,
+    /// It did not, for `why`.
+    DoesNotRun { why: String },
+    /// The runtime's host interrupted the probe, which found nothing.
+    CutShortByTheHost,
+}
+
+/// Whether `interpreter` starts and exits successfully within
+/// [`PROJECT_VENV_INTERPRETER_PROBE_BOUND`].
+fn probe_the_venv_interpreter(
     interpreter: &Path,
     project_directory: &Path,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> Option<String> {
+) -> VenvInterpreterProbe {
     let mut command = a_command_detached_from_the_terminal_in(interpreter, project_directory);
     command.args(["-I", "-c", ""]).stderr(Stdio::null());
     let interpreter = interpreter.display();
@@ -200,12 +211,16 @@ fn why_the_venv_interpreter_does_not_run(
         is_interrupted_by_the_host,
     ) {
         Ok(probe) => probe,
-        Err(not_started) => return Some(format!("{interpreter} does not start: {not_started}")),
+        Err(not_started) => {
+            return VenvInterpreterProbe::DoesNotRun {
+                why: format!("{interpreter} does not start: {not_started}"),
+            };
+        }
     };
     if probe.exited_successfully() {
-        return None;
+        return VenvInterpreterProbe::Runs;
     }
-    Some(match probe.ended {
+    let why = match probe.ended {
         HowABoundedChildProcessRunEnded::Exited => {
             format!("{interpreter} exits with {}", probe.exit_status_rendered())
         }
@@ -214,9 +229,10 @@ fn why_the_venv_interpreter_does_not_run(
             PROJECT_VENV_INTERPRETER_PROBE_BOUND.as_secs_f64()
         ),
         HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
-            format!("{interpreter} was not probed: the runtime is shutting down")
+            return VenvInterpreterProbe::CutShortByTheHost;
         }
-    })
+    };
+    VenvInterpreterProbe::DoesNotRun { why }
 }
 
 /// `program` started in `project_directory` with nothing on its standard
@@ -564,6 +580,26 @@ mod tests {
 
         assert!(refusal.contains("shutting down"), "{refusal}");
         assert!(!project.venv().exists(), "the half-made venv was left");
+    }
+
+    #[test]
+    fn a_probe_the_host_interrupts_is_refused_and_never_fails_the_project() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        project.given_a_venv_interpreter_running("sleep 30");
+        let interrupted_after = std::time::Instant::now() + Duration::from_millis(300);
+
+        let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
+            &project.project_directory,
+            None,
+            PROJECT_VENV_SYNC_BOUND,
+            &|| std::time::Instant::now() >= interrupted_after,
+        ));
+
+        assert!(refusal.contains("shutting down"), "{refusal}");
+        assert!(
+            project.interpreter().is_file(),
+            "an interrupted probe removed the venv"
+        );
     }
 
     #[test]
