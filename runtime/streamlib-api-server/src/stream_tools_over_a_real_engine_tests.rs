@@ -1032,11 +1032,11 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
     );
 }
 
-/// A recorded stream whose interpreter is gone does not start, refused naming the
-/// interpreter and how to bring it back; a run in a project with no venv is
-/// refused pointing at `uv sync`.
+/// On a runtime handed no uv, a recorded stream whose interpreter is gone does
+/// not start and is recorded failed saying the runtime unit carries no uv; a run
+/// in a project with no venv answers the project failed, not a refusal.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_uv_sync() {
+async fn a_start_or_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_failed_saying_so() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("gone"));
     let gone = engine.a_stream_recorded_and_not_loaded(&project, "gone", true);
@@ -1050,15 +1050,27 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
         )
         .await,
     )
-    .expect_err("a recorded stream whose interpreter is gone does not start");
+    .expect_err("a recorded stream whose venv cannot be made does not start");
     assert!(
         refusal.contains(&project.interpreter().display().to_string())
-            && refusal.contains("uv sync"),
+            && refusal.contains("the runtime unit carries no uv"),
         "{refusal}"
+    );
+    let Some(StreamRecordAsRead::Current(gone_record)) = engine
+        .stream_records()
+        .read(&gone)
+        .expect("the record reads")
+    else {
+        panic!("the record of `{gone}` stays, as this runtime wrote it");
+    };
+    let gone_failed_because = gone_record.failed_because.expect("the stream is failed");
+    assert!(
+        gone_failed_because.contains("the runtime unit carries no uv"),
+        "{gone_failed_because}"
     );
 
     let project_with_no_venv = tempfile::tempdir().expect("a project directory");
-    let refusal = tool_answer(
+    let run = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "run_stream",
@@ -1066,16 +1078,15 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
         )
         .await,
     )
-    .expect_err("a project with no venv does not run");
-    assert!(refusal.contains("uv sync"), "{refusal}");
+    .expect("a project whose venv cannot be made is answered, not refused");
+    assert_eq!(run["streams"][0]["state"], "failed", "{run}");
+    assert!(
+        run["streams"][0]["failed_because"]
+            .as_str()
+            .is_some_and(|failed_because| failed_because.contains("the runtime unit carries no uv")),
+        "{run}"
+    );
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
-    let recorded_stream_ids: Vec<String> = engine
-        .stream_records()
-        .read_every()
-        .into_iter()
-        .map(|read| read.expect("the record reads").stream_id().to_string())
-        .collect();
-    assert_eq!(recorded_stream_ids, [gone], "a refused run records nothing");
 }
 
 /// A run whose function raises answers the stream failed with its traceback,
@@ -1144,7 +1155,7 @@ async fn a_run_whose_entry_does_not_import_answers_the_project_failed_under_its_
         ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
     project.fail_to_import_printing("SyntaxError: invalid syntax");
     let project_location =
-        StreamLocation::of_a_project_whose_entry_did_not_import(project.path().to_path_buf());
+        StreamLocation::of_a_project_that_gave_no_stream(project.path().to_path_buf());
 
     let run = tool_answer(
         &tool_call_result(

@@ -32,19 +32,20 @@ pub struct StreamLocation {
 }
 
 impl StreamLocation {
-    /// Where the project at `project_directory` is recorded while its entry
-    /// does not import: the project directory with no stream function, so its
-    /// stream id is `<folder>-<hash>`.
-    pub fn of_a_project_whose_entry_did_not_import(project_directory: PathBuf) -> Self {
+    /// Where the project at `project_directory` is recorded while it gives no
+    /// stream — its `.venv` cannot be made, or its entry does not import: the
+    /// project directory with no stream function, so its stream id is
+    /// `<folder>-<hash>`.
+    pub fn of_a_project_that_gave_no_stream(project_directory: PathBuf) -> Self {
         Self {
             project_directory,
             stream_function: String::new(),
         }
     }
 
-    /// Whether this is where a project is recorded while its entry does not
-    /// import, holding no stream function.
-    pub fn is_a_project_whose_entry_did_not_import(&self) -> bool {
+    /// Whether this is where a project is recorded while it gives no stream,
+    /// holding no stream function.
+    pub fn is_a_project_that_gave_no_stream(&self) -> bool {
         self.stream_function.is_empty()
     }
 

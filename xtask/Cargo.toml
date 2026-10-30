@@ -36,6 +36,9 @@ walkdir = "2.5"
 # keeping each member's unix mode. Deflate only: that is all maturin writes.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+# Checks the runtime unit's uv archive against its pinned sha256.
+sha2 = "0.10"
+
 # PNG decode/encode for `xtask psnr` — the codec proof's image measurements.
 # Same pin as the engine's, which decodes the very same reference set.
 png = "0.17"

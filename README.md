@@ -94,8 +94,10 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`, so
-`uv sync` is the whole setup. Nothing is generated, compiled or downloaded at run time.
+`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`.
+The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
+does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
+setup step.
 
 ### Building the runtime from source
 
@@ -142,13 +144,13 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```bash
 tatolab new my-stream       # test pattern → GPU effect, plus a CPU meter, wired and working
 cd my-stream
-uv sync                     # the stream's venv: tatolab-stream and numpy
 tatolab dev                 # the test pattern through a GPU lens, encoded and shared, its brightness logged
 ```
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
-`stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
+`stream.py`'s one `@stream` function to the stream's graph in the project's `.venv` — making the
+`.venv` first with the uv it carries when it has none — loads it and
 starts it, and `dev` prints the stream's id and its records in your terminal. Save an edit and
 `dev` runs the stream again, and the runtime replaces the running stream with the edit. An edit
 whose code fails unloads the stream and records it failed: `dev` prints the traceback and loads
@@ -676,8 +678,11 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   set`** — the runtime started with no desktop session to give it a display, and its log said so at
   the start. Logging in to one restarts the installed service with it; a runtime started by hand
   takes `systemctl --user restart tatolabd`, or a restart from a terminal inside the session.
-- **``… has no .venv/bin/python; run `uv sync` in …``** — the runtime compiles a stream in the
-  `.venv` of its project directory: the working directory, or `--dir`. Create it with `uv sync`.
+- **`<id> failed: … uv sync did not make …/.venv`** — the runtime makes a project's `.venv` with
+  its own uv whenever `.venv/bin/python` does not run, and uv could not: the reason quotes uv's
+  own words, usually a dependency that does not resolve. Fix `pyproject.toml` and run or save
+  again. **`… the runtime unit carries no uv`** — the runtime was built without it; rebuild with
+  `cargo xtask build-runtime`.
 - **``… cannot import `tatolab.stream`: add `tatolab-stream` to the project's dependencies``** —
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and

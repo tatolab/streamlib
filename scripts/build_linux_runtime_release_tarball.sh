@@ -8,7 +8,7 @@
 #
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
-# bin/tatolabd, bin/tatolab, bin/moq-relay, lib/tatolab/lend/,
+# bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
 # lib/tatolab/watch/ — plus the systemd user units in lib/systemd/user/, where
 # install.sh takes them from.
 #

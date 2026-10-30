@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
-    wait_for_a_child_to_become_collectable_within,
+    kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
 };
 use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
@@ -172,7 +172,7 @@ pub(crate) fn stream_interpreter_command_in_its_project_directory(
 
 /// Remove from `command` each of `inherited_variable_names` that begins with
 /// `PYTHON`.
-fn remove_every_python_variable_named_in(
+pub(crate) fn remove_every_python_variable_named_in(
     command: &mut Command,
     inherited_variable_names: impl IntoIterator<Item = OsString>,
 ) {
@@ -981,6 +981,90 @@ pub(super) fn wait_for_a_stream_interpreter_to_exit(
             return StreamInterpreterExitAwaited::BoundElapsed;
         }
     }
+}
+
+/// How a child [`run_a_child_process_to_its_exit_within`] ran ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HowABoundedChildProcessRunEnded {
+    /// It exited, successfully or not.
+    Exited,
+    /// Its bound elapsed first, and it was killed.
+    BoundElapsed,
+    /// The runtime's host interrupted it first, and it was killed.
+    InterruptedByTheHost,
+}
+
+/// A child run to its exit within a bound: how the run ended, the status its
+/// process-group leader was reaped with, and the tail of its standard error.
+#[derive(Debug)]
+pub(crate) struct BoundedChildProcessRun {
+    /// How the run ended.
+    pub(crate) ended: HowABoundedChildProcessRunEnded,
+    /// The leader's exit status; `None` when it could not be collected.
+    pub(crate) exit_status: Option<std::process::ExitStatus>,
+    /// The end of what it wrote to a piped standard error, trimmed; empty when
+    /// its standard error was not piped.
+    pub(crate) standard_error_tail: String,
+}
+
+impl BoundedChildProcessRun {
+    /// Whether it exited on its own, successfully.
+    pub(crate) fn exited_successfully(&self) -> bool {
+        self.ended == HowABoundedChildProcessRunEnded::Exited
+            && self
+                .exit_status
+                .is_some_and(|exit_status| exit_status.success())
+    }
+
+    /// Its exit status as a refusal names it.
+    pub(crate) fn exit_status_rendered(&self) -> String {
+        self.exit_status
+            .map(|exit_status| exit_status.to_string())
+            .unwrap_or_else(|| "an exit status that could not be collected".to_string())
+    }
+
+    /// The end of its standard error as a refusal quotes it.
+    pub(crate) fn standard_error_as_a_refusal_quotes_it(&self) -> String {
+        standard_error_tail_as_a_refusal_quotes_it(&self.standard_error_tail)
+    }
+}
+
+/// Spawn `command` outside every iceoryx2 listener bind, keep the tail of a
+/// piped standard error — logging each line under `standard_error_log_label` —
+/// and wait up to `bound` for it to exit, cut short whenever
+/// `is_interrupted_by_the_host` reports true. Its whole process group is killed
+/// either way, so `command` must give the child a group of its own.
+pub(crate) fn run_a_child_process_to_its_exit_within(
+    command: &mut Command,
+    standard_error_log_label: &str,
+    bound: Duration,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> std::io::Result<BoundedChildProcessRun> {
+    let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(command)?;
+    let standard_error_recording = child.stderr.take().map(|standard_error| {
+        spawn_standard_error_reader_keeping_its_tail(standard_error, standard_error_log_label)
+    });
+    let exit_awaited =
+        wait_for_a_stream_interpreter_to_exit(&child, bound, &|| false, is_interrupted_by_the_host);
+    let exit_status =
+        kill_the_process_group_and_reap_its_leader(&mut child, standard_error_log_label);
+    let ended = match exit_awaited {
+        StreamInterpreterExitAwaited::Exited => HowABoundedChildProcessRunEnded::Exited,
+        StreamInterpreterExitAwaited::BoundElapsed => HowABoundedChildProcessRunEnded::BoundElapsed,
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
+        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
+            HowABoundedChildProcessRunEnded::InterruptedByTheHost
+        }
+    };
+    Ok(BoundedChildProcessRun {
+        ended,
+        exit_status,
+        standard_error_tail: standard_error_recording
+            .map(|recording| {
+                recording.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+            })
+            .unwrap_or_default(),
+    })
 }
 
 // =============================================================================

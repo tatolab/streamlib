@@ -30,7 +30,7 @@ pass() {
 bundled_vulkan_icd_manifest_in_a_release="lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json"
 
 # A second argument of `without-the-bundled-vulkan-icd-manifest` leaves the
-# lend's ICD manifest out of the release.
+# lend's ICD manifest out of the release; `without-uv` leaves out `bin/uv`.
 make_release() {
 	local release_version="$1"
 	local release_shape="${2:-whole}"
@@ -46,6 +46,10 @@ EOF
 	printf '#!/bin/sh\necho "tatolab %s"\n' "$release_version" >"$release_contents/bin/tatolab"
 	printf '#!/bin/sh\nexec sleep 3600\n' >"$release_contents/bin/moq-relay"
 	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab" "$release_contents/bin/moq-relay"
+	if [ "$release_shape" != without-uv ]; then
+		printf '#!/bin/sh\necho "uv %s"\n' "$release_version" >"$release_contents/bin/uv"
+		chmod +x "$release_contents/bin/uv"
+	fi
 	touch "$release_contents/lib/tatolab/lend/tatolab/runtime/__init__.py"
 	printf '<!doctype html>\n' >"$release_contents/lib/tatolab/watch/index.html"
 	if [ "$release_shape" != without-the-bundled-vulkan-icd-manifest ]; then
@@ -133,6 +137,7 @@ for executable_name in tatolab tatolabd; do
 		"$test_user_home/.local/share/tatolab/1.0.0/bin/$executable_name" ] ||
 		fail "$test_user_home/.local/bin/$executable_name does not reach the release's bin/"
 done
+[ ! -e "$test_user_home/.local/bin/uv" ] || fail "install.sh linked the runtime unit's uv into ~/.local/bin"
 [ -d "$test_user_home/.local/share/tatolab/1.0.0/lib/tatolab/lend" ] ||
 	fail "lib/ is not a sibling of bin/ in the release"
 cmp -s "$installer_directory/tatolabd.service" "$test_user_home/.config/systemd/user/tatolabd.service" ||
@@ -204,6 +209,23 @@ esac
 [ ! -e "$test_user_home/.local/share/tatolab/1.0.2-without-a-vulkan-driver" ] ||
 	fail "a tarball without the manifest was left unpacked"
 pass "a tarball that carries no bundled Vulkan ICD manifest is refused and changes nothing"
+
+# --- a tarball without uv is refused ----------------------------------------
+
+make_release 1.0.2-without-uv without-uv
+publish_as_latest 1.0.2-without-uv
+if missing_uv_refusal="$(run_the_installer 2>&1)"; then
+	fail "a tarball carrying no bin/uv was installed"
+fi
+case "$missing_uv_refusal" in
+*"carries no bin/uv"*) ;;
+*) fail "the refusal does not name the missing uv: $missing_uv_refusal" ;;
+esac
+[ "$(readlink "$test_user_home/.local/share/tatolab/current")" = "1.0.1" ] ||
+	fail "a tarball without uv moved current"
+[ ! -e "$test_user_home/.local/share/tatolab/1.0.2-without-uv" ] ||
+	fail "a tarball without uv was left unpacked"
+pass "a tarball that carries no uv is refused and changes nothing"
 
 # --- a service that fails to restart keeps the release before it ----------
 

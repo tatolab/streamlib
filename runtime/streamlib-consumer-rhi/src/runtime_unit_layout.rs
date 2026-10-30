@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 /// The directory holding the runtime unit's binaries, relative to its root.
 pub const BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "bin";
 
+/// The uv the runtime makes every project's `.venv` with, in the runtime
+/// unit's `bin/` and the app bundle's `Contents/MacOS` beside `tatolabd`.
+pub const RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME: &str = "uv";
+
 /// The lend directory, relative to the runtime unit's root.
 pub const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/lend";
 

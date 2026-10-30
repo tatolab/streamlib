@@ -15,6 +15,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
 };
 
+use super::project_venv_made_with_the_runtime_unit_uv::{
+    PROJECT_VENV_MAKING_BOUND, ProjectVenvNotMade,
+    make_the_projects_venv_unless_its_interpreter_runs,
+};
 use super::runtime::{
     a_stream_id_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
 };
@@ -31,6 +35,7 @@ use crate::core::compiler::compiler_ops::{
     stream_function_compile_in_the_projects_interpreter::{
         STREAM_FUNCTION_COMPILE_BOUND, StreamFunctionCompileInTheProjectsInterpreterReport,
         WhatTheProjectsCodeGaveTheCompile, compile_the_stream_function_in_the_projects_interpreter,
+        the_projects_venv_interpreter,
     },
 };
 use crate::core::graph::{
@@ -287,8 +292,9 @@ pub enum StreamReloadAtTheStart {
 #[derive(Default)]
 pub(crate) struct StreamActionsOfTheEngine {
     stream_records: OnceLock<StreamRecordsInTheStateDirectory>,
-    /// Held across an action's check, load and record — never across a
-    /// compile, which runs a project's code for up to its bound.
+    /// Held across an action's check, load and record, and across the re-load
+    /// at the runtime's start of one record, its venv made included — never
+    /// across a load's venv or compile.
     one_stream_action_at_a_time: Mutex<()>,
 }
 
@@ -322,29 +328,66 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
 /// load's describe and the refused start's teardown. An entry that does not
 /// import unloads every stream of its project side by side, within one
 /// teardown.
-const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS: u128 =
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS: u128 =
     ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
         + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
         + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis();
 
-/// The longest a load waits for its answer with one stream action queued ahead
-/// of it, in milliseconds: its compile runs outside the lock while the action
-/// ahead holds it, then it holds the lock itself.
-const LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = {
-    let compile = STREAM_FUNCTION_COMPILE_BOUND.as_millis();
-    let compile_or_the_action_ahead =
-        if compile > LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS {
-            compile
-        } else {
-            LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
-        };
-    compile_or_the_action_ahead + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
-};
+/// The longest the re-load at the runtime's start holds the one-action lock for
+/// one record, in milliseconds: its project's venv made, then its load's
+/// describe and a refused start's teardown. The local API serves meanwhile.
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_THE_RELOAD_OF_ONE_RECORD_IN_MILLISECONDS: u128 =
+    PROJECT_VENV_MAKING_BOUND.as_millis()
+        + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+        + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis();
+
+/// The longest whatever is queued ahead holds the one-action lock, in
+/// milliseconds: a stream action, or the re-load of one record at the start.
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS: u128 =
+    the_longer_of(
+        LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS,
+        LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_THE_RELOAD_OF_ONE_RECORD_IN_MILLISECONDS,
+    );
+
+const fn the_longer_of(first_in_milliseconds: u128, second_in_milliseconds: u128) -> u128 {
+    if first_in_milliseconds > second_in_milliseconds {
+        first_in_milliseconds
+    } else {
+        second_in_milliseconds
+    }
+}
+
+/// The longest a load waits for its answer with one holder of the lock queued
+/// ahead of it, in milliseconds: the project's venv is made and its compile
+/// runs outside the lock while the one ahead holds it, then it holds the lock
+/// itself.
+const LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = the_longer_of(
+    PROJECT_VENV_MAKING_BOUND.as_millis() + STREAM_FUNCTION_COMPILE_BOUND.as_millis(),
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS,
+)
+    + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS;
+
+/// The longest a start of a stream holding a graph waits for its answer with
+/// one holder of the lock queued ahead of it, in milliseconds: the project's
+/// venv is made outside the lock while the one ahead holds it, then it holds
+/// the lock itself. A start of a stream holding no graph is a load.
+const LONGEST_START_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = the_longer_of(
+    PROJECT_VENV_MAKING_BOUND.as_millis(),
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS,
+)
+    + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS;
 
 const _: () = assert!(
-    STREAM_FUNCTION_COMPILE_BOUND.as_millis() + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+    PROJECT_VENV_MAKING_BOUND.as_millis()
+        + STREAM_FUNCTION_COMPILE_BOUND.as_millis()
+        + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
         < STREAM_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
-    "a client gives up on a load before the runtime's compile and describe bounds end"
+    "a client gives up on a load before the runtime's venv, compile and describe bounds end"
+);
+const _: () = assert!(
+    LONGEST_START_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS
+        < STREAM_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
+    "a client gives up on a start queued behind one stream action before the runtime answers"
 );
 const _: () = assert!(
     LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS
@@ -352,7 +395,7 @@ const _: () = assert!(
     "a client gives up on a load queued behind one stream action before the runtime answers"
 );
 const _: () = assert!(
-    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS
         + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
         < STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
     "a client gives up on a stop, remove or expose queued behind one stream action before the \
@@ -384,18 +427,20 @@ impl Runner {
             })
     }
 
-    /// Compile the request's stream function in its project's interpreter,
-    /// then record and load the stream under the id its location — the
-    /// resolved project directory and the function's `module:qualname` —
-    /// computes to, and start it.
+    /// Make the project's `.venv` unless its interpreter runs, compile the
+    /// request's stream function in it, then record and load the stream under
+    /// the id its location — the resolved project directory and the function's
+    /// `module:qualname` — computes to, and start it.
     ///
-    /// A load is never refused for what the project's code does. A function
+    /// A load is never refused for what the project's code or environment
+    /// does. A `.venv` that cannot be made fails the project's records as an
+    /// entry that does not import does. A function
     /// that raised while it compiled is recorded failed with its traceback and
     /// no graph; a load or start that is refused leaves the stream recorded
     /// failed with the reason; a named function the entry no longer defines
     /// fails its record. An entry that does not import fails every record of
     /// the project, or with none records the project itself failed, under
-    /// [`StreamLocation::of_a_project_whose_entry_did_not_import`], until a load
+    /// [`StreamLocation::of_a_project_that_gave_no_stream`], until a load
     /// that imports forgets it.
     ///
     /// A load of a location already recorded replaces it under the same id,
@@ -433,6 +478,29 @@ impl Runner {
                     project_directory.display()
                 ))
             })?;
+        if let Err(venv_not_made) = self.make_the_projects_venv(&project_directory) {
+            let failed_because = match venv_not_made {
+                ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
+                ProjectVenvNotMade::Failed { failed_because } => failed_because,
+            };
+            let stream_environment = StreamEnvironment {
+                project_directory: std::fs::canonicalize(&project_directory)
+                    .unwrap_or_else(|_| project_directory.clone()),
+                interpreter: the_projects_venv_interpreter(&project_directory),
+            };
+            let _one_stream_action_at_a_time =
+                self.stream_actions.one_stream_action_at_a_time.lock();
+            return Ok(StreamRunOutcome {
+                streams: self.fail_every_record_of_a_project_that_gave_no_stream(
+                    stream_records,
+                    &stream_environment,
+                    display_name_the_run_gives,
+                    failed_because,
+                )?,
+                project_directory,
+                compile_warnings: Vec::new(),
+            });
+        }
         let StreamFunctionCompileInTheProjectsInterpreterReport {
             what_the_projects_code_gave,
             stream_environment,
@@ -482,7 +550,7 @@ impl Runner {
                 import_failed_because,
             } => {
                 return Ok(StreamRunOutcome {
-                    streams: self.fail_every_record_of_a_project_whose_entry_did_not_import(
+                    streams: self.fail_every_record_of_a_project_that_gave_no_stream(
                         stream_records,
                         &stream_environment,
                         display_name_the_run_gives,
@@ -493,7 +561,7 @@ impl Runner {
                 });
             }
         };
-        self.forget_the_record_of_a_project_whose_entry_imports_again(
+        self.forget_the_record_of_a_project_that_gives_streams_again(
             stream_records,
             &stream_environment.project_directory,
         );
@@ -579,9 +647,11 @@ impl Runner {
         }
     }
 
-    /// Load and start the recorded stream whose id is `stream_id` from its
+    /// Make the recorded stream's project `.venv` unless its interpreter runs,
+    /// then load and start the recorded stream whose id is `stream_id` from its
     /// record, the owner's rulings applied, and record it neither stopped nor
-    /// failed, its crash count reset. A record holding no graph — its compile
+    /// failed, its crash count reset. A `.venv` that cannot be made records it
+    /// failed for why, and refuses the start. A record holding no graph — its compile
     /// failed — is compiled from its location as [`Self::run_stream`] compiles
     /// it, and the project's record of an entry that did not import is a run of
     /// the project. Refused for a stream already loaded, an id no record holds,
@@ -590,6 +660,7 @@ impl Runner {
     /// as it was, when the refusal was the engine's own; one whose retry
     /// crashes the runtime stays failed as it was.
     pub fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
+        self.make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(stream_id)?;
         let one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
             return Err(Error::Runtime(format!(
@@ -636,16 +707,10 @@ impl Runner {
                         Error::EngineResourceRefusedAtAStreamsStart(_)
                     ) =>
             {
-                record.failed_because = Some(format!(
-                    "`start` retried it, and it did not load: {retry_refusal}"
-                ));
-                record.runtime_crashes_in_a_row_implicating_it = 0;
-                if let Err(not_written) = self.write_a_stream_record(&record) {
-                    tracing::warn!(
-                        "the stream `{stream_id}` stays failed, and its refused retry was not \
-                         recorded: {not_written}"
-                    );
-                }
+                self.record_a_refused_start_failed_resetting_its_crash_count(
+                    &mut record,
+                    format!("`start` retried it, and it did not load: {retry_refusal}"),
+                );
                 return Err(retry_refusal);
             }
             Err(start_refusal) => return Err(start_refusal),
@@ -964,7 +1029,10 @@ impl Runner {
                     .push(self.reload_a_recorded_stream_holding_no_graph_by_compiling_it(&record));
                 continue;
             };
-            match self.load_a_recorded_stream_from_its_record(&record, graph_json) {
+            let reloaded = self
+                .make_the_venv_of_a_recorded_stream(&record)
+                .and_then(|()| self.load_a_recorded_stream_from_its_record(&record, graph_json));
+            match reloaded {
                 Ok(stream) => {
                     tracing::info!(
                         "the stream `{stream_id}` re-loaded from {} with {} nodes",
@@ -1383,17 +1451,18 @@ impl Runner {
         ))
     }
 
-    /// Record failed, with `import_failed_because`, every stream recorded from
-    /// the project whose entry did not import, unloading each one loaded; with
-    /// none, record the project itself failed under
-    /// [`StreamLocation::of_a_project_whose_entry_did_not_import`], shown under
+    /// Record failed, with `failed_because`, every stream recorded from the
+    /// project that gave no stream — its `.venv` was not made, or its entry did
+    /// not import — unloading each one loaded; with none, record the project
+    /// itself failed under
+    /// [`StreamLocation::of_a_project_that_gave_no_stream`], shown under
     /// its folder's name unless the run gives one.
-    fn fail_every_record_of_a_project_whose_entry_did_not_import(
+    fn fail_every_record_of_a_project_that_gave_no_stream(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
         stream_environment: &StreamEnvironment,
         display_name_the_run_gives: Option<String>,
-        import_failed_because: String,
+        failed_because: String,
     ) -> Result<Vec<StreamLoadedOrFailedByARun>> {
         let records_of_the_project: Vec<StreamRecord> = stream_records
             .read_every()
@@ -1409,7 +1478,7 @@ impl Runner {
             })
             .collect();
         if records_of_the_project.is_empty() {
-            let stream_location = StreamLocation::of_a_project_whose_entry_did_not_import(
+            let stream_location = StreamLocation::of_a_project_that_gave_no_stream(
                 stream_environment.project_directory.clone(),
             );
             self.refuse_a_run_of_a_location_whose_id_another_holds(&stream_location)?;
@@ -1419,49 +1488,43 @@ impl Runner {
                 stream_location,
                 display_name,
                 stream_environment,
-                import_failed_because.clone(),
+                failed_because.clone(),
             );
             stream_records.write(&record)?;
             return Ok(vec![StreamLoadedOrFailedByARun::of_the_record(
                 record,
-                StreamStateAfterItsRun::Failed {
-                    failed_because: import_failed_because,
-                },
+                StreamStateAfterItsRun::Failed { failed_because },
                 false,
             )]);
         }
         let mut streams_failed = Vec::with_capacity(records_of_the_project.len());
         let mut streams_to_unload = Vec::new();
         for mut record in records_of_the_project {
-            record.failed_because = Some(import_failed_because.clone());
+            record.failed_because = Some(failed_because.clone());
             stream_records.write(&record)?;
             streams_to_unload.extend(self.loaded_stream_of_the_id_when_loaded(&record.stream_id));
             streams_failed.push(StreamLoadedOrFailedByARun::of_the_record(
                 record,
                 StreamStateAfterItsRun::Failed {
-                    failed_because: import_failed_because.clone(),
+                    failed_because: failed_because.clone(),
                 },
                 true,
             ));
         }
-        unload_every_stream_an_action_took_back(
-            &streams_to_unload,
-            "its project's entry did not import",
-        );
+        unload_every_stream_an_action_took_back(&streams_to_unload, "its project gave no stream");
         Ok(streams_failed)
     }
 
     /// Forget the record of the project in `project_directory` written while
-    /// its entry did not import, now that it imports; one that cannot be
-    /// removed is logged and stays listed failed.
-    fn forget_the_record_of_a_project_whose_entry_imports_again(
+    /// it gave no stream, now that it gives streams; one that cannot be removed
+    /// is logged and stays listed failed.
+    fn forget_the_record_of_a_project_that_gives_streams_again(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
         project_directory: &Path,
     ) {
-        let stream_location = StreamLocation::of_a_project_whose_entry_did_not_import(
-            project_directory.to_path_buf(),
-        );
+        let stream_location =
+            StreamLocation::of_a_project_that_gave_no_stream(project_directory.to_path_buf());
         let stream_id = stream_location.stream_id();
         let Ok(Some(StreamRecordAsRead::Current(record))) = stream_records.read(&stream_id) else {
             return;
@@ -1471,16 +1534,94 @@ impl Runner {
         }
         if let Err(not_removed) = stream_records.remove(&stream_id) {
             tracing::error!(
-                "the project in {} imports again, and the record `{stream_id}` written while it \
-                 did not was not removed, so it stays listed failed: {not_removed}",
+                "the project in {} gives streams again, and the record `{stream_id}` written \
+                 while it gave none was not removed, so it stays listed failed: {not_removed}",
                 project_directory.display()
             );
         }
     }
 
+    /// Make the `.venv` of the project in `project_directory` with the uv this
+    /// runtime was handed, unless its interpreter runs.
+    fn make_the_projects_venv(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), ProjectVenvNotMade> {
+        make_the_projects_venv_unless_its_interpreter_runs(
+            project_directory,
+            self.engine_resources_shared_by_every_stream
+                .runtime_unit_uv_executable
+                .get(),
+        )
+    }
+
+    /// Make the `.venv` that `record`'s interpreter is in, unless it runs,
+    /// refused for why when it cannot be made. An interpreter in no project's
+    /// `.venv` is left as it is.
+    fn make_the_venv_of_a_recorded_stream(&self, record: &StreamRecord) -> Result<()> {
+        let Some(project_directory) = the_project_directory_whose_venv_holds(&record.interpreter)
+        else {
+            return Ok(());
+        };
+        Ok(self.make_the_projects_venv(&project_directory)?)
+    }
+
+    /// Before `start_stream` takes the one-action lock: make the `.venv` of the
+    /// recorded stream `stream_id` when its record holds a graph — a record
+    /// holding none is compiled by a load, which makes it — and, when it cannot
+    /// be made, record the stream failed for why and refuse the start.
+    fn make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(
+        &self,
+        stream_id: &str,
+    ) -> Result<()> {
+        let Ok(Some(StreamRecordAsRead::Current(record))) = self.stream_record_of_the_id(stream_id)
+        else {
+            return Ok(());
+        };
+        if record.graph.is_none() {
+            return Ok(());
+        }
+        let Err(venv_not_made) = self.make_the_venv_of_a_recorded_stream(&record) else {
+            return Ok(());
+        };
+        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
+        if let Ok(Some(mut record)) = self.current_stream_record_of_the_id(stream_id)
+            && self
+                .loaded_stream_of_the_id_when_loaded(stream_id)
+                .is_none()
+            && !is_the_machines_shutdown_requested()
+        {
+            self.record_a_refused_start_failed_resetting_its_crash_count(
+                &mut record,
+                format!(
+                    "`start` found its project's .venv not running, and it was not made: \
+                     {venv_not_made}"
+                ),
+            );
+        }
+        Err(venv_not_made)
+    }
+
+    /// Record `record` failed for `failed_because`, a start of it refused, its
+    /// crash count reset; a record that cannot be written is logged.
+    fn record_a_refused_start_failed_resetting_its_crash_count(
+        &self,
+        record: &mut StreamRecord,
+        failed_because: String,
+    ) {
+        record.failed_because = Some(failed_because);
+        record.runtime_crashes_in_a_row_implicating_it = 0;
+        if let Err(not_written) = self.write_a_stream_record(record) {
+            tracing::warn!(
+                "the stream `{}` was not started, and its failure was not recorded: {not_written}",
+                record.stream_id
+            );
+        }
+    }
+
     /// Compile `record`'s stream again from its location, as a run of it, and
-    /// load it — the project's run, for the record of a project whose entry
-    /// did not import. That record names no entry, so one written for an entry
+    /// load it — the project's run, for the record of a project that gave no
+    /// stream. That record names no entry, so one written for an entry
     /// other than the project's own `stream.py` is refused, naming it.
     fn compile_and_run_a_recorded_stream_from_its_location(
         &self,
@@ -1495,7 +1636,7 @@ impl Runner {
                     record.interpreter.display()
                 ))
             })?;
-        if record.location.is_a_project_whose_entry_did_not_import()
+        if record.location.is_a_project_that_gave_no_stream()
             && !the_same_directory(&project_directory, &record.location.project_directory)
         {
             return Err(Error::Configuration(format!(
@@ -1513,7 +1654,7 @@ impl Runner {
         })?;
         let mut streams = run.streams.into_iter();
         let the_project_took_in_one_stream =
-            record.location.is_a_project_whose_entry_did_not_import() && streams.len() == 1;
+            record.location.is_a_project_that_gave_no_stream() && streams.len() == 1;
         streams
             .find(|stream| the_project_took_in_one_stream || stream.stream_id == record.stream_id)
             .ok_or_else(|| {
@@ -1558,21 +1699,12 @@ impl Runner {
     }
 
     /// Load and start a recorded stream from `record` and the graph
-    /// `graph_json` it holds, refused naming the interpreter when the recorded
-    /// one is gone.
+    /// `graph_json` it holds.
     fn load_a_recorded_stream_from_its_record(
         &self,
         record: &StreamRecord,
         graph_json: &serde_json::Value,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        if !record.interpreter.is_file() {
-            return Err(Error::Configuration(format!(
-                "the stream `{}` was not loaded: its interpreter {} is gone; run `uv sync` in {}",
-                record.stream_id,
-                record.interpreter.display(),
-                record.location.project_directory.display()
-            )));
-        }
         self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(record, graph_json))
     }
 
@@ -1731,11 +1863,11 @@ fn the_same_directory(first: &Path, second: &Path) -> bool {
 }
 
 /// The target that compiles the stream at `location` again: none for a
-/// project whose entry did not import; the module's file and the function when
+/// project that gave no stream; the module's file and the function when
 /// the module is one file of the location's project directory — the location
 /// an entry file compiles to; the `module:qualname` otherwise.
 fn the_stream_target_that_compiles_a_location_again(location: &StreamLocation) -> Option<String> {
-    if location.is_a_project_whose_entry_did_not_import() {
+    if location.is_a_project_that_gave_no_stream() {
         return None;
     }
     if let Some((module, qualname)) = location.stream_function.split_once(':')
@@ -1940,6 +2072,11 @@ mod tests {
         })
     }
 
+    /// How a stub `.venv/bin/python` opens: the runtime's probe of whether the
+    /// interpreter runs, `-I -c ""`, exits 0 before the stub's compile.
+    const STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE: &str =
+        "#!/bin/sh\n[ \"$2\" = -c ] && exit 0\n";
+
     /// A project whose `.venv/bin/python` is a shell script standing in for
     /// the compile entry.
     struct ProjectWithAStubCompile {
@@ -1959,6 +2096,11 @@ mod tests {
         fn with_no_venv() -> Self {
             let temporary_directory =
                 a_temporary_directory_at_owner_only_mode().expect("a project directory");
+            std::fs::write(
+                temporary_directory.path().join("pyproject.toml"),
+                "[project]\nname = \"project\"\n",
+            )
+            .expect("the project's pyproject.toml");
             Self {
                 project_directory: temporary_directory.path().to_path_buf(),
                 _directory_removed_on_drop: Arc::new(temporary_directory),
@@ -2123,8 +2265,8 @@ mod tests {
             write_an_executable_script_from_a_child_process(
                 &self.interpreter(),
                 &format!(
-                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > compile-arguments\n{warnings_written}\
-                     cat <<'COMPILED'\n{document}\nCOMPILED\n"
+                    "{STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE}printf '%s\\n' \"$@\" > \
+                     compile-arguments\n{warnings_written}cat <<'COMPILED'\n{document}\nCOMPILED\n"
                 ),
             );
         }
@@ -2139,13 +2281,15 @@ mod tests {
         fn fail_to_compile_printing(&self, traceback: &str) {
             write_an_executable_script_from_a_child_process(
                 &self.interpreter(),
-                &format!("#!/bin/sh\necho \"{traceback}\" >&2\nexit 1\n"),
+                &format!(
+                    "{STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE}echo \"{traceback}\" >&2\nexit 1\n"
+                ),
             );
         }
 
         /// Where this project is recorded while its entry does not import.
         fn location_of_the_project(&self) -> StreamLocation {
-            StreamLocation::of_a_project_whose_entry_did_not_import(self.path().to_path_buf())
+            StreamLocation::of_a_project_that_gave_no_stream(self.path().to_path_buf())
         }
 
         fn run_request(&self) -> RunStreamRequest {
@@ -2315,20 +2459,6 @@ mod tests {
         );
 
         assert!(refusal.contains(&first.display().to_string()), "{refusal}");
-    }
-
-    #[test]
-    #[serial]
-    fn a_run_in_a_project_with_no_venv_interpreter_is_refused_pointing_at_uv_sync() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithAStubCompile::with_no_venv();
-
-        let refusal = refusal_of(runner.run_stream(project.run_request()));
-
-        assert!(refusal.contains("uv sync"), "{refusal}");
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
-        assert!(records_in(state_directory.path()).read_every().is_empty());
     }
 
     #[test]
@@ -2914,7 +3044,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn starting_the_record_of_a_project_whose_entry_did_not_import_runs_the_project() {
+    fn starting_the_record_of_a_project_that_gave_no_stream_runs_the_project() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
@@ -2960,7 +3090,7 @@ mod tests {
         let rigs = project.path().join("rigs");
         std::fs::create_dir(&rigs).unwrap();
         let record_of_rigs = StreamRecord::of_a_stream_whose_compile_failed(
-            StreamLocation::of_a_project_whose_entry_did_not_import(rigs.clone()),
+            StreamLocation::of_a_project_that_gave_no_stream(rigs.clone()),
             "rigs",
             &project.stream_environment(),
             "SyntaxError: invalid syntax",
@@ -3725,8 +3855,8 @@ mod tests {
 
             assert!(refusal.contains("shows nothing"), "{refusal}");
             assert!(
-                !refusal.contains("uv sync"),
-                "refused before the compile, which this project cannot run: {refusal}"
+                !refusal.contains("carries no uv"),
+                "refused before its venv is made, which this runtime cannot: {refusal}"
             );
         }
         assert!(!running.has_ended());
@@ -4129,7 +4259,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn reloading_reports_each_recorded_stream_whose_interpreter_is_gone_by_id_and_keeps_going() {
+    fn reloading_reports_each_recorded_stream_whose_venv_cannot_be_made_by_id_and_keeps_going() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithAStubCompile::with_no_venv();
         let records = records_in(state_directory.path());
@@ -4154,12 +4284,11 @@ mod tests {
             match reload {
                 StreamReloadAtTheStart::NotReloaded { stream_id, refusal } => {
                     let refusal = refusal.to_string();
-                    assert!(refusal.contains(stream_id.as_str()), "{refusal}");
                     assert!(
                         refusal.contains(&project.interpreter().display().to_string()),
                         "{refusal}"
                     );
-                    assert!(refusal.contains("uv sync"), "{refusal}");
+                    assert!(refusal.contains("carries no uv"), "{refusal}");
                     ids_not_reloaded.push(stream_id.clone());
                 }
                 StreamReloadAtTheStart::RecordUnreadable(unreadable) => {
@@ -5042,9 +5171,17 @@ mod tests {
     #[serial]
     fn a_refused_retry_of_a_failed_stream_keeps_it_failed_for_the_retrys_reason_its_count_reset() {
         let state_directory = tempfile::tempdir().unwrap();
-        let project = ProjectWithAStubCompile::with_no_venv();
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "crasher",
+            serde_json::json!([]),
+        ));
         let crasher = project.stream_id_of("crasher");
         let mut failed = a_record_of(&project, "crasher", serde_json::json!([]));
+        failed.graph = Some(serde_json::json!({
+            "stream": "crasher",
+            "nodes": [{"name": "source", "type": "NoSuchBuiltInNodeType", "config": {}}],
+            "links": [],
+        }));
         failed.failed_because = Some("it crashed the runtime".to_string());
         failed.runtime_crashes_in_a_row_implicating_it = 2;
         records_in(state_directory.path()).write(&failed).unwrap();
@@ -5052,7 +5189,10 @@ mod tests {
 
         let refusal = refusal_of(runner.start_stream(&crasher));
 
-        assert!(refusal.contains("interpreter"), "{refusal}");
+        assert!(
+            refusal.contains("no node type `NoSuchBuiltInNodeType`"),
+            "{refusal}"
+        );
         let retried = the_record_of(state_directory.path(), &crasher);
         assert_eq!(retried.runtime_crashes_in_a_row_implicating_it, 0);
         let failed_because = retried.failed_because.expect("the stream stays failed");
@@ -5060,6 +5200,369 @@ mod tests {
             failed_because.contains("`start` retried it"),
             "{failed_because}"
         );
-        assert!(failed_because.contains("interpreter"), "{failed_because}");
+        assert!(failed_because.contains(&refusal), "{failed_because}");
+    }
+
+    /// A stub of the runtime unit's uv, outside every project, that counts its
+    /// runs.
+    struct StubRuntimeUnitUv {
+        uv: PathBuf,
+        uv_runs: PathBuf,
+        directory: tempfile::TempDir,
+    }
+
+    impl StubRuntimeUnitUv {
+        fn running(body: &str) -> Self {
+            let directory = a_temporary_directory_at_owner_only_mode().expect("the uv's directory");
+            let uv = directory.path().join("uv");
+            let uv_runs = directory.path().join("uv-runs");
+            write_an_executable_script_from_a_child_process(
+                &uv,
+                &format!(
+                    "#!/bin/sh\necho \"$*\" >> '{}'\n{body}\n",
+                    uv_runs.display()
+                ),
+            );
+            Self {
+                uv,
+                uv_runs,
+                directory,
+            }
+        }
+
+        /// A uv whose sync puts back `project`'s `.venv`, which is moved aside
+        /// here: the project is left with no venv for the runtime to make.
+        fn making_the_venv_moved_aside_from(project: &ProjectWithAStubCompile) -> Self {
+            let stub_uv = Self::running("");
+            let venv_uv_makes = stub_uv.directory.path().join("venv-uv-makes");
+            std::fs::rename(project.path().join(".venv"), &venv_uv_makes)
+                .expect("the venv is moved aside");
+            write_an_executable_script_from_a_child_process(
+                &stub_uv.uv,
+                &format!(
+                    "#!/bin/sh\necho \"$*\" >> '{}'\ncp -R '{}' .venv\n",
+                    stub_uv.uv_runs.display(),
+                    venv_uv_makes.display()
+                ),
+            );
+            stub_uv
+        }
+
+        /// A uv whose sync half-makes a `.venv`, then fails writing
+        /// `standard_error`.
+        fn failing_writing(standard_error: &str) -> Self {
+            Self::running(&format!(
+                "mkdir -p .venv/bin\necho '{standard_error}' >&2\nexit 1"
+            ))
+        }
+
+        /// The runtime handed this uv.
+        fn handed_to(&self, runner: &Runner) {
+            runner
+                .set_runtime_unit_uv_executable(self.uv.clone())
+                .expect("the runtime is handed its uv");
+        }
+
+        /// Each run, by its arguments.
+        fn runs(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.uv_runs)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    const UV_RESOLUTION_FAILURE: &str =
+        "error: No solution found when resolving dependencies: tatolab-stream==99 is unavailable";
+
+    #[test]
+    #[serial]
+    fn a_run_in_a_project_with_no_venv_makes_it_with_the_runtime_unit_uv_then_compiles() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
+        stub_uv.handed_to(&runner);
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        the_one_running_stream_of(&run);
+        assert_eq!(stub_uv.runs(), ["sync"]);
+        assert!(project.interpreter().is_file());
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_whose_venv_interpreter_runs_never_runs_uv() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        the_one_running_stream_of(&run);
+        assert!(stub_uv.runs().is_empty(), "{:?}", stub_uv.runs());
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_whose_venv_interpreter_does_not_run_has_its_venv_made_again() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
+        stub_uv.handed_to(&runner);
+        directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &project.path().join(".venv").join("bin"),
+            0o755,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/nonexistent/python3.12", project.interpreter()).unwrap();
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        the_one_running_stream_of(&run);
+        assert_eq!(stub_uv.runs(), ["sync"]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_whose_venv_uv_cannot_make_records_the_project_failed_in_uvs_words() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because.contains(UV_RESOLUTION_FAILURE),
+            "{failed_because}"
+        );
+        assert_eq!(stream.stream_location, project.location_of_the_project());
+        assert!(
+            !project.path().join(".venv").exists(),
+            "the half-made venv was left"
+        );
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        assert_eq!(
+            the_record_of(state_directory.path(), &stream.stream_id).failed_because,
+            Some(failed_because.to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_whose_venv_uv_cannot_make_unloads_and_fails_every_record_of_the_project() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        runner.run_stream(project.run_request()).unwrap();
+        let running = runner.loaded_stream_of_the_id(&camera).unwrap();
+        std::fs::remove_dir_all(project.path().join(".venv")).unwrap();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert_eq!(stream.stream_id, camera);
+        assert!(
+            failed_because.contains(UV_RESOLUTION_FAILURE),
+            "{failed_because}"
+        );
+        assert!(running.has_ended());
+        assert!(the_record_of(state_directory.path(), &camera).is_failed());
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_on_a_runtime_given_no_uv_records_the_project_failed_saying_the_unit_carries_none() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+
+        let run = runner.run_stream(project.run_request()).unwrap();
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because.contains(
+                "the runtime unit carries no uv; rebuild it with `cargo xtask build-runtime`"
+            ),
+            "{failed_because}"
+        );
+        assert_eq!(stream.stream_location, project.location_of_the_project());
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_in_a_missing_project_directory_is_refused_with_nothing_recorded() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let refusal = refusal_of(runner.run_stream(RunStreamRequest {
+            project_directory: project.path().join("missing"),
+            ..project.run_request()
+        }));
+
+        assert!(refusal.contains("does not exist"), "{refusal}");
+        assert!(stub_uv.runs().is_empty(), "{:?}", stub_uv.runs());
+        assert!(records_in(state_directory.path()).read_every().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn starting_a_stopped_stream_whose_venv_is_gone_makes_it_with_the_runtime_unit_uv() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        runner.run_stream(project.run_request()).unwrap();
+        runner.stop_stream(&camera).unwrap();
+        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
+        stub_uv.handed_to(&runner);
+
+        let started = runner.start_stream(&camera).expect("the stream starts");
+
+        assert_eq!(started.stream_id, camera);
+        assert_eq!(stub_uv.runs(), ["sync"]);
+        assert!(!the_record_of(state_directory.path(), &camera).stopped);
+    }
+
+    #[test]
+    #[serial]
+    fn starting_a_stream_whose_venv_uv_cannot_make_is_refused_and_records_it_failed_in_uvs_words() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        runner.run_stream(project.run_request()).unwrap();
+        runner.stop_stream(&camera).unwrap();
+        std::fs::remove_dir_all(project.path().join(".venv")).unwrap();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let refusal = refusal_of(runner.start_stream(&camera));
+
+        assert!(refusal.contains(UV_RESOLUTION_FAILURE), "{refusal}");
+        let failed_because = the_record_of(state_directory.path(), &camera)
+            .failed_because
+            .expect("the stream is failed");
+        assert!(
+            failed_because.contains(UV_RESOLUTION_FAILURE),
+            "{failed_because}"
+        );
+        assert!(
+            !project.path().join(".venv").exists(),
+            "the half-made venv was left"
+        );
+        assert!(
+            runner
+                .loaded_stream_of_the_id_when_loaded(&camera)
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn the_reload_at_the_start_makes_a_gone_venv_once_for_every_record_of_its_project() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let records = records_in(state_directory.path());
+        for function_name in ["camera", "microphone"] {
+            records
+                .write(&a_record_of(&project, function_name, serde_json::json!([])))
+                .unwrap();
+        }
+        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        stub_uv.handed_to(&runner);
+
+        let reloads = runner.reload_every_recorded_stream_neither_stopped_nor_failed();
+
+        assert!(
+            reloads
+                .iter()
+                .all(|reload| matches!(reload, StreamReloadAtTheStart::Reloaded { .. })),
+            "{reloads:?}"
+        );
+        assert_eq!(reloads.len(), 2, "{reloads:?}");
+        assert_eq!(stub_uv.runs(), ["sync"]);
+    }
+
+    #[test]
+    #[serial]
+    fn the_reload_at_the_start_records_failed_in_uvs_words_a_stream_whose_venv_uv_cannot_make() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let camera = project.stream_id_of("camera");
+        records_in(state_directory.path())
+            .write(&a_record_of(&project, "camera", serde_json::json!([])))
+            .unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let reloads = runner.reload_every_recorded_stream_neither_stopped_nor_failed();
+
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [StreamReloadAtTheStart::NotReloaded { stream_id, .. }] if *stream_id == camera
+            ),
+            "{reloads:?}"
+        );
+        let failed_because = the_record_of(state_directory.path(), &camera)
+            .failed_because
+            .expect("the stream is failed");
+        assert!(
+            failed_because.contains(UV_RESOLUTION_FAILURE),
+            "{failed_because}"
+        );
+        assert!(failed_because.contains("re-load"), "{failed_because}");
+    }
+
+    #[test]
+    fn a_runtime_handed_its_uv_twice_refuses_the_second() {
+        let runner = a_runner_recording_its_streams_in(None);
+        runner
+            .set_runtime_unit_uv_executable(PathBuf::from("/opt/tatolab/bin/uv"))
+            .unwrap();
+
+        let refusal =
+            refusal_of(runner.set_runtime_unit_uv_executable(PathBuf::from("/elsewhere/uv")));
+
+        assert!(refusal.contains("/opt/tatolab/bin/uv"), "{refusal}");
     }
 }

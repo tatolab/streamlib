@@ -141,31 +141,41 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
     }
 }
 
-/// The lend directory a runtime's host handed it, read by every stream's
-/// describes and processor interpreters.
-#[derive(Default)]
-pub(crate) struct ProcessorInterpreterLendDirectoryOfTheEngine(std::sync::OnceLock<PathBuf>);
+/// A path in the runtime unit that the runtime's host hands it once, before any
+/// load: the lend directory every stream's describes and processor interpreters
+/// borrow, or the uv every project's `.venv` is made with.
+pub(crate) struct RuntimeUnitPathTheHostHandsTheEngineOnce {
+    what_the_path_is: &'static str,
+    held: std::sync::OnceLock<PathBuf>,
+}
 
-impl ProcessorInterpreterLendDirectoryOfTheEngine {
-    /// Hold `lend_directory`, refusing a second one: a stream already loaded
-    /// borrows the first.
-    pub(crate) fn set(&self, lend_directory: PathBuf) -> Result<()> {
-        self.0
-            .set(lend_directory)
-            .map_err(|refused_lend_directory| {
-                Error::Runtime(format!(
-                    "this runtime was already handed the lend directory {}, so {} was refused",
-                    self.0
-                        .get()
-                        .map(|held| held.display().to_string())
-                        .unwrap_or_default(),
-                    refused_lend_directory.display()
-                ))
-            })
+impl RuntimeUnitPathTheHostHandsTheEngineOnce {
+    /// None held yet, refusals naming the path as `what_the_path_is`.
+    pub(crate) const fn naming(what_the_path_is: &'static str) -> Self {
+        Self {
+            what_the_path_is,
+            held: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Hold `path`, refusing a second one: what the engine already started
+    /// uses the first.
+    pub(crate) fn set(&self, path: PathBuf) -> Result<()> {
+        self.held.set(path).map_err(|refused_path| {
+            Error::Runtime(format!(
+                "this runtime was already handed {} {}, so {} was refused",
+                self.what_the_path_is,
+                self.held
+                    .get()
+                    .map(|held| held.display().to_string())
+                    .unwrap_or_default(),
+                refused_path.display()
+            ))
+        })
     }
 
     pub(crate) fn get(&self) -> Option<&Path> {
-        self.0.get().map(PathBuf::as_path)
+        self.held.get().map(PathBuf::as_path)
     }
 }
 
@@ -183,7 +193,8 @@ mod tests {
 
     #[test]
     fn a_second_lend_directory_is_refused_and_the_first_kept() {
-        let lend_directory_of_the_engine = ProcessorInterpreterLendDirectoryOfTheEngine::default();
+        let lend_directory_of_the_engine =
+            RuntimeUnitPathTheHostHandsTheEngineOnce::naming("the lend directory");
         lend_directory_of_the_engine
             .set("/first/lend".into())
             .expect("the first lend directory");

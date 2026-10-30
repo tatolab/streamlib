@@ -128,13 +128,15 @@ class LocalApiClient:
         operation: "Callable[[Client], Awaitable[McpAnswer]]",
         *,
         mode: str = "auto",
+        timeout: float = LOCAL_API_REQUEST_TIMEOUT_SECONDS,
     ) -> McpAnswer:
-        """Run one operation on an MCP client connected for it alone."""
+        """Run one operation on an MCP client connected for it alone, each request
+        waiting up to `timeout` seconds."""
 
         async def connected_operation() -> McpAnswer:
             async with httpx2.AsyncClient(
                 transport=httpx2.AsyncHTTPTransport(uds=str(self.local_api_socket_path)),
-                timeout=LOCAL_API_REQUEST_TIMEOUT_SECONDS,
+                timeout=timeout,
             ) as http_client, Client(
                 streamable_http_client(LOCAL_API_MCP_URL, http_client=http_client), mode=mode
             ) as client:
@@ -142,17 +144,29 @@ class LocalApiClient:
 
         return asyncio.run(connected_operation())
 
-    def call_tool(self, tool_name: str, arguments: "dict[str, Any] | None" = None) -> Any:
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: "dict[str, Any] | None" = None,
+        *,
+        timeout: float = LOCAL_API_REQUEST_TIMEOUT_SECONDS,
+    ) -> Any:
         """MCP `tools/call`, its first text content parsed as JSON; a tool error raises."""
         result = self.answer_over_mcp(
-            lambda client: client.call_tool(tool_name, arguments or {})
+            lambda client: client.call_tool(tool_name, arguments or {}), timeout=timeout
         )
         assert result.is_error is False, f"`{tool_name}` failed: {result.content}"
         stated = result.content[0]
         assert isinstance(stated, TextContent), result.content
         return json.loads(stated.text)
 
-    def call_tool_refusal(self, tool_name: str, arguments: "dict[str, Any] | None" = None) -> str:
+    def call_tool_refusal(
+        self,
+        tool_name: str,
+        arguments: "dict[str, Any] | None" = None,
+        *,
+        timeout: float = LOCAL_API_REQUEST_TIMEOUT_SECONDS,
+    ) -> str:
         """MCP `tools/call` that must fail; returns why, and a success raises.
 
         The reason is the protocol error's message when the server refused the
@@ -160,7 +174,7 @@ class LocalApiClient:
         """
         try:
             result = self.answer_over_mcp(
-                lambda client: client.call_tool(tool_name, arguments or {})
+                lambda client: client.call_tool(tool_name, arguments or {}), timeout=timeout
             )
         except Exception as raised:
             return str(mcp_error_raised_in(raised))

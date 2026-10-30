@@ -6,12 +6,12 @@
 //! both sharing the one publish token `tatolabd` mints for itself, their
 //! admission answered on the engine's own async runtime.
 
-use std::path::PathBuf;
+use crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one;
 
 use streamlib::sdk::runtime::Runner;
 use streamlib_relay_adapter_local::{
-    LocalRelayAdapterInstanceMaker, LocalRelaySharedByBothInstances,
-    SettingsOfEachLocalRelayListener, local_relay_executable_beside,
+    LOCAL_RELAY_EXECUTABLE_FILE_NAME, LocalRelayAdapterInstanceMaker,
+    LocalRelaySharedByBothInstances, SettingsOfEachLocalRelayListener,
     mint_the_runtimes_relay_publish_token,
 };
 
@@ -38,7 +38,8 @@ fn the_local_relay_shared_by_both_instances(
     String,
 > {
     let settings_of_each_listener = the_settings_of_both_listeners()?;
-    let relay_executable = the_local_relay_executable_beside_this_one()?;
+    let relay_executable =
+        runtime_unit_executable_beside_this_one(LOCAL_RELAY_EXECUTABLE_FILE_NAME)?;
     let runtime_publish_token =
         mint_the_runtimes_relay_publish_token().map_err(|refusal| refusal.to_string())?;
     Ok((
@@ -51,26 +52,6 @@ fn the_local_relay_shared_by_both_instances(
         },
         settings_of_each_listener,
     ))
-}
-
-/// `moq-relay` beside this executable, canonical, or why it is not there.
-fn the_local_relay_executable_beside_this_one() -> Result<PathBuf, String> {
-    let this_executable = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .map_err(|failure| format!("this executable's own path cannot be named: {failure}"))?;
-    let relay_executable = local_relay_executable_beside(&this_executable).ok_or_else(|| {
-        format!(
-            "{} sits in no directory to find the relay in",
-            this_executable.display()
-        )
-    })?;
-    if !relay_executable.is_file() {
-        return Err(format!(
-            "the runtime unit carries no {}; rebuild it with `cargo xtask build-runtime`",
-            relay_executable.display()
-        ));
-    }
-    Ok(relay_executable)
 }
 
 /// Each listener with the settings it is built in with: its defaults.

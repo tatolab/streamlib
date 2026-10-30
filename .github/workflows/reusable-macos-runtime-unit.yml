@@ -99,11 +99,11 @@ jobs:
 
       # The linker signs an arm64 executable ad hoc; one whose signature is
       # missing or broken is killed by the kernel before its first instruction.
-      - name: tatolabd, tatolab and the local relay are signed
+      - name: tatolabd, tatolab, the local relay and uv are signed
         run: |
           codesign --verify --strict --verbose=1 \
             target/tatolab-runtime/bin/tatolabd target/tatolab-runtime/bin/tatolab \
-            target/tatolab-runtime/bin/moq-relay
+            target/tatolab-runtime/bin/moq-relay target/tatolab-runtime/bin/uv
 
       # Against the lend a processor interpreter borrows, from a venv holding
       # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
