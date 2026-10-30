@@ -338,8 +338,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   load — `run`, `dev`, `run_stream`, `create_project`, `Tatolab.app`'s Add, `start`, and the
   runtime's re-load at start — takes the project in. A stream whose venv, compile, describe or
   start fails is recorded `failed`, with the reason in `list_streams` and the traceback in its
-  logs, and a replaced stream's running version is unloaded. When `stream.py` cannot be
-  imported, every stream recorded from the project is recorded `failed` with the traceback. A
+  logs, and a replaced stream's running version is unloaded. A failed load is a load of its own:
+  `run_stream` answers its `stream_instance` as a running load's, and its records — what it
+  logged, then its traceback or reason — go to its log file under the project's
+  `.streamlib/logs/`. `logs` serves them from that file until the stream is loaded again, across
+  the runtime's restarts;
+  `logs -f` and `dev` print them and wait, and `rm` deletes the stream's log files under
+  `.streamlib/logs/` with its record. Both find a stream's files by its stream id there; the
+  stream record names no file.
+  When `stream.py` cannot be imported, or imports and defines no `@stream`, every stream
+  recorded from the project is recorded `failed` with the traceback or the missing `@stream`. A
   project with none gets one failed record for `stream.py`, its location the project directory
   with no function, so its id is `<folder>-<hash>`. The next load that imports `stream.py`
   replaces it with the project's streams. A load refuses only what its own arguments get wrong:
@@ -357,7 +365,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and `list_project_streams`. It removes a `.venv` whose interpreter does not run first, and
   never touches one whose interpreter runs. A failed sync records the stream `failed` in uv's
   own words. `list_project_streams` on a project whose `stream.py` cannot be imported answers
-  with the traceback in place of its streams. Owner, 2026-10-29. [load-never-refused-for-code]
+  with the traceback in place of its streams. Owner, 2026-10-29. [load-never-refused-for-code;
+  failed-load-logs]
   Rejected: refusing a load whose code fails, or putting the previous version back — a person or
   an agent could load only finished code (owner, 2026-10-29).
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
