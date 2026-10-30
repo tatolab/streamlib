@@ -149,10 +149,8 @@ fn a_recorded_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() 
         .as_str()
         .unwrap_or_default();
     assert!(
-        failed_because.contains(&format!(
-            "its interpreter {} is gone",
-            deleted_interpreter.display()
-        )),
+        failed_because.contains(&format!("{} does not start", deleted_interpreter.display()))
+            && failed_because.contains("the runtime unit carries no uv"),
         "{listed}"
     );
 }

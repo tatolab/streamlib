@@ -108,7 +108,8 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
 
 /// At its start the runtime re-loads every recorded stream neither stopped nor
 /// failed, reporting each by its id: a stopped one is left unloaded, one whose
-/// interpreter is gone is recorded failed for it, one the engine could not
+/// venv a runtime unit with no uv cannot make again is recorded failed for it,
+/// one the engine could not
 /// start — no GPU — is re-loaded at the next start, and a record an earlier
 /// runtime wrote is listed failed, keyed by its file name, the runtime still up.
 #[test]
@@ -208,12 +209,12 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     );
     assert!(
         standard_error.contains(&format!(
-            "its interpreter {} is gone",
+            "{} does not start",
             machine_root
                 .project_directory()
                 .join(".venv/bin/python")
                 .display()
-        )),
+        )) && standard_error.contains("the runtime unit carries no uv"),
         "{standard_error}"
     );
     assert!(
@@ -263,7 +264,7 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
             .as_str()
             .unwrap_or_default()
             .contains(&format!(
-                "its interpreter {} is gone",
+                "{} does not start",
                 machine_root
                     .project_directory()
                     .join(".venv/bin/python")
