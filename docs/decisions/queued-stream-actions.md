@@ -28,8 +28,12 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
 - A load refuses nothing. A missing directory and an id another location holds fail the
   action, with the reason in the action and the log. The call errors only on a malformed
   request.
-- What a stop, a remove or a start does to the record is written when it is queued, so a
-  crash finishes the action rather than undoing it. The queue itself lives in memory.
+- Queuing a stop, a remove or a start writes a pending mark on the stream's record, which the
+  action finalises when done and a cancel clears, so the record never says what has not
+  happened and a crash still finishes the action: the re-load at start completes any mark left.
+  The queue itself lives in memory.
+- The re-load at start loads a project's records that are neither stopped nor failed and no
+  others; a `run` of the project loads all of its streams.
 - Each project has one serial queue, as a workflow engine runs jobs: its actions run one at a
   time in order, and nothing replaces or edits a queued action — `cancel_stream_action` is the
   only way to end one early. Everything but the sync is fast, so a serial queue costs little.
@@ -79,6 +83,10 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
   an action back to its log.
 - **OpenTelemetry's log field names** — a breaking rewrite of the durable log contract, for no
   reader that needs it yet.
+- **Writing a stop's or a remove's final state when it is queued** — a cancelled one would
+  leave a running stream recorded `stopped`, or forgotten and lost at the next restart.
+- **Cancel writing back the record's previous state** — a compensating write that keeps every
+  action's prior state, where a pending mark needs none.
 - **A client-supplied idempotency key** — the action id is the handle, and a client on the local
   socket has no retry to deduplicate.
 

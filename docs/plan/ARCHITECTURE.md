@@ -403,10 +403,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     why.
   - **States.** While an action works on a stream, `list_streams` and `tatolab streams` show it
     `preparing` (a load or a start) or `stopping` (a stop or a remove), the step as the why.
-    Neither state is ever recorded.
-  - **Recorded when queued.** A stop records `stopped`, a remove forgets the record and a start
-    clears `stopped` when the action is queued, so a crash finishes it rather than undoing it;
-    the unload or the load follows.
+  - **Pending marks.** Queuing a stop, a remove or a start writes a pending mark on the
+    stream's record, and the action finalises it when done: a stop records `stopped`, a remove
+    forgets the record, a start clears `stopped` or `failed`. Cancelling the action clears the
+    mark, leaving the record as it was. The re-load at start first finishes any mark a crash
+    left — a pending stop recorded `stopped`, a pending remove forgotten, a pending start
+    loaded.
   - **One serial queue per project.** A project's actions run one at a time in the order
     queued; no action replaces or edits another. Projects' queues never wait on each other. A
     queued or running action ends early only through `cancel_stream_action {action}` (`tatolab
@@ -416,7 +418,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - **No bound on the sync.** uv's own network timeouts end a stalled download. A runtime
     shutdown ends a running sync and removes its half-made `.venv`. Queued actions are held in
     memory, so a restart forgets them; the re-load at start queues one load per project
-    holding a record neither stopped nor failed.
+    holding a record neither stopped nor failed, and that load loads only those records — a
+    stopped or failed stream of the project stays as recorded. A `run` of the project loads
+    all of its streams.
   - **Attributes are immediate.** `rename_stream` and `expose_port` set an attribute of the
     record and answer once it is set, never waiting behind an action. A ruling on a stream that
     is not running applies when it loads.
