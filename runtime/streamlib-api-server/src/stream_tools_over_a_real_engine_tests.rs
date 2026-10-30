@@ -1144,7 +1144,7 @@ async fn a_run_whose_entry_does_not_import_answers_the_project_failed_under_its_
         ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
     project.fail_to_import_printing("SyntaxError: invalid syntax");
     let project_location =
-        StreamLocation::of_a_project_whose_entry_did_not_import(project.path().to_path_buf());
+        StreamLocation::of_a_project_that_gave_no_stream(project.path().to_path_buf());
 
     let run = tool_answer(
         &tool_call_result(

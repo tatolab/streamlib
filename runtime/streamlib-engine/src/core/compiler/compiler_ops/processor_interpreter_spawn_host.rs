@@ -102,7 +102,7 @@ const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 ///
 /// Bounded because a descendant that left the group can hold the pipe open
 /// past the helper's own exit.
-pub(super) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
+pub(crate) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
 
 /// How much of a helper's standard error a refusal carries, from the end.
 const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
@@ -172,7 +172,7 @@ pub(crate) fn stream_interpreter_command_in_its_project_directory(
 
 /// Remove from `command` each of `inherited_variable_names` that begins with
 /// `PYTHON`.
-fn remove_every_python_variable_named_in(
+pub(crate) fn remove_every_python_variable_named_in(
     command: &mut Command,
     inherited_variable_names: impl IntoIterator<Item = OsString>,
 ) {
@@ -907,7 +907,7 @@ fn refusal_of_a_helper_process_that_died_while_setting_up(
 
 /// The end of a helper's standard error as a refusal quotes it, saying so when
 /// there is none.
-pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &str) -> String {
+pub(crate) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &str) -> String {
     if standard_error_tail.is_empty() {
         return "It wrote nothing to its standard error.".to_string();
     }
@@ -943,7 +943,7 @@ const STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL: Duration = Duration::from_mi
 /// How the wait for a stream interpreter that runs to its own exit — a
 /// describe, a compile — ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StreamInterpreterExitAwaited {
+pub(crate) enum StreamInterpreterExitAwaited {
     /// It exited, and is left unreaped.
     Exited,
     /// Its bound elapsed first.
@@ -957,7 +957,7 @@ pub(super) enum StreamInterpreterExitAwaited {
 /// Wait up to `bound` for `child` to exit, leaving it unreaped, cut short
 /// whenever `is_its_streams_shutdown_requested` or `is_interrupted_by_the_host`
 /// reports true.
-pub(super) fn wait_for_a_stream_interpreter_to_exit(
+pub(crate) fn wait_for_a_stream_interpreter_to_exit(
     child: &Child,
     bound: Duration,
     is_its_streams_shutdown_requested: &dyn Fn() -> bool,
@@ -999,7 +999,7 @@ pub(super) enum ChildStandardStreamKeptBytes {
 /// What a child wrote to one standard stream, bounded, and whether the pipe
 /// has closed.
 #[derive(Clone)]
-pub(super) struct ChildStandardStreamRecording {
+pub(crate) struct ChildStandardStreamRecording {
     recorded_bytes_and_pipe_closed_signal: Arc<(
         parking_lot::Mutex<RecordedChildStandardStream>,
         parking_lot::Condvar,
@@ -1070,7 +1070,7 @@ impl ChildStandardStreamRecording {
 
     /// What was recorded as trimmed text, once the pipe has closed or
     /// `deadline` has passed.
-    pub(super) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
+    pub(crate) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
         String::from_utf8_lossy(&self.bytes_once_closed_or_after(deadline))
             .trim()
             .to_string()
@@ -1101,7 +1101,7 @@ impl<R> Drop for ChildStandardStreamRecordingReader<R> {
 
 /// Log a child's standard error line by line, as every intercepted fd is, while
 /// keeping its tail for a refusal.
-pub(super) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
+pub(crate) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
     standard_error: R,
     processor_id: &str,
 ) -> ChildStandardStreamRecording {

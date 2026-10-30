@@ -233,11 +233,6 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
         )));
     }
     let interpreter = the_projects_venv_interpreter(project_directory);
-    if !interpreter.is_file() {
-        return Err(Error::Configuration(format!(
-            "{project} has no .venv/bin/python; run `uv sync` in {project}"
-        )));
-    }
     let interpreter_shown = interpreter.display();
     if is_interrupted_by_the_host() {
         return Err(Error::Runtime(format!(
@@ -740,27 +735,6 @@ mod tests {
             Some(OsStr::new(
                 "/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"
             ))
-        );
-    }
-
-    #[test]
-    fn a_project_with_no_venv_interpreter_is_refused_pointing_at_uv_sync() {
-        let project_directory = tempfile::tempdir().expect("a project directory");
-        let project = project_directory.path().display();
-
-        let refusal = compile_the_stream_function_in_the_projects_interpreter(
-            project_directory.path(),
-            None,
-            Path::new(LEND_DIRECTORY_FOR_TEST),
-        )
-        .expect_err("a project with no venv cannot compile")
-        .to_string();
-
-        assert!(
-            refusal.contains(&format!(
-                "{project} has no .venv/bin/python; run `uv sync` in {project}"
-            )),
-            "{refusal}"
         );
     }
 

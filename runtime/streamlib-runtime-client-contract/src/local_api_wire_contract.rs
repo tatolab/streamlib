@@ -21,10 +21,11 @@ pub const MCP_STDIO_UPGRADE_REQUEST_TARGET: &str = "/mcp/stdio";
 pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 
 /// How long a client waits for `run_stream` or `start_stream`. The engine asserts at build time
-/// that its `STREAM_FUNCTION_COMPILE_BOUND`, `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and
-/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for this load and one stream action queued
-/// ahead of it; more actions queued ahead can outlast it, and the runtime still takes the action.
-pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
+/// that its `PROJECT_VENV_MAKING_BOUND`, `STREAM_FUNCTION_COMPILE_BOUND`,
+/// `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for
+/// this load and one stream action queued ahead of it; more actions queued ahead can outlast it,
+/// and the runtime still takes the action.
+pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
 
 /// How long a client waits for `stop_stream`, `remove_stream` or `expose_port`. The engine
 /// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and
