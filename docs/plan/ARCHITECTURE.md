@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, create-project, failed-load-logs; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, create-project, failed-load-logs, queued-stream-actions; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -49,7 +49,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
   #2682; stream-identity-and-persistence — SHIPPED #2962; amended by project-loads-every-stream:
   `dev`/`run` load every `@stream` in `stream.py`; amended by queued-stream-actions: `run` and
-  `dev` take a project and never a function, and `--name` goes]
+  `dev` take a project and never a function, `--name` goes, and `-f` goes — a project's entry
+  is always `stream.py`]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -245,8 +246,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; amended by create-project:
   `create_project`; amended by project-loads-every-stream: `list_project_streams`; amended by
-  queued-stream-actions: `run_stream`, `start_stream`, `stop_stream` and `remove_stream` queue a
-  stream action and answer its action id, `describe_stream_action` reads one and
+  queued-stream-actions: `run_stream` is renamed `run_project`; `run_project`, `start_stream`,
+  `stop_stream` and `remove_stream` queue a stream action and answer its action id, `describe_stream_action` reads one and
   `cancel_stream_action` ends one, `list_streams` shows `preparing` and `stopping`, and `logs`
   takes a project]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
@@ -350,7 +351,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `--name` go — `run_stream` answers its action id and `describe_stream_action` lists the
   streams the load touched, `list_project_streams` answers from the project's last compile, and
   `dev` follows the project's log]
-- **DECIDED** — A load is never refused. Every load — `run`, `dev`, `run_stream`,
+- **DECIDED** — A load is never refused. Every load — `run`, `dev`, `run_project`,
   `create_project`, `Tatolab.app`'s Add, `start`, and the runtime's re-load at start — is a
   queued stream action (the entry below) that takes the project in. A stream whose venv,
   compile, describe or start fails is recorded `failed`, with the reason in `list_streams` and
@@ -387,15 +388,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: a log per stream, or per load of a stream, or found through a stream's record — a
   stream is a programmatic concept a project defines any number of; the project is a real
   location on disk and the storage unit for its log (owner, 2026-10-30).
-- **DECIDED** — Every load and unload is a queued stream action. `run_stream`, `start_stream`,
+- **DECIDED** — Every load and unload is a queued stream action. `run_project`, `start_stream`,
   `create_project`, `stop_stream`, `remove_stream` and the runtime's re-load at start each queue
   one **stream action** and answer at once with its **action id**. The runtime makes the venv,
   compiles, describes, loads, starts, stops and unloads in the background, and no call waits for
   what its action does. `tatolab run`, `new`, `start`, `stop` and `rm` exit 0 once the action
   is queued. A call answers an error only for a malformed request — a missing argument, a
   directory that is not absolute — and the CLI only for that or a runtime it cannot reach.
-  - **Loads take a project.** `tatolab run`, `tatolab dev` and `run_stream {project_directory}`
-    load every `@stream` in the project and take no stream function and no display name; one
+  - **Loads take a project.** `tatolab run`, `tatolab dev` and `run_project {project_directory}`
+    load every `@stream` in the project's `stream.py` and take no stream function, no display
+    name and no other entry file; one
     stream is managed afterwards by its own `start`, `stop`, `rm` and `rename`.
   - **Steps.** An action runs in order: queued, then making the venv, compiling and starting,
     or stopping. It ends done, failed with its reason, or cancelled. `describe_stream_action
@@ -3605,7 +3607,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   machine-lock-without-administrator — SHIPPED #2929; amended by create-project: the bundle
   carries the runtime unit's pinned uv, and the app neither scaffolds nor syncs a project]
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, create-project, failed-load-logs)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, create-project, failed-load-logs, queued-stream-actions)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3659,8 +3661,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; amended by create-project: `create_project` joins the stream actions;
   amended by project-loads-every-stream: `list_project_streams` joins the stream actions;
-  amended by queued-stream-actions: `describe_stream_action` and `cancel_stream_action` join
-  the stream actions]
+  amended by queued-stream-actions: `run_stream` is renamed `run_project`, and
+  `describe_stream_action` and `cancel_stream_action` join the stream actions]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
