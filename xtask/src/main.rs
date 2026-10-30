@@ -503,20 +503,19 @@ enum Commands {
     /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
     CheckBoundaries,
 
-    /// CI gate for the helper-process-placement-only ruling (owner
-    /// 2026-08-04). Fails on the vocabulary of the banned model anywhere in
+    /// CI gate for the helper-process-placement-only ruling. Fails on the
+    /// vocabulary of the banned model anywhere in
     /// the engine tree or `docs/`; the banned patterns and the two escape
     /// hatches are enumerated in
     /// [`check_no_in_process_placement`]. Markdown and Rust doc comments are
-    /// scanned on purpose — the shipped violation announced itself in a `//!`
-    /// line. See `docs/decisions/helper-process-placement-only.md`.
+    /// scanned on purpose: a violation can announce itself in a `//!` line.
+    /// See `docs/decisions/helper-process-placement-only.md`.
     CheckNoInProcessPlacement,
 
-    /// CI gate for #793's all-dynamic registration rule. Fails on any
+    /// CI gate for the all-dynamic registration rule. Fails on any
     /// `inventory::submit!(FactoryRegistration { ... })` in live code —
-    /// the `#[processor]` macro no longer emits one, and reintroducing
-    /// the pattern would bypass the dynamic-load model from milestone
-    /// `All-Dynamic Package Loading` (#20). `RuntimeInitHookRegistration`
+    /// the `#[processor]` macro emits none, and the pattern would bypass the
+    /// dynamic-load model. `RuntimeInitHookRegistration`
     /// inventory submissions are unaffected — only `FactoryRegistration`
     /// is flagged.
     CheckNoInventorySubmit,
@@ -559,8 +558,8 @@ enum Commands {
     /// `runtime/streamlib-engine/src/vulkan/` or
     /// `runtime/streamlib-consumer-rhi/src/`. `CStr::from_ptr` returns an
     /// unbounded lifetime, so the borrow is never tied to the storage the
-    /// pointer came from and survives it — the use-after-free two device
-    /// bring-up paths shipped in #1846. `vk::StringArray::as_cstr` borrows
+    /// pointer came from and survives it, a use-after-free.
+    /// `vk::StringArray::as_cstr` borrows
     /// from `&self` and is the drop-in. A bare pointer argument owned by an
     /// external API is not flagged.
     CheckNoUnboundedCstrFromPtr,
@@ -614,9 +613,8 @@ enum Commands {
     /// type bumps the workspace version and ships no cargo dependency-requirement
     /// updater, so the pins sit still while the crates move. Inside one minor line
     /// that is invisible (`^0.17.0` matches `0.17.1`); the next breaking bump makes
-    /// the workspace unresolvable, because `^0.17.0` excludes `0.18.0` — which is
-    /// what held release 0.18.0 shut from 2026-08-11 and starved the PEP 503 index
-    /// of every wheel since. `cargo metadata --no-deps` parses it clean, so only a
+    /// the workspace unresolvable, because `^0.17.0` excludes `0.18.0`, and holds
+    /// the release shut. `cargo metadata --no-deps` parses it clean, so only a
     /// real resolve catches it, and the first real resolve is on the release
     /// branch. `--fix` moves every drifted pin onto the workspace version; the
     /// release workflow calls it right after the bump.
