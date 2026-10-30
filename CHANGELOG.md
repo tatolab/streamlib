@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.60.0](https://github.com/tatolab/streamlib/compare/v0.59.0...v0.60.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** the runtime unit carries a pinned uv, and the runtime makes a project's .venv whenever its interpreter does not run ([#2982](https://github.com/tatolab/streamlib/issues/2982))
+
+### Features
+
+* **runtime:** the runtime unit carries a pinned uv, and the runtime makes a project's .venv whenever its interpreter does not run ([#2982](https://github.com/tatolab/streamlib/issues/2982)) ([5c4de57](https://github.com/tatolab/streamlib/commit/5c4de5717aa2369e1c46de4bf7458fd5cd0c4f86))
+
 ## [0.59.0](https://github.com/tatolab/streamlib/compare/v0.58.0...v0.59.0) (2026-10-29)
 
 
