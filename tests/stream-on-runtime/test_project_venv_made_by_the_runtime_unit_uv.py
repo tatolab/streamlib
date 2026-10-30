@@ -71,7 +71,9 @@ def path_without_any_uv() -> str:
     )
 
 
-def assert_the_venv_interpreter_runs(project_directory: Path) -> None:
+def assert_uv_made_a_venv_whose_interpreter_runs(project_directory: Path) -> None:
+    venv_configuration = (project_directory / ".venv" / "pyvenv.cfg").read_text(encoding="utf-8")
+    assert "\nuv = " in venv_configuration, venv_configuration
     interpreter = project_directory / ".venv" / "bin" / "python"
     probed = subprocess.run(
         [str(interpreter), "-I", "-c", "import tatolab.stream"],
@@ -110,7 +112,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     [failed_stream] = run["streams"]
     assert failed_stream["state"] == "failed", run
     assert RAISED_ON_PURPOSE in failed_stream["failed_because"], run
-    assert_the_venv_interpreter_runs(project_directory)
+    assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
     assert not (tmp_path / "another-venv").exists(), "uv made the venv VIRTUAL_ENV names"
 
     shutil.rmtree(project_directory / ".venv")
@@ -121,4 +123,4 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     )
 
     assert RAISED_ON_PURPOSE in refusal, refusal
-    assert_the_venv_interpreter_runs(project_directory)
+    assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
