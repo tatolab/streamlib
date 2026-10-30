@@ -1,5 +1,8 @@
 # queued-stream-actions
 
+> **Approved by the owner, 2026-10-30:** "I approve the pr merge it then /derive-tickets" (PR #2985).
+> Ticketed as #2986, #2987, #2988, #2989, #2990, #2991.
+
 Builds §Product's "Every load and unload is a queued stream action" and the project-log clauses
 of "A load is never refused", with every `amended by queued-stream-actions` pointer in §Product
 and §Control plane (ADR `docs/decisions/queued-stream-actions.md`, aligned in #2984).
