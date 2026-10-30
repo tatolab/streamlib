@@ -15,7 +15,7 @@ mod local_relay_instance_settings;
 mod local_relay_listener;
 
 use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -532,14 +532,6 @@ impl Drop for LocalRelayCertificateRotation {
     }
 }
 
-/// The `moq-relay` executable beside `canonical_executable`, as a runtime
-/// unit lays it out beside `tatolabd`.
-pub fn local_relay_executable_beside(canonical_executable: &Path) -> Option<PathBuf> {
-    canonical_executable
-        .parent()
-        .map(|directory| directory.join(LOCAL_RELAY_EXECUTABLE_FILE_NAME))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,14 +590,6 @@ mod tests {
             ["port"]
         );
         assert!(entry.secret_setting_names().is_empty());
-    }
-
-    #[test]
-    fn the_relay_is_found_beside_the_executable() {
-        assert_eq!(
-            local_relay_executable_beside(Path::new("/opt/tatolab/bin/tatolabd")),
-            Some(PathBuf::from("/opt/tatolab/bin/moq-relay"))
-        );
     }
 
     #[test]

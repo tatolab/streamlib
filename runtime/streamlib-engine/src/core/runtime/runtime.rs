@@ -17,7 +17,7 @@ use super::RuntimeUniqueId;
 use super::loaded_stream::{
     LoadedStreamInThisRuntime, LoadedStreamNaming, LoadedStreamOutOfTheTableUntilItsEndIsRecorded,
 };
-use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
+use super::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, RuntimeShutdownEscalation, StreamEnvironment,
@@ -112,7 +112,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     /// processor's `setup()` runs.
     setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
-    pub(crate) processor_interpreter_lend_directory: ProcessorInterpreterLendDirectoryOfTheEngine,
+    pub(crate) processor_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
+    /// The uv the host handed this runtime, which makes every project's `.venv`.
+    pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// Whether [`Runner::shut_down`] has run.
     shut_down: AtomicBool,
     /// Whether this engine holds the machine's shutdown signals now, and so
@@ -675,7 +677,10 @@ impl Runner {
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
                 processor_interpreter_lend_directory:
-                    ProcessorInterpreterLendDirectoryOfTheEngine::default(),
+                    RuntimeUnitPathTheHostHandsTheEngineOnce::naming("the lend directory"),
+                runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
+                    "the runtime unit's uv",
+                ),
                 shut_down: AtomicBool::new(false),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]
@@ -826,6 +831,16 @@ impl Runner {
         self.engine_resources_shared_by_every_stream
             .processor_interpreter_lend_directory
             .set(lend_directory)
+    }
+
+    /// Hand this runtime the uv it makes every project's `.venv` with — the
+    /// runtime unit's own. The host calls it once, before any load; a second
+    /// call is refused. A runtime never handed one records failed every stream
+    /// whose venv needs making.
+    pub fn set_runtime_unit_uv_executable(&self, runtime_unit_uv: PathBuf) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .runtime_unit_uv_executable
+            .set(runtime_unit_uv)
     }
 
     // =========================================================================

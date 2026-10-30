@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
-    wait_for_a_child_to_become_collectable_within,
+    kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
 };
 use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
@@ -102,7 +102,7 @@ const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 ///
 /// Bounded because a descendant that left the group can hold the pipe open
 /// past the helper's own exit.
-pub(crate) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
+pub(super) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
 
 /// How much of a helper's standard error a refusal carries, from the end.
 const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
@@ -907,7 +907,7 @@ fn refusal_of_a_helper_process_that_died_while_setting_up(
 
 /// The end of a helper's standard error as a refusal quotes it, saying so when
 /// there is none.
-pub(crate) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &str) -> String {
+pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &str) -> String {
     if standard_error_tail.is_empty() {
         return "It wrote nothing to its standard error.".to_string();
     }
@@ -943,7 +943,7 @@ const STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL: Duration = Duration::from_mi
 /// How the wait for a stream interpreter that runs to its own exit — a
 /// describe, a compile — ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamInterpreterExitAwaited {
+pub(super) enum StreamInterpreterExitAwaited {
     /// It exited, and is left unreaped.
     Exited,
     /// Its bound elapsed first.
@@ -957,7 +957,7 @@ pub(crate) enum StreamInterpreterExitAwaited {
 /// Wait up to `bound` for `child` to exit, leaving it unreaped, cut short
 /// whenever `is_its_streams_shutdown_requested` or `is_interrupted_by_the_host`
 /// reports true.
-pub(crate) fn wait_for_a_stream_interpreter_to_exit(
+pub(super) fn wait_for_a_stream_interpreter_to_exit(
     child: &Child,
     bound: Duration,
     is_its_streams_shutdown_requested: &dyn Fn() -> bool,
@@ -983,6 +983,90 @@ pub(crate) fn wait_for_a_stream_interpreter_to_exit(
     }
 }
 
+/// How a child [`run_a_child_process_to_its_exit_within`] ran ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HowABoundedChildProcessRunEnded {
+    /// It exited, successfully or not.
+    Exited,
+    /// Its bound elapsed first, and it was killed.
+    BoundElapsed,
+    /// The runtime's host interrupted it first, and it was killed.
+    InterruptedByTheHost,
+}
+
+/// A child run to its exit within a bound: how the run ended, the status its
+/// process-group leader was reaped with, and the tail of its standard error.
+#[derive(Debug)]
+pub(crate) struct BoundedChildProcessRun {
+    /// How the run ended.
+    pub(crate) ended: HowABoundedChildProcessRunEnded,
+    /// The leader's exit status; `None` when it could not be collected.
+    pub(crate) exit_status: Option<std::process::ExitStatus>,
+    /// The end of what it wrote to a piped standard error, trimmed; empty when
+    /// its standard error was not piped.
+    pub(crate) standard_error_tail: String,
+}
+
+impl BoundedChildProcessRun {
+    /// Whether it exited on its own, successfully.
+    pub(crate) fn exited_successfully(&self) -> bool {
+        self.ended == HowABoundedChildProcessRunEnded::Exited
+            && self
+                .exit_status
+                .is_some_and(|exit_status| exit_status.success())
+    }
+
+    /// Its exit status as a refusal names it.
+    pub(crate) fn exit_status_rendered(&self) -> String {
+        self.exit_status
+            .map(|exit_status| exit_status.to_string())
+            .unwrap_or_else(|| "an exit status that could not be collected".to_string())
+    }
+
+    /// The end of its standard error as a refusal quotes it.
+    pub(crate) fn standard_error_as_a_refusal_quotes_it(&self) -> String {
+        standard_error_tail_as_a_refusal_quotes_it(&self.standard_error_tail)
+    }
+}
+
+/// Spawn `command` outside every iceoryx2 listener bind, keep the tail of a
+/// piped standard error — logging each line under `standard_error_log_label` —
+/// and wait up to `bound` for it to exit, cut short whenever
+/// `is_interrupted_by_the_host` reports true. Its whole process group is killed
+/// either way, so `command` must give the child a group of its own.
+pub(crate) fn run_a_child_process_to_its_exit_within(
+    command: &mut Command,
+    standard_error_log_label: &str,
+    bound: Duration,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> std::io::Result<BoundedChildProcessRun> {
+    let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(command)?;
+    let standard_error_recording = child.stderr.take().map(|standard_error| {
+        spawn_standard_error_reader_keeping_its_tail(standard_error, standard_error_log_label)
+    });
+    let exit_awaited =
+        wait_for_a_stream_interpreter_to_exit(&child, bound, &|| false, is_interrupted_by_the_host);
+    let exit_status =
+        kill_the_process_group_and_reap_its_leader(&mut child, standard_error_log_label);
+    let ended = match exit_awaited {
+        StreamInterpreterExitAwaited::Exited => HowABoundedChildProcessRunEnded::Exited,
+        StreamInterpreterExitAwaited::BoundElapsed => HowABoundedChildProcessRunEnded::BoundElapsed,
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
+        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
+            HowABoundedChildProcessRunEnded::InterruptedByTheHost
+        }
+    };
+    Ok(BoundedChildProcessRun {
+        ended,
+        exit_status,
+        standard_error_tail: standard_error_recording
+            .map(|recording| {
+                recording.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+            })
+            .unwrap_or_default(),
+    })
+}
+
 // =============================================================================
 // What a child wrote to a standard stream
 // =============================================================================
@@ -999,7 +1083,7 @@ pub(super) enum ChildStandardStreamKeptBytes {
 /// What a child wrote to one standard stream, bounded, and whether the pipe
 /// has closed.
 #[derive(Clone)]
-pub(crate) struct ChildStandardStreamRecording {
+pub(super) struct ChildStandardStreamRecording {
     recorded_bytes_and_pipe_closed_signal: Arc<(
         parking_lot::Mutex<RecordedChildStandardStream>,
         parking_lot::Condvar,
@@ -1070,7 +1154,7 @@ impl ChildStandardStreamRecording {
 
     /// What was recorded as trimmed text, once the pipe has closed or
     /// `deadline` has passed.
-    pub(crate) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
+    pub(super) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
         String::from_utf8_lossy(&self.bytes_once_closed_or_after(deadline))
             .trim()
             .to_string()
@@ -1101,7 +1185,7 @@ impl<R> Drop for ChildStandardStreamRecordingReader<R> {
 
 /// Log a child's standard error line by line, as every intercepted fd is, while
 /// keeping its tail for a refusal.
-pub(crate) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
+pub(super) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
     standard_error: R,
     processor_id: &str,
 ) -> ChildStandardStreamRecording {

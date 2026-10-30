@@ -8,22 +8,21 @@
 //! the machine or fetches it.
 
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
-use crate::core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
-    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, StreamInterpreterExitAwaited,
-    remove_every_python_variable_named_in, spawn_standard_error_reader_keeping_its_tail,
-    standard_error_tail_as_a_refusal_quotes_it, wait_for_a_stream_interpreter_to_exit,
+    HowABoundedChildProcessRunEnded, remove_every_python_variable_named_in,
+    run_a_child_process_to_its_exit_within,
 };
-use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::the_projects_venv_interpreter;
+use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::{
+    refuse_a_project_directory_not_named_by_its_absolute_path, the_projects_venv_interpreter,
+};
 use crate::core::error::Error;
-use crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind;
 
 /// How long `.venv/bin/python -I -c ""` may take to show that the venv's
 /// interpreter runs.
@@ -34,9 +33,8 @@ pub(crate) const PROJECT_VENV_INTERPRETER_PROBE_BOUND: Duration = Duration::from
 pub(crate) const PROJECT_VENV_SYNC_BOUND: Duration = Duration::from_secs(240);
 
 /// The longest making one project's venv takes: the probe, then the sync.
-pub(crate) const PROJECT_VENV_MAKING_BOUND: Duration = Duration::from_secs(
-    PROJECT_VENV_INTERPRETER_PROBE_BOUND.as_secs() + PROJECT_VENV_SYNC_BOUND.as_secs(),
-);
+pub(crate) const PROJECT_VENV_MAKING_BOUND: Duration =
+    PROJECT_VENV_INTERPRETER_PROBE_BOUND.saturating_add(PROJECT_VENV_SYNC_BOUND);
 
 /// Why a venv is not made by a runtime given no uv.
 pub(crate) const THE_RUNTIME_UNIT_CARRIES_NO_UV: &str =
@@ -49,6 +47,9 @@ const VARIABLES_A_PROJECT_VENV_SYNC_IS_STARTED_WITHOUT: [&str; 2] =
 
 /// What a sync's standard-error lines are logged under.
 const PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL: &str = "project-venv-uv-sync";
+
+/// What the probe of a venv's interpreter is named in the runtime's log.
+const PROJECT_VENV_INTERPRETER_PROBE_LOG_LABEL: &str = "project-venv-interpreter-probe";
 
 /// Why a project's `.venv` was not made.
 #[derive(Debug)]
@@ -63,9 +64,18 @@ pub(crate) enum ProjectVenvNotMade {
     },
 }
 
+impl From<ProjectVenvNotMade> for Error {
+    fn from(venv_not_made: ProjectVenvNotMade) -> Self {
+        match venv_not_made {
+            ProjectVenvNotMade::Refused(refusal) => refusal,
+            ProjectVenvNotMade::Failed { failed_because } => Error::Runtime(failed_because),
+        }
+    }
+}
+
 /// Make the `.venv` of the project in `project_directory` with
 /// `runtime_unit_uv` unless its `.venv/bin/python` runs. A machine shutdown
-/// requested while uv runs kills it.
+/// requested meanwhile cuts it short.
 pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
@@ -88,144 +98,146 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
-    if !project_directory.is_absolute() {
-        return Err(ProjectVenvNotMade::Refused(Error::Configuration(format!(
-            "the project directory `{project}` is not an absolute path; a stream is compiled in \
-             a project named by its absolute path"
-        ))));
-    }
+    refuse_a_project_directory_not_named_by_its_absolute_path(project_directory)
+        .map_err(ProjectVenvNotMade::Refused)?;
     if !project_directory.is_dir() {
         return Err(ProjectVenvNotMade::Refused(Error::Configuration(format!(
             "the project directory {project} does not exist"
         ))));
     }
+    let a_shutdown_refusal = || {
+        ProjectVenvNotMade::Refused(Error::Runtime(format!(
+            "the .venv of {project} was not made: the runtime is shutting down"
+        )))
+    };
     let interpreter = the_projects_venv_interpreter(project_directory);
-    if the_venv_interpreter_runs(&interpreter, project_directory) {
-        return Ok(());
-    }
+    let why_the_interpreter_does_not_run = match why_the_venv_interpreter_does_not_run(
+        &interpreter,
+        project_directory,
+        is_interrupted_by_the_host,
+    ) {
+        None => return Ok(()),
+        Some(why_the_interpreter_does_not_run) => why_the_interpreter_does_not_run,
+    };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
         return Err(ProjectVenvNotMade::Failed {
             failed_because: format!(
-                "{project}/.venv/bin/python does not run, and {THE_RUNTIME_UNIT_CARRIES_NO_UV}"
+                "{why_the_interpreter_does_not_run}, and {THE_RUNTIME_UNIT_CARRIES_NO_UV}"
             ),
         });
     };
+    if !project_directory.join("pyproject.toml").is_file() {
+        return Err(ProjectVenvNotMade::Failed {
+            failed_because: format!(
+                "{why_the_interpreter_does_not_run}, and {project} holds no pyproject.toml to \
+                 make its .venv from: uv makes a project's .venv from the project's own \
+                 pyproject.toml, and in a folder without one it would sync the project above it"
+            ),
+        });
+    }
+    if is_interrupted_by_the_host() {
+        return Err(a_shutdown_refusal());
+    }
     let venv = project_directory.join(".venv");
     tracing::info!(
-        "{} does not run, so {} is made again with {}",
-        interpreter.display(),
+        "{why_the_interpreter_does_not_run}, so {} is made again with {}",
         venv.display(),
         runtime_unit_uv.display()
     );
     remove_the_venv(&venv)?;
-    if is_interrupted_by_the_host() {
-        return Err(ProjectVenvNotMade::Refused(Error::Runtime(format!(
-            "the .venv of {project} was not made: the runtime is shutting down"
-        ))));
-    }
 
-    let mut child = spawn_outside_every_iceoryx2_listener_bind(&mut project_venv_sync_command(
-        runtime_unit_uv,
-        project_directory,
-    ))
+    let sync = run_a_child_process_to_its_exit_within(
+        &mut project_venv_sync_command(runtime_unit_uv, project_directory),
+        PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
+        sync_bound,
+        is_interrupted_by_the_host,
+    )
     .map_err(|spawn_failure| ProjectVenvNotMade::Failed {
         failed_because: format!(
             "`{} sync` could not be started in {project}: {spawn_failure}",
             runtime_unit_uv.display()
         ),
     })?;
-    let standard_error_tail = child.stderr.take().map(|standard_error| {
-        spawn_standard_error_reader_keeping_its_tail(
-            standard_error,
-            PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
-        )
-    });
-    let sync_exit = wait_for_a_stream_interpreter_to_exit(
-        &child,
-        sync_bound,
-        &|| false,
-        is_interrupted_by_the_host,
-    );
-    let exit_status = kill_the_process_group_and_reap_its_leader(&mut child, "the venv's uv sync");
-    let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
-        &standard_error_tail
-            .map(|tail| {
-                tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
-            })
-            .unwrap_or_default(),
-    );
-
-    let why_the_sync_did_not_make_it = match sync_exit {
-        StreamInterpreterExitAwaited::Exited
-            if exit_status.is_some_and(|exit_status| exit_status.success()) =>
-        {
-            tracing::info!("`uv sync` made {}", venv.display());
-            return Ok(());
-        }
-        StreamInterpreterExitAwaited::Exited => format!(
+    if sync.exited_successfully() {
+        tracing::info!("`uv sync` made {}", venv.display());
+        return Ok(());
+    }
+    let quoted_standard_error = sync.standard_error_as_a_refusal_quotes_it();
+    let failed_because = match sync.ended {
+        HowABoundedChildProcessRunEnded::Exited => format!(
             "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
             venv.display(),
-            exit_status
-                .map(|exit_status| exit_status.to_string())
-                .unwrap_or_else(|| "an exit status that could not be collected".to_string())
+            sync.exit_status_rendered()
         ),
-        StreamInterpreterExitAwaited::BoundElapsed => format!(
+        HowABoundedChildProcessRunEnded::BoundElapsed => format!(
             "`uv sync` did not make {} within {}s, and was killed. {quoted_standard_error}",
             venv.display(),
             sync_bound.as_secs_f64()
         ),
-        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
-        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
+        HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
             remove_the_venv(&venv)?;
-            return Err(ProjectVenvNotMade::Refused(Error::Runtime(format!(
-                "the .venv of {project} was not made: the runtime began shutting down while \
-                 `uv sync` made it, and it was killed"
-            ))));
+            return Err(a_shutdown_refusal());
         }
     };
     remove_the_venv(&venv)?;
-    Err(ProjectVenvNotMade::Failed {
-        failed_because: why_the_sync_did_not_make_it,
+    Err(ProjectVenvNotMade::Failed { failed_because })
+}
+
+/// Why `interpreter` does not start and exit successfully within
+/// [`PROJECT_VENV_INTERPRETER_PROBE_BOUND`]; `None` when it does.
+fn why_the_venv_interpreter_does_not_run(
+    interpreter: &Path,
+    project_directory: &Path,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> Option<String> {
+    let mut command = a_command_detached_from_the_terminal_in(interpreter, project_directory);
+    command.args(["-I", "-c", ""]).stderr(Stdio::null());
+    let interpreter = interpreter.display();
+    let probe = match run_a_child_process_to_its_exit_within(
+        &mut command,
+        PROJECT_VENV_INTERPRETER_PROBE_LOG_LABEL,
+        PROJECT_VENV_INTERPRETER_PROBE_BOUND,
+        is_interrupted_by_the_host,
+    ) {
+        Ok(probe) => probe,
+        Err(not_started) => return Some(format!("{interpreter} does not start: {not_started}")),
+    };
+    if probe.exited_successfully() {
+        return None;
+    }
+    Some(match probe.ended {
+        HowABoundedChildProcessRunEnded::Exited => {
+            format!("{interpreter} exits with {}", probe.exit_status_rendered())
+        }
+        HowABoundedChildProcessRunEnded::BoundElapsed => format!(
+            "{interpreter} did not exit within {}s",
+            PROJECT_VENV_INTERPRETER_PROBE_BOUND.as_secs_f64()
+        ),
+        HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
+            format!("{interpreter} was not probed: the runtime is shutting down")
+        }
     })
 }
 
-/// Whether `interpreter` starts and exits successfully within
-/// [`PROJECT_VENV_INTERPRETER_PROBE_BOUND`].
-fn the_venv_interpreter_runs(interpreter: &Path, project_directory: &Path) -> bool {
-    let mut command = Command::new(interpreter);
+/// `program` started in `project_directory` with nothing on its standard
+/// input or output, in a process group of its own and given no descriptor
+/// beyond its standard streams.
+fn a_command_detached_from_the_terminal_in(program: &Path, project_directory: &Path) -> Command {
+    let mut command = Command::new(program);
     command
-        .args(["-I", "-c", ""])
         .current_dir(project_directory)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::null());
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
     give_the_child_no_descriptor_beyond_stdio(&mut command);
-    let Ok(mut child) = spawn_outside_every_iceoryx2_listener_bind(&mut command) else {
-        return false;
-    };
-    exited_successfully_within(&mut child, PROJECT_VENV_INTERPRETER_PROBE_BOUND)
-}
-
-/// Whether `child` exits successfully within `bound`; its process group is
-/// killed either way.
-fn exited_successfully_within(child: &mut Child, bound: Duration) -> bool {
-    let exit = wait_for_a_stream_interpreter_to_exit(child, bound, &|| false, &|| false);
-    let exit_status = kill_the_process_group_and_reap_its_leader(child, "the venv's interpreter");
-    matches!(exit, StreamInterpreterExitAwaited::Exited)
-        && exit_status.is_some_and(|exit_status| exit_status.success())
+    command
 }
 
 /// `<runtime_unit_uv> sync` in `project_directory`, started without the
 /// variables that would point uv at another environment or Python.
 fn project_venv_sync_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
-    let mut command = Command::new(runtime_unit_uv);
-    command
-        .arg("sync")
-        .current_dir(project_directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    let mut command = a_command_detached_from_the_terminal_in(runtime_unit_uv, project_directory);
+    command.arg("sync").stderr(Stdio::piped());
     remove_every_python_variable_named_in(
         &mut command,
         std::env::vars_os().map(|(variable_name, _)| variable_name),
@@ -233,13 +245,11 @@ fn project_venv_sync_command(runtime_unit_uv: &Path, project_directory: &Path) -
     for variable_name in VARIABLES_A_PROJECT_VENV_SYNC_IS_STARTED_WITHOUT {
         command.env_remove(variable_name);
     }
-    detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
-    give_the_child_no_descriptor_beyond_stdio(&mut command);
     command
 }
 
-/// Remove `venv` whatever it is — a directory, a file or a dangling link —
-/// when it is there.
+/// Remove `venv` whatever it is — a directory, a file or a link, never what a
+/// link points at — when it is there.
 fn remove_the_venv(venv: &Path) -> Result<(), ProjectVenvNotMade> {
     let removed = match venv.symlink_metadata() {
         Err(not_there) if not_there.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -278,6 +288,11 @@ mod tests {
                 a_temporary_directory_at_owner_only_mode().expect("a temporary directory");
             let project_directory = temporary_directory.path().join("project");
             std::fs::create_dir(&project_directory).expect("the project directory");
+            std::fs::write(
+                project_directory.join("pyproject.toml"),
+                "[project]\nname = \"p\"\n",
+            )
+            .expect("the project's pyproject.toml");
             let uv_runs = temporary_directory.path().join("uv-runs");
             let stub_uv = temporary_directory.path().join("uv");
             write_an_executable_script_from_a_child_process(
@@ -400,6 +415,59 @@ mod tests {
             "the old venv was not removed"
         );
         assert!(project.interpreter().is_file());
+    }
+
+    #[test]
+    fn a_venv_that_links_elsewhere_has_its_link_removed_and_never_what_it_links_to() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        let linked_venv = project
+            .project_directory
+            .parent()
+            .unwrap()
+            .join("linked-venv");
+        std::fs::create_dir_all(linked_venv.join("bin")).unwrap();
+        std::fs::write(linked_venv.join("kept"), "kept").unwrap();
+        write_an_executable_script_from_a_child_process(
+            &linked_venv.join("bin").join("python"),
+            "#!/bin/sh\nexit 3\n",
+        );
+        std::os::unix::fs::symlink(&linked_venv, project.venv()).unwrap();
+
+        project.make_the_venv().expect("the venv is made again");
+
+        assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
+        assert!(
+            !project
+                .venv()
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(linked_venv.join("kept")).unwrap(),
+            "kept"
+        );
+        assert!(linked_venv.join("bin").join("python").is_file());
+    }
+
+    #[test]
+    fn a_folder_with_no_pyproject_fails_and_uv_never_runs_where_it_would_sync_the_project_above() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        std::fs::remove_file(project.project_directory.join("pyproject.toml")).unwrap();
+        project.given_a_venv_interpreter_running("exit 3");
+
+        let failed_because = the_reason_it_failed(project.make_the_venv());
+
+        assert!(
+            failed_because.contains("holds no pyproject.toml"),
+            "{failed_because}"
+        );
+        assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
+        assert!(
+            project.interpreter().is_file(),
+            "the venv was removed with nothing to make it"
+        );
     }
 
     #[test]

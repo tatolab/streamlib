@@ -292,10 +292,9 @@ pub enum StreamReloadAtTheStart {
 #[derive(Default)]
 pub(crate) struct StreamActionsOfTheEngine {
     stream_records: OnceLock<StreamRecordsInTheStateDirectory>,
-    /// The uv every project's `.venv` is made with.
-    runtime_unit_uv_executable: OnceLock<PathBuf>,
-    /// Held across an action's check, load and record — never across a
-    /// compile, which runs a project's code for up to its bound.
+    /// Held across an action's check, load and record, and across the re-load
+    /// at the runtime's start of one record, its venv made included — never
+    /// across a load's venv or compile.
     one_stream_action_at_a_time: Mutex<()>,
 }
 
@@ -329,36 +328,54 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
 /// load's describe and the refused start's teardown. An entry that does not
 /// import unloads every stream of its project side by side, within one
 /// teardown.
-const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS: u128 =
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS: u128 =
     ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
         + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
         + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis();
 
-/// The longest a load waits for its answer with one stream action queued ahead
-/// of it, in milliseconds: the project's venv is made and its compile runs
-/// outside the lock while the action ahead holds it, then it holds the lock
+/// The longest the re-load at the runtime's start holds the one-action lock for
+/// one record, in milliseconds: its project's venv made, then its load's
+/// describe and a refused start's teardown. The local API serves meanwhile.
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_THE_RELOAD_OF_ONE_RECORD_IN_MILLISECONDS: u128 =
+    PROJECT_VENV_MAKING_BOUND.as_millis()
+        + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+        + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis();
+
+/// The longest whatever is queued ahead holds the one-action lock, in
+/// milliseconds: a stream action, or the re-load of one record at the start.
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS: u128 =
+    the_longer_of(
+        LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS,
+        LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_THE_RELOAD_OF_ONE_RECORD_IN_MILLISECONDS,
+    );
+
+const fn the_longer_of(first_in_milliseconds: u128, second_in_milliseconds: u128) -> u128 {
+    if first_in_milliseconds > second_in_milliseconds {
+        first_in_milliseconds
+    } else {
+        second_in_milliseconds
+    }
+}
+
+/// The longest a load waits for its answer with one holder of the lock queued
+/// ahead of it, in milliseconds: the project's venv is made and its compile
+/// runs outside the lock while the one ahead holds it, then it holds the lock
 /// itself.
-const LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = {
-    let venv_and_compile =
-        PROJECT_VENV_MAKING_BOUND.as_millis() + STREAM_FUNCTION_COMPILE_BOUND.as_millis();
-    let venv_and_compile_or_the_action_ahead =
-        if venv_and_compile > LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS {
-            venv_and_compile
-        } else {
-            LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
-        };
-    venv_and_compile_or_the_action_ahead
-        + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
-};
+const LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = the_longer_of(
+    PROJECT_VENV_MAKING_BOUND.as_millis() + STREAM_FUNCTION_COMPILE_BOUND.as_millis(),
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS,
+)
+    + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS;
 
 /// The longest a start of a stream holding a graph waits for its answer with
-/// one stream action queued ahead of it, in milliseconds: the project's venv is
-/// made outside the lock, then it waits out the action ahead and holds the lock
-/// itself. A start of a stream holding no graph is a load.
-const LONGEST_START_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 =
-    PROJECT_VENV_MAKING_BOUND.as_millis()
-        + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
-        + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS;
+/// one holder of the lock queued ahead of it, in milliseconds: the project's
+/// venv is made outside the lock while the one ahead holds it, then it holds
+/// the lock itself. A start of a stream holding no graph is a load.
+const LONGEST_START_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = the_longer_of(
+    PROJECT_VENV_MAKING_BOUND.as_millis(),
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS,
+)
+    + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_BY_A_STREAM_ACTION_IN_MILLISECONDS;
 
 const _: () = assert!(
     PROJECT_VENV_MAKING_BOUND.as_millis()
@@ -378,7 +395,7 @@ const _: () = assert!(
     "a client gives up on a load queued behind one stream action before the runtime answers"
 );
 const _: () = assert!(
-    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_AHEAD_IN_THE_QUEUE_IN_MILLISECONDS
         + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
         < STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
     "a client gives up on a stop, remove or expose queued behind one stream action before the \
@@ -406,27 +423,6 @@ impl Runner {
                     "this runtime was handed a streams directory twice at once; it records its \
                      streams in {} only",
                     streams_directory.display()
-                ))
-            })
-    }
-
-    /// Hand this runtime the uv it makes every project's `.venv` with — the
-    /// runtime unit's own. The host calls it once, before any load; a second
-    /// call is refused. A runtime never handed one records failed every stream
-    /// whose venv needs making.
-    pub fn set_runtime_unit_uv_executable(&self, runtime_unit_uv: PathBuf) -> Result<()> {
-        self.stream_actions
-            .runtime_unit_uv_executable
-            .set(runtime_unit_uv)
-            .map_err(|_| {
-                Error::Configuration(format!(
-                    "this runtime was already handed its uv, {}; it makes every venv with that \
-                     one",
-                    self.stream_actions
-                        .runtime_unit_uv_executable
-                        .get()
-                        .map(|runtime_unit_uv| runtime_unit_uv.display().to_string())
-                        .unwrap_or_default()
                 ))
             })
     }
@@ -711,16 +707,10 @@ impl Runner {
                         Error::EngineResourceRefusedAtAStreamsStart(_)
                     ) =>
             {
-                record.failed_because = Some(format!(
-                    "`start` retried it, and it did not load: {retry_refusal}"
-                ));
-                record.runtime_crashes_in_a_row_implicating_it = 0;
-                if let Err(not_written) = self.write_a_stream_record(&record) {
-                    tracing::warn!(
-                        "the stream `{stream_id}` stays failed, and its refused retry was not \
-                         recorded: {not_written}"
-                    );
-                }
+                self.record_a_refused_start_failed_resetting_its_crash_count(
+                    &mut record,
+                    format!("`start` retried it, and it did not load: {retry_refusal}"),
+                );
                 return Err(retry_refusal);
             }
             Err(start_refusal) => return Err(start_refusal),
@@ -1559,10 +1549,9 @@ impl Runner {
     ) -> std::result::Result<(), ProjectVenvNotMade> {
         make_the_projects_venv_unless_its_interpreter_runs(
             project_directory,
-            self.stream_actions
+            self.engine_resources_shared_by_every_stream
                 .runtime_unit_uv_executable
-                .get()
-                .map(PathBuf::as_path),
+                .get(),
         )
     }
 
@@ -1574,11 +1563,7 @@ impl Runner {
         else {
             return Ok(());
         };
-        self.make_the_projects_venv(&project_directory)
-            .map_err(|venv_not_made| match venv_not_made {
-                ProjectVenvNotMade::Refused(refusal) => refusal,
-                ProjectVenvNotMade::Failed { failed_because } => Error::Runtime(failed_because),
-            })
+        Ok(self.make_the_projects_venv(&project_directory)?)
     }
 
     /// Before `start_stream` takes the one-action lock: make the `.venv` of the
@@ -1606,19 +1591,32 @@ impl Runner {
                 .is_none()
             && !is_the_machines_shutdown_requested()
         {
-            record.failed_because = Some(format!(
-                "`start` found its project's .venv not running, and it was not made: \
-                 {venv_not_made}"
-            ));
-            record.runtime_crashes_in_a_row_implicating_it = 0;
-            if let Err(not_written) = self.write_a_stream_record(&record) {
-                tracing::warn!(
-                    "the stream `{stream_id}` was not started, and was not recorded failed: \
-                     {not_written}"
-                );
-            }
+            self.record_a_refused_start_failed_resetting_its_crash_count(
+                &mut record,
+                format!(
+                    "`start` found its project's .venv not running, and it was not made: \
+                     {venv_not_made}"
+                ),
+            );
         }
         Err(venv_not_made)
+    }
+
+    /// Record `record` failed for `failed_because`, a start of it refused, its
+    /// crash count reset; a record that cannot be written is logged.
+    fn record_a_refused_start_failed_resetting_its_crash_count(
+        &self,
+        record: &mut StreamRecord,
+        failed_because: String,
+    ) {
+        record.failed_because = Some(failed_because);
+        record.runtime_crashes_in_a_row_implicating_it = 0;
+        if let Err(not_written) = self.write_a_stream_record(record) {
+            tracing::warn!(
+                "the stream `{}` was not started, and its failure was not recorded: {not_written}",
+                record.stream_id
+            );
+        }
     }
 
     /// Compile `record`'s stream again from its location, as a run of it, and
@@ -2098,6 +2096,11 @@ mod tests {
         fn with_no_venv() -> Self {
             let temporary_directory =
                 a_temporary_directory_at_owner_only_mode().expect("a project directory");
+            std::fs::write(
+                temporary_directory.path().join("pyproject.toml"),
+                "[project]\nname = \"project\"\n",
+            )
+            .expect("the project's pyproject.toml");
             Self {
                 project_directory: temporary_directory.path().to_path_buf(),
                 _directory_removed_on_drop: Arc::new(temporary_directory),

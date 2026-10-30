@@ -94,7 +94,7 @@ pub fn stage_the_runtime_unit_uv(workspace_root: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&staging_directory)
         .with_context(|| format!("creating {}", staging_directory.display()))?;
     let archive = staging_directory.join(pinned_archive.archive_file_name());
-    if refuse_an_archive_whose_sha256_is_not_pinned(&archive, &pinned_archive).is_err() {
+    if !the_archive_matches_its_pin(&archive, &pinned_archive) {
         download_the_pinned_archive(&pinned_archive, &archive)?;
     }
     unpack_the_uv_executable(&archive, &pinned_archive, &staging_directory)
@@ -136,15 +136,19 @@ fn download_the_pinned_archive(
     })
 }
 
+/// Whether `archive` is there and its sha256 is the one `pinned_archive` pins.
+fn the_archive_matches_its_pin(archive: &Path, pinned_archive: &PinnedUvReleaseArchive) -> bool {
+    sha256_hex_of_the_file(archive)
+        .is_ok_and(|actual_sha256_hex| actual_sha256_hex == pinned_archive.archive_sha256_hex)
+}
+
 /// Refuse `archive` unless its sha256 is the one `pinned_archive` pins,
 /// naming both.
 pub fn refuse_an_archive_whose_sha256_is_not_pinned(
     archive: &Path,
     pinned_archive: &PinnedUvReleaseArchive,
 ) -> Result<()> {
-    let archive_bytes =
-        std::fs::read(archive).with_context(|| format!("reading {}", archive.display()))?;
-    let actual_sha256_hex = sha256_hex_of(&archive_bytes);
+    let actual_sha256_hex = sha256_hex_of_the_file(archive)?;
     if actual_sha256_hex != pinned_archive.archive_sha256_hex {
         bail!(
             "{} does not match the sha256 uv {PINNED_RUNTIME_UNIT_UV_VERSION} is pinned to: got \
@@ -156,12 +160,18 @@ pub fn refuse_an_archive_whose_sha256_is_not_pinned(
     Ok(())
 }
 
-/// `bytes`' sha256 as lowercase hex, as uv publishes it.
-fn sha256_hex_of(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
+/// The sha256 of the file at `path` as lowercase hex, as uv publishes it,
+/// read through without holding the file in memory.
+fn sha256_hex_of_the_file(path: &Path) -> Result<String> {
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).with_context(|| format!("reading {}", path.display()))?;
+    Ok(hasher
+        .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .collect())
 }
 
 /// Unpack the `uv` executable from `archive` into `staging_directory`,
@@ -204,6 +214,28 @@ fn unpack_the_uv_executable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sha256_hex_of_the_bytes(bytes: &[u8]) -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_missing_or_unpinned_archive_does_not_match_and_is_downloaded_again() {
+        let scratch = tempfile::tempdir().unwrap();
+        let archive = scratch.path().join("uv-x86_64-unknown-linux-gnu.tar.gz");
+        assert!(!the_archive_matches_its_pin(
+            &archive,
+            &PINNED_UV_RELEASE_ARCHIVE_FOR_LINUX_X86_64
+        ));
+        std::fs::write(&archive, b"a truncated download").unwrap();
+        assert!(!the_archive_matches_its_pin(
+            &archive,
+            &PINNED_UV_RELEASE_ARCHIVE_FOR_LINUX_X86_64
+        ));
+    }
 
     #[test]
     fn each_archive_is_downloaded_from_uvs_release_of_the_pinned_version() {
@@ -251,7 +283,7 @@ mod tests {
             "{refusal}"
         );
         assert!(
-            refusal.contains(&format!("got {}", sha256_hex_of(b"not uv"))),
+            refusal.contains(&format!("got {}", sha256_hex_of_the_bytes(b"not uv"))),
             "{refusal}"
         );
     }
@@ -261,7 +293,7 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let archive = scratch.path().join("archive.tar.gz");
         std::fs::write(&archive, b"pinned bytes").unwrap();
-        let pinned_bytes_sha256_hex = sha256_hex_of(b"pinned bytes");
+        let pinned_bytes_sha256_hex = sha256_hex_of_the_bytes(b"pinned bytes");
         let pinned_archive = PinnedUvReleaseArchive {
             target_triple: "x86_64-unknown-linux-gnu",
             archive_sha256_hex: Box::leak(pinned_bytes_sha256_hex.into_boxed_str()),

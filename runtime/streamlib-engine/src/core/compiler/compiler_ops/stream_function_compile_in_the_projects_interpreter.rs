@@ -157,6 +157,21 @@ pub(crate) fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf
     project_directory.join(".venv").join("bin").join("python")
 }
 
+/// Refuse `project_directory` unless it is an absolute path: a project is
+/// named by its absolute path.
+pub(crate) fn refuse_a_project_directory_not_named_by_its_absolute_path(
+    project_directory: &Path,
+) -> Result<()> {
+    if !project_directory.is_absolute() {
+        return Err(Error::Configuration(format!(
+            "the project directory `{}` is not an absolute path; a stream is compiled in a \
+             project named by its absolute path",
+            project_directory.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Compile `stream_function` of the project in `project_directory` — or the
 /// sole `@stream` in its `stream.py` when none is named — in the project's
 /// venv interpreter, answering with the graph or why the project's code gave
@@ -226,12 +241,7 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
     let project = project_directory.display();
-    if !project_directory.is_absolute() {
-        return Err(Error::Configuration(format!(
-            "the project directory `{project}` is not an absolute path; a stream is compiled \
-             in a project named by its absolute path"
-        )));
-    }
+    refuse_a_project_directory_not_named_by_its_absolute_path(project_directory)?;
     let interpreter = the_projects_venv_interpreter(project_directory);
     let interpreter_shown = interpreter.display();
     if is_interrupted_by_the_host() {

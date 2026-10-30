@@ -79,7 +79,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "the engine could not be handed its lend directory: {lend_directory_refusal}"
         ));
     }
-    match crate::runtime_unit_uv::the_uv_executable_beside_this_one() {
+    match crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one(
+        streamlib::sdk::processor_interpreter::RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
+    ) {
         Ok(runtime_unit_uv) => {
             if let Err(uv_refusal) = engine.set_runtime_unit_uv_executable(runtime_unit_uv) {
                 return write_refusal_to_standard_error(&format!(

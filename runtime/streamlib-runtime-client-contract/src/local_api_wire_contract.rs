@@ -28,10 +28,11 @@ pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
 
 /// How long a client waits for `stop_stream`, `remove_stream` or `expose_port`. The engine
-/// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and
-/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for this action and one stream action queued
-/// ahead of it; more actions queued ahead can outlast it, and the runtime still takes the action.
-pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(240);
+/// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND`,
+/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` and `PROJECT_VENV_MAKING_BOUND` fit within it for this action
+/// and one stream action — or the re-load of one record at the runtime's start — queued ahead of
+/// it; more queued ahead can outlast it, and the runtime still takes the action.
+pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
 
 /// Which load of a stream a `run_stream` result or a `logs` page is about: opaque, compared only
 /// for equality. A stream re-loaded under the same name is another instance, and numbers its log
