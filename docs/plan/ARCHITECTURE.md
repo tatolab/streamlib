@@ -344,7 +344,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `.streamlib/logs/`. `logs` serves them from that file until the stream is loaded again, across
   the runtime's restarts;
   `logs -f` and `dev` print them and wait, and `rm` deletes the stream's log files under
-  `.streamlib/logs/` with its record.
+  `.streamlib/logs/` with its record. Both find a stream's files by its stream id there; the
+  stream record names no file.
   When `stream.py` cannot be imported, or imports and defines no `@stream`, every stream
   recorded from the project is recorded `failed` with the traceback or the missing `@stream`. A
   project with none gets one failed record for `stream.py`, its location the project directory
