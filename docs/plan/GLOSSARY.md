@@ -32,6 +32,18 @@ one or more streams; `tatolab new` and `create_project` make one, its scaffold h
 stream. Loading a project loads every stream in it, each its own unit.
 _Avoid_: "stream project" (a project holds many streams), "app".
 
+**Stream action** _(crosses)_: one queued load or unload of a project's streams — a run, a
+start, a create, a stop, a remove, or the runtime's re-load at start — answered at once with its
+**action id** and carried out in the background, one at a time per project. It ends done or
+failed, and `describe_stream_action` reads it. `rename_stream` and `expose_port` set an
+attribute of the record and are not actions. _Avoid_: "job", "task", "load" for a stop or a
+remove.
+
+**Project log** _(user)_: a project's one log under `<project>/.streamlib/logs/`, each record
+carrying its stream action's id and, when a stream wrote it, the stream id; `logs` reads it by
+project, stream or action. _Avoid_: "stream log" (a project defines many streams, and its venv
+and compile belong to none of them).
+
 **Location** _(crosses)_: what a stream is — its project directory and its stream function.
 Loading the same location again replaces the stream; a moved directory is a new stream.
 _Avoid_: "source" (the relay source node's word), "origin" (MoQ's), "path" alone.

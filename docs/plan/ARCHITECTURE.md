@@ -129,7 +129,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2965; amended by create-project: `new` is a local-API call whose scaffold the runtime
   writes, and a project with no `.venv/bin/python` gets one from the runtime's uv instead of a
   refusal; amended by project-loads-every-stream: `run_stream` with no `stream_function` loads
-  every `@stream` in `stream.py`]
+  every `@stream` in `stream.py`; amended by queued-stream-actions: `run_stream` queues a stream
+  action and answers its action id, and the compile's warnings go to the project's log]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
@@ -241,7 +242,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; amended by create-project:
-  `create_project`; amended by project-loads-every-stream: `list_project_streams`]
+  `create_project`; amended by project-loads-every-stream: `list_project_streams`; amended by
+  queued-stream-actions: `run_stream`, `start_stream`, `stop_stream` and `remove_stream` queue a
+  stream action and answer its action id, `describe_stream_action` reads one, `list_streams`
+  shows `preparing` and `stopping`, and `logs` pages a project's log]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -284,8 +288,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   names the crash and keeps running, waits for the runtime, which re-loads the stream from its
   record, and follows again. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED
   #2965; amended by load-never-refused-for-code: a load whose code fails records the stream
-  `failed` instead of re-loading the previous version, and `run` exits 1 when a stream it loaded
-  is `failed`]
+  `failed` instead of re-loading the previous version; amended by queued-stream-actions: `run`
+  exits 0 once its stream action is queued, and `dev` follows the project's log]
   Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
   read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
 - **DECIDED** — Creating a project. The runtime creates a project in one operation: it writes
@@ -303,7 +307,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   uv taking the Python `.python-version` pins from the machine or fetching it, and makes it
   whenever `.venv/bin/python` does not run (the entry below).
   The tool and `new` return the stream id, the display name and the project directory. Owner,
-  2026-10-28. [create-project]
+  2026-10-28. [create-project; amended by queued-stream-actions: create is a queued stream
+  action, answering its action id, the scaffold's stream id and the project directory at once]
   Rejected: `hello`, then `hello-2`, `hello-3`, … as the default project — a prototype's
   placeholder (owner, 2026-10-28).
   Rejected: uv from the user's `PATH`, refused when absent — an agent with no terminal could not
@@ -333,42 +338,92 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   each record prefixed with its display name, and re-loads them on save. The local-API tool
   `list_project_streams {project_directory}` returns each `@stream` in the project as
   `module:function` with its docstring, and its stream id and state when loaded; `run_stream` and
-  the CLI return every stream a load loaded. Owner, 2026-10-28. [project-loads-every-stream]
-- **DECIDED** — A load is never refused for what a project's code or environment does. Every
-  load — `run`, `dev`, `run_stream`, `create_project`, `Tatolab.app`'s Add, `start`, and the
-  runtime's re-load at start — takes the project in. A stream whose venv, compile, describe or
-  start fails is recorded `failed`, with the reason in `list_streams` and the traceback in its
-  logs, and a replaced stream's running version is unloaded. A failed load is a load of its own:
-  `run_stream` answers its `stream_instance` as a running load's, and its records — what it
-  logged, then its traceback or reason — go to its log file under the project's
-  `.streamlib/logs/`. `logs` serves them from that file until the stream is loaded again, across
-  the runtime's restarts;
-  `logs -f` and `dev` print them and wait, and `rm` deletes the stream's log files under
-  `.streamlib/logs/` with its record. Both find a stream's files by its stream id there; the
-  stream record names no file.
-  When `stream.py` cannot be imported, or imports and defines no `@stream`, every stream
-  recorded from the project is recorded `failed` with the traceback or the missing `@stream`. A
-  project with none gets one failed record for `stream.py`, its location the project directory
-  with no function, so its id is `<folder>-<hash>`. The next load that imports `stream.py`
-  replaces it with the project's streams. A load refuses only what its own arguments get wrong:
-  - a directory that does not exist or is not absolute;
-  - a folder with neither `stream.py` nor `pyproject.toml`;
-  - a named function that `stream.py` does not define and no record holds;
+  the CLI return every stream a load loaded. Owner, 2026-10-28. [project-loads-every-stream;
+  amended by queued-stream-actions: `run_stream` answers its action id and
+  `describe_stream_action` lists the streams the load touched, `--name` across several streams
+  fails the action, and `dev` follows the project's log]
+- **DECIDED** — A load is never refused. Every load — `run`, `dev`, `run_stream`,
+  `create_project`, `Tatolab.app`'s Add, `start`, and the runtime's re-load at start — is a
+  queued stream action (the entry below) that takes the project in. A stream whose venv,
+  compile, describe or start fails is recorded `failed`, with the reason in `list_streams` and
+  the traceback in the project's log, and a replaced stream's running version is unloaded.
+  What a load's own arguments get wrong fails its action, with the reason in the action and the
+  log, never the call:
+  - a directory that does not exist, or a folder with neither `stream.py` nor `pyproject.toml`
+    — the reason in the runtime's own log, since there is no project to log to;
+  - a named function that `stream.py` does not define and no record holds — the action leaves
+    no record of it;
   - `--name` across several streams;
   - an id held by another location;
   - create into a directory holding a file the scaffold writes.
 
-  `start` of a failed stream whose record holds no graph compiles it from its location.
-  `tatolab run` exits 0 when every stream it loaded is running, and exits 1 naming each reason
-  when any is `failed` or the load is refused. The runtime makes a project's `.venv` whenever
-  `.venv/bin/python` does not run: on a load, `start`, the runtime's re-load at start, create
-  and `list_project_streams`. It removes a `.venv` whose interpreter does not run first, and
-  never touches one whose interpreter runs. A failed sync records the stream `failed` in uv's
-  own words. `list_project_streams` on a project whose `stream.py` cannot be imported answers
-  with the traceback in place of its streams. Owner, 2026-10-29. [load-never-refused-for-code;
-  failed-load-logs]
+  When `stream.py` cannot be imported, or imports and defines no `@stream`, every stream
+  recorded from the project is recorded `failed` with the traceback or the missing `@stream`. A
+  project with none gets one failed record for `stream.py`, its location the project directory
+  with no function, so its id is `<folder>-<hash>`. The next load that imports `stream.py`
+  replaces it with the project's streams. `start` of a failed stream whose record holds no
+  graph compiles it from its location. The runtime makes a project's `.venv` as the first step
+  of a load, `start`, the runtime's re-load at start, create and `list_project_streams`,
+  whenever `.venv/bin/python` does not run. It removes a `.venv` whose interpreter does not run
+  first, and never touches one whose interpreter runs. A failed sync records the stream
+  `failed` in uv's own words. `list_project_streams` on a project whose `stream.py` cannot be
+  imported answers with the traceback in place of its streams.
+  A project has one log: its segments under `<project>/.streamlib/logs/` hold every record its
+  stream actions and its streams write. Each record carries the action's id in `action`, and the
+  stream id in `stream` when a stream wrote it; the venv's making and the compile write records
+  with no stream. The records keep the log schema's fields, with `action` added. `logs` pages a
+  project's log by project, stream or action, and serves a stream that is not loaded from disk;
+  `logs -f` and `dev` follow it. `rm` forgets a stream's record and deletes no log; its records
+  age out with the log's rotation. Owner, 2026-10-29 and 2026-10-30.
+  [load-never-refused-for-code; failed-load-logs; queued-stream-actions]
   Rejected: refusing a load whose code fails, or putting the previous version back — a person or
   an agent could load only finished code (owner, 2026-10-29).
+  Rejected: one log per stream, or per load of a stream — a project defines any number of
+  streams, and its venv and compile belong to none of them (owner, 2026-10-30).
+- **DECIDED** — Every load and unload is a queued stream action. `run_stream`, `start_stream`,
+  `create_project`, `stop_stream`, `remove_stream` and the runtime's re-load at start each queue
+  one **stream action** and answer at once with its **action id**. The runtime makes the venv,
+  compiles, describes, loads, starts, stops and unloads in the background, and no call waits for
+  what its action does. `tatolab run`, `new`, `start`, `stop` and `rm` exit 0 once the action
+  is queued. A call answers an error only for a malformed request — a missing argument, a
+  directory that is not absolute — and the CLI only for that or a runtime it cannot reach.
+  - **Steps.** An action runs in order: queued, then making the venv, compiling and starting,
+    or stopping. It ends done or failed with its reason. `describe_stream_action {action}`
+    returns its state, its current step, the streams it touched and, when failed, why.
+  - **States.** While an action works on a stream, `list_streams` and `tatolab streams` show it
+    `preparing` (a load or a start) or `stopping` (a stop or a remove), the step as the why.
+    Neither state is ever recorded.
+  - **Recorded when queued.** What an action does is recorded when it is queued, so a crash
+    finishes it rather than undoing it. A stop records `stopped`, a remove forgets the record,
+    and a load of a location records it; the unload or the load follows.
+  - **One project, one action at a time.** A project's actions run in the order queued. A newer
+    load of a project replaces one of it still queued, never one under way. A stop or a remove
+    of a stream takes it out of a queued or running load. The project's `uv sync` is ended, and
+    its half-made `.venv` removed, once no stream of that load still wants it. A load or
+    `list_project_streams` that arrives while the project's venv is being made waits on that
+    sync rather than starting another.
+  - **No bound on the sync.** uv's own network timeouts end a stalled download. A runtime
+    shutdown ends a running sync and removes its half-made `.venv`. Queued actions are held in
+    memory, so a restart forgets them; the re-load at start queues one load per record neither
+    stopped nor failed.
+  - **Attributes are immediate.** `rename_stream` and `expose_port` set an attribute of the
+    record and answer once it is set, never waiting behind an action. A ruling on a stream that
+    is not running applies when it loads.
+  - **Reads.** `list_project_streams` answers inline when the project's venv runs; when it
+    does not, it queues the venv's making and answers `preparing` in place of streams.
+  - **The CLI.** `tatolab run` prints the action id and how to follow it (`tatolab logs -f`).
+    `tatolab dev` follows the project's log, each record under its stream's display name, and
+    queues a load on every save.
+
+  Owner, 2026-10-30. [queued-stream-actions]
+  Rejected: making the venv inside the call that answers the load, bounded, with the client's
+  timeouts raised to fit — an asynchronous side effect never sits inside a call that promises
+  its final answer (owner, 2026-10-30).
+  Rejected: `tatolab run` following its load until it settles and exiting by the outcome —
+  there is no synchronous mode; a verb acknowledges the request and the logs tell the rest
+  (owner, 2026-10-30).
+  Rejected: `rename_stream` and `expose_port` as queued actions — each sets an attribute of the
+  record, which a stream not yet loaded takes when it loads (owner, 2026-10-30).
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream id>/<node>/<port>`; no group label and no nested
@@ -3578,7 +3633,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; amended by create-project: `create_project` joins the stream actions;
-  amended by project-loads-every-stream: `list_project_streams` joins the stream actions]
+  amended by project-loads-every-stream: `list_project_streams` joins the stream actions;
+  amended by queued-stream-actions: `describe_stream_action` joins the stream actions]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
@@ -3595,7 +3651,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `insert_node_between_linked_nodes` among them. The engine's Rust identifiers keep
   "processor" until the rename. Owner, 2026-10-02. [local-api; stream-graph — SHIPPED #2614;
   zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; runtime-hosting — SHIPPED #2704, #2711,
-  #2715]
+  #2715; amended by queued-stream-actions: `logs` takes a project, a stream or an action]
 - **DECIDED** — `graph` carries the machine's name as a top-level key, `machine`, beside a
   stream's `stream`, `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one

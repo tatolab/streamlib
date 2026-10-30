@@ -22,15 +22,12 @@ before leaving a project's `.venv` for someone else to make.
   stream already recorded from the project is marked `failed`. A project with none gets one
   failed record for `stream.py`, so a brand-new broken project still shows up in the list, and
   the next load that imports `stream.py` replaces it.
-- Only the caller's own mistakes are refused: a path that is not there, a folder that is not a
-  project, a function name nothing defines, `--name` across several streams, an id another
-  location holds, and create over scaffold files. None of these leaves a record worth fixing.
+- > ~~Only the caller's own mistakes are refused: a path that is not there, a folder that is not a project, a function name nothing defines, `--name` across several streams, an id another location holds, and create over scaffold files. None of these leaves a record worth fixing.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: a load refuses nothing; what its arguments get wrong fails its stream action.
 - The runtime always takes care of the `.venv`, as `npm install` would: whenever
   `.venv/bin/python` does not run — missing, deleted, or pointing at a Python that is gone — on
   a load, `start`, the runtime's re-load at start, create and listing. A `.venv` whose
   interpreter runs is never touched. A sync uv cannot finish is a failed stream in uv's words.
-- `tatolab run` exits 1 when a stream it loaded is `failed`, so a script or an agent notices,
-  while the stream stays recorded and listed.
+- > ~~`tatolab run` exits 1 when a stream it loaded is `failed`, so a script or an agent notices, while the stream stays recorded and listed.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: `tatolab run` exits 0 once its stream action is queued; the action and the logs carry the outcome.
 
 ## Rejected alternatives
 
@@ -55,5 +52,4 @@ before leaving a project's `.venv` for someone else to make.
   only, and `start` compiles it from its location.
 - The runtime's re-load at start may run `uv sync`, so a start after a deleted `.venv` takes as
   long as the sync and needs the network.
-- A load's reply carries running and failed streams alike; clients read each stream's state
-  rather than treating an answer as success.
+- > ~~A load's reply carries running and failed streams alike; clients read each stream's state rather than treating an answer as success.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: a load's reply is its action id; clients read the action's and each stream's state.
