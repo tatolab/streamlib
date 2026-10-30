@@ -842,8 +842,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   standard toolchain only — `pyproject.toml`, uv, a package index, git — never by machinery of
   streamlib's, which is what importable-python-library deleted. The runtime process imports
   nothing from a pack or a project; their code runs only in processor interpreters started from
-  that venv. Undecided: the registry's owner and
-  standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
+  that venv. Known (2026-10-30): a load takes a project directory and loads every stream in it,
+  so no stream is run out of an installed package by naming its function; a pack's runnable
+  streams reach the runtime as a project copied into a directory and loaded as a local one is,
+  and a pack added to a project is a dependency its `stream.py` imports (owner). Undecided: how a
+  pip-published pack becomes that directory, the registry's owner and standards, a manager UI,
+  and what the app's own catalog does. [one-runtime-per-machine]
 
 ## Consumers — examples & packages — SHIPPED
 
