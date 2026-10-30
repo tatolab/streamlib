@@ -30,6 +30,7 @@ pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
 pub mod stage_local_relay;
+pub mod stage_runtime_unit_uv;
 pub mod stage_watch_page;
 pub mod watch_page_third_party_notices;
 
@@ -678,6 +679,13 @@ enum Commands {
     /// with the same pin builds nothing. See [`stage_local_relay`].
     StageLocalRelay,
 
+    /// Download uv's release archive for this host at its pinned version,
+    /// check its pinned sha256, and unpack `uv` into
+    /// `target/runtime-unit-uv/`; `build-runtime` copies it into the unit's
+    /// `bin/`. A second run whose archive still matches downloads nothing.
+    /// See [`stage_runtime_unit_uv`].
+    StageRuntimeUnitUv,
+
     /// Build the preview page from `runtime/tatolab-watch/` with the bun its
     /// `package.json` pins and the dependencies its `bun.lock` pins, into the
     /// runtime unit's `lib/tatolab/watch/`, which `build-runtime` also stages.
@@ -786,6 +794,9 @@ fn main() -> Result<()> {
         )?,
         Commands::StageLocalRelay => {
             stage_local_relay::stage_the_local_relay(&workspace_root()?)?;
+        }
+        Commands::StageRuntimeUnitUv => {
+            stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;
         }
         Commands::StageWatchPage => stage_watch_page::stage_the_watch_page(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,

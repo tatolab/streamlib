@@ -8,9 +8,9 @@
 //! interpreter puts first on `PYTHONPATH`. The wheel is kept beside the lend
 //! because CI hands that same file to the jobs that install the engine. Then
 //! builds `tatolabd` and `tatolab` and places them in `bin/` with the local
-//! relay `stage-local-relay` builds, beside `lib/`, the install prefix's own
-//! shape, in which `tatolabd` finds the lend and the relay from its own
-//! directory, and stages the preview page beside the lend.
+//! relay `stage-local-relay` builds and the pinned uv, beside `lib/`, the
+//! install prefix's own shape, in which `tatolabd` finds the lend, the relay
+//! and uv from its own directory, and stages the preview page beside the lend.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
 //! `runtime_unit_layout`, included by path because xtask does not link the
@@ -19,6 +19,7 @@
 
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_local_relay::{LOCAL_RELAY_EXECUTABLE_FILE_NAME, stage_the_local_relay};
+use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
 use crate::stage_watch_page::stage_the_watch_page;
 use anyhow::{Context, Result};
 use engine_build_id_composition::{
@@ -26,7 +27,8 @@ use engine_build_id_composition::{
 };
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
-    lend_directory_in_the_runtime_unit, watch_page_directory_beside_the_lend,
+    RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME, lend_directory_in_the_runtime_unit,
+    watch_page_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
 
@@ -241,9 +243,13 @@ pub fn run(
         binary_target_name: LOCAL_RELAY_EXECUTABLE_FILE_NAME.to_string(),
         built_executable: stage_the_local_relay(workspace_root)?,
     });
+    built_binaries.push(BuiltRuntimeUnitBinary {
+        binary_target_name: RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME.to_string(),
+        built_executable: stage_the_runtime_unit_uv(workspace_root)?,
+    });
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
     tracing::info!(
-        "build-runtime: tatolabd, tatolab and the local relay placed in {}",
+        "build-runtime: tatolabd, tatolab, the local relay and uv placed in {}",
         bin_directory.display()
     );
     if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {
