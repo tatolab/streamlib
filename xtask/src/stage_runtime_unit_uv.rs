@@ -216,6 +216,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_files_sha256_is_its_known_answer_in_lowercase_hex() {
+        let scratch = tempfile::tempdir().unwrap();
+        let file = scratch.path().join("abc");
+        std::fs::write(&file, b"abc").unwrap();
+
+        assert_eq!(
+            sha256_hex_of_the_file(&file).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn a_missing_or_unpinned_archive_does_not_match_and_is_downloaded_again() {
         let scratch = tempfile::tempdir().unwrap();
         let archive = scratch.path().join("uv-x86_64-unknown-linux-gnu.tar.gz");
