@@ -132,23 +132,25 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   - `action_id` is `<runtime_id>-<n>`, so no id repeats across restarts.
   - The engine keeps every queued and running action, and the last 64 finished ones per
     project; an older id is answered as no longer held, and its records stay in the log.
-- **Cancel.** `cancel_stream_action(action_id)` drops a queued action, or sets a running one's
-  cancel flag.
-  - The venv sync, the compile and `load_stream_held_as_unless_a_machine_shutdown_is_requested`
-    (`runtime.rs:892-965`) already poll an interrupt for shutdown; that interrupt becomes
-    "shutdown requested or this action cancelled", so a running sync is killed and its
-    half-made `.venv` removed as on shutdown.
-  - Streams the action had not reached stay as recorded.
-- **The pending mark.** `StreamRecord.pending_stream_action: Option<PendingStreamActionOnTheRecord>`
-  (`Stop`, `Remove` or `Start`, with its action id), and `STREAM_RECORD_SCHEMA_VERSION` goes to 4.
-  - A schema-3 file reads as having no mark.
-  - Queuing writes the mark; the action finalises it (records `stopped`, forgets the record,
-    or clears `stopped` and `failed`); a cancel clears it.
-  - The re-load at start finishes every mark before it queues loads.
+- **Cancel.** `cancel_stream_action(action_id)` drops a queued action. A running load or start
+  stops at its current step: the venv sync, the compile and `load_stream_held_as_unless_a_machine_shutdown_is_requested`
+  (`runtime.rs:892-965`) already poll a shutdown interrupt, which becomes "shutdown requested
+  or this action cancelled", so a running sync is killed and its half-made `.venv` removed.
+  Streams it had not reached stay as recorded. A stop or remove whose teardown has started is
+  past cancelling: cancel answers so, and the action ends `done`, its mark finalised.
+- **Pending marks.** `StreamRecord.pending_stream_actions: Vec<PendingStreamActionOnTheRecord>`,
+  each `{action_id, kind}` with kind `Stop`, `Remove` or `Start`, in queue order;
+  `STREAM_RECORD_SCHEMA_VERSION` goes to 4, and a schema-3 file reads as having none.
+  - Queuing appends the action's mark. Only that action finalises it (records `stopped`,
+    forgets the record, or clears `stopped` and `failed`), and only its cancel removes it.
+  - The re-load at start finishes every record's marks in order before it queues loads.
+- **The record update.** `StreamRecordsInTheStateDirectory::update(stream_id, edit)` reads,
+  edits and writes a record under a lock held only for that, so concurrent writers never lose
+  each other's fields (`write` replaces the whole record from a caller's snapshot today,
+  `machine_state_directory.rs:456`). Every record change goes through it.
 - **Engine trait.** `OperationsOnTheStreamsLoadedInThisRuntime` gains `describe_stream_action`
-  and `cancel_stream_action`. `run_stream`, `start_stream`, `stop_stream` and `remove_stream`
-  return `StreamActionQueued {action_id, project_directory}`. The stub and the test engine
-  follow.
+  and `cancel_stream_action`; `run_stream`, `start_stream`, `stop_stream` and `remove_stream`
+  return `StreamActionQueued {action_id, project_directory}`; the stub and test engine follow.
 - **Last compile per project.** Every compile records its project's streams (each function and
   its docstring), or why `stream.py` did not import, in memory. `list_project_streams` (#2973)
   answers from that record:
@@ -170,8 +172,9 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
     appended across the runtime's runs. Only one runtime writes, since there is one per machine.
   - Rotation and retention apply per project with today's tunables (`logging/writer.rs`,
     `logging/config.rs:23-33`).
-- **`RuntimeLogEvent.action: Option<String>`**, skipped when absent. `schema_version` goes
-  1 → 2, and readers take both.
+- **`RuntimeLogEvent.action: Option<String>`**, present on every project-log record — a
+  running stream's records carry the id of the action that loaded it — and absent only in the
+  runtime's own log. `schema_version` goes 1 → 2, and readers take both.
 - **Reading the project log from disk.** `project_log_records_after(project_directory, stream,
   action, after, count)` in the contract crate reads the rotated segments by ascending `seq`,
   then the active one, through `runtime_log_files_reader.rs`'s rotation-aware reader moved
@@ -179,9 +182,10 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   - The cursor is opaque, `<seq>:<line>`, and survives restarts.
   - A cursor whose segment retention deleted resumes at the oldest held, with
     `records_no_longer_held: true`.
+  - Per-stream segments written before this change are neither migrated nor read, and stay on
+    disk; there is no back-compat shim pre-1.0.
 - **CLI.**
-  - `tatolab cancel <action>` calls `cancel_stream_action`, and prints the action's id and new
-    state.
+  - `tatolab cancel <action>` calls `cancel_stream_action` and prints the action's new state.
   - `streams` shows `preparing` and `stopping` in STATE, with a `<id> <step>` line under the
     table, as it shows a failed stream's reason.
 
@@ -199,9 +203,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   - tatolabd's call (`machine_stream_hosting.rs:147-149`) queues and returns.
   - The venv is made outside the lock.
 - **`rename_stream` and `expose_port`** stop taking `one_stream_action_at_a_time`
-  (S:766, S:862). Their record write and an action's write to the same record serialize on
-  `StreamRecordsInTheStateDirectory`'s read-modify-write. `expose_port`'s live cut runs as
-  today when the stream is loaded; otherwise the ruling applies at load.
+  (S:766, S:862) and write through `update`. `expose_port`'s live cut runs as today when the
+  stream is loaded; otherwise the ruling applies at load.
 - **Listing.**
   - `StreamListingState` and `ListedStreamState` gain `Preparing` and `Stopping` (wire
     `preparing` and `stopping`).
@@ -305,8 +308,10 @@ CLI sends it as `stream_function` today (`stream_actions_on_the_runtime.rs:131-1
   - two projects' queues run side by side; one project's actions run in order;
   - a cancel drops a queued action and kills a running stub `uv` (a `sleep`), removing the
     half-made `.venv`;
-  - a pending stop, remove and start each finalise; a cancelled one leaves the record as it
-    was; a fresh `Runner` on the state directory finishes a mark a crash left;
+  - stop then start of one stream queue two marks, each finalised by its own action in order;
+    a cancelled one leaves the record as it was; a fresh `Runner` finishes the marks a crash
+    left, in order; cancelling a stop whose teardown started answers so and ends `done`;
+  - a rename during a load keeps both the new display name and the load's record change;
   - the re-load at start of a project with a running and a stopped record loads only the
     running one;
   - `rename_stream` and `expose_port` answer while a project's sync runs;
@@ -339,7 +344,5 @@ CLI sends it as `stream_function` today (`stream_actions_on_the_runtime.rs:131-1
 
 ## Out of scope
 
-- A client-supplied idempotency key, persisted actions and OpenTelemetry field names (rejected
-  in the ADR).
-- Pruning old `project.*.jsonl` beyond today's retention.
-- `create_project` itself (#2974) and Tatolab.app (tatolab-app#100).
+- An idempotency key, persisted actions and OpenTelemetry field names (rejected in the ADR).
+- Pruning `project.*.jsonl` beyond today's retention; `create_project` (#2974); tatolab-app#100.
