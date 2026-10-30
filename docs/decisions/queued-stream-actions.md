@@ -22,8 +22,9 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
   `rm` exit 0 once the action is queued, as a backend acknowledges a request. The stream shows
   `preparing` or `stopping` with its current step, and everything the action does is in the
   logs.
-- A load takes a project and loads every `@stream` in it; it names no function and gives no
-  display name. A project defines any number of streams, and each is managed afterwards by its
+- A load takes a project and loads every `@stream` in its `stream.py`; it names no function,
+  gives no display name and takes no other entry file. The local-API tool is `run_project`, as
+  `create_project` and `list_project_streams` are named for what they take. A project defines any number of streams, and each is managed afterwards by its
   own `start`, `stop`, `rm` and `rename`.
 - A load refuses nothing. A missing directory and an id another location holds fail the
   action, with the reason in the action and the log. The call errors only on a malformed
@@ -87,6 +88,11 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
   leave a running stream recorded `stopped`, or forgotten and lost at the next restart.
 - **Cancel writing back the record's previous state** — a compensating write that keeps every
   action's prior state, where a pending mark needs none.
+- **Keeping `-f <file>` for another entry file** — the runtime re-loads a project on its own
+  (a restart, `start`, every `dev` save), so the file would have to be stored on the records or
+  in `pyproject.toml`; nothing uses it, and an optional `[tool.tatolab]` entry can come the day
+  a project needs one.
+- **Keeping the tool's name `run_stream`** — it takes a project and loads every stream in it.
 - **A client-supplied idempotency key** — the action id is the handle, and a client on the local
   socket has no retry to deduplicate.
 

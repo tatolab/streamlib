@@ -9,10 +9,10 @@ Today every stream tool is a synchronous engine call. A load makes the venv (a s
 re-load at start syncs under the engine-wide lock. Each loaded stream writes its own log.
 
 **After this change:**
-- **Actions.** `run_stream`, `start_stream`, `stop_stream`, `remove_stream` and the re-load at
+- **Actions.** `run_project`, `start_stream`, `stop_stream`, `remove_stream` and the re-load at
   start queue a stream action on the project's serial queue and answer its action id at once.
   `describe_stream_action` reads one, and `cancel_stream_action` ends one early.
-- **Loads take a project.** `run_stream {project_directory}` loads every `@stream`. `run` and
+- **Loads take a project.** `run_project {project_directory}` loads every `@stream`. `run` and
   `dev` name no function and no display name.
 - **Listing.** `list_streams` shows `preparing` and `stopping`, with the action's step.
 - **Records.** A queued stop, remove or start writes a pending mark that the action finalises.
@@ -121,7 +121,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
     through `spawn_blocking`.
   - Queues never wait on each other. The one-action lock stays engine-wide and is held only
     for an action's load and unload steps, never for the venv or the compile.
-  - The existing bodies (`run_stream`, `start_stream`, `stop_stream`, `remove_stream` and the
+  - The existing bodies (`run_project`, `start_stream`, `stop_stream`, `remove_stream` and the
     re-load of one project) become the actions' steps and gain a `StreamActionProgress` they
     report their step to.
 - **A stream action.** `StreamAction {action_id, project_directory, kind, state, step,
@@ -149,7 +149,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   each other's fields (`write` replaces the whole record from a caller's snapshot today,
   `machine_state_directory.rs:456`). Every record change goes through it.
 - **Engine trait.** `OperationsOnTheStreamsLoadedInThisRuntime` gains `describe_stream_action`
-  and `cancel_stream_action`; `run_stream`, `start_stream`, `stop_stream` and `remove_stream`
+  and `cancel_stream_action`; `run_project`, `start_stream`, `stop_stream` and `remove_stream`
   return `StreamActionQueued {action_id, project_directory}`; the stub and test engine follow.
 - **Last compile per project.** Every compile records its project's streams (each function and
   its docstring), or why `stream.py` did not import, in memory. `list_project_streams` (#2973)
@@ -191,7 +191,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
 
 ## MODIFIED
 
-- **`Runner::run_stream`** takes `RunStreamRequest {project_directory}` and queues a `Load`.
+- **`Runner::run_stream` becomes `Runner::run_project`**, taking `RunProjectRequest
+  {project_directory}` and queuing a `Load`. The project's entry is always `stream.py`.
   - The load compiles every `@stream` through #2973's `--every-stream`, and loads or fails each
     as today's bodies do.
   - A missing directory or a folder that is not a project fails the action, with its reason in
@@ -211,8 +212,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   - `StreamListing` and `ListStreamsToolResultStream` gain `action` and `step`, set while an
     action works on the stream.
 - **Wire.**
-  - `RunStreamToolArguments` is `{project_directory}`, and `RunStreamToolResult` is
-    `{action, project_directory}`.
+  - The tool `run_stream` is renamed `run_project`: `RunProjectToolArguments
+    {project_directory}`, `RunProjectToolResult {action, project_directory}`.
   - `StartStreamToolResult`, `StopStreamToolResult` and `RemoveStreamToolResult` become
     `{action, stream}`.
   - `LogsToolArguments` is `{project_directory, stream?, action?, after?, count?}`, `after` the
@@ -223,7 +224,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
     follows;
   - a load takes the project; `logs` takes the project.
 - **The CLI.**
-  - `run` takes `--dir` only and prints `<action> queued: load of <project>` and `follow it:
+  - `run` takes `--dir` only (`TARGET`, `-f`, `--name` go) and prints `<action> queued: load of <project>` and `follow it:
     tatolab logs -f`. It exits 0 once queued, and 1 only for a malformed request or an
     unreachable runtime.
   - `start`, `stop` and `rm` print `<action> queued: <verb> of <stream>`.
@@ -275,21 +276,18 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
 - REMOVED: stream_instance
 - REMOVED: compile_warnings
   The compile op's report field and the wire's: the compile's lines are in the project log.
-- REMOVED: RunStreamToolResultStream
+- REMOVED: RunStreamToolResult
+  With `RunStreamToolResultStream`, `RunStreamToolArguments` and `RunStreamRequest`: the tool
+  is `run_project`.
+- REMOVED: RunStreamToolArguments
+- REMOVED: RunStreamRequest
+- REMOVED: requested_entry_file
+  The CLI's `-f`; a project's entry is always `stream.py` (owner, 2026-10-30).
+- REMOVED: requested_stream_target
 - REMOVED: Omit it for the sole
   The `stream_function` argument's description.
 - REMOVED: tatolab_run_of_a_suite_stream_function
   The harness's `run <module>:<qualname>`; replaced by the one-stream project.
-
-## [NEEDS DECISION] `-f <file>`
-
-§Product's "Terms of the sentence" still says `-f <file>` overrides the file, but `run_stream`
-takes `{project_directory}` alone (the `tatolabd` entry's pointer), so `-f` has no carrier. The
-CLI sends it as `stream_function` today (`stream_actions_on_the_runtime.rs:131-171`).
-- **(a) `-f` goes; a project's entry is always `stream.py`.** The `app.py` refusal stops naming
-  `-f`. **Recommended:** a load takes a project, and the convention is the zero-ceremony path.
-- **(b) `run_stream` gains `entry_file`**, a project-level argument recorded so the re-load at
-  start compiles the same file. It keeps a rarely used flag at the cost of a recorded field.
 
 ## Seams
 
@@ -325,7 +323,7 @@ CLI sends it as `stream_function` today (`stream_actions_on_the_runtime.rs:131-1
     a restart, and flags records no longer held.
 - **api-server:**
   - `CONTROL_TOOL_NAMES` pins the two tools;
-  - `run_stream` answers `{action, project_directory}` at once while a stub sync sleeps;
+  - `run_project` answers `{action, project_directory}` at once while a stub sync sleeps;
   - `describe_stream_action` walks `queued`, `in_progress` (`making_the_venv`) to `done`;
   - `list_streams` shows `preparing`;
   - `logs` by project, stream and action.
