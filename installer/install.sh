@@ -107,7 +107,7 @@ unpack_the_release() {
 	release_version="$1"
 	release_directory="$TATOLAB_INSTALL_DIRECTORY/$release_version"
 	if [ -x "$release_directory/bin/tatolabd" ] && [ -x "$release_directory/bin/tatolab" ] &&
-		[ -x "$release_directory/bin/moq-relay" ]; then
+		[ -x "$release_directory/bin/moq-relay" ] && [ -x "$release_directory/bin/uv" ]; then
 		say "Tatolab $release_version is already unpacked in $release_directory"
 		return
 	fi
@@ -127,7 +127,7 @@ unpack_the_release() {
 	rm -rf "$partial_release_directory"
 	mkdir "$partial_release_directory"
 	tar -xzf "$download_directory/$tarball_name" -C "$partial_release_directory"
-	for unpacked_member in bin/tatolabd bin/tatolab bin/moq-relay lib/tatolab/lend \
+	for unpacked_member in bin/tatolabd bin/tatolab bin/moq-relay bin/uv lib/tatolab/lend \
 		lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json \
 		lib/tatolab/watch/index.html \
 		"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME"; do
