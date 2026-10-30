@@ -40,16 +40,9 @@ load because `stream.py` defines no `@stream`.
 
 ## Consequences
 
-- `logs` reads a log file from disk for a stream that is not loaded. It and `rm` find a
-  stream's segments by its stream id in its project's `.streamlib/logs/` — a name ending
-  `-<stream id>-<digits>`, confirmed by the `stream` its records carry, since a pinned runtime
-  id may hold dashes. The stream record gains no field.
-- `run_stream` answers a `stream_instance` for a failed stream as for a running one.
-- `rm` deletes files inside the project: the removed stream's log files, under the runtime's
-  own `.streamlib/logs/`, and nothing else. Rotating the old load files of a stream that is
-  never removed is not decided here.
+- > ~~`logs` reads a log file from disk for a stream that is not loaded. It and `rm` find a stream's segments by its stream id in its project's `.streamlib/logs/` — a name ending `-<stream id>-<digits>`, confirmed by the `stream` its records carry, since a pinned runtime id may hold dashes. The stream record gains no field.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: `logs` reads the project's one log from disk, filtered by the `stream` and `action` its records carry; `rm` deletes no log.
+- > ~~`run_stream` answers a `stream_instance` for a failed stream as for a running one.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: `run_stream` answers the action id of the stream action it queued.
+- > ~~`rm` deletes files inside the project: the removed stream's log files, under the runtime's own `.streamlib/logs/`, and nothing else. Rotating the old load files of a stream that is never removed is not decided here.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: `rm` deletes no file; a removed stream's records age out with the project log's rotation.
 - A project whose `stream.py` defines no `@stream` is listed, as its `stream.py` record
   `<folder>-<hash>`, from its first load.
-- `docs/logging-schema.md`'s one log per loaded stream grows to a failed load's segment, and a
-  compile's output reaches a stream's segment once the compile has named the stream; the
-  schema document says so when this is built.
+- > ~~`docs/logging-schema.md`'s one log per loaded stream grows to a failed load's segment, and a compile's output reaches a stream's segment once the compile has named the stream; the schema document says so when this is built.~~ — Superseded 2026-10-30 by `queued-stream-actions.md`: `docs/logging-schema.md`'s one log per loaded stream becomes one log per project, each record gaining `action`; the schema document says so when this is built.
