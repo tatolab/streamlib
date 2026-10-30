@@ -215,13 +215,6 @@ fn unpack_the_uv_executable(
 mod tests {
     use super::*;
 
-    fn sha256_hex_of_the_bytes(bytes: &[u8]) -> String {
-        Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-
     #[test]
     fn a_missing_or_unpinned_archive_does_not_match_and_is_downloaded_again() {
         let scratch = tempfile::tempdir().unwrap();
@@ -283,7 +276,10 @@ mod tests {
             "{refusal}"
         );
         assert!(
-            refusal.contains(&format!("got {}", sha256_hex_of_the_bytes(b"not uv"))),
+            refusal.contains(&format!(
+                "got {}",
+                sha256_hex_of_the_file(&archive).unwrap()
+            )),
             "{refusal}"
         );
     }
@@ -293,7 +289,7 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let archive = scratch.path().join("archive.tar.gz");
         std::fs::write(&archive, b"pinned bytes").unwrap();
-        let pinned_bytes_sha256_hex = sha256_hex_of_the_bytes(b"pinned bytes");
+        let pinned_bytes_sha256_hex = sha256_hex_of_the_file(&archive).unwrap();
         let pinned_archive = PinnedUvReleaseArchive {
             target_triple: "x86_64-unknown-linux-gnu",
             archive_sha256_hex: Box::leak(pinned_bytes_sha256_hex.into_boxed_str()),

@@ -125,8 +125,8 @@ Paths are under `runtime/` unless marked otherwise.
   - The pin is uv `0.13.1`, as tatolab-app ships today, with one URL and sha256 per target:
     `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`. If the gnu build fails the glibc 2.28
     floor, the musl build is used.
-  - `tatolabd` finds it beside its own executable through `the_uv_executable_beside_this_one`,
-    which mirrors the relay's lookup. Inside the bundle that is `Contents/MacOS/uv`.
+  - `tatolabd` finds it beside its own executable through `runtime_unit_executable_beside_this_one`,
+    the lookup it finds the relay through. Inside the bundle that is `Contents/MacOS/uv`.
   - A unit without it refuses every venv-making call: "the runtime unit carries no uv; rebuild it
     with `cargo xtask build-runtime`".
 - **Making the venv.** `streamlib-engine/src/core/runtime/project_venv_made_with_the_runtime_unit_uv.rs`:
