@@ -372,7 +372,8 @@ fn a_refused_first_load_waits_for_a_save_and_loads_again_on_it() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let refusal = format!(
-        "{0} has no .venv/bin/python; run `uv sync` in {0}",
+        "`{0}/.venv/bin/python` cannot import `tatolab.stream`: add `tatolab-stream` to the \
+         project's dependencies and run `uv sync` in {0}.",
         scratch_project.canonical_path().display()
     );
     let stub_local_api_server = a_runtime_holding(

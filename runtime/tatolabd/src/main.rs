@@ -25,6 +25,7 @@ mod relay_instances_of_this_runtime;
 mod relay_instances_record;
 mod relay_secret_store;
 mod runtime_unit_lend;
+mod runtime_unit_uv;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod secret_holding_test_relay_adapter;
 mod tatolabd_command_line;
