@@ -6,7 +6,8 @@
 The templates are checked as files in the stream suite; this checks what the
 runtime renders from them, as a user receives it: every
 Python file lints and is formatted, and the stream compiles in a venv holding
-`tatolab-stream` and no runtime.
+`tatolab-stream` and no runtime. The create loads the scaffold's stream, which
+runs a GPU effect.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ import pytest
 from conftest import TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
 from tatolab.stream import H264Encoder, TestPatternSource
+
+pytestmark = pytest.mark.requires_gpu
 
 # ruff is pointed at the template tree for each rendered file, so it reads the
 # `[tool.ruff]` the stream package checks the templates under.

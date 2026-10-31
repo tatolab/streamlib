@@ -945,7 +945,11 @@ jobs:
             fi
           }
 
-          "$tatolab_executable" new /tmp/scaffold-check > /tmp/scaffold-new.log 2>&1
+          if ! "$tatolab_executable" new /tmp/scaffold-check > /tmp/scaffold-new.log 2>&1; then
+            cat /tmp/scaffold-new.log /tmp/tatolabd.log
+            echo "::error::tatolab new did not queue the create"
+            exit 1
+          fi
           sleep 20
           "$tatolab_executable" graph > /tmp/scaffold-graph.json || true
           interrupt_and_expect_a_clean_exit tatolabd "$tatolabd_pid" /tmp/tatolabd.log

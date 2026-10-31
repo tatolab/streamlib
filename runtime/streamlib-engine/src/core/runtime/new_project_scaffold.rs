@@ -5,6 +5,7 @@
 //! SDK carries, and their write into the project's directory.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::core::{Error, Result};
@@ -151,14 +152,19 @@ pub(crate) fn write_the_new_project_scaffold_into(project_directory: &Path) -> R
                 ))
             })?;
         }
-        fs::write(&scaffolded_file_path, &scaffolded_file.rendered_contents).map_err(
-            |io_failure| {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&scaffolded_file_path)
+            .and_then(|mut scaffolded_file_written| {
+                scaffolded_file_written.write_all(scaffolded_file.rendered_contents.as_bytes())
+            })
+            .map_err(|io_failure| {
                 Error::Runtime(format!(
-                    "cannot write `{}`: {io_failure}",
+                    "cannot write `{}`, so the project is left partly written: {io_failure}",
                     scaffolded_file_path.display()
                 ))
-            },
-        )?;
+            })?;
     }
     Ok(())
 }

@@ -2825,6 +2825,23 @@ impl Runner {
         display_name_of_a_stream_first_recorded: Option<String>,
     ) {
         let progress = self.progress_of_the_stream_action(action_id);
+        self.load_the_project_reporting_to(
+            action_id,
+            &progress,
+            project_directory,
+            display_name_of_a_stream_first_recorded,
+        );
+    }
+
+    /// Run the load of the project in `project_directory` for the stream
+    /// action `action_id`, reporting to `progress`, and finish the action.
+    fn load_the_project_reporting_to(
+        &self,
+        action_id: &str,
+        progress: &StreamActionProgress<'_>,
+        project_directory: PathBuf,
+        display_name_of_a_stream_first_recorded: Option<String>,
+    ) {
         let run_outcome = match why_a_directory_is_no_project(&project_directory) {
             Some(why_it_is_no_project) => {
                 tracing::warn!("the stream action {action_id} failed: {why_it_is_no_project}");
@@ -2837,26 +2854,35 @@ impl Runner {
                         stream_function: None,
                         display_name_of_a_stream_first_recorded,
                     },
-                    Some(&progress),
+                    Some(progress),
                     &|| progress.is_interrupted(),
                 )
                 .map_err(|refusal| refusal.to_string()),
         };
-        self.finish_the_load_action(action_id, &progress, run_outcome);
+        self.finish_the_load_action(action_id, progress, run_outcome);
     }
 
     /// Write the scaffold into `project_directory` for the stream action
     /// `action_id` [`Runner::create_project`] queued, then run its load; a
     /// scaffold that cannot be written fails the action, written to the
-    /// project's log.
+    /// project's log, and a cancel seen before the write ends it cancelled
+    /// with nothing written.
     fn create_the_project_for_its_stream_action(
         &self,
         action_id: &str,
         project_directory: PathBuf,
         display_name_of_the_created_stream: Option<String>,
     ) {
+        let progress = self.progress_of_the_stream_action(action_id);
+        if progress.is_interrupted() {
+            self.finish_the_load_action(
+                action_id,
+                &progress,
+                Err("it was interrupted before the project's files were written".to_string()),
+            );
+            return;
+        }
         if let Err(not_written) = write_the_new_project_scaffold_into(&project_directory) {
-            let progress = self.progress_of_the_stream_action(action_id);
             ProjectLogRouteEntry::for_the_project_in(
                 &project_directory,
                 self.engine_resources_shared_by_every_stream
@@ -2868,8 +2894,9 @@ impl Runner {
             self.finish_the_load_action(action_id, &progress, Err(not_written.to_string()));
             return;
         }
-        self.load_the_project_for_its_stream_action(
+        self.load_the_project_reporting_to(
             action_id,
+            &progress,
             project_directory,
             display_name_of_the_created_stream,
         );
