@@ -3,24 +3,33 @@
 # streamlib:lint-logging:allow-file — stdout carries the one JSON document the runtime
 # parses and stderr what it shows the user; neither is a log event.
 
-"""The compile entry the runtime runs in the project's own interpreter for `tatolab run`
-and `tatolab dev`.
+"""The compile entry the runtime runs in the project's own interpreter for every load of a
+project.
 
 The runtime starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
---verb {run,dev} [TARGET] [-f FILE] [--dir DIR]`, with the anchor
-directory as the working directory; `--dir` is only how the caller's command spelled
-it. Whatever the project's code does, stdout carries exactly one JSON object and the
-exit code is 0. The object is one of:
+--verb {run,dev} (--every-stream | TARGET) [--dir DIR]`, with the anchor directory as the
+working directory; `--dir` is only how the caller's command spelled it. Whatever the
+project's code does, stdout carries exactly one JSON object and the exit code is 0. With
+`--every-stream`, which no TARGET is the same as, the object is one of:
+
+- `{"project_directory", "streams"}` — every `@stream` `stream.py` defines, in definition
+  order, each `{"stream_function", "description", "stream_graph"}`, or
+  `{"stream_function", "description", "failed_because"}` when that function raised;
+- `{"project_directory", "no_stream_defined_because"}` — `stream.py` imported and defines
+  no `@stream`;
+- `{"project_directory", "import_failed_because"}` — the entry raised before any stream
+  function could be listed, with its traceback.
+
+With a TARGET naming one stream function, the object is one of:
 
 - `{"project_directory", "stream_function", "stream_graph"}` — the stream compiled;
 - `{"project_directory", "stream_function", "failed_because"}` — the stream function
   raised, with its traceback;
 - `{"project_directory", "stream_function", "not_defined_because"}` — the target named
   a function the entry does not define as a `@stream`;
-- `{"project_directory", "no_stream_defined_because"}` — the entry imported and defines no
-  `@stream`, with a sample of one;
-- `{"project_directory", "import_failed_because"}` — the entry raised before any stream
-  function could be chosen, with its traceback.
+- `{"project_directory", "no_stream_defined_because"}` — the target's file defines no
+  `@stream`;
+- `{"project_directory", "import_failed_because"}`.
 
 `stream_function` is `<module>:<qualname>`. A refusal of the caller's own target prints
 `error: <message>` to stderr and exits 1 with nothing on stdout; an app's deliberate
@@ -58,13 +67,16 @@ from ._project_stream_entry_execution import (
     import_stream_entry_module,
     named_stream_function_location,
     project_directory_the_stream_entry_imports_from,
+    no_stream_defined_because,
     select_stream_function,
+    stream_description_of,
     stream_function_location,
     stream_functions_defined_in,
 )
 from ._project_stream_entry_resolution import (
     DEFAULT_STREAM_ENTRY_FILE_NAME,
     ProjectStreamCompileRefusalError,
+    ResolvedStreamEntry,
     ResolvedStreamEntryModule,
     StreamFunctionNotDefinedRefusalError,
     locate_stream_entry_module,
@@ -81,6 +93,8 @@ STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY = "failed_because"
 STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY = "not_defined_because"
 STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY = "import_failed_because"
 STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY = "no_stream_defined_because"
+EVERY_STREAM_DOCUMENT_KEY = "streams"
+STREAM_DESCRIPTION_DOCUMENT_KEY = "description"
 
 _PROJECT_STREAM_COMPILE_MODULE_FILE_NAMES = (
     "_project_stream_compile_entry.py",
@@ -137,15 +151,14 @@ def app_failure_described(app_failure: BaseException) -> str:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    """The compile entry's arguments: the verb `tatolab` was given and its target flags."""
+    """The compile entry's arguments: the verb `tatolab` was given and what to compile."""
     parser = argparse.ArgumentParser(
         prog="python -I -m tatolab.stream._project_stream_compile_entry",
         description=(
-            f"Compile the stream `tatolab run` / `tatolab dev` names, in the project's own "
-            f"interpreter, with the anchor directory as the working directory. Executes "
-            f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}` from the anchor, or the file named by `-f` "
-            f"or TARGET, compiles its sole @stream function (or the one TARGET names), and "
-            f"writes the stream graph, or why it has none, to stdout as one JSON object."
+            f"Compile a project's streams in its own interpreter, with the anchor directory "
+            f"as the working directory: every @stream function "
+            f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}` defines, or the one TARGET names, writing "
+            f"their stream graphs, or why there are none, to stdout as one JSON object."
         ),
     )
     parser.add_argument(
@@ -154,24 +167,21 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=("run", "dev"),
         help="The `tatolab` verb being served, as refusals spell it.",
     )
-    parser.add_argument(
-        "requested_stream_target",
+    what_to_compile = parser.add_mutually_exclusive_group()
+    what_to_compile.add_argument(
+        "--every-stream",
+        action="store_true",
+        help=(
+            f"Compile every @stream function {DEFAULT_STREAM_ENTRY_FILE_NAME} defines, in "
+            f"definition order; the default when no TARGET is given."
+        ),
+    )
+    what_to_compile.add_argument(
+        "stream_function_target",
         nargs="?",
         metavar="TARGET",
         help=(
-            "The stream to compile: `<file>.py[:<function>]` or `<module>:<function>` "
-            f"(default: the sole @stream in {DEFAULT_STREAM_ENTRY_FILE_NAME})."
-        ),
-    )
-    parser.add_argument(
-        "-f",
-        "--file",
-        dest="requested_entry_file",
-        type=Path,
-        metavar="FILE",
-        help=(
-            f"Entry file, overriding the `{DEFAULT_STREAM_ENTRY_FILE_NAME}` convention; "
-            f"not with TARGET."
+            "The one stream to compile: `<file>.py[:<function>]` or `<module>:<function>`."
         ),
     )
     parser.add_argument(
@@ -222,41 +232,120 @@ def _print_the_cross_floor_warning_block(anchor_directory: Path) -> None:
     print(cross_floor_warning_block, end="", file=sys.stderr, flush=True)
 
 
-def compile_the_requested_stream(
+def _entry_namespace_or_why_it_did_not_import(
+    verb: str,
+    resolved_stream_entry: ResolvedStreamEntry,
+    anchor_directory: Path,
+    anchor_directory_as_typed: Optional[str],
+) -> "tuple[ResolvedStreamEntry, dict[str, Any] | str]":
+    """The entry run or imported, and its namespace — or its traceback when it raised. A
+    refusal of the caller's own target raises."""
+    try:
+        if isinstance(resolved_stream_entry, ResolvedStreamEntryModule):
+            resolved_stream_entry = locate_stream_entry_module(
+                verb, anchor_directory, anchor_directory_as_typed, resolved_stream_entry
+            )
+            return resolved_stream_entry, import_stream_entry_module(resolved_stream_entry)
+        return resolved_stream_entry, execute_app_entry_file(resolved_stream_entry.entry_file)
+    except ProjectStreamCompileRefusalError:
+        raise
+    # SystemExit passes through: an app that calls `sys.exit()` at module scope
+    # chose its exit code, and reporting that as a failure would override it.
+    except Exception as entry_failure:  # noqa: BLE001 — reported as the app's own
+        return resolved_stream_entry, app_failure_described(entry_failure)
+
+
+def _one_stream_compiled(
+    stream_function: Any,
+    stream_function_located: str,
+) -> dict[str, Any]:
+    """The stream graph `stream_function` compiles to, or its traceback, under its location."""
+    try:
+        stream_graph = compile_stream_to_graph(stream_function)
+    except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
+        return {
+            COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
+            STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY: app_failure_described(compile_failure),
+        }
+    return {
+        COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
+        COMPILED_STREAM_GRAPH_DOCUMENT_KEY: stream_graph,
+    }
+
+
+def compile_every_stream_of_the_project(
     verb: str,
     *,
     anchor_directory: Path,
     anchor_directory_as_typed: Optional[str],
-    requested_entry_file: Optional[Path],
-    requested_stream_target: Optional[str],
 ) -> dict[str, Any]:
-    """The document the runtime records: the compiled stream, or why the project's code
-    gave none. A refusal of the caller's own target raises."""
-    resolved_stream_entry = resolve_stream_entry(
-        verb, anchor_directory, requested_entry_file, requested_stream_target
-    )
+    """The document a load of the project records: every `@stream` `stream.py` defines,
+    compiled or failed, or why the project gave none."""
+    resolved_stream_entry = resolve_stream_entry(verb, anchor_directory, None)
 
     _print_the_cross_floor_warning_block(anchor_directory)
 
     project_directory = project_directory_the_stream_entry_imports_from(
         resolved_stream_entry, anchor_directory
     )
-    try:
-        if isinstance(resolved_stream_entry, ResolvedStreamEntryModule):
-            resolved_stream_entry = locate_stream_entry_module(
-                verb, anchor_directory, anchor_directory_as_typed, resolved_stream_entry
-            )
-            entry_namespace = import_stream_entry_module(resolved_stream_entry)
-        else:
-            entry_namespace = execute_app_entry_file(resolved_stream_entry.entry_file)
-    except ProjectStreamCompileRefusalError:
-        raise
-    # SystemExit passes through: an app that calls `sys.exit()` at module scope
-    # chose its exit code, and reporting that as a failure would override it.
-    except Exception as entry_failure:  # noqa: BLE001 — reported as the app's own
+    resolved_stream_entry, entry_namespace = _entry_namespace_or_why_it_did_not_import(
+        verb, resolved_stream_entry, anchor_directory, anchor_directory_as_typed
+    )
+    if isinstance(entry_namespace, str):
         return {
             COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-            STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY: app_failure_described(entry_failure),
+            STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY: entry_namespace,
+        }
+    stream_functions = stream_functions_defined_in(
+        entry_namespace, str(entry_namespace.get("__name__", ""))
+    )
+    if not stream_functions:
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY: no_stream_defined_because(
+                resolved_stream_entry.described_for_the_user()
+            ),
+        }
+    return {
+        COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+        EVERY_STREAM_DOCUMENT_KEY: [
+            {
+                **_one_stream_compiled(
+                    stream_function,
+                    stream_function_location(
+                        stream_function, resolved_stream_entry, project_directory
+                    ),
+                ),
+                STREAM_DESCRIPTION_DOCUMENT_KEY: stream_description_of(stream_function) or None,
+            }
+            for stream_function in stream_functions
+        ],
+    }
+
+
+def compile_the_requested_stream(
+    verb: str,
+    *,
+    anchor_directory: Path,
+    anchor_directory_as_typed: Optional[str],
+    stream_function_target: str,
+) -> dict[str, Any]:
+    """The document of the one stream `stream_function_target` names: compiled, or why the
+    project's code gave none. A refusal of the caller's own target raises."""
+    resolved_stream_entry = resolve_stream_entry(verb, anchor_directory, stream_function_target)
+
+    _print_the_cross_floor_warning_block(anchor_directory)
+
+    project_directory = project_directory_the_stream_entry_imports_from(
+        resolved_stream_entry, anchor_directory
+    )
+    resolved_stream_entry, entry_namespace = _entry_namespace_or_why_it_did_not_import(
+        verb, resolved_stream_entry, anchor_directory, anchor_directory_as_typed
+    )
+    if isinstance(entry_namespace, str):
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY: entry_namespace,
         }
 
     try:
@@ -268,11 +357,6 @@ def compile_the_requested_stream(
             entry_namespace,
             stream_functions_defined_in(entry_namespace, str(entry_namespace.get("__name__", ""))),
         )
-    except StreamEntryDefinesNoStreamError as no_stream_defined:
-        return {
-            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-            STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY: str(no_stream_defined),
-        }
     except StreamFunctionNotDefinedRefusalError as not_defined:
         return {
             COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
@@ -281,21 +365,17 @@ def compile_the_requested_stream(
             ),
             STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY: str(not_defined),
         }
-    stream_function_located = stream_function_location(
-        stream_function, resolved_stream_entry, project_directory
-    )
-    try:
-        stream_graph = compile_stream_to_graph(stream_function)
-    except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
+    except StreamEntryDefinesNoStreamError as no_stream_defined:
         return {
             COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-            COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
-            STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY: app_failure_described(compile_failure),
+            STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY: str(no_stream_defined),
         }
     return {
-        COMPILED_STREAM_GRAPH_DOCUMENT_KEY: stream_graph,
         COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-        COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
+        **_one_stream_compiled(
+            stream_function,
+            stream_function_location(stream_function, resolved_stream_entry, project_directory),
+        ),
     }
 
 
@@ -305,13 +385,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     compiled_document_stdout_descriptor = _carry_every_later_stdout_write_to_stderr()
     try:
-        compiled_document = compile_the_requested_stream(
-            arguments.verb,
-            anchor_directory=Path.cwd(),
-            anchor_directory_as_typed=arguments.anchor_directory_as_typed,
-            requested_entry_file=arguments.requested_entry_file,
-            requested_stream_target=arguments.requested_stream_target,
-        )
+        if arguments.stream_function_target is None:
+            compiled_document = compile_every_stream_of_the_project(
+                arguments.verb,
+                anchor_directory=Path.cwd(),
+                anchor_directory_as_typed=arguments.anchor_directory_as_typed,
+            )
+        else:
+            compiled_document = compile_the_requested_stream(
+                arguments.verb,
+                anchor_directory=Path.cwd(),
+                anchor_directory_as_typed=arguments.anchor_directory_as_typed,
+                stream_function_target=arguments.stream_function_target,
+            )
     except ProjectStreamCompileRefusalError as refusal:
         os.close(compiled_document_stdout_descriptor)
         print(f"error: {refusal}", file=sys.stderr)

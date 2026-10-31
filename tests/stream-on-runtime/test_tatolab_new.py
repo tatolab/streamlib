@@ -132,6 +132,7 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
             "tatolab.stream._project_stream_compile_entry",
             "--verb",
             "run",
+            "stream.py:main",
         ],
         cwd=app_directory,
         capture_output=True,

@@ -1139,3 +1139,77 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     assert camera_records_after_rm[: len(camera_records_while_loaded)] == (
         camera_records_while_loaded
     )
+
+
+STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING = (
+    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def camera(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def preview(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def broken(stream_builder: StreamBuilder) -> None:\n"
+    '    raise ValueError("bad wiring")\n'
+)
+
+
+def test_a_run_takes_in_every_stream_of_stream_py_and_fails_one_no_longer_defined(
+    make_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """`run` with no target loads every `@stream` in `stream.py`, each its own
+    stream: two run, each followed by its own id, and the one that raises is
+    failed with its traceback; a run once `stream.py` drops one records it
+    failed, naming the function."""
+    app_directory = make_tatolab_project(
+        {"stream.py": STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING}
+    )
+    tatolabd = start_tatolabd()
+    stream_id_of = lambda function: stream_id_of_the_location(  # noqa: E731
+        app_directory.resolve(), f"stream:{function}"
+    )
+
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
+
+    assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, stream_run.recent_stderr()
+    for function in ("camera", "preview"):
+        assert f"follow it: tatolab logs -f --stream {stream_id_of(function)}\n" in stream_run.stdout_text
+    failed_stream = stream_run.failed_stream()
+    assert failed_stream is not None, stream_run.stdout_text
+    assert failed_stream[0] == stream_id_of("broken"), stream_run.stdout_text
+    assert "ValueError: bad wiring" in failed_stream[1], failed_stream[1]
+    states = {
+        listed["stream"]: listed["state"]
+        for listed in tatolabd.local_api_client().list_streams()
+    }
+    assert states == {
+        stream_id_of("camera"): "running",
+        stream_id_of("preview"): "running",
+        stream_id_of("broken"): "failed",
+    }, states
+
+    (app_directory / "stream.py").write_text(
+        STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING.replace(
+            "@stream\ndef preview", "def preview"
+        ),
+        encoding="utf-8",
+    )
+    rerun = load_the_projects_stream(tatolabd, app_directory)
+    assert rerun.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, rerun.recent_stderr()
+    assert f"follow it: tatolab logs -f --stream {stream_id_of('camera')}\n" in rerun.stdout_text
+
+    listed_by_id = {
+        listed["stream"]: listed for listed in tatolabd.local_api_client().list_streams()
+    }
+    preview = listed_by_id[stream_id_of("preview")]
+    assert preview["state"] == "failed", preview
+    assert preview["failed_because"] == "`stream:preview` is no longer defined in stream.py"
+    assert listed_by_id[stream_id_of("camera")]["state"] == "running"

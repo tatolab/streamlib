@@ -88,6 +88,28 @@ fn write_an_executable_script_from_a_child_process(path: &Path, script: &str) {
     assert!(script_writer.wait().expect("the shell exits").success());
 }
 
+/// A compile script writing `warnings_written` to its standard error, then
+/// printing `document`, or, asked for every stream, the answer an every-stream
+/// compile gives with `document` its only stream.
+fn a_compile_script_printing(warnings_written: &str, document: &Value) -> String {
+    let every_stream_document = match document.get("stream_function") {
+        Some(stream_function) => {
+            let mut one_stream = json!({ "stream_function": stream_function, "description": null });
+            for answer_key in ["stream_graph", "failed_because"] {
+                if let Some(answer) = document.get(answer_key) {
+                    one_stream[answer_key] = answer.clone();
+                }
+            }
+            json!({ "project_directory": document["project_directory"], "streams": [one_stream] })
+        }
+        None => document.clone(),
+    };
+    format!(
+        "#!/bin/sh\n{warnings_written}case \" $* \" in\n*' --every-stream '*) cat <<'COMPILED'\n\
+         {every_stream_document}\nCOMPILED\n;;\n*) cat <<'COMPILED'\n{document}\nCOMPILED\n;;\nesac\n"
+    )
+}
+
 /// A project whose `.venv/bin/python` prints `graph` as its compile.
 struct ProjectWhosePythonPrintsAGraph {
     project_directory: tempfile::TempDir,
@@ -129,9 +151,7 @@ impl ProjectWhosePythonPrintsAGraph {
             .collect();
         write_an_executable_script_from_a_child_process(
             &self.interpreter(),
-            &format!(
-                "#!/bin/sh\n{warnings_written}cat <<'COMPILED'\n{compile_document}\nCOMPILED\n"
-            ),
+            &a_compile_script_printing(&warnings_written, &compile_document),
         );
     }
 
@@ -144,7 +164,7 @@ impl ProjectWhosePythonPrintsAGraph {
         });
         write_an_executable_script_from_a_child_process(
             &self.interpreter(),
-            &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
+            &a_compile_script_printing("", &compile_document),
         );
     }
 
@@ -158,7 +178,7 @@ impl ProjectWhosePythonPrintsAGraph {
         });
         write_an_executable_script_from_a_child_process(
             &self.interpreter(),
-            &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
+            &a_compile_script_printing("", &compile_document),
         );
     }
 

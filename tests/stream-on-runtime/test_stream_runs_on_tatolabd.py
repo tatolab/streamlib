@@ -86,6 +86,19 @@ def test_a_hand_written_graph_projects_interpreter_prints_the_graph_as_the_compi
         + json.dumps(str(tmp_path / "nodes-live-here"))
         + ', "stream_function": "stream:hand-written"}\n'
     )
+    every_stream_compiled = subprocess.run(
+        [str(project.venv_interpreter), *COMPILE_ENTRY_INVOCATION, "--verb", "run", "--every-stream"],
+        capture_output=True,
+        text=True,
+        timeout=WRAPPER_INVOCATION_TIMEOUT_SECONDS,
+        check=True,
+    )
+    assert every_stream_compiled.stdout == (
+        '{"project_directory": '
+        + json.dumps(str(tmp_path / "nodes-live-here"))
+        + ', "streams": [{"stream_function": "stream:hand-written", "description": null, '
+        + '"stream_graph": ' + graph_text + "}]}\n"
+    )
     assert project.tatolab_run == TatolabRunOfAProject(working_directory=tmp_path / "project")
 
 
