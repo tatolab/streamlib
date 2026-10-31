@@ -1,6 +1,6 @@
 ---
 name: stop-running-stream
-description: Stop a stream on the machine's StreamLib runtime with `tatolab stop`, or forget it with `tatolab rm`, then confirm with `tatolab streams` that it is no longer loaded so its camera / GPU claim is released — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
+description: Stop a stream on the machine's StreamLib runtime with `tatolab stop`, or forget its whole project with `tatolab rm`, then confirm with `tatolab streams` that it is no longer loaded so its camera / GPU claim is released — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
 ---
 
 # stop-running-stream
@@ -13,12 +13,12 @@ Ends a stream's work without touching the runtime. The machine's runtime stays o
 ```bash
 tatolab stop <stream id>
 ```
-Unloads the stream. It is recorded `stopped` and stays stopped across the runtime's restarts until `tatolab start <stream id>`. A warning that the stop was not recorded means a restart of the runtime loads the stream again.
+Queues the stop and prints its action id at once (`<action> queued: stop of <stream id>`); the stream shows `stopping` until the stop has run, then `stopped`, and stays stopped across the runtime's restarts until `tatolab start <stream id>`. A warning that the stop was not recorded means a restart of the runtime loads the stream again.
 
 ```bash
-tatolab rm <stream id>
+tatolab rm --dir <project directory>
 ```
-Unloads the stream and forgets it — the way to clear a stream, stopped or failed ones included, for good.
+Queues the removal of the whole project (`--dir` defaults to the working directory): every stream of it is unloaded and forgotten, stopped or failed ones included. No verb removes one stream — a `@stream` in `stream.py` runs; comment it out to drop it.
 
 Ctrl-C on `tatolab dev` or `tatolab logs -f` ends only the following; the stream stays loaded, so `stop` or `rm` it as above. A `tatolab stop` while `dev` runs ends the current load, and `dev` loads again on the next saved edit — end `dev` first to stop for good.
 

@@ -25,6 +25,15 @@ pub const FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT: usize = 64;
 pub enum StreamActionKind {
     /// Loads every `@stream` of a project.
     Load,
+    /// Loads and starts one stopped or failed stream.
+    Start,
+    /// Unloads one stream and records it stopped.
+    Stop,
+    /// Unloads every stream of a project and forgets every record of it.
+    Remove,
+    /// Re-loads, at the runtime's start, a project's streams neither stopped
+    /// nor failed.
+    ReloadAtStart,
 }
 
 impl StreamActionKind {
@@ -32,7 +41,17 @@ impl StreamActionKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Load => "load",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Remove => "remove",
+            Self::ReloadAtStart => "reload_at_start",
         }
+    }
+
+    /// Whether the action unloads the streams it works on, so a listing shows
+    /// them stopping rather than preparing.
+    pub fn unloads_its_streams(self) -> bool {
+        matches!(self, Self::Stop | Self::Remove)
     }
 }
 
@@ -75,6 +94,8 @@ pub enum StreamActionStep {
     Compiling,
     /// Loading and starting the streams the compile gave.
     Starting,
+    /// Unloading the streams it works on.
+    Stopping,
 }
 
 impl StreamActionStep {
@@ -84,6 +105,7 @@ impl StreamActionStep {
             Self::MakingTheVenv => "making_the_venv",
             Self::Compiling => "compiling",
             Self::Starting => "starting",
+            Self::Stopping => "stopping",
         }
     }
 }
@@ -96,9 +118,10 @@ pub struct StreamOfAStreamAction {
     pub stream_id: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// Where the stream's code lives.
-    pub stream_location: StreamLocation,
-    /// `None` until the action took the stream in; then running or failed.
+    /// Where the stream's code lives; `None` for a stream a library host
+    /// loaded.
+    pub stream_location: Option<StreamLocation>,
+    /// `None` until the action took the stream in; then the state it left it in.
     pub state: Option<StreamListingState>,
 }
 
@@ -441,6 +464,44 @@ impl StreamActionProgress<'_> {
         self.queue_of_each_project
             .change_the_held_stream_action(&self.action_id, |action| {
                 action.step = Some(step);
+            });
+    }
+
+    /// The action has left its queue and runs.
+    pub(crate) fn has_begun(&self) {
+        self.queue_of_each_project
+            .change_the_held_stream_action(&self.action_id, |action| {
+                action.state = StreamActionState::InProgress;
+            });
+    }
+
+    /// Finish the action: done, each of its streams named in `streams_once_done`
+    /// given the state it ended in; or failed for why.
+    pub(crate) fn finish(
+        &self,
+        streams_once_done: std::result::Result<Vec<(String, StreamListingState)>, String>,
+    ) {
+        self.queue_of_each_project
+            .change_the_held_stream_action(&self.action_id, |action| {
+                action.step = None;
+                match streams_once_done {
+                    Ok(streams_once_done) => {
+                        action.state = StreamActionState::Done;
+                        for (stream_id, state) in streams_once_done {
+                            if let Some(stream) = action
+                                .streams
+                                .iter_mut()
+                                .find(|stream| stream.stream_id == stream_id)
+                            {
+                                stream.state = Some(state);
+                            }
+                        }
+                    }
+                    Err(failed_because) => {
+                        action.state = StreamActionState::Failed;
+                        action.failed_because = Some(failed_because);
+                    }
+                }
             });
     }
 

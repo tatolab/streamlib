@@ -32,7 +32,8 @@ old-main-9f8e7d      main    stopped  -      /home/me/old     stream:main
 - **A `running` row with a node count** — that stream is loaded; hand its id to `drive-running-stream`.
 - **`No streams in this runtime.`** — the runtime answers and holds nothing. Load one with `tatolab run --dir <project>`; it prints the stream id and returns.
 - **`no runtime is running on this machine: nothing answers at <socket>`** — no runtime is up for this user. The machine's runtime is a service (`systemctl --user start tatolabd` on Linux, the "Run Tatolab" switch in `Tatolab.app` on macOS) or `tatolabd` in a terminal — the owner's to start; a session that needs a runtime of its own starts the test-only build instead (`drive-running-stream`). When another user holds the machine, the refusal names them.
-- **`stopped` / `failed`** — not loaded. `tatolab start <name>` loads it again (retrying a failed one); `tatolab rm <name>` forgets it.
+- **`preparing` / `stopping`** — a queued action is working on the stream: a load or start, or a stop or `rm`. Read the row again once it has run.
+- **`stopped` / `failed`** — not loaded. `tatolab start <name>` loads it again (retrying a failed one); `tatolab rm --dir <project>` forgets every stream of its project.
 
 ## Notes
 - No flags. `tatolab streams` takes none.

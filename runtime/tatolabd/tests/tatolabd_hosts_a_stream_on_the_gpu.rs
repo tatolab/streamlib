@@ -22,6 +22,7 @@ use common::{
     TemporaryRuntimeUnit, a_native_only_stream_graph, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
     expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to_get,
+    the_stream_action_once_ended,
 };
 
 /// One engine on the GPU at a time, so the tests' runs never contend for it.
@@ -195,6 +196,12 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
         serde_json::json!({"stream": crasher.stream_id}),
     )
     .json();
+    let start_once_ended = the_stream_action_once_ended(
+        &machine_root.local_api_socket_path(),
+        started["action"]
+            .as_str()
+            .expect("`start_stream` answers its action"),
+    );
     let listed_after_the_retry = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "list_streams",
@@ -234,6 +241,11 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
         "{listed_after_two_crashes}"
     );
     assert_eq!(started["stream"], crasher.stream_id.as_str(), "{started}");
+    assert_eq!(
+        (&start_once_ended["kind"], &start_once_ended["state"]),
+        (&"start".into(), &"done".into()),
+        "{start_once_ended}"
+    );
     let retried_crasher = &listed_after_the_retry["streams"][0];
     assert_eq!(
         (

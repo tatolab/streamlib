@@ -27,7 +27,7 @@ pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 /// and the runtime still takes the action.
 pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
 
-/// How long a client waits for `stop_stream`, `remove_stream` or `expose_port`. The engine
+/// How long a client waits for `stop_stream`, `start_stream`, `remove_project` or `expose_port`. The engine
 /// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND`,
 /// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` and `PROJECT_VENV_MAKING_BOUND` fit within it for this action
 /// and one stream action — or the re-load of one record at the runtime's start — queued ahead of
@@ -116,37 +116,31 @@ pub enum RunStreamToolResultStreamState {
     Failed,
 }
 
-/// The `stop_stream` tool's result.
+/// The `stop_stream` tool's result: the stop queued on its stream's project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StopStreamToolResult {
+    /// The queued stop, as `describe_stream_action` takes it.
+    pub action: String,
     /// The stream's id.
     pub stream: String,
-    /// Always true: a stream the runtime could not unload is refused instead.
-    pub stopped: bool,
-    /// Present only when a recorded stream unloaded and could not be recorded stopped, so a
-    /// restart of the runtime loads it again.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_recorded_because: Option<String>,
 }
 
-/// The `start_stream` tool's result.
+/// The `start_stream` tool's result: the start queued on its stream's project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartStreamToolResult {
+    /// The queued start, as `describe_stream_action` takes it.
+    pub action: String,
     /// The stream's id.
     pub stream: String,
-    /// How many nodes the loaded graph holds.
-    pub node_count: usize,
 }
 
-/// The `remove_stream` tool's result.
+/// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RemoveStreamToolResult {
-    /// The stream's id.
-    pub stream: String,
-    /// Whether the stream was loaded and is now unloaded.
-    pub unloaded: bool,
-    /// Whether the stream was recorded and its record is now gone.
-    pub forgotten: bool,
+pub struct RemoveProjectToolResult {
+    /// The queued removal, as `describe_stream_action` takes it.
+    pub action: String,
+    /// The project whose streams it unloads and forgets, symlinks resolved.
+    pub project_directory: PathBuf,
 }
 
 /// The `rename_stream` tool's result.
@@ -200,8 +194,10 @@ pub enum ListedStreamState {
     Stopped,
     /// Skipped at the runtime's start until `start_stream` retries it.
     Failed,
-    /// A stream action of its project is queued or under way on it.
+    /// A stream action of its project that loads it is queued or under way on it.
     Preparing,
+    /// A stream action of its project that unloads it is queued or under way on it.
+    Stopping,
 }
 
 impl ListedStreamState {
@@ -212,6 +208,7 @@ impl ListedStreamState {
             ListedStreamState::Stopped => "stopped",
             ListedStreamState::Failed => "failed",
             ListedStreamState::Preparing => "preparing",
+            ListedStreamState::Stopping => "stopping",
         }
     }
 }
@@ -237,6 +234,14 @@ pub struct RunProjectToolResult {
 pub enum StreamActionKindOnTheWire {
     /// Loads every `@stream` of a project.
     Load,
+    /// Loads and starts one stopped or failed stream.
+    Start,
+    /// Unloads one stream and records it stopped.
+    Stop,
+    /// Unloads every stream of a project and forgets every record of it.
+    Remove,
+    /// Re-loads, at the runtime's start, a project's streams neither stopped nor failed.
+    ReloadAtStart,
 }
 
 /// Where a stream action is in its life.
@@ -263,6 +268,8 @@ pub enum StreamActionStepOnTheWire {
     Compiling,
     /// Loading and starting the streams the compile gave.
     Starting,
+    /// Unloading the streams it works on.
+    Stopping,
 }
 
 impl StreamActionStepOnTheWire {
@@ -272,6 +279,7 @@ impl StreamActionStepOnTheWire {
             StreamActionStepOnTheWire::MakingTheVenv => "making_the_venv",
             StreamActionStepOnTheWire::Compiling => "compiling",
             StreamActionStepOnTheWire::Starting => "starting",
+            StreamActionStepOnTheWire::Stopping => "stopping",
         }
     }
 }
@@ -640,18 +648,24 @@ mod tests {
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {
+                action: "R-7".to_owned(),
                 stream: "camera".to_owned(),
-                node_count: 3,
             }),
-            r#"{"stream":"camera","node_count":3}"#
+            r#"{"action":"R-7","stream":"camera"}"#
         );
         assert_eq!(
-            wire_text(&RemoveStreamToolResult {
+            wire_text(&StopStreamToolResult {
+                action: "R-8".to_owned(),
                 stream: "camera".to_owned(),
-                unloaded: true,
-                forgotten: false,
             }),
-            r#"{"stream":"camera","unloaded":true,"forgotten":false}"#
+            r#"{"action":"R-8","stream":"camera"}"#
+        );
+        assert_eq!(
+            wire_text(&RemoveProjectToolResult {
+                action: "R-9".to_owned(),
+                project_directory: PathBuf::from("/srv/project"),
+            }),
+            r#"{"action":"R-9","project_directory":"/srv/project"}"#
         );
         assert_eq!(
             wire_text(&ListStreamsToolResult {
@@ -747,12 +761,7 @@ mod tests {
 
     /// `not_recorded_because` is on the wire only when the runtime could not record.
     #[test]
-    fn stop_and_expose_carry_not_recorded_because_only_when_it_is_set() {
-        let stopped = |not_recorded_because: Option<&str>| StopStreamToolResult {
-            stream: "camera".to_owned(),
-            stopped: true,
-            not_recorded_because: not_recorded_because.map(str::to_owned),
-        };
+    fn expose_carries_not_recorded_because_only_when_it_is_set() {
         let exposed = |not_recorded_because: Option<&str>| ExposePortToolResult {
             stream: "camera".to_owned(),
             node: "source".to_owned(),
@@ -763,25 +772,12 @@ mod tests {
         };
 
         assert_eq!(
-            serde_json::to_string(&stopped(None)).unwrap(),
-            r#"{"stream":"camera","stopped":true}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&stopped(Some("cannot write"))).unwrap(),
-            r#"{"stream":"camera","stopped":true,"not_recorded_because":"cannot write"}"#
-        );
-        assert_eq!(
             serde_json::to_string(&exposed(None)).unwrap(),
             r#"{"stream":"camera","node":"source","port":"video","level":"public","recorded":true}"#
         );
         assert_eq!(
             serde_json::to_string(&exposed(Some("cannot write"))).unwrap(),
             r#"{"stream":"camera","node":"source","port":"video","level":"public","recorded":false,"not_recorded_because":"cannot write"}"#
-        );
-        assert_eq!(
-            serde_json::from_str::<StopStreamToolResult>(r#"{"stream":"camera","stopped":true}"#)
-                .unwrap(),
-            stopped(None)
         );
     }
 
@@ -792,6 +788,8 @@ mod tests {
             ListedStreamState::Running,
             ListedStreamState::Stopped,
             ListedStreamState::Failed,
+            ListedStreamState::Preparing,
+            ListedStreamState::Stopping,
         ] {
             assert_eq!(
                 serde_json::to_value(state).unwrap(),

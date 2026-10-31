@@ -7,7 +7,7 @@
 //! error naming the runtime's log when the runtime goes away.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Args;
@@ -121,10 +121,11 @@ where
 pub(crate) fn run_runtime_logs_verb(
     logs_arguments: RuntimeLogsVerbArguments,
 ) -> Result<u8, TatolabCommandFailure> {
-    let project_directory = the_project_directory_logs_reads(
-        &crate::caller_working_directory()?,
-        logs_arguments.requested_project_directory.as_deref(),
-    )?;
+    let project_directory =
+        crate::stream_actions_on_the_runtime::the_project_directory_a_verb_names(
+            &crate::caller_working_directory()?,
+            logs_arguments.requested_project_directory.as_deref(),
+        )?;
     let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
     let stream_id = match logs_arguments.requested_stream.as_deref() {
         None => None,
@@ -184,32 +185,6 @@ pub(crate) fn run_runtime_logs_verb(
             runtime_log_directory: &runtime_log_directory,
         },
     )
-}
-
-/// The canonical project directory `logs` reads: `--dir` resolved against
-/// `caller_working_directory`, else the working directory itself.
-fn the_project_directory_logs_reads(
-    caller_working_directory: &Path,
-    requested_project_directory: Option<&Path>,
-) -> Result<PathBuf, TatolabCommandFailure> {
-    let project_directory =
-        caller_working_directory.join(requested_project_directory.unwrap_or(Path::new("")));
-    project_directory
-        .canonicalize()
-        .ok()
-        .filter(|canonical_project_directory| canonical_project_directory.is_dir())
-        .ok_or_else(|| {
-            TatolabCommandFailure::refused(format!(
-                "{} is not a directory",
-                requested_project_directory.map_or_else(
-                    || format!("the working directory {}", project_directory.display()),
-                    |requested_project_directory| format!(
-                        "--dir {}",
-                        requested_project_directory.display()
-                    ),
-                )
-            ))
-        })
 }
 
 /// The stream id `stream_argument` names among `listed_streams`, the project's — a listed id, else a display
@@ -336,6 +311,8 @@ mod tests {
 
     use super::*;
     use crate::runtime_log_line_fixtures::a_log_record;
+    use crate::stream_actions_on_the_runtime::the_project_directory_a_verb_names;
+    use std::path::Path;
 
     #[derive(Parser)]
     struct LogsVerbCommandLine {
@@ -511,16 +488,16 @@ mod tests {
         let canonical_working_directory = working_directory.path().canonicalize().unwrap();
 
         assert_eq!(
-            the_project_directory_logs_reads(working_directory.path(), None).unwrap(),
+            the_project_directory_a_verb_names(working_directory.path(), None).unwrap(),
             canonical_working_directory
         );
         assert_eq!(
-            the_project_directory_logs_reads(working_directory.path(), Some(Path::new("desk")))
+            the_project_directory_a_verb_names(working_directory.path(), Some(Path::new("desk")))
                 .unwrap(),
             canonical_working_directory.join("desk")
         );
         assert_eq!(
-            TatolabCommandFailure::refusal_message_of(the_project_directory_logs_reads(
+            TatolabCommandFailure::refusal_message_of(the_project_directory_a_verb_names(
                 working_directory.path(),
                 Some(Path::new("gone"))
             )),

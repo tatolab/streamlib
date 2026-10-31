@@ -10,8 +10,7 @@ use super::operations::RuntimeOperations;
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
     ProjectStreamsListing, RunProjectRequest, RunStreamRequest, Runner, StreamAction,
-    StreamActionQueued, StreamListing, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStopOutcome,
+    StreamActionQueued, StreamListing, StreamRenameOutcome, StreamRunOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -21,9 +20,10 @@ use crate::core::graph::OutputPortExposureLevel;
 /// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
-/// `run_project` answers at once and its load runs on the project's stream
-/// action queue; every other stream action blocks — a load runs a compile and
-/// describes — so the local API calls each from a blocking task.
+/// `run_project`, `start_stream`, `stop_stream` and `remove_project` answer at
+/// once, their actions running on the project's stream action queue; every
+/// other call may block — `run_stream` runs a compile and describes — so the
+/// local API calls each from a blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
@@ -78,13 +78,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing>;
 
     /// [`Runner::stop_stream`].
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome>;
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
 
     /// [`Runner::start_stream`].
-    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome>;
+    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
 
-    /// [`Runner::remove_stream`].
-    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome>;
+    /// [`Runner::remove_project`].
+    fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
     /// [`Runner::rename_stream`].
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
@@ -164,16 +164,16 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::list_project_streams(self, project_directory)
     }
 
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome> {
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
         Runner::stop_stream(self, stream_id)
     }
 
-    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
+    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
         Runner::start_stream(self, stream_id)
     }
 
-    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome> {
-        Runner::remove_stream(self, stream_id)
+    fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::remove_project(self, project_directory)
     }
 
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {

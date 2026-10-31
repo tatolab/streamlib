@@ -7,14 +7,14 @@
 //! through `list_streams` first. `run` and `dev` share the load request.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult,
+    ListedStreamState, RemoveProjectToolResult, RenameStreamToolResult, RunStreamToolResult,
     RunStreamToolResultStream, RunStreamToolResultStreamState,
     STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
     StartStreamToolResult, StopStreamToolResult,
@@ -36,8 +36,8 @@ pub(crate) enum StreamActionTool {
     StopStream,
     /// Loads a stopped stream again, or retries a failed one.
     StartStream,
-    /// Unloads a stream and forgets its record.
-    RemoveStream,
+    /// Unloads every stream of a project and forgets every record of it.
+    RemoveProject,
     /// Shows a stream under another display name.
     RenameStream,
     /// Lists the streams the runtime holds.
@@ -53,7 +53,7 @@ impl StreamActionTool {
             StreamActionTool::RunStream => "run_stream",
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
-            StreamActionTool::RemoveStream => "remove_stream",
+            StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
@@ -63,11 +63,10 @@ impl StreamActionTool {
     /// How long a caller waits for the tool's result: as long as the runtime may take to answer.
     pub(crate) fn tool_call_timeout(self) -> Duration {
         match self {
-            StreamActionTool::RunStream | StreamActionTool::StartStream => {
-                STREAM_LOAD_TOOL_CALL_TIMEOUT
-            }
-            StreamActionTool::StopStream
-            | StreamActionTool::RemoveStream
+            StreamActionTool::RunStream => STREAM_LOAD_TOOL_CALL_TIMEOUT,
+            StreamActionTool::StartStream
+            | StreamActionTool::StopStream
+            | StreamActionTool::RemoveProject
             | StreamActionTool::RenameStream
             | StreamActionTool::ExposePort => STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
             StreamActionTool::ListStreams => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
@@ -248,15 +247,6 @@ pub(crate) fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     call_one_tool_reading_its_result(tool.tool_name(), tool_arguments, tool.tool_call_timeout())
 }
 
-/// `count` followed by `noun`, plural unless it is one.
-pub(crate) fn counted(count: usize, noun: &str) -> String {
-    if count == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{count} {noun}s")
-    }
-}
-
 /// `tatolab run`: load the stream, print the lines naming each stream the load took in and how to
 /// follow it, and return 0 when every one runs, 1 when any is failed.
 pub(crate) fn run_stream(
@@ -365,36 +355,11 @@ pub(crate) fn stop_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCo
         StreamActionTool::StopStream,
         stop_stream_tool_arguments(&stream),
     )?;
-    if let Some(not_recorded_warning) = stop_not_recorded_warning_line(&stop_stream_result) {
-        write_verb_standard_error(&not_recorded_warning);
-    }
-    write_verb_standard_output(&rendered_stopped_stream_line(&stop_stream_result))
-}
-
-fn rendered_stopped_stream_line(stop_stream_result: &StopStreamToolResult) -> String {
-    let stream = &stop_stream_result.stream;
-    if stop_stream_result.not_recorded_because.is_none() {
-        format!(
-            "{stream} stopped; it stays stopped across restarts until `tatolab start {stream}`\n"
-        )
-    } else {
-        format!("{stream} stopped\n")
-    }
-}
-
-/// The warning a stream stopped but not recorded stopped earns: a restart of the runtime loads
-/// it again.
-fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> Option<String> {
-    stop_stream_result
-        .not_recorded_because
-        .as_ref()
-        .map(|not_recorded_because| {
-            format!(
-                "warning: {} was not recorded stopped, so a restart of the runtime loads it \
-                 again: {not_recorded_because}\n",
-                stop_stream_result.stream
-            )
-        })
+    write_verb_standard_output(&rendered_queued_stream_action_line(
+        &stop_stream_result.action,
+        "stop",
+        &stop_stream_result.stream,
+    ))
 }
 
 /// `tatolab start [STREAM]`.
@@ -404,37 +369,79 @@ pub(crate) fn start_stream(stream_argument: Option<&str>) -> Result<u8, TatolabC
         StreamActionTool::StartStream,
         stream_tool_arguments(&stream),
     )?;
-    write_verb_standard_output(&format!(
-        "{} started ({})\n",
-        start_stream_result.stream,
-        counted(start_stream_result.node_count, "node")
+    write_verb_standard_output(&rendered_queued_stream_action_line(
+        &start_stream_result.action,
+        "start",
+        &start_stream_result.stream,
     ))
 }
 
-/// `tatolab rm [STREAM]`.
-pub(crate) fn remove_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
-    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-    let remove_stream_result: RemoveStreamToolResult = call_one_stream_action_tool(
-        StreamActionTool::RemoveStream,
-        stream_tool_arguments(&stream),
-    )?;
-    write_verb_standard_output(&rendered_removed_stream_line(&remove_stream_result))
+/// `tatolab rm [--dir DIR]`: the removal of the whole project — `--dir` resolved against
+/// `caller_working_directory`, else the working directory itself. A `--dir` that no longer
+/// exists is passed as given, so the streams of a deleted project can still be forgotten.
+pub(crate) fn remove_project(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<u8, TatolabCommandFailure> {
+    let project_directory = match requested_project_directory {
+        Some(requested_project_directory)
+            if !caller_working_directory
+                .join(requested_project_directory)
+                .exists() =>
+        {
+            caller_working_directory.join(requested_project_directory)
+        }
+        _ => the_project_directory_a_verb_names(
+            caller_working_directory,
+            requested_project_directory,
+        )?,
+    };
+    let mut remove_project_arguments = serde_json::Map::new();
+    remove_project_arguments.insert(
+        "project_directory".to_owned(),
+        project_directory.display().to_string().into(),
+    );
+    let remove_project_result: RemoveProjectToolResult =
+        call_one_stream_action_tool(StreamActionTool::RemoveProject, remove_project_arguments)?;
+    write_verb_standard_output(&rendered_queued_stream_action_line(
+        &remove_project_result.action,
+        "remove",
+        &remove_project_result
+            .project_directory
+            .display()
+            .to_string(),
+    ))
 }
 
-fn rendered_removed_stream_line(remove_stream_result: &RemoveStreamToolResult) -> String {
-    let what_removing_did = match (
-        remove_stream_result.unloaded,
-        remove_stream_result.forgotten,
-    ) {
-        (true, true) => " (unloaded and forgotten)",
-        (true, false) => " (unloaded)",
-        (false, true) => " (forgotten)",
-        (false, false) => "",
-    };
-    format!(
-        "{} removed{what_removing_did}\n",
-        remove_stream_result.stream
-    )
+/// `<action> queued: <verb> of <what>`, the line a verb whose stream action is queued prints.
+fn rendered_queued_stream_action_line(action: &str, verb: &str, what_it_acts_on: &str) -> String {
+    format!("{action} queued: {verb} of {what_it_acts_on}\n")
+}
+
+/// The canonical project directory a verb names: `--dir` resolved against
+/// `caller_working_directory`, else the working directory itself.
+pub(crate) fn the_project_directory_a_verb_names(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<PathBuf, TatolabCommandFailure> {
+    let project_directory =
+        caller_working_directory.join(requested_project_directory.unwrap_or(Path::new("")));
+    project_directory
+        .canonicalize()
+        .ok()
+        .filter(|canonical_project_directory| canonical_project_directory.is_dir())
+        .ok_or_else(|| {
+            TatolabCommandFailure::refused(format!(
+                "{} is not a directory",
+                requested_project_directory.map_or_else(
+                    || format!("the working directory {}", project_directory.display()),
+                    |requested_project_directory| format!(
+                        "--dir {}",
+                        requested_project_directory.display()
+                    ),
+                )
+            ))
+        })
 }
 
 /// `tatolab rename [STREAM] DISPLAY_NAME`, its positionals as given.
@@ -525,10 +532,11 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
             continue;
         };
         let stream_id = &listed_stream.stream;
-        let failed_line = match listed_stream.location {
-            Some(_) => format!(
+        let failed_line = match &listed_stream.location {
+            Some(location) => format!(
                 "{stream_id} failed: {failed_because}. `tatolab start {stream_id}` retries it, \
-                 `tatolab rm {stream_id}` forgets it.\n"
+                 `tatolab rm --dir {}` forgets its project.\n",
+                location.project_directory.display()
             ),
             None => format!("{stream_id} failed: {failed_because}.\n"),
         };
@@ -743,16 +751,14 @@ mod tests {
 
     #[test]
     fn each_stream_action_tool_waits_for_the_bound_of_its_kind() {
-        for loading_tool in [StreamActionTool::RunStream, StreamActionTool::StartStream] {
-            assert_eq!(
-                loading_tool.tool_call_timeout(),
-                STREAM_LOAD_TOOL_CALL_TIMEOUT,
-                "{loading_tool:?}"
-            );
-        }
+        assert_eq!(
+            StreamActionTool::RunStream.tool_call_timeout(),
+            STREAM_LOAD_TOOL_CALL_TIMEOUT
+        );
         for tool_that_loads_nothing in [
+            StreamActionTool::StartStream,
             StreamActionTool::StopStream,
-            StreamActionTool::RemoveStream,
+            StreamActionTool::RemoveProject,
             StreamActionTool::ExposePort,
         ] {
             assert_eq!(
@@ -851,56 +857,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_says_the_stream_stays_stopped() {
+    fn start_stop_and_rm_say_which_action_they_queued() {
         assert_eq!(
-            rendered_stopped_stream_line(&StopStreamToolResult {
-                stream: "camera".to_owned(),
-                stopped: true,
-                not_recorded_because: None,
-            }),
-            "camera stopped; it stays stopped across restarts until `tatolab start camera`\n"
-        );
-    }
-
-    #[test]
-    fn a_stop_the_runtime_could_not_record_warns_naming_why() {
-        let stop_stream_result: StopStreamToolResult = serde_json::from_value(json!({
-            "stream": "camera",
-            "stopped": true,
-            "not_recorded_because": "the record /state/streams/camera.json cannot be read",
-        }))
-        .unwrap();
-
-        assert_eq!(
-            rendered_stopped_stream_line(&stop_stream_result),
-            "camera stopped\n",
-            "a stop not recorded never claims the stream stays stopped across restarts"
+            rendered_queued_stream_action_line("R-7", "stop", "camera"),
+            "R-7 queued: stop of camera\n"
         );
         assert_eq!(
-            stop_not_recorded_warning_line(&stop_stream_result).as_deref(),
-            Some(
-                "warning: camera was not recorded stopped, so a restart of the runtime loads it \
-                 again: the record /state/streams/camera.json cannot be read\n"
-            )
+            rendered_queued_stream_action_line("R-9", "remove", "/srv/project"),
+            "R-9 queued: remove of /srv/project\n"
         );
-    }
-
-    #[test]
-    fn rm_says_what_removing_did() {
-        for (unloaded, forgotten, expected_line) in [
-            (true, true, "camera removed (unloaded and forgotten)\n"),
-            (true, false, "camera removed (unloaded)\n"),
-            (false, true, "camera removed (forgotten)\n"),
-        ] {
-            assert_eq!(
-                rendered_removed_stream_line(&RemoveStreamToolResult {
-                    stream: "camera".to_owned(),
-                    unloaded,
-                    forgotten,
-                }),
-                expected_line
-            );
-        }
     }
 
     #[test]

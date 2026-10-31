@@ -12,8 +12,8 @@ Today every stream tool is a synchronous engine call. A load makes the venv (a s
 re-load at start syncs under the engine-wide lock. Each loaded stream writes its own log.
 
 **After this change:**
-- **Actions.** `run_project`, `start_stream`, `stop_stream`, `remove_stream` and the re-load at
-  start queue a stream action on the project's serial queue and answer its action id at once.
+- **Actions.** `run_project`, `start_stream`, `stop_stream`, `remove_project` (which replaces
+  `remove_stream` and removes the whole project) and the re-load at start queue a stream action on the project's serial queue and answer its action id at once.
   `describe_stream_action` reads one, and `cancel_stream_action` ends one early.
 - **Loads take a project.** `run_project {project_directory}` loads every `@stream`. `run` and
   `dev` name no function and no display name.
@@ -124,7 +124,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
     through `spawn_blocking`.
   - Queues never wait on each other. The one-action lock stays engine-wide and is held only
     for an action's load and unload steps, never for the venv or the compile.
-  - The existing bodies (`run_project`, `start_stream`, `stop_stream`, `remove_stream` and the
+  - The existing bodies (`run_project`, `start_stream`, `stop_stream`, `remove_project` and the
     re-load of one project) become the actions' steps and gain a `StreamActionProgress` they
     report their step to.
 - **A stream action.** `StreamAction {action_id, project_directory, kind, state, step,
@@ -152,7 +152,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   each other's fields (`write` replaces the whole record from a caller's snapshot today,
   `machine_state_directory.rs:456`). Every record change goes through it.
 - **Engine trait.** `OperationsOnTheStreamsLoadedInThisRuntime` gains `describe_stream_action`
-  and `cancel_stream_action`; `run_project`, `start_stream`, `stop_stream` and `remove_stream`
+  and `cancel_stream_action`; `run_project`, `start_stream`, `stop_stream` and `remove_project`
   return `StreamActionQueued {action_id, project_directory}`; the stub and test engine follow.
 - **Last compile per project.** Every compile records its project's streams (each function and
   its docstring), or why `stream.py` did not import, in memory. `list_project_streams` (#2973)

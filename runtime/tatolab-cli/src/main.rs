@@ -143,20 +143,28 @@ enum TatolabVerb {
         #[command(flatten)]
         stream_load_arguments: StreamLoadArguments,
     },
-    /// Stop a stream: unload it, and keep it stopped across restarts.
+    /// Stop a stream: queue its unload, and keep it stopped across restarts.
     Stop {
         #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
-    /// Load a stopped stream again, or retry a failed one.
+    /// Queue a load of a stopped stream, or a retry of a failed one.
     Start {
         #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
-    /// Remove a stream: unload it and forget it.
+    /// Remove this project from the runtime: unload every stream of it and forget them.
+    #[command(
+        long_about = "Queue the removal of the whole project on its stream action queue: once \
+                      the project's earlier actions have run, every stream of it is unloaded and \
+                      forgotten, so the runtime no longer re-loads it. No file is deleted. Prints \
+                      `<action> queued: remove of <project>` and exits 0 once queued; \
+                      `tatolab streams` shows the project's streams `stopping` until it is done."
+    )]
     Rm {
-        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
-        stream: Option<String>,
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
     },
     /// Show a stream under another display name; its id and address stay as they are.
     #[command(
@@ -315,8 +323,13 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         TatolabVerb::Start { stream } => {
             stream_actions_on_the_runtime::start_stream(stream.as_deref())
         }
-        TatolabVerb::Rm { stream } => {
-            stream_actions_on_the_runtime::remove_stream(stream.as_deref())
+        TatolabVerb::Rm { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::remove_project(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
         }
         TatolabVerb::Rename {
             stream_then_display_name,

@@ -61,8 +61,9 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    OwnerExposureRuling, STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead,
-    StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
+    OwnerExposureRuling, PendingStreamActionKind, PendingStreamActionOnTheRecord,
+    STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
@@ -109,8 +110,8 @@ pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
     LoadedStreamHolding, OutputPortExposureOutcome, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
     RunProjectRequest, RunStreamRequest, StreamListing, StreamListingState,
-    StreamLoadedOrFailedByARun, StreamReloadAtTheStart, StreamRemoveOutcome, StreamRenameOutcome,
-    StreamRunOutcome, StreamStartOutcome, StreamStateAfterItsRun, StreamStopOutcome,
+    StreamLoadedOrFailedByARun, StreamReloadAtTheStart, StreamRenameOutcome, StreamRunOutcome,
+    StreamStateAfterItsRun,
 };
 pub use stream_environment::StreamEnvironment;
 pub use stream_location_and_id::StreamLocation;

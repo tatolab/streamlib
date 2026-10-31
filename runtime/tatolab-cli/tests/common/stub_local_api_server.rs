@@ -741,7 +741,7 @@ pub fn failed_run_stream_tool_result_text(
     .to_string()
 }
 
-/// The text a runtime's `stop_stream` answers with.
+/// The text a runtime's `stop_stream` answers with, the stop queued as the action `R-1`.
 pub fn stop_stream_tool_result_text(stream: &str) -> String {
-    serde_json::json!({ "stream": stream, "stopped": true }).to_string()
+    serde_json::json!({ "action": "R-1", "stream": stream }).to_string()
 }

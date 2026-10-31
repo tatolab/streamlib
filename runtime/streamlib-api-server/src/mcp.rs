@@ -8,7 +8,7 @@
 //! `describe_runtime`; the graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_stream`, `run_project`, `describe_stream_action`,
-//! `list_project_streams`, `stop_stream`, `start_stream`, `remove_stream`,
+//! `list_project_streams`, `stop_stream`, `start_stream`, `remove_project`,
 //! `list_streams` and `expose_port`; and the relay verbs `add_relay`,
 //! `configure_relay`, `remove_relay` and `list_relays` — and beside them it
 //! serves the node catalog, the live graph and the relay-adapter catalog as
@@ -68,7 +68,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeStreamActionToolResultStream, ExposePortLevel, ExposePortToolResult,
     ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListRelaysToolResult,
     ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LoadedStreamInstance,
-    LogsToolResult, RemoveRelayToolResult, RemoveStreamToolResult, RenameStreamToolResult,
+    LogsToolResult, RemoveProjectToolResult, RemoveRelayToolResult, RenameStreamToolResult,
     RunProjectToolResult, RunStreamToolResult, RunStreamToolResultStream,
     RunStreamToolResultStreamState, StartStreamToolResult, StopStreamToolResult,
     StreamActionKindOnTheWire, StreamActionStateOnTheWire, StreamActionStepOnTheWire,
@@ -98,7 +98,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue makes its `.venv`, compiles every `@stream` in its `stream.py` and starts each — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done` or `failed`, and read what it wrote with `logs` given its `action`; `list_project_streams` lists the project's `@stream` functions as its last compile named them, running none of its code. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for every `@stream` in `stream.py`, each its own stream), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. A load is never refused for what the project's code does: a stream whose function raises, whose load or start is refused, or whose project's `stream.py` does not import or defines no `@stream` is returned in `streams` with `state` `failed` and its traceback or reason in `failed_because`, listed failed until a load of the fixed code replaces it or `start_stream` compiles it again; only the caller's own mistakes — a directory that is not a project, a function nothing defines or records, an id another location holds — are refused. Every stream it loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_stream` ends it: closing the connection that carried the call unloads nothing. `stop_stream` unloads a stream and records it stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, `rename_stream` shows one under another display name — recorded, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level on the stream's record. Every tool about one stream — `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv and compile lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue makes its `.venv`, compiles every `@stream` in its `stream.py` and starts each — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done` or `failed`, and read what it wrote with `logs` given its `action`; `list_project_streams` lists the project's `@stream` functions as its last compile named them, running none of its code. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for every `@stream` in `stream.py`, each its own stream), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. A load is never refused for what the project's code does: a stream whose function raises, whose load or start is refused, or whose project's `stream.py` does not import or defines no `@stream` is returned in `streams` with `state` `failed` and its traceback or reason in `failed_because`, listed failed until a load of the fixed code replaces it or `start_stream` compiles it again; only the caller's own mistakes — a directory that is not a project, a function nothing defines or records, an id another location holds — are refused. Every stream it loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_project` ends it: closing the connection that carried the call unloads nothing. `stop_stream` queues the unload of a stream that records it stopped, `start_stream` queues a load of a stopped one and a retry of a failed one, and `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its stream's project queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level on the stream's record. Every tool about one stream — `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv and compile lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -352,6 +352,14 @@ struct RunStreamToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct RunProjectToolArguments {
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveProjectToolArguments {
     #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
 }
@@ -658,7 +666,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Make the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run, compile a project's stream function — or, with none named, every `@stream` in its `stream.py` — in that interpreter, describe its Python types, then load and start the stream under its stream id, `<folder>-<function>-<hash>`, which the runtime computes from its location — the resolved project directory and the function's `module:qualname`. The answer lists in `streams` each stream the load took in, by `stream`, beside its `display_name` (the function's name, or `name`), its `location` and its `state`: `running`, with `stream_instance` naming this load and its `node_count`; or `failed`, with `failed_because`. A failed stream is returned, never refused: a function that raises carries its traceback, a load or start that is refused its reason, and a `.venv` uv cannot make — uv's own words — or a `stream.py` that does not import or defines no `@stream` fails every stream recorded from the project — or, with none, a stream `<folder>-<hash>` shown under the folder's name, which the next load that defines a stream replaces. Fix the code and run again, or `start_stream` it. Refused, with nothing changed: a project the compile refuses, a function nothing defines or records, and an id another location holds, named with both. The stream is recorded, re-loaded whenever the runtime starts until `stop_stream` or `remove_stream` ends it — a failed one waits for `start_stream` — and outlives the connection that carried this call. A run of a recorded stream's location replaces it, keeping its display name unless `name` is given and the owner's exposure levels; the running stream is unloaded once its replacement is recorded, and never put back. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Make the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run, compile a project's stream function — or, with none named, every `@stream` in its `stream.py` — in that interpreter, describe its Python types, then load and start the stream under its stream id, `<folder>-<function>-<hash>`, which the runtime computes from its location — the resolved project directory and the function's `module:qualname`. The answer lists in `streams` each stream the load took in, by `stream`, beside its `display_name` (the function's name, or `name`), its `location` and its `state`: `running`, with `stream_instance` naming this load and its `node_count`; or `failed`, with `failed_because`. A failed stream is returned, never refused: a function that raises carries its traceback, a load or start that is refused its reason, and a `.venv` uv cannot make — uv's own words — or a `stream.py` that does not import or defines no `@stream` fails every stream recorded from the project — or, with none, a stream `<folder>-<hash>` shown under the folder's name, which the next load that defines a stream replaces. Fix the code and run again, or `start_stream` it. Refused, with nothing changed: a project the compile refuses, a function nothing defines or records, and an id another location holds, named with both. The stream is recorded, re-loaded whenever the runtime starts until `stop_stream` or `remove_project` ends it — a failed one waits for `start_stream` — and outlives the connection that carried this call. A run of a recorded stream's location replaces it, keeping its display name unless `name` is given and the owner's exposure levels; the running stream is unloaded once its replacement is recorded, and never put back. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -767,66 +775,73 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Unload a stream and record it stopped, so it stays unloaded across a runtime restart until `start_stream`. A stream already stopped, or failed, is refused. `not_recorded_because`, present only then, says why a stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
+        description = "Queue a stop of a stream on its project's stream action queue and answer at once with the action's id as `action` beside the stream's id as `stream`: once the project's earlier actions have run, the stop unloads the stream and records it stopped, so it stays unloaded across a runtime restart until `start_stream`. The stream is `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. A recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a stream stopped, or failed, once the actions queued before it run."
     )]
     async fn stop_stream(
         &self,
         Parameters(StreamActionToolArguments { stream }): Parameters<StreamActionToolArguments>,
     ) -> ToolCallAnswer {
-        let stopped = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.stop_stream(&stream)
+        let queued = self
+            .a_stream_action_off_the_async_runtime({
+                let stream = stream.clone();
+                move |operations_on_the_loaded_streams| {
+                    operations_on_the_loaded_streams.stop_stream(&stream)
+                }
             })
             .await?;
         serialized_tool_result(
             "stop_stream",
             &StopStreamToolResult {
-                stream: stopped.stream_id,
-                stopped: true,
-                not_recorded_because: stopped.stop_not_recorded_because,
+                action: queued.action_id,
+                stream,
             },
         )
     }
 
     #[tool(
-        description = "Load and start a recorded stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason. When its project's `.venv/bin/python` does not run, the runtime first makes the `.venv` with the uv it carries; one uv cannot make records the stream failed in uv's own words and refuses the start."
+        description = "Queue a start of a recorded stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — on its project's stream action queue, and answer at once with the action's id as `action` beside the stream's id as `stream`. Once the project's earlier actions have run, the start makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run, then loads and starts the stream from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason, and the action ends `done` with the stream `failed`. The stream is `preparing` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a stream loaded once the actions queued before it run, and an id no record holds."
     )]
     async fn start_stream(
         &self,
         Parameters(StreamActionToolArguments { stream }): Parameters<StreamActionToolArguments>,
     ) -> ToolCallAnswer {
-        let started = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.start_stream(&stream)
+        let queued = self
+            .a_stream_action_off_the_async_runtime({
+                let stream = stream.clone();
+                move |operations_on_the_loaded_streams| {
+                    operations_on_the_loaded_streams.start_stream(&stream)
+                }
             })
             .await?;
         serialized_tool_result(
             "start_stream",
             &StartStreamToolResult {
-                stream: started.stream_id,
-                node_count: started.node_count,
+                action: queued.action_id,
+                stream,
             },
         )
     }
 
     #[tool(
-        description = "Unload a stream if it is loaded, and forget its record, so the runtime no longer re-loads it."
+        description = "Queue the removal of the whole project in `project_directory` on its stream action queue and answer at once with the action's id as `action`: once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, so the runtime no longer re-loads any of them, and deletes no file. No tool removes one stream: every `@stream` in `stream.py` runs, and a stream leaves its project when its function leaves `stream.py`. The project's streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute, and a project the runtime holds no stream of."
     )]
-    async fn remove_stream(
+    async fn remove_project(
         &self,
-        Parameters(StreamActionToolArguments { stream }): Parameters<StreamActionToolArguments>,
+        Parameters(RemoveProjectToolArguments { project_directory }): Parameters<
+            RemoveProjectToolArguments,
+        >,
     ) -> ToolCallAnswer {
-        let removed = self
+        refuse_a_relative_project_directory(&project_directory)?;
+        let queued = self
             .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.remove_stream(&stream)
+                operations_on_the_loaded_streams.remove_project(&project_directory)
             })
             .await?;
         serialized_tool_result(
-            "remove_stream",
-            &RemoveStreamToolResult {
-                stream: removed.stream_id,
-                unloaded: removed.unloaded,
-                forgotten: removed.forgotten,
+            "remove_project",
+            &RemoveProjectToolResult {
+                action: queued.action_id,
+                project_directory: queued.project_directory,
             },
         )
     }
@@ -856,7 +871,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `preparing` (a `run_project` action is queued or under way on it, named by `action`, on its `step`: `making_the_venv`, `compiling` or `starting`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_stream` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `preparing` (an action that loads it — a `run_project` or a `start_stream` — is queued or under way on it, named by `action`, on its `step`: `making_the_venv`, `compiling` or `starting`, `null` while it waits), `stopping` (a `stop_stream`, or a `remove_project` of its project, is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
     )]
     async fn list_streams(
         &self,
@@ -1020,6 +1035,7 @@ fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamSta
         StreamListingState::Stopped => ListedStreamState::Stopped,
         StreamListingState::Failed => ListedStreamState::Failed,
         StreamListingState::Preparing => ListedStreamState::Preparing,
+        StreamListingState::Stopping => ListedStreamState::Stopping,
     }
 }
 
@@ -1028,6 +1044,7 @@ fn stream_action_step_on_the_wire(step: StreamActionStep) -> StreamActionStepOnT
         StreamActionStep::MakingTheVenv => StreamActionStepOnTheWire::MakingTheVenv,
         StreamActionStep::Compiling => StreamActionStepOnTheWire::Compiling,
         StreamActionStep::Starting => StreamActionStepOnTheWire::Starting,
+        StreamActionStep::Stopping => StreamActionStepOnTheWire::Stopping,
     }
 }
 
@@ -1040,6 +1057,10 @@ fn describe_stream_action_tool_result_of(
         project_directory: stream_action.project_directory,
         kind: match stream_action.kind {
             StreamActionKind::Load => StreamActionKindOnTheWire::Load,
+            StreamActionKind::Start => StreamActionKindOnTheWire::Start,
+            StreamActionKind::Stop => StreamActionKindOnTheWire::Stop,
+            StreamActionKind::Remove => StreamActionKindOnTheWire::Remove,
+            StreamActionKind::ReloadAtStart => StreamActionKindOnTheWire::ReloadAtStart,
         },
         state: match stream_action.state {
             StreamActionState::Queued => StreamActionStateOnTheWire::Queued,
@@ -1422,7 +1443,7 @@ pub(crate) mod tests {
         "list_project_streams",
         "stop_stream",
         "start_stream",
-        "remove_stream",
+        "remove_project",
         "rename_stream",
         "list_streams",
         "expose_port",
@@ -1442,7 +1463,6 @@ pub(crate) mod tests {
         "disconnect",
         "stop_stream",
         "start_stream",
-        "remove_stream",
         "rename_stream",
         "expose_port",
     ];
@@ -2564,10 +2584,15 @@ pub(crate) mod tests {
                 json!({ "stream": STUB_STREAM_ID, "keep": true }),
                 "keep",
             ),
-            ("remove_stream", json!({}), "stream"),
+            ("remove_project", json!({}), "project_directory"),
             (
-                "remove_stream",
-                json!({ "stream": STUB_STREAM_ID, "force": true }),
+                "remove_project",
+                json!({ "project_directory": "relative/project" }),
+                "absolute",
+            ),
+            (
+                "remove_project",
+                json!({ "project_directory": absolute_project_directory, "force": true }),
                 "force",
             ),
             (
@@ -2654,9 +2679,9 @@ pub(crate) mod tests {
                 "start_stream",
             ),
             (
-                "remove_stream",
-                json!({ "stream": "camera" }),
-                "remove_stream",
+                "remove_project",
+                json!({ "project_directory": "/home/someone/projects/camera" }),
+                "remove_project",
             ),
             (
                 "expose_port",

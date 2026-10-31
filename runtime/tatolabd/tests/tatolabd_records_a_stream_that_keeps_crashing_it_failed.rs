@@ -16,7 +16,7 @@ mod common;
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    expect_the_runtime_to_crash_on_segv,
+    expect_the_runtime_to_crash_on_segv, the_stream_action_once_ended,
 };
 
 #[test]
@@ -94,17 +94,30 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start
         &machine_root.local_api_socket_path(),
         "start_stream",
         serde_json::json!({"stream": crasher_stream_id}),
+    )
+    .json();
+    let retry_once_ended = the_stream_action_once_ended(
+        &machine_root.local_api_socket_path(),
+        retried["action"]
+            .as_str()
+            .expect("`start_stream` answers its action"),
     );
     runtime.interrupt_and_expect_a_clean_exit();
 
+    assert_eq!(
+        (
+            &retry_once_ended["state"],
+            &retry_once_ended["streams"][0]["state"]
+        ),
+        (&"done".into(), &"failed".into()),
+        "{retry_once_ended}"
+    );
+    let standard_error = runtime.standard_error();
     assert!(
-        retried.is_error
-            && retried
-                .text
-                .contains("the engine could not give the stream its GPU context"),
+        standard_error.contains(&format!("the stream `{crasher_stream_id}` did not start: "))
+            && standard_error.contains("the engine could not give the stream its GPU context"),
         "the retry did not load the stream past its crash to the GPU this runtime was left \
-         without: {}",
-        retried.text
+         without:\n{standard_error}"
     );
     assert!(
         !run_in_progress_record.exists(),
