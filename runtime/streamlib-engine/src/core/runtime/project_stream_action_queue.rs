@@ -436,8 +436,7 @@ impl StreamActionQueueOfEachProject {
         drop(queues);
         let action = held
             .by_action_id
-            .get(action_id)
-            .cloned()
+            .get_mut(action_id)
             .ok_or_else(|| a_stream_action_not_held(action_id))?;
         if action.state.is_finished() {
             return Err(Error::Configuration(format!(
@@ -445,6 +444,9 @@ impl StreamActionQueueOfEachProject {
                 action.state.as_str()
             )));
         }
+        // Out of its queue, the worker has taken it, whether or not its body has marked it begun.
+        action.state = StreamActionState::InProgress;
+        let action = action.clone();
         refuse_the_cancel_of_a_running_action(&action)?;
         held.running_action_ids_whose_cancel_is_asked
             .insert(action_id.to_string());
@@ -821,6 +823,32 @@ mod tests {
                 .lock()
                 .running_action_ids_whose_cancel_is_asked
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_action_its_worker_took_before_marking_it_begun_answers_its_cancel_in_progress() {
+        let queue_of_each_project = StreamActionQueueOfEachProject::default();
+        queue_of_each_project
+            .stream_actions_held
+            .lock()
+            .by_action_id
+            .insert("R-1".to_string(), an_action_of("/srv/desk", "R-1"));
+
+        let cancelled = queue_of_each_project
+            .cancel_the_stream_action("R-1", |_running| Ok(()))
+            .expect("a taken action is asked to cancel");
+
+        let StreamActionCancelOutcome::AskedOfTheRunningAction(asked) = cancelled else {
+            panic!("a taken action is running: {cancelled:?}");
+        };
+        assert_eq!(asked.state, StreamActionState::InProgress);
+        assert_eq!(
+            queue_of_each_project
+                .held_stream_action("R-1")
+                .unwrap()
+                .state,
+            StreamActionState::InProgress
         );
     }
 

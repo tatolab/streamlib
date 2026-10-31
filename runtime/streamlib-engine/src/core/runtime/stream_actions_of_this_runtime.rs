@@ -479,7 +479,7 @@ impl Runner {
     /// holds, an id held by another location — and before the compile on a
     /// runtime given no state directory.
     pub fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
-        self.run_the_project_reporting_to(request, None)
+        self.run_the_project_reporting_to(request, None, &is_the_machines_shutdown_requested)
     }
 
     /// [`Runner::run_stream`], for the stream action `progress` reports when
@@ -490,12 +490,13 @@ impl Runner {
         &self,
         request: RunStreamRequest,
         progress: Option<&StreamActionProgress<'_>>,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<StreamRunOutcome> {
         let _in_the_projects_log = self.enter_the_log_of_the_project_a_load_takes_in(
             &request.project_directory,
             progress.map(|progress| progress.action_id.as_str()),
         );
-        let run_outcome = self.run_the_project_in_its_log(request, progress);
+        let run_outcome = self.run_the_project_in_its_log(request, progress, is_interrupted);
         match (&run_outcome, &_in_the_projects_log) {
             (Ok(run_outcome), Some(_)) => self.log_each_stream_a_run_failed_in_its_projects_log(
                 run_outcome,
@@ -552,17 +553,12 @@ impl Runner {
         &self,
         request: RunStreamRequest,
         progress: Option<&StreamActionProgress<'_>>,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<StreamRunOutcome> {
         let report_the_step = |step: StreamActionStep| {
             if let Some(progress) = progress {
                 progress.is_on(step);
             }
-        };
-        let is_interrupted = || {
-            progress.map_or_else(
-                is_the_machines_shutdown_requested,
-                StreamActionProgress::is_interrupted,
-            )
         };
         let RunStreamRequest {
             project_directory,
@@ -594,7 +590,7 @@ impl Runner {
         report_the_step(StreamActionStep::MakingTheVenv);
         let venv_sync_bound = progress.is_none().then_some(PROJECT_VENV_SYNC_BOUND);
         if let Err(venv_not_made) =
-            self.make_the_projects_venv_within(&project_directory, venv_sync_bound, &is_interrupted)
+            self.make_the_projects_venv_within(&project_directory, venv_sync_bound, is_interrupted)
         {
             let failed_because = match venv_not_made {
                 ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
@@ -627,7 +623,7 @@ impl Runner {
             &project_directory,
             stream_function.as_deref(),
             lend_directory,
-            &is_interrupted,
+            is_interrupted,
         )?;
         if stream_function.is_none() {
             self.remember_what_the_every_stream_compile_gave(
@@ -673,7 +669,7 @@ impl Runner {
                             display_name_the_run_gives: display_name_the_run_gives.clone(),
                             stream_environment: &stream_environment,
                             graph_or_why_none,
-                            is_interrupted: &is_interrupted,
+                            is_interrupted: is_interrupted,
                         },
                     )?);
                 }
@@ -708,7 +704,7 @@ impl Runner {
                     display_name_the_run_gives,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Ok(graph_json),
-                    is_interrupted: &is_interrupted,
+                    is_interrupted: is_interrupted,
                 },
             )?],
             WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
@@ -721,7 +717,7 @@ impl Runner {
                     display_name_the_run_gives,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Err(failed_because),
-                    is_interrupted: &is_interrupted,
+                    is_interrupted: is_interrupted,
                 },
             )?],
             WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
@@ -1316,8 +1312,11 @@ impl Runner {
         let Some(graph_json) = record.graph.as_ref() else {
             drop(one_stream_action_at_a_time);
             report_the_step(StreamActionStep::Compiling);
-            let compiled_again =
-                self.compile_and_run_a_recorded_stream_from_its_location(&record, progress)?;
+            let compiled_again = self.compile_and_run_a_recorded_stream_from_its_location(
+                &record,
+                progress,
+                &is_interrupted,
+            )?;
             return match compiled_again.state {
                 StreamStateAfterItsRun::Running { node_count, .. } => Ok(StreamStartOutcome {
                     stream_id: compiled_again.stream_id,
@@ -1658,7 +1657,9 @@ impl Runner {
 
     /// Run the re-load at the start the stream action `action_id` queued of
     /// the records `stream_ids`, and finish the action done with each
-    /// stream's state.
+    /// stream's state; a stream left unloaded but not recorded failed — an
+    /// engine refusal or an interrupt, re-loaded at the next start — keeps
+    /// no state.
     fn reload_the_records_for_its_stream_action(&self, action_id: &str, stream_ids: &[String]) {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Starting);
@@ -1679,8 +1680,13 @@ impl Runner {
                 StreamReloadAtTheStart::Reloaded { stream_id } => {
                     Some((stream_id.clone(), StreamListingState::Running))
                 }
-                StreamReloadAtTheStart::NotReloaded { stream_id, .. }
-                | StreamReloadAtTheStart::SkippedAsFailed { stream_id, .. } => {
+                StreamReloadAtTheStart::NotReloaded { stream_id, .. } => self
+                    .current_stream_record_of_the_id(stream_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|record| record.is_failed())
+                    .then(|| (stream_id.clone(), StreamListingState::Failed)),
+                StreamReloadAtTheStart::SkippedAsFailed { stream_id, .. } => {
                     Some((stream_id.clone(), StreamListingState::Failed))
                 }
                 StreamReloadAtTheStart::RecordUnreadable(_) => None,
@@ -1780,8 +1786,12 @@ impl Runner {
             }
             let Some(graph_json) = record.graph.as_ref() else {
                 drop(one_stream_action_at_a_time);
-                reloads
-                    .push(self.reload_a_recorded_stream_holding_no_graph_by_compiling_it(&record));
+                reloads.push(
+                    self.reload_a_recorded_stream_holding_no_graph_by_compiling_it(
+                        &record,
+                        is_interrupted,
+                    ),
+                );
                 continue;
             };
             let reloaded = venv_made_outside_the_lock
@@ -2544,6 +2554,7 @@ impl Runner {
         &self,
         record: &StreamRecord,
         progress: Option<&StreamActionProgress<'_>>,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<StreamLoadedOrFailedByARun> {
         let project_directory = the_project_directory_whose_venv_holds(&record.interpreter)
             .ok_or_else(|| {
@@ -2572,6 +2583,7 @@ impl Runner {
                 display_name: None,
             },
             progress,
+            is_interrupted,
         )?;
         let mut streams = run.streams.into_iter();
         let the_project_took_in_one_stream =
@@ -2591,9 +2603,14 @@ impl Runner {
     fn reload_a_recorded_stream_holding_no_graph_by_compiling_it(
         &self,
         record: &StreamRecord,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> StreamReloadAtTheStart {
         let stream_id = record.stream_id.clone();
-        let refusal = match self.compile_and_run_a_recorded_stream_from_its_location(record, None) {
+        let refusal = match self.compile_and_run_a_recorded_stream_from_its_location(
+            record,
+            None,
+            is_interrupted,
+        ) {
             Ok(StreamLoadedOrFailedByARun {
                 stream_id,
                 state: StreamStateAfterItsRun::Running { node_count, .. },
@@ -2851,6 +2868,7 @@ impl Runner {
                         display_name: None,
                     },
                     Some(&progress),
+                    &|| progress.is_interrupted(),
                 )
                 .map_err(|refusal| refusal.to_string()),
         };

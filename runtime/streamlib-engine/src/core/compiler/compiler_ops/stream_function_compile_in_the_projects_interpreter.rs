@@ -394,8 +394,14 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
                 compile_bound.as_secs_f64()
             )));
         }
-        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
-        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested => {
+            return Err(Error::Runtime(format!(
+                "the stream functions in {project} were not compiled: a machine shutdown was \
+                 requested while `{interpreter_shown}` compiled them, and it was killed. \
+                 {quoted_standard_error}"
+            )));
+        }
+        StreamInterpreterExitAwaited::InterruptedByTheHost => {
             return Err(Error::Runtime(format!(
                 "the stream functions in {project} were not compiled: {} while \
                  `{interpreter_shown}` compiled them, and it was killed. {quoted_standard_error}",
