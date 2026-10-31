@@ -6,8 +6,8 @@ the stream function it names.
 
 A target ending `.py`, with or without `:<function>`, is a file resolved against
 the anchor directory; `<module>:<function>` is a module imported with the anchor
-leading the import path; no target means `stream.py` at the anchor, or the file
-`-f` names.
+leading the import path; no target means `stream.py` at the anchor, a project's
+entry.
 """
 
 from __future__ import annotations
@@ -108,14 +108,8 @@ def stream_target_forms(verb: str) -> str:
     )
 
 
-def resolve_app_entry_file(
-    verb: str, anchor_directory: Path, requested_entry_file: Optional[Path]
-) -> Path:
-    """The entry file `-f` names (relative to the anchor), else `stream.py` directly at the anchor."""
-    if requested_entry_file is not None:
-        return _resolve_named_entry_file(
-            anchor_directory, requested_entry_file, f"-f {requested_entry_file}"
-        )
+def resolve_app_entry_file(verb: str, anchor_directory: Path) -> Path:
+    """`stream.py` directly at the anchor, the entry every project's load executes."""
     conventional_entry_file = anchor_directory / DEFAULT_STREAM_ENTRY_FILE_NAME
     if conventional_entry_file.is_file():
         return conventional_entry_file
@@ -123,23 +117,18 @@ def resolve_app_entry_file(
         raise ProjectStreamCompileRefusalError(
             f"no `{DEFAULT_STREAM_ENTRY_FILE_NAME}` in `{anchor_directory}`, only an "
             f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}`\n"
-            f"`tatolab {verb}` launches a @stream function from "
-            f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}`, and reads "
-            f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}` "
-            f"only when `-f` or a target names it.\n"
+            f"`tatolab {verb}` loads the @stream functions of "
+            f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}`, and never reads "
+            f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}`.\n"
             f"{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
             f"\n"
-            f"Write the stream in `{DEFAULT_STREAM_ENTRY_FILE_NAME}`, or name the file "
-            f"that defines it with `-f <file>` or "
-            f"`tatolab {verb} <file>.py[:<function>]`."
+            f"Write the stream in `{DEFAULT_STREAM_ENTRY_FILE_NAME}`."
         )
     raise ProjectStreamCompileRefusalError(
         f"no `{DEFAULT_STREAM_ENTRY_FILE_NAME}` in `{anchor_directory}`\n"
         f"`tatolab {verb}` reads `{DEFAULT_STREAM_ENTRY_FILE_NAME}` from this "
         f"directory only — it never searches parent directories.\n"
-        f"Run it from your project root, point at one with `--dir <project-root>`, "
-        f"or name the entry file with `-f <file>` or "
-        f"`tatolab {verb} <file>.py[:<function>]`."
+        f"Run it from your project root, or point at one with `--dir <project-root>`."
     )
 
 
@@ -161,30 +150,23 @@ def _resolve_named_entry_file(
 def resolve_stream_entry(
     verb: str,
     anchor_directory: Path,
-    requested_entry_file: Optional[Path],
-    requested_stream_target: Optional[str],
+    stream_function_target: Optional[str],
 ) -> ResolvedStreamEntry:
-    """Resolve the positional target, or `-f` / the convention when there is none."""
-    if requested_stream_target is None:
+    """Resolve the positional target, or the project's `stream.py` when there is none."""
+    if stream_function_target is None:
         return ResolvedStreamEntryFile(
-            entry_file=resolve_app_entry_file(verb, anchor_directory, requested_entry_file),
+            entry_file=resolve_app_entry_file(verb, anchor_directory),
             stream_function_name=None,
         )
-    if requested_entry_file is not None:
-        raise ProjectStreamCompileRefusalError(
-            f"`-f {requested_entry_file}` and `{requested_stream_target}` both name what "
-            f"to launch — give one: `tatolab {verb} -f <file>`, or "
-            f"{stream_target_forms(verb)}"
-        )
 
-    named_by = f"tatolab {verb} {requested_stream_target}"
-    before_separator, separator, after_separator = requested_stream_target.rpartition(
+    named_by = f"tatolab {verb} {stream_function_target}"
+    before_separator, separator, after_separator = stream_function_target.rpartition(
         STREAM_TARGET_FUNCTION_SEPARATOR
     )
-    if requested_stream_target.endswith(STREAM_TARGET_FILE_SUFFIX):
+    if stream_function_target.endswith(STREAM_TARGET_FILE_SUFFIX):
         return ResolvedStreamEntryFile(
             entry_file=_resolve_named_entry_file(
-                anchor_directory, Path(requested_stream_target), named_by
+                anchor_directory, Path(stream_function_target), named_by
             ),
             stream_function_name=None,
         )
@@ -202,7 +184,7 @@ def resolve_stream_entry(
                 stream_function_name=after_separator,
             )
     raise ProjectStreamCompileRefusalError(
-        f"`{requested_stream_target}` names no stream: a target is a file ending "
+        f"`{stream_function_target}` names no stream: a target is a file ending "
         f"`{STREAM_TARGET_FILE_SUFFIX}`, optionally followed by `:<function>`, or an "
         f"importable `<module>:<function>` — {stream_target_forms(verb)}"
     )

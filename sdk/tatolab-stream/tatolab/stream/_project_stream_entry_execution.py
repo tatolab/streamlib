@@ -22,17 +22,19 @@ from ._project_stream_entry_resolution import (
     ResolvedStreamEntryFile,
     ResolvedStreamEntryModule,
     StreamFunctionNotDefinedRefusalError,
-    stream_target_forms,
     tatolab_command_as_typed,
 )
 from ._stream_graph_builder import is_stream_function
 
 __all__ = [
+    "StreamEntryDefinesNoStreamError",
     "execute_app_entry_file",
     "import_stream_entry_module",
     "named_stream_function_location",
+    "no_stream_defined_because",
     "project_directory_the_stream_entry_imports_from",
     "select_stream_function",
+    "stream_description_of",
     "stream_function_location",
     "stream_functions_defined_in",
 ]
@@ -42,6 +44,11 @@ _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
 # The module name CPython gives the file it was launched with, which an entry file
 # runs as.
 _ENTRY_FILE_RUN_MODULE_NAME = "__main__"
+
+
+class StreamEntryDefinesNoStreamError(Exception):
+    """An entry that imported and defines no `@stream` function: a failed project, never a
+    refusal of the caller."""
 
 
 def execute_app_entry_file(entry_file: Path) -> dict[str, Any]:
@@ -105,7 +112,7 @@ def stream_functions_defined_in(
 def _stream_function_listing(stream_functions: Sequence[Callable[..., Any]]) -> str:
     listed_lines: list[str] = []
     for stream_function in stream_functions:
-        description = getattr(stream_function, _STREAM_DESCRIPTION_ATTRIBUTE, "")
+        description = stream_description_of(stream_function)
         first_description_line = description.splitlines()[0] if description else ""
         listed_lines.append(
             f"    {stream_function.__name__}"
@@ -147,7 +154,7 @@ def select_stream_function(
         if len(stream_functions) == 1:
             return stream_functions[0]
         if not stream_functions:
-            raise _no_stream_defined_refusal(verb, entry_described)
+            raise StreamEntryDefinesNoStreamError(no_stream_defined_because(entry_described))
         raise ProjectStreamCompileRefusalError(
             f"{entry_described} defines {len(stream_functions)} @stream functions:\n"
             f"{_stream_function_listing(stream_functions)}\n"
@@ -179,14 +186,14 @@ def select_stream_function(
     )
 
 
-def _no_stream_defined_refusal(verb: str, entry_described: str) -> ProjectStreamCompileRefusalError:
-    return ProjectStreamCompileRefusalError(
-        f"{entry_described} defines no @stream function\n"
-        f"{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
-        "\n"
-        "Name another entry file with `-f <file>`, or the stream itself with "
-        f"{stream_target_forms(verb)}."
-    )
+def no_stream_defined_because(entry_described: str) -> str:
+    """Why an entry that imported gives no stream, with a sample of one."""
+    return f"{entry_described} defines no @stream function\n{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
+
+
+def stream_description_of(stream_function: Callable[..., Any]) -> str:
+    """The docstring `@stream` stamped on `stream_function`, empty when it has none."""
+    return getattr(stream_function, _STREAM_DESCRIPTION_ATTRIBUTE, "")
 
 
 def project_directory_the_stream_entry_imports_from(

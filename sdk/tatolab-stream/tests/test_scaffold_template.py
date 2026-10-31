@@ -124,8 +124,8 @@ def test_every_python_template_is_valid_python_that_explains_itself(template_fil
 
 
 def test_the_stream_declares_one_stream_named_main():
-    """`dev` with no argument compiles the sole `@stream` in `stream.py`, so the
-    scaffold declares exactly one, bare."""
+    """`dev` loads every `@stream` in `stream.py` as its own stream, and the
+    scaffold starts a project with exactly one, bare."""
     entry_source = template_text("stream.py")
     stream_functions = [
         node.name
@@ -270,8 +270,13 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
         assert finished.stderr == "", "the scaffold binds to no floor, so the compile says nothing"
     else:
         assert "the cross-floor check found nothing" in finished.stderr, finished.stderr
-    assert json.loads(finished.stdout) == {
-        "stream_graph": {
+    document = json.loads(finished.stdout)
+    assert set(document) == {"project_directory", "streams"}, document
+    assert document["project_directory"] == str(app_directory)
+    (stream,) = document["streams"]
+    assert stream["stream_function"] == "stream:main"
+    assert stream["description"], "the scaffold's stream carries its docstring"
+    assert stream["stream_graph"] == {
             "stream": "main",
             "nodes": [
                 {
@@ -310,9 +315,6 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                 },
             ],
             "exposed": [{"node": "h264encoder", "port": "encoded_video", "level": "public"}],
-        },
-        "project_directory": str(app_directory),
-        "stream_function": "stream:main",
     }
 
 

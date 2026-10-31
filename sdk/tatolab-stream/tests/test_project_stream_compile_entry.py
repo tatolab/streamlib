@@ -123,16 +123,49 @@ def the_one_document_of(
     return document
 
 
+def every_stream_document(finished: "subprocess.CompletedProcess[str]") -> "dict[str, Any]":
+    """The document of a compile of every stream the project's `stream.py` defines."""
+    return the_one_document_of(finished, {"project_directory", "streams"})
+
+
+def _the_one_stream_holding(
+    finished: "subprocess.CompletedProcess[str]", stream_keys: "set[str]"
+) -> "dict[str, Any]":
+    """The one stream a compile wrote, holding exactly `stream_keys` beside the project.
+
+    A compile naming no target writes every stream `stream.py` defines; one naming a target
+    writes that stream alone. Either reads here as the stream's keys and the project's.
+    """
+    document = json.loads(finished.stdout) if finished.returncode == 0 else {}
+    if "streams" not in document:
+        return the_one_document_of(finished, stream_keys | {"project_directory"})
+    streams = every_stream_document(finished)["streams"]
+    assert len(streams) == 1, streams
+    (stream,) = streams
+    assert set(stream) == stream_keys | {"description"}, stream
+    return {
+        "project_directory": document["project_directory"],
+        **{key: stream[key] for key in stream_keys},
+    }
+
+
 def compiled_document(finished: "subprocess.CompletedProcess[str]") -> "dict[str, Any]":
-    """The one JSON object a compile that succeeded writes to stdout."""
-    return the_one_document_of(finished, {"stream_graph", "project_directory", "stream_function"})
+    """The one stream a compile that succeeded writes to stdout."""
+    return _the_one_stream_holding(finished, {"stream_graph", "stream_function"})
 
 
 def stream_function_failure_document(
     finished: "subprocess.CompletedProcess[str]",
 ) -> "dict[str, Any]":
-    """The document of a stream function that raised while it compiled."""
-    return the_one_document_of(finished, {"failed_because", "project_directory", "stream_function"})
+    """The one stream function that raised while it compiled."""
+    return _the_one_stream_holding(finished, {"failed_because", "stream_function"})
+
+
+def no_stream_defined_because_of(finished: "subprocess.CompletedProcess[str]") -> str:
+    """Why an entry that imported gives no stream."""
+    return the_one_document_of(finished, {"no_stream_defined_because", "project_directory"})[
+        "no_stream_defined_because"
+    ]
 
 
 def stream_function_not_defined_document(
@@ -182,7 +215,7 @@ def test_stream_py_resolves_beside_an_app_py(anchor_directory: Path):
     assert document["stream_graph"]["stream"] == "main"
 
 
-def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag(
+def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py(
     anchor_directory: Path,
 ):
     write_app(anchor_directory, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
@@ -191,36 +224,16 @@ def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_
 
     assert f"error: no `stream.py` in `{anchor_directory}`, only an `app.py`" in message
     assert (
-        "`tatolab dev` launches a @stream function from `stream.py`, and reads "
-        "`app.py` only when `-f` or a target names it." in message
+        "`tatolab dev` loads the @stream functions of `stream.py`, and never reads "
+        "`app.py`." in message
     )
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message, (
         "the refusal must show the shape `stream.py` holds"
     )
-    assert "-f <file>" in message, "the refusal must offer the `-f` override"
-    assert "tatolab dev <file>.py[:<function>]" in message
+    assert "-f <file>" not in message, "a project's entry is always `stream.py`"
     assert "--dir <project-root>" not in message, (
         "the directory is the project root; only its entry file is wrong"
     )
-
-
-def test_explicit_entry_file_overrides_the_convention(anchor_directory: Path):
-    write_app(anchor_directory, "stream.py", FRONT_STREAM_SOURCE)
-    write_app(anchor_directory, "other.py", MINIMAL_STREAM_SOURCE)
-
-    document = compiled_document(run_compile_entry(anchor_directory, "-f", "other.py"))
-
-    assert document["stream_graph"]["stream"] == "main"
-
-
-def test_explicit_entry_file_may_be_absolute(anchor_directory: Path):
-    absolute_entry = write_app(anchor_directory, "elsewhere.py", MINIMAL_STREAM_SOURCE)
-
-    document = compiled_document(
-        run_compile_entry(anchor_directory, "-f", str(absolute_entry), verb="dev")
-    )
-
-    assert document["stream_graph"]["stream"] == "main"
 
 
 def test_a_missing_conventional_entry_names_the_convention_and_the_anchor(anchor_directory: Path):
@@ -231,16 +244,9 @@ def test_a_missing_conventional_entry_names_the_convention_and_the_anchor(anchor
     )
     assert "app.py" not in message, "a directory with no `app.py` hears nothing of one"
     assert "tatolab dev" in message, "the error must name the verb the user typed"
-    assert "-f <file>" in message, "the error must offer the `-f` escape hatch"
-    assert "tatolab dev <file>.py[:<function>]" in message
+    assert "-f <file>" not in message, "a project's entry is always `stream.py`"
     assert "--dir <project-root>" in message
     assert "never searches parent directories" in message
-
-
-def test_a_missing_explicit_entry_names_the_path_it_tried(anchor_directory: Path):
-    message = refusal_of(run_compile_entry(anchor_directory, "-f", "gone.py"))
-
-    assert f"no entry file at `{anchor_directory / 'gone.py'}` (from `-f gone.py`)" in message
 
 
 def test_resolution_never_walks_up_to_a_parent(anchor_directory: Path):
@@ -271,12 +277,11 @@ def test_the_anchor_is_the_working_directory_and_dir_only_spells_it(
 ):
     """`tatolab` starts the entry in the anchor and passes `--dir` as the user typed
     it, relative to a shell this process never saw."""
-    write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
+    write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
 
-    message = refusal_of(run_compile_entry(anchor_directory, "--dir", "../front rig"))
+    document = every_stream_document(run_compile_entry(anchor_directory, "--dir", "../front rig"))
 
-    assert f"`{anchor_directory / 'stream.py'}` defines 2 @stream functions" in message
-    assert "`tatolab run --dir '../front rig' stream.py:<function>`" in message
+    assert document["project_directory"] == str(anchor_directory)
 
 
 # ---------------------------------------------------------------------------
@@ -329,24 +334,6 @@ def test_a_target_in_no_known_form_is_refused_naming_the_forms(
     assert f"`{malformed_target}` names no stream" in message
     assert "tatolab run <file>.py:<function>" in message
     assert "tatolab run <module>:<function>" in message
-
-
-def test_a_target_and_an_entry_file_together_are_refused_naming_both(anchor_directory: Path):
-    write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
-    write_app(anchor_directory, "other.py", MINIMAL_STREAM_SOURCE)
-
-    message = refusal_of(
-        run_compile_entry(anchor_directory, "-f", "other.py", "stream.py:main", verb="dev")
-    )
-
-    assert "`-f other.py`" in message
-    assert "`stream.py:main`" in message
-    assert "`tatolab dev -f <file>`" in message
-
-
-# ---------------------------------------------------------------------------
-# Executing the entry
-# ---------------------------------------------------------------------------
 
 
 def test_the_entry_runs_as_main_with_its_own_directory_importable(anchor_directory: Path):
@@ -499,22 +486,6 @@ def test_a_module_target_compiles_with_the_anchor_as_the_project(anchor_director
     }
 
 
-def test_an_entry_file_outside_the_anchor_compiles_with_its_own_directory_as_the_project(
-    tmp_path: Path,
-):
-    """The nodes an entry file imports sit beside it, so its processor interpreters
-    start there rather than in the anchor."""
-    anchor_directory = tmp_path.resolve() / "anchor"
-    anchor_directory.mkdir()
-    entry_file = write_app(tmp_path.resolve() / "elsewhere" / "rigs", "stream.py", FRONT_STREAM_SOURCE)
-
-    document = compiled_document(
-        run_compile_entry(anchor_directory, "-f", str(entry_file), verb="dev")
-    )
-
-    assert document["project_directory"] == str(entry_file.parent)
-
-
 def test_a_file_target_in_a_subdirectory_compiles_with_that_subdirectory_as_the_project(
     anchor_directory: Path,
 ):
@@ -541,9 +512,8 @@ def test_a_file_target_in_a_subdirectory_compiles_with_that_subdirectory_as_the_
         (("stream.py",), "stream:main"),
         (("stream.py:main",), "stream:main"),
         (("stream:main",), "stream:main"),
-        (("-f", "stream.py"), "stream:main"),
         (("rig.py:back",), "rig:back"),
-        (("-f", "solo.py"), "solo:main"),
+        (("solo.py",), "solo:main"),
         (("located_rigs.desk:front",), "located_rigs.desk:front"),
     ],
 )
@@ -566,7 +536,7 @@ def test_an_entry_file_in_a_subdirectory_reports_its_module_relative_to_its_own_
 ):
     write_app(anchor_directory, "rigs/desk.py", MINIMAL_STREAM_SOURCE)
 
-    document = compiled_document(run_compile_entry(anchor_directory, "-f", "rigs/desk.py"))
+    document = compiled_document(run_compile_entry(anchor_directory, "rigs/desk.py"))
 
     assert document["project_directory"] == str(anchor_directory / "rigs")
     assert document["stream_function"] == "desk:main"
@@ -729,27 +699,83 @@ def test_the_compile_takes_no_name_and_names_the_graph_by_its_function(anchor_di
     assert document["stream_graph"]["stream"] == "main"
 
 
-def test_several_streams_are_refused_listing_each_with_its_description(anchor_directory: Path):
+def test_every_stream_is_compiled_in_definition_order_with_its_description(
+    anchor_directory: Path,
+):
     write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
 
-    message = refusal_of(run_compile_entry(anchor_directory, "--dir", str(anchor_directory)))
-
-    assert "defines 2 @stream functions" in message
-    assert "    front — Front pattern, encoded to H.264.\n" in message
-    assert "The second paragraph" not in message, "only the description's first line is listed"
-    assert "    back\n" in message
-    assert f"`tatolab run --dir {anchor_directory} stream.py:<function>`" in message
-
-
-def test_the_several_streams_suggestion_quotes_the_dir_it_was_given(tmp_path: Path):
-    project_directory = tmp_path.resolve() / "front rig"
-    write_app(project_directory, "stream.py", TWO_STREAM_SOURCE)
-
-    message = refusal_of(
-        run_compile_entry(project_directory, "--dir", str(project_directory), verb="dev")
+    document = every_stream_document(
+        run_compile_entry(anchor_directory, "--every-stream", "--dir", str(anchor_directory))
     )
 
-    assert f"`tatolab dev --dir '{project_directory}' stream.py:<function>`" in message
+    assert document == {
+        "project_directory": str(anchor_directory),
+        "streams": [
+            {
+                "stream_function": "stream:front",
+                "description": "Front pattern, encoded to H.264.\n\nThe second paragraph is not listed.",
+                "stream_graph": FRONT_STREAM_GRAPH,
+            },
+            {"stream_function": "stream:back", "description": "", "stream_graph": BACK_STREAM_GRAPH},
+        ],
+    }
+
+
+def test_no_target_compiles_every_stream_as_every_stream_does(anchor_directory: Path):
+    write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
+
+    assert every_stream_document(run_compile_entry(anchor_directory)) == every_stream_document(
+        run_compile_entry(anchor_directory, "--every-stream")
+    )
+
+
+def test_every_stream_and_a_target_together_are_a_usage_error(anchor_directory: Path):
+    write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
+
+    refused = run_compile_entry(anchor_directory, "--every-stream", "stream.py:front")
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "not allowed with argument" in refused.stderr
+
+
+def test_a_raising_stream_is_its_own_failed_entry_beside_the_streams_that_compile(
+    anchor_directory: Path,
+):
+    write_app(
+        anchor_directory,
+        "stream.py",
+        TWO_STREAM_SOURCE
+        + "\n\n@stream\ndef broken(stream_builder: StreamBuilder) -> None:\n"
+        + '    """Raises."""\n    raise ValueError("bad wiring")\n',
+    )
+
+    streams = every_stream_document(run_compile_entry(anchor_directory, "--every-stream"))[
+        "streams"
+    ]
+
+    assert [stream["stream_function"] for stream in streams] == [
+        "stream:front",
+        "stream:back",
+        "stream:broken",
+    ]
+    assert streams[0]["stream_graph"] == FRONT_STREAM_GRAPH
+    assert streams[1]["stream_graph"] == BACK_STREAM_GRAPH
+    broken = streams[2]
+    assert set(broken) == {"stream_function", "description", "failed_because"}, broken
+    assert broken["description"] == "Raises."
+    assert broken["failed_because"].startswith("Traceback (most recent call last):\n")
+    assert broken["failed_because"].endswith("ValueError: bad wiring")
+    assert "_project_stream_compile_entry.py" not in broken["failed_because"]
+
+
+def test_an_entry_that_does_not_import_exits_with_its_traceback_under_every_stream(
+    anchor_directory: Path,
+):
+    write_app(anchor_directory, "stream.py", "raise RuntimeError('no camera')\n")
+
+    import_failure = import_failure_of(run_compile_entry(anchor_directory, "--every-stream"))
+
+    assert import_failure.endswith("RuntimeError: no camera")
 
 
 def not_defined_because_of(finished: "subprocess.CompletedProcess[str]") -> str:
@@ -780,14 +806,6 @@ def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
     assert document["stream_graph"] == BACK_STREAM_GRAPH
 
 
-def test_the_several_streams_suggestion_names_no_dir_when_none_was_given(anchor_directory: Path):
-    write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
-
-    message = refusal_of(run_compile_entry(anchor_directory))
-
-    assert "`tatolab run stream.py:<function>`" in message
-
-
 def test_a_second_name_bound_to_a_stream_is_still_one_stream(anchor_directory: Path):
     write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE + "\n\ndefault = main\n")
 
@@ -806,16 +824,26 @@ def test_a_target_naming_a_second_name_of_a_stream_defined_in_the_file_selects_i
     assert document["stream_graph"]["stream"] == "back"
 
 
-def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(anchor_directory: Path):
+def test_an_entry_that_defines_no_stream_is_a_project_with_no_stream_and_a_sample(
+    anchor_directory: Path,
+):
     write_app(anchor_directory, "stream.py", "PIPELINE = 1\n")
 
-    message = refusal_of(run_compile_entry(anchor_directory, verb="dev"))
+    message = no_stream_defined_because_of(run_compile_entry(anchor_directory, verb="dev"))
 
     assert "stream.py` defines no @stream function" in message
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
     assert "stream_builder.add(CameraSource)" in message
-    assert "-f <file>" in message
-    assert "tatolab dev <file>.py:<function>" in message
+    assert "-f <file>" not in message
+
+
+def test_a_file_target_that_defines_no_stream_answers_the_same_document(anchor_directory: Path):
+    write_app(anchor_directory, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
+
+    message = no_stream_defined_because_of(run_compile_entry(anchor_directory, "app.py"))
+
+    assert f"`{anchor_directory / 'app.py'}` defines no @stream function\n" in message
+    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
 
 
 def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_its_streams(
@@ -834,17 +862,6 @@ def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_
     assert "defines no @stream function named `side`" in message
     assert "    front — Front pattern, encoded to H.264.\n" in message
     assert "    back" in message
-
-
-def test_an_app_py_named_by_the_file_flag_that_defines_only_setup_defines_no_stream(
-    anchor_directory: Path,
-):
-    write_app(anchor_directory, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
-
-    message = refusal_of(run_compile_entry(anchor_directory, "-f", "app.py"))
-
-    assert f"`{anchor_directory / 'app.py'}` defines no @stream function\n" in message
-    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
 
 
 def test_a_named_function_in_a_file_with_no_stream_is_reported_naming_the_decorator(
