@@ -385,7 +385,7 @@ fn spawn_dedicated_thread(
                 });
                 if let Err(e) = setup_result {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    state_arc.fail_with(format!("setup failed: {e}"));
+                    state_arc.fail_with_the_setup_refusal(&e);
                     return;
                 }
 

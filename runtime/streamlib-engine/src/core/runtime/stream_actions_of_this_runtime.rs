@@ -44,6 +44,7 @@ use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects
     the_projects_venv_interpreter,
 };
 use crate::core::context::CaptureDeviceAccessPrompting;
+use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
     node_names_listed_for_a_refusal,
@@ -257,6 +258,10 @@ pub struct StreamListing {
     pub node_count: Option<usize>,
     /// Why it is failed; `None` when it is not.
     pub failed_because: Option<String>,
+    /// Each capture device a node of the loaded stream refused because nobody
+    /// had asked the user for its access; a stop and start of it asks. Empty
+    /// when it is not loaded.
+    pub capture_devices_whose_access_was_never_asked_for: Vec<PrivacyGatedCaptureDevice>,
     /// The stream action working on it while one is queued or running.
     pub stream_action_under_way: Option<StreamActionWorkingOnAStream>,
 }
@@ -1352,6 +1357,8 @@ impl Runner {
                 state: StreamListingState::Running,
                 node_count: Some(stream.node_count()),
                 failed_because: None,
+                capture_devices_whose_access_was_never_asked_for: stream
+                    .capture_devices_whose_access_was_never_asked_for(),
                 stream_action_under_way: None,
             })
             .collect();
@@ -1365,6 +1372,7 @@ impl Runner {
                         stream_location: Some(record.location),
                         node_count: None,
                         failed_because: record.failed_because,
+                        capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         stream_action_under_way: None,
                     },
                     Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(earlier)) => StreamListing {
@@ -1374,6 +1382,7 @@ impl Runner {
                         stream_id: earlier.stream_id,
                         stream_location: None,
                         node_count: None,
+                        capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         stream_action_under_way: None,
                     },
                     Err(unreadable) => {
@@ -3138,6 +3147,7 @@ impl Runner {
                         state: state_it_shows,
                         node_count: None,
                         failed_because: None,
+                        capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         stream_action_under_way: Some(working_on_it.clone()),
                     }),
                 }
@@ -5067,6 +5077,7 @@ mod tests {
                 state: StreamListingState::Stopped,
                 node_count: None,
                 failed_because: None,
+                capture_devices_whose_access_was_never_asked_for: Vec::new(),
                 stream_action_under_way: None,
             }]
         );
@@ -5792,6 +5803,7 @@ mod tests {
             state,
             node_count,
             failed_because: None,
+            capture_devices_whose_access_was_never_asked_for: Vec::new(),
             stream_action_under_way: None,
         };
         let mut expected = [
@@ -6401,6 +6413,7 @@ mod tests {
                 state: StreamListingState::Running,
                 node_count: Some(1),
                 failed_because: None,
+                capture_devices_whose_access_was_never_asked_for: Vec::new(),
                 stream_action_under_way: None,
             },
             StreamListing {
@@ -6410,6 +6423,7 @@ mod tests {
                 state: StreamListingState::Running,
                 node_count: Some(1),
                 failed_because: None,
+                capture_devices_whose_access_was_never_asked_for: Vec::new(),
                 stream_action_under_way: None,
             },
         ];
@@ -7477,6 +7491,16 @@ mod tests {
             refusal.contains(MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR),
             "{refusal}"
         );
+        let listing = runner
+            .list_streams()
+            .into_iter()
+            .find(|listing| listing.stream_id == camera)
+            .expect("the re-loaded stream is listed");
+        assert_eq!(
+            listing.capture_devices_whose_access_was_never_asked_for,
+            vec![PrivacyGatedCaptureDevice::Camera],
+            "the listing names the device the stream waits on"
+        );
     }
 
     #[test]
@@ -7505,6 +7529,17 @@ mod tests {
             .expect("the started stream is loaded")
             .wait_until_every_processor_is_running(STREAM_ACTION_TEST_DEADLINE)
             .expect("a start someone asked for may ask the user, so the node sets up");
+        let listing = runner
+            .list_streams()
+            .into_iter()
+            .find(|listing| listing.stream_id == camera)
+            .expect("the started stream is listed");
+        assert!(
+            listing
+                .capture_devices_whose_access_was_never_asked_for
+                .is_empty(),
+            "a started stream waits on no access: {listing:?}"
+        );
     }
 
     #[test]

@@ -678,9 +678,9 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
         })
     };
     let mut expected_streams = vec![
-        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "failed_because": null, "action": null, "step": null }),
-        json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "failed_because": null, "action": null, "step": null }),
-        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "running", "node_count": null, "failed_because": null, "action": null, "step": null }),
+        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null }),
+        json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null }),
+        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "running", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null }),
     ];
     expected_streams.sort_by_key(|listed| listed["stream"].as_str().unwrap().to_string());
     assert_eq!(listed, json!({ "streams": expected_streams }));

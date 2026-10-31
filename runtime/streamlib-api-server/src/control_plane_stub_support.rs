@@ -366,6 +366,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,
+                    capture_devices_whose_access_was_never_asked_for: Vec::new(),
                     stream_action_under_way: None,
                 }]
             }

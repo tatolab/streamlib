@@ -195,7 +195,7 @@ mod against_an_isolated_machine {
                         "stream": DESK_CAMERA_STREAM_ID, "display_name": "camera", "state": "running",
                         "location": {"project_directory": project_directory,
                                      "stream_function": "stream:camera"},
-                        "node_count": 3, "failed_because": null,
+                        "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
                     }]})
                     .to_string(),
                 )],

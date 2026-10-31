@@ -115,7 +115,8 @@ class LocalApiClient:
 
     def list_streams(self) -> "list[dict[str, Any]]":
         """MCP `list_streams`: each stream the runtime holds, `{stream, display_name, location,
-        state, node_count, failed_because}`, `stream` its id."""
+        state, node_count, failed_because, capture_devices_whose_access_was_never_asked_for, action,
+        step}`, `stream` its id."""
         return self.call_tool("list_streams")["streams"]
 
     def stream_action_once_ended(

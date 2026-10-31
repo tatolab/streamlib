@@ -16,5 +16,5 @@
 
 pub use streamlib_error::{
     ChannelTrustTierLabel, DeviceMemoryHeapBudgetSource, DeviceMemoryHeapLocality, Error,
-    OutputPortNotExposedToTheReader, PortDirection, Result,
+    OutputPortNotExposedToTheReader, PortDirection, PrivacyGatedCaptureDevice, Result,
 };

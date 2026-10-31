@@ -28,6 +28,7 @@ use crate::core::context::{
     AudioClockConfig, CaptureDeviceAccessPrompting, GpuContext,
     LoadedStreamARuntimeContextBelongsTo, RuntimeContext, SharedAudioClock, TimeContext,
 };
+use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
@@ -1026,6 +1027,29 @@ impl LoadedStreamInThisRuntime {
                 })
                 .collect()
         }))
+    }
+
+    /// Each capture device a node of this stream refused at `setup()` because
+    /// nobody had asked the user for its access, once each, in order.
+    pub fn capture_devices_whose_access_was_never_asked_for(
+        &self,
+    ) -> Vec<PrivacyGatedCaptureDevice> {
+        let mut capture_devices: Vec<PrivacyGatedCaptureDevice> =
+            self.compiler.scope(|graph, _tx| {
+                graph
+                    .traversal()
+                    .v(())
+                    .iter()
+                    .filter_map(|node| {
+                        node.get::<StateComponent>()?
+                            .clone_inner()
+                            .capture_device_access_never_asked_for()
+                    })
+                    .collect()
+            });
+        capture_devices.sort();
+        capture_devices.dedup();
+        capture_devices
     }
 
     /// Block until every processor in this stream has finished `setup` and

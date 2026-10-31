@@ -508,7 +508,7 @@ mod tests {
     fn a_listed_stream(stream: &str, display_name: &str) -> ListStreamsToolResultStream {
         serde_json::from_value(serde_json::json!({
             "stream": stream, "display_name": display_name, "state": "running",
-            "location": null, "node_count": 1, "failed_because": null,
+            "location": null, "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
         }))
         .unwrap()
     }
