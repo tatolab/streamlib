@@ -101,11 +101,8 @@ def tatolab_command_as_typed(verb: str, anchor_directory_as_typed: Optional[str]
 
 
 def stream_target_forms(verb: str) -> str:
-    """The three target forms, each spelled as a `tatolab <verb>` command."""
-    return (
-        f"`tatolab {verb} <file>.py`, `tatolab {verb} <file>.py:<function>` or "
-        f"`tatolab {verb} <module>:<function>`"
-    )
+    """The two target forms, each spelled as a `tatolab <verb>` command."""
+    return f"`tatolab {verb} <file>.py:<function>` or `tatolab {verb} <module>:<function>`"
 
 
 def resolve_app_entry_file(verb: str, anchor_directory: Path) -> Path:
@@ -163,13 +160,6 @@ def resolve_stream_entry(
     before_separator, separator, after_separator = stream_function_target.rpartition(
         STREAM_TARGET_FUNCTION_SEPARATOR
     )
-    if stream_function_target.endswith(STREAM_TARGET_FILE_SUFFIX):
-        return ResolvedStreamEntryFile(
-            entry_file=_resolve_named_entry_file(
-                anchor_directory, Path(stream_function_target), named_by
-            ),
-            stream_function_name=None,
-        )
     if separator and after_separator.isidentifier():
         if before_separator.endswith(STREAM_TARGET_FILE_SUFFIX):
             return ResolvedStreamEntryFile(
@@ -185,7 +175,7 @@ def resolve_stream_entry(
             )
     raise ProjectStreamCompileRefusalError(
         f"`{stream_function_target}` names no stream: a target is a file ending "
-        f"`{STREAM_TARGET_FILE_SUFFIX}`, optionally followed by `:<function>`, or an "
+        f"`{STREAM_TARGET_FILE_SUFFIX}` followed by `:<function>`, or an "
         f"importable `<module>:<function>` — {stream_target_forms(verb)}"
     )
 

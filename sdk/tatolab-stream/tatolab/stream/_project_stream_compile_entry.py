@@ -62,7 +62,6 @@ from ._cross_floor_check import (
     render_cross_floor_warning_block,
 )
 from ._project_stream_entry_execution import (
-    StreamEntryDefinesNoStreamError,
     execute_app_entry_file,
     import_stream_entry_module,
     named_stream_function_location,
@@ -181,7 +180,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         nargs="?",
         metavar="TARGET",
         help=(
-            "The one stream to compile: `<file>.py[:<function>]` or `<module>:<function>`."
+            "The one stream to compile: `<file>.py:<function>` or `<module>:<function>`."
         ),
     )
     parser.add_argument(
@@ -364,11 +363,6 @@ def compile_the_requested_stream(
                 resolved_stream_entry, project_directory
             ),
             STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY: str(not_defined),
-        }
-    except StreamEntryDefinesNoStreamError as no_stream_defined:
-        return {
-            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
-            STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY: str(no_stream_defined),
         }
     return {
         COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
