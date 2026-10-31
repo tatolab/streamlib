@@ -6,7 +6,6 @@
 //! them and every client that calls them.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,56 +19,20 @@ pub const MCP_STDIO_UPGRADE_REQUEST_TARGET: &str = "/mcp/stdio";
 /// case-insensitively.
 pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 
-/// How long a client waits for `run_stream` or `start_stream`. The engine asserts at build time
-/// that its `PROJECT_VENV_MAKING_BOUND`, `STREAM_FUNCTION_COMPILE_BOUND`,
-/// `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for
-/// this load and one stream action queued ahead of it; more actions queued ahead can outlast it,
-/// and the runtime still takes the action.
-pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
-
-/// How long a client waits for `stop_stream`, `remove_stream` or `expose_port`. The engine
-/// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND`,
-/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` and `PROJECT_VENV_MAKING_BOUND` fit within it for this action
-/// and one stream action — or the re-load of one record at the runtime's start — queued ahead of
-/// it; more queued ahead can outlast it, and the runtime still takes the action.
-pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
-
-/// Which load of a stream a `run_stream` result or a `logs` page is about: opaque, compared only
-/// for equality. A stream re-loaded under the same name is another instance, and numbers its log
-/// records from 1 again.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct LoadedStreamInstance(pub String);
-
-impl std::fmt::Display for LoadedStreamInstance {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// The `logs` tool's result: one loaded stream's records after the sequence number asked for.
+/// The `logs` tool's result: one project's log records after the cursor asked for, read from
+/// the project's log on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogsToolResult {
-    /// The stream's id.
-    pub stream: String,
-    /// The load whose records these are; a page naming another instance than the last numbers
-    /// its records afresh.
-    pub stream_instance: LoadedStreamInstance,
-    /// The records after `after`, oldest first.
-    pub records: Vec<LogsToolResultRecord>,
-    /// The `after` the next call passes to read on from this page.
-    pub next_after: u64,
-    /// Records after `after` the runtime dropped from its in-memory history before this read.
-    pub records_no_longer_held: u64,
-}
-
-/// One record of a [`LogsToolResult`], numbered by the runtime from 1 per loaded stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LogsToolResultRecord {
-    /// The record's place in its stream's log.
-    pub sequence: u64,
-    /// The record as its stream's JSONL log file holds it.
-    pub record: serde_json::Value,
+    /// The project whose log these are.
+    pub project_directory: PathBuf,
+    /// The records after `after` that match the call's `stream` and `action`, oldest first, each
+    /// as the project's JSONL log holds it.
+    pub records: Vec<serde_json::Value>,
+    /// The opaque cursor the next call passes as `after` to read on from this page.
+    pub next_after: String,
+    /// Whether retention deleted the segment `after` named, so the page resumes at the oldest
+    /// record held.
+    pub records_no_longer_held: bool,
 }
 
 /// Where a stream's code lives, as the local API reports it: its project directory, resolved,
@@ -82,81 +45,252 @@ pub struct StreamLocationOnTheWire {
     pub stream_function: String,
 }
 
-/// The `run_stream` tool's result: each stream a project's load took in, running or failed.
+/// The `run_project` tool's result: the load it queued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunStreamToolResult {
-    /// The project the load was given.
+pub struct RunProjectToolResult {
+    /// The queued load's action id, as `describe_stream_action` and `logs` take it.
+    pub action: String,
+    /// The project, its symlinks resolved.
     pub project_directory: PathBuf,
-    /// Each stream the load started, or recorded failed.
-    pub streams: Vec<RunStreamToolResultStream>,
-    /// Each line the compile wrote to its standard error, the cross-floor check's warnings
-    /// among them; empty when it wrote nothing.
-    pub compile_warnings: Vec<String>,
 }
 
-/// One stream of a [`RunStreamToolResult`].
+/// The `create_project` tool's result: the load of the new project it queued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunStreamToolResultStream {
-    /// The stream's id, computed from its location; every tool naming the stream takes it.
+pub struct CreateProjectToolResult {
+    /// The queued load's action id; its first step writes the project's files.
+    pub action: String,
+    /// The id of the stream the new project's `stream.py` defines.
+    pub stream: String,
+    /// The new project's directory.
+    pub project_directory: PathBuf,
+}
+
+/// The `stop_stream` tool's result: the stop it queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopStreamToolResult {
+    /// The queued stop's action id.
+    pub action: String,
+    /// The stream's id.
+    pub stream: String,
+}
+
+/// The `start_stream` tool's result: the start it queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartStreamToolResult {
+    /// The queued start's action id.
+    pub action: String,
+    /// The stream's id.
+    pub stream: String,
+}
+
+/// The `remove_project` tool's result: the remove it queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoveProjectToolResult {
+    /// The queued remove's action id.
+    pub action: String,
+    /// The project, its symlinks resolved.
+    pub project_directory: PathBuf,
+}
+
+/// What a stream action does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionKindOnTheWire {
+    /// Loads every `@stream` of a project, after writing a created project's files.
+    Load,
+    /// Starts a recorded stream.
+    Start,
+    /// Stops a stream.
+    Stop,
+    /// Unloads every stream of a project and forgets its records.
+    Remove,
+    /// Re-loads a project's recorded streams at the runtime's start.
+    ReloadAtStart,
+}
+
+/// Where a stream action is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionStateOnTheWire {
+    /// Waiting for the actions ahead of it in its project's queue.
+    Queued,
+    /// Running.
+    InProgress,
+    /// Ended as asked.
+    Done,
+    /// Ended early, with `failed_because`.
+    Failed,
+    /// Ended by `cancel_stream_action`.
+    Cancelled,
+}
+
+impl StreamActionStateOnTheWire {
+    /// Whether the action has ended.
+    pub fn is_finished(self) -> bool {
+        !matches!(self, Self::Queued | Self::InProgress)
+    }
+}
+
+/// The step a running stream action is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionStepOnTheWire {
+    /// Writing a created project's files.
+    WritingTheScaffold,
+    /// Making the project's `.venv` with the uv the runtime carries.
+    MakingTheVenv,
+    /// Compiling the project's `@stream` functions in its own interpreter.
+    Compiling,
+    /// Loading and starting the compiled streams.
+    Starting,
+    /// Unloading streams.
+    Stopping,
+}
+
+impl StreamActionKindOnTheWire {
+    /// The kind as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            Self::Load => "load",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Remove => "remove",
+            Self::ReloadAtStart => "reload_at_start",
+        }
+    }
+}
+
+impl std::fmt::Display for StreamActionKindOnTheWire {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.wire_spelling())
+    }
+}
+
+impl StreamActionStateOnTheWire {
+    /// The state as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl std::fmt::Display for StreamActionStateOnTheWire {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.wire_spelling())
+    }
+}
+
+impl StreamActionStepOnTheWire {
+    /// The step as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            Self::WritingTheScaffold => "writing_the_scaffold",
+            Self::MakingTheVenv => "making_the_venv",
+            Self::Compiling => "compiling",
+            Self::Starting => "starting",
+            Self::Stopping => "stopping",
+        }
+    }
+}
+
+impl std::fmt::Display for StreamActionStepOnTheWire {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.wire_spelling())
+    }
+}
+
+/// One stream a stream action touched, as `describe_stream_action` reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeStreamActionToolResultStream {
+    /// The stream's id.
     pub stream: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// Whether it runs, or is recorded failed.
-    pub state: RunStreamToolResultStreamState,
-    /// This load of it, as its `logs` pages name it; `null` for a failed stream.
-    pub stream_instance: Option<LoadedStreamInstance>,
-    /// Where the stream's code lives.
-    pub location: StreamLocationOnTheWire,
-    /// How many nodes the loaded graph holds; `null` for a failed stream.
-    pub node_count: Option<usize>,
-    /// Whether the load replaced the recorded stream of the same location.
-    pub replaced_a_recorded_stream: bool,
-    /// Why it is failed — a traceback, or the refused load's reason; `null` when it runs.
+    /// The state the stream is listed in now; `null` once the runtime holds it no longer.
+    pub state: Option<ListedStreamState>,
+}
+
+/// The `describe_stream_action` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeStreamActionToolResult {
+    /// The action's id.
+    pub action: String,
+    /// The project whose queue holds it.
+    pub project_directory: PathBuf,
+    /// What it does.
+    pub kind: StreamActionKindOnTheWire,
+    /// Where it is in its life.
+    pub state: StreamActionStateOnTheWire,
+    /// The step it is on; `null` while queued and once ended.
+    pub step: Option<StreamActionStepOnTheWire>,
+    /// The streams it touched so far.
+    pub streams: Vec<DescribeStreamActionToolResultStream>,
+    /// Why it failed; `null` unless it did.
     pub failed_because: Option<String>,
 }
 
-/// The state of one stream a `run_stream` load took in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RunStreamToolResultStreamState {
-    /// Loaded and started.
-    Running,
-    /// Recorded failed and not loaded; `start_stream` retries it, and a load of its fixed code
-    /// replaces it.
-    Failed,
-}
-
-/// The `stop_stream` tool's result.
+/// The `cancel_stream_action` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StopStreamToolResult {
-    /// The stream's id.
-    pub stream: String,
-    /// Always true: a stream the runtime could not unload is refused instead.
-    pub stopped: bool,
-    /// Present only when a recorded stream unloaded and could not be recorded stopped, so a
-    /// restart of the runtime loads it again.
+pub struct CancelStreamActionToolResult {
+    /// The action's id.
+    pub action: String,
+    /// The action's state once the cancel landed: `cancelled` for a queued one, `in_progress`
+    /// for a running one that ends at its current step.
+    pub state: StreamActionStateOnTheWire,
+    /// Present only when the action was not cancelled: it had ended, or its teardown had begun.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_recorded_because: Option<String>,
+    pub not_cancelled_because: Option<String>,
 }
 
-/// The `start_stream` tool's result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StartStreamToolResult {
-    /// The stream's id.
-    pub stream: String,
-    /// How many nodes the loaded graph holds.
-    pub node_count: usize,
+/// What the runtime knows of a project's streams, as `list_project_streams` answers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListedProjectStreamsState {
+    /// The project's last compile listed its streams.
+    Compiled,
+    /// The project's last compile gave no stream, with `failed_because`.
+    GaveNoStream,
+    /// A load of the project is queued or running and has not compiled yet.
+    Preparing,
+    /// No load of the project ran in this runtime.
+    NotLoaded,
 }
 
-/// The `remove_stream` tool's result.
+/// One `@stream` of a [`ListProjectStreamsToolResult`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RemoveStreamToolResult {
-    /// The stream's id.
+pub struct ListProjectStreamsToolResultStream {
+    /// The stream function as `module:qualname`.
+    pub stream_function: String,
+    /// The function's docstring; `null` when it has none.
+    pub description: Option<String>,
+    /// The stream id its location computes to.
     pub stream: String,
-    /// Whether the stream was loaded and is now unloaded.
-    pub unloaded: bool,
-    /// Whether the stream was recorded and its record is now gone.
-    pub forgotten: bool,
+    /// The state the runtime lists it in; `null` when the runtime holds it not.
+    pub state: Option<ListedStreamState>,
+}
+
+/// The `list_project_streams` tool's result: a project's `@stream` functions as its last
+/// compile in this runtime gave them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListProjectStreamsToolResult {
+    /// The project, its symlinks resolved.
+    pub project_directory: PathBuf,
+    /// What the runtime knows of its streams.
+    pub state: ListedProjectStreamsState,
+    /// Each `@stream` of `stream.py`, in definition order; empty unless `state` is `compiled`.
+    pub streams: Vec<ListProjectStreamsToolResultStream>,
+    /// Present only when `state` is `gave_no_stream`: the traceback, or why the `.venv` was not
+    /// made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_because: Option<String>,
+    /// Present only when `state` is `preparing`: the load's action id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 /// The `rename_stream` tool's result.
@@ -185,21 +319,29 @@ pub struct ListStreamsToolResultStream {
     /// Where the stream's code lives; `null` for a stream a library host loaded, and for a
     /// record an earlier runtime wrote.
     pub location: Option<StreamLocationOnTheWire>,
-    /// Whether it is running, stopped or failed.
+    /// Whether it is preparing, running, stopping, stopped or failed.
     pub state: ListedStreamState,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
     /// Why it is failed; `null` when it is not.
     pub failed_because: Option<String>,
+    /// The stream action working on it; `null` when none is.
+    pub action: Option<String>,
+    /// The step that action is on; `null` when none is.
+    pub step: Option<StreamActionStepOnTheWire>,
 }
 
 /// The state of one stream `list_streams` lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ListedStreamState {
+    /// A load or a start of it is under way.
+    Preparing,
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
+    /// A stop of it, or a remove of its project, is under way.
+    Stopping,
     /// Stopped by its owner, and left unloaded until `start_stream`.
     Stopped,
     /// Skipped at the runtime's start until `start_stream` retries it.
@@ -210,7 +352,9 @@ impl ListedStreamState {
     /// The state as the wire spells it.
     pub fn wire_spelling(self) -> &'static str {
         match self {
+            ListedStreamState::Preparing => "preparing",
             ListedStreamState::Running => "running",
+            ListedStreamState::Stopping => "stopping",
             ListedStreamState::Stopped => "stopped",
             ListedStreamState::Failed => "failed",
         }
@@ -491,54 +635,79 @@ mod tests {
         }
 
         assert_eq!(
-            wire_text(&RunStreamToolResult {
+            wire_text(&RunProjectToolResult {
+                action: "rt-1".to_owned(),
                 project_directory: PathBuf::from("/srv/project"),
-                streams: vec![
-                    RunStreamToolResultStream {
-                        stream: "project-main-3f2a9c".to_owned(),
-                        display_name: "main".to_owned(),
-                        state: RunStreamToolResultStreamState::Running,
-                        stream_instance: Some(LoadedStreamInstance("4".to_owned())),
-                        location: StreamLocationOnTheWire {
-                            project_directory: PathBuf::from("/srv/project"),
-                            stream_function: "stream:main".to_owned(),
-                        },
-                        node_count: Some(3),
-                        replaced_a_recorded_stream: false,
-                        failed_because: None,
-                    },
-                    RunStreamToolResultStream {
-                        stream: "project-side-1b2c3d".to_owned(),
-                        display_name: "side".to_owned(),
-                        state: RunStreamToolResultStreamState::Failed,
-                        stream_instance: None,
-                        location: StreamLocationOnTheWire {
-                            project_directory: PathBuf::from("/srv/project"),
-                            stream_function: "stream:side".to_owned(),
-                        },
-                        node_count: None,
-                        replaced_a_recorded_stream: true,
-                        failed_because: Some("ValueError: bad wiring".to_owned()),
-                    },
-                ],
-                compile_warnings: vec!["tatolab: one warning".to_owned()],
             }),
-            r#"{"project_directory":"/srv/project","streams":[{"stream":"project-main-3f2a9c","display_name":"main","state":"running","stream_instance":"4","location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_a_recorded_stream":false,"failed_because":null},{"stream":"project-side-1b2c3d","display_name":"side","state":"failed","stream_instance":null,"location":{"project_directory":"/srv/project","stream_function":"stream:side"},"node_count":null,"replaced_a_recorded_stream":true,"failed_because":"ValueError: bad wiring"}],"compile_warnings":["tatolab: one warning"]}"#
+            r#"{"action":"rt-1","project_directory":"/srv/project"}"#
+        );
+        assert_eq!(
+            wire_text(&CreateProjectToolResult {
+                action: "rt-2".to_owned(),
+                stream: "brave-otter-main-0a1b2c".to_owned(),
+                project_directory: PathBuf::from("/home/me/streams/brave-otter"),
+            }),
+            r#"{"action":"rt-2","stream":"brave-otter-main-0a1b2c","project_directory":"/home/me/streams/brave-otter"}"#
+        );
+        assert_eq!(
+            wire_text(&StopStreamToolResult {
+                action: "rt-3".to_owned(),
+                stream: "camera".to_owned(),
+            }),
+            r#"{"action":"rt-3","stream":"camera"}"#
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {
+                action: "rt-4".to_owned(),
                 stream: "camera".to_owned(),
-                node_count: 3,
             }),
-            r#"{"stream":"camera","node_count":3}"#
+            r#"{"action":"rt-4","stream":"camera"}"#
         );
         assert_eq!(
-            wire_text(&RemoveStreamToolResult {
-                stream: "camera".to_owned(),
-                unloaded: true,
-                forgotten: false,
+            wire_text(&RemoveProjectToolResult {
+                action: "rt-5".to_owned(),
+                project_directory: PathBuf::from("/srv/project"),
             }),
-            r#"{"stream":"camera","unloaded":true,"forgotten":false}"#
+            r#"{"action":"rt-5","project_directory":"/srv/project"}"#
+        );
+        assert_eq!(
+            wire_text(&DescribeStreamActionToolResult {
+                action: "rt-1".to_owned(),
+                project_directory: PathBuf::from("/srv/project"),
+                kind: StreamActionKindOnTheWire::Load,
+                state: StreamActionStateOnTheWire::InProgress,
+                step: Some(StreamActionStepOnTheWire::MakingTheVenv),
+                streams: vec![DescribeStreamActionToolResultStream {
+                    stream: "project-main-3f2a9c".to_owned(),
+                    display_name: "main".to_owned(),
+                    state: Some(ListedStreamState::Preparing),
+                }],
+                failed_because: None,
+            }),
+            r#"{"action":"rt-1","project_directory":"/srv/project","kind":"load","state":"in_progress","step":"making_the_venv","streams":[{"stream":"project-main-3f2a9c","display_name":"main","state":"preparing"}],"failed_because":null}"#
+        );
+        assert_eq!(
+            wire_text(&CancelStreamActionToolResult {
+                action: "rt-1".to_owned(),
+                state: StreamActionStateOnTheWire::Cancelled,
+                not_cancelled_because: None,
+            }),
+            r#"{"action":"rt-1","state":"cancelled"}"#
+        );
+        assert_eq!(
+            wire_text(&ListProjectStreamsToolResult {
+                project_directory: PathBuf::from("/srv/project"),
+                state: ListedProjectStreamsState::Compiled,
+                streams: vec![ListProjectStreamsToolResultStream {
+                    stream_function: "stream:main".to_owned(),
+                    description: Some("The desk camera.".to_owned()),
+                    stream: "project-main-3f2a9c".to_owned(),
+                    state: None,
+                }],
+                failed_because: None,
+                action: None,
+            }),
+            r#"{"project_directory":"/srv/project","state":"compiled","streams":[{"stream_function":"stream:main","description":"The desk camera.","stream":"project-main-3f2a9c","state":null}]}"#
         );
         assert_eq!(
             wire_text(&ListStreamsToolResult {
@@ -550,9 +719,11 @@ mod tests {
                             project_directory: PathBuf::from("/srv/cam"),
                             stream_function: "stream:main".to_owned(),
                         }),
-                        state: ListedStreamState::Running,
+                        state: ListedStreamState::Stopping,
                         node_count: Some(4),
                         failed_because: None,
+                        action: Some("rt-6".to_owned()),
+                        step: Some(StreamActionStepOnTheWire::Stopping),
                     },
                     ListStreamsToolResultStream {
                         stream: "main".to_owned(),
@@ -561,34 +732,27 @@ mod tests {
                         state: ListedStreamState::Failed,
                         node_count: None,
                         failed_because: Some("an earlier runtime recorded it".to_owned()),
+                        action: None,
+                        step: None,
                     },
                 ],
             }),
-            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it"}]}"#
+            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"stopping","node_count":4,"failed_because":null,"action":"rt-6","step":"stopping"},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","action":null,"step":null}]}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {
-                stream: "camera".to_owned(),
-                stream_instance: LoadedStreamInstance("4".to_owned()),
-                records: vec![LogsToolResultRecord {
-                    sequence: 7,
-                    record: serde_json::json!({"message": "hello"}),
-                }],
-                next_after: 7,
-                records_no_longer_held: 2,
+                project_directory: PathBuf::from("/srv/project"),
+                records: vec![serde_json::json!({"message": "hello"})],
+                next_after: "2:17".to_owned(),
+                records_no_longer_held: false,
             }),
-            r#"{"stream":"camera","stream_instance":"4","records":[{"sequence":7,"record":{"message":"hello"}}],"next_after":7,"records_no_longer_held":2}"#
+            r#"{"project_directory":"/srv/project","records":[{"message":"hello"}],"next_after":"2:17","records_no_longer_held":false}"#
         );
     }
 
     /// `not_recorded_because` is on the wire only when the runtime could not record.
     #[test]
-    fn stop_and_expose_carry_not_recorded_because_only_when_it_is_set() {
-        let stopped = |not_recorded_because: Option<&str>| StopStreamToolResult {
-            stream: "camera".to_owned(),
-            stopped: true,
-            not_recorded_because: not_recorded_because.map(str::to_owned),
-        };
+    fn expose_carries_not_recorded_because_only_when_it_is_set() {
         let exposed = |not_recorded_because: Option<&str>| ExposePortToolResult {
             stream: "camera".to_owned(),
             node: "source".to_owned(),
@@ -599,14 +763,6 @@ mod tests {
         };
 
         assert_eq!(
-            serde_json::to_string(&stopped(None)).unwrap(),
-            r#"{"stream":"camera","stopped":true}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&stopped(Some("cannot write"))).unwrap(),
-            r#"{"stream":"camera","stopped":true,"not_recorded_because":"cannot write"}"#
-        );
-        assert_eq!(
             serde_json::to_string(&exposed(None)).unwrap(),
             r#"{"stream":"camera","node":"source","port":"video","level":"public","recorded":true}"#
         );
@@ -614,24 +770,57 @@ mod tests {
             serde_json::to_string(&exposed(Some("cannot write"))).unwrap(),
             r#"{"stream":"camera","node":"source","port":"video","level":"public","recorded":false,"not_recorded_because":"cannot write"}"#
         );
-        assert_eq!(
-            serde_json::from_str::<StopStreamToolResult>(r#"{"stream":"camera","stopped":true}"#)
-                .unwrap(),
-            stopped(None)
-        );
     }
 
     /// The `Display` spelling a client prints is the spelling the wire carries.
     #[test]
     fn each_state_and_level_displays_as_the_wire_spells_it() {
         for state in [
+            ListedStreamState::Preparing,
             ListedStreamState::Running,
+            ListedStreamState::Stopping,
             ListedStreamState::Stopped,
             ListedStreamState::Failed,
         ] {
             assert_eq!(
                 serde_json::to_value(state).unwrap(),
                 serde_json::Value::String(state.to_string())
+            );
+        }
+        for kind in [
+            StreamActionKindOnTheWire::Load,
+            StreamActionKindOnTheWire::Start,
+            StreamActionKindOnTheWire::Stop,
+            StreamActionKindOnTheWire::Remove,
+            StreamActionKindOnTheWire::ReloadAtStart,
+        ] {
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::Value::String(kind.to_string())
+            );
+        }
+        for state in [
+            StreamActionStateOnTheWire::Queued,
+            StreamActionStateOnTheWire::InProgress,
+            StreamActionStateOnTheWire::Done,
+            StreamActionStateOnTheWire::Failed,
+            StreamActionStateOnTheWire::Cancelled,
+        ] {
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::Value::String(state.to_string())
+            );
+        }
+        for step in [
+            StreamActionStepOnTheWire::WritingTheScaffold,
+            StreamActionStepOnTheWire::MakingTheVenv,
+            StreamActionStepOnTheWire::Compiling,
+            StreamActionStepOnTheWire::Starting,
+            StreamActionStepOnTheWire::Stopping,
+        ] {
+            assert_eq!(
+                serde_json::to_value(step).unwrap(),
+                serde_json::Value::String(step.to_string())
             );
         }
         for level in [
