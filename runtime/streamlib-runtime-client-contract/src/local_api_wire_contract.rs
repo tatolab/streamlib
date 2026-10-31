@@ -157,6 +157,17 @@ pub struct RunProjectToolResult {
     pub project_directory: PathBuf,
 }
 
+/// The `create_project` tool's result: the load it queued of the project it created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateProjectToolResult {
+    /// The queued action's id, which `describe_stream_action` and `logs` take.
+    pub action: String,
+    /// The id the scaffold's `stream:main` loads as.
+    pub stream: String,
+    /// The project's directory, symlinks resolved.
+    pub project_directory: PathBuf,
+}
+
 /// What a stream action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -636,6 +647,14 @@ mod tests {
                 project_directory: PathBuf::from("/srv/desk"),
             }),
             r#"{"action":"Rabc-3","project_directory":"/srv/desk"}"#
+        );
+        assert_eq!(
+            wire_text(&CreateProjectToolResult {
+                action: "Rabc-4".to_owned(),
+                stream: "brisk-otter-main-0a1b2c".to_owned(),
+                project_directory: PathBuf::from("/home/me/streams/brisk-otter"),
+            }),
+            r#"{"action":"Rabc-4","stream":"brisk-otter-main-0a1b2c","project_directory":"/home/me/streams/brisk-otter"}"#
         );
         assert_eq!(
             wire_text(&DescribeStreamActionToolResult {

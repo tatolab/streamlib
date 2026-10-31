@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The streams the machine's runtime holds, managed one call at a time: `run`, `stop`, `start`,
-//! `rm`, `cancel`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
+//! The streams the machine's runtime holds, managed one call at a time: `new`, `run`, `stop`,
+//! `start`, `rm`, `cancel`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
 //! lines or table each prints. A verb naming one stream resolves its stream argument to an id
 //! through `list_streams` first. `run` and `dev` share the project load request.
 
@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CancelStreamActionToolResult, ExposePortLevel, ExposePortToolResult, ListStreamsToolResult,
-    ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
+    CancelStreamActionToolResult, CreateProjectToolResult, ExposePortLevel, ExposePortToolResult,
+    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
     RenameStreamToolResult, RunProjectToolResult, StartStreamToolResult, StopStreamToolResult,
     StreamActionStateOnTheWire,
 };
@@ -29,6 +29,8 @@ use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard
 pub(crate) enum StreamActionTool {
     /// Queues a load of every `@stream` of a project.
     RunProject,
+    /// Creates a project and queues its load.
+    CreateProject,
     /// Unloads a stream, recording it stopped.
     StopStream,
     /// Loads a stopped stream again, or retries a failed one.
@@ -50,6 +52,7 @@ impl StreamActionTool {
     pub(crate) fn tool_name(self) -> &'static str {
         match self {
             StreamActionTool::RunProject => "run_project",
+            StreamActionTool::CreateProject => "create_project",
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
             StreamActionTool::RemoveProject => "remove_project",
@@ -193,6 +196,47 @@ pub(crate) fn run_project(
         &run_project_result,
         caller_working_directory,
     ))
+}
+
+/// `tatolab new [DIRECTORY]`: create a project in `requested_project_directory` resolved against
+/// `caller_working_directory`, or with none in a folder the runtime draws under `~/streams`,
+/// print the action that writes and loads it and how to follow it, and return.
+pub(crate) fn create_project(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<u8, TatolabCommandFailure> {
+    let mut create_project_arguments = serde_json::Map::new();
+    if let Some(requested_project_directory) = requested_project_directory {
+        create_project_arguments.insert(
+            "project_directory".to_owned(),
+            utf8_text_of(
+                "the project directory",
+                caller_working_directory
+                    .join(requested_project_directory)
+                    .as_os_str(),
+            )?
+            .into(),
+        );
+    }
+    let create_project_result: CreateProjectToolResult =
+        call_one_stream_action_tool(StreamActionTool::CreateProject, create_project_arguments)?;
+    write_verb_standard_output(&rendered_create_project_lines(&create_project_result))
+}
+
+/// `<action> queued: create of <project>`, then how to follow it: the project's log by `--dir`.
+fn rendered_create_project_lines(create_project_result: &CreateProjectToolResult) -> String {
+    let project_directory = create_project_result
+        .project_directory
+        .display()
+        .to_string();
+    format!(
+        "{}  follow it: tatolab logs -f --dir {project_directory}\n",
+        rendered_queued_stream_action_line(
+            &create_project_result.action,
+            "create",
+            &project_directory,
+        )
+    )
 }
 
 /// `<action> queued: load of <project>`, then how to follow it from `caller_working_directory`:

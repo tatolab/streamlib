@@ -1,21 +1,24 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+//! `tatolab --help` lists the served verbs, and `tatolab new` is one `create_project` call on
+//! the machine's runtime: the directory it sends, the lines it prints, and how a refusal reads.
+
+#![cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
+
+mod common;
+
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::{Command, Output};
 
-const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
-    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n";
+use serde_json::json;
 
-fn scaffold_template_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/tatolab-stream/scaffold_template")
-}
-
-fn scaffold_template_text(template_file: &str) -> String {
-    fs::read_to_string(scaffold_template_directory().join(template_file)).unwrap()
-}
+use common::isolated_machine_directories::IsolatedMachineDirectories;
+use common::stub_local_api_server::{
+    RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer, StubToolCallTransport,
+};
+use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
 fn run_tatolab(working_directory: &Path, tatolab_arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_tatolab"))
@@ -25,41 +28,40 @@ fn run_tatolab(working_directory: &Path, tatolab_arguments: &[&str]) -> Output {
         .unwrap()
 }
 
-fn every_file_under(directory: &Path) -> BTreeSet<String> {
-    let mut relative_file_paths = BTreeSet::new();
-    let mut directories_to_visit = vec![directory.to_path_buf()];
-    while let Some(visited_directory) = directories_to_visit.pop() {
-        for directory_entry in fs::read_dir(&visited_directory).unwrap() {
-            let entry_path = directory_entry.unwrap().path();
-            if entry_path.is_dir() {
-                directories_to_visit.push(entry_path);
-            } else {
-                relative_file_paths.insert(
-                    entry_path
-                        .strip_prefix(directory)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-            }
-        }
-    }
-    relative_file_paths
+/// A machine whose runtime answers `create_project` with `tool_answer`.
+fn a_runtime_answering_create_project(
+    tool_answer: StubToolAnswer,
+) -> (IsolatedMachineDirectories, StubLocalApiServer) {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tool_answers_by_name: HashMap::from([("create_project".to_owned(), vec![tool_answer])]),
+            ..StubLocalApiScript::default()
+        });
+    (isolated_machine_directories, stub_local_api_server)
 }
 
-fn expected_scaffolded_file_paths() -> BTreeSet<String> {
-    [
-        "stream.py",
-        "nodes/__init__.py",
-        "nodes/halftone_lens_effect.py",
-        "nodes/brightness_meter.py",
-        "pyproject.toml",
-        ".python-version",
-        ".gitignore",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+/// What a runtime's `create_project` answers once it queued `action` creating `project_directory`.
+fn create_project_tool_result_text(action: &str, project_directory: &Path) -> String {
+    json!({
+        "action": action,
+        "stream": "brisk-otter-main-0a1b2c",
+        "project_directory": project_directory,
+    })
+    .to_string()
+}
+
+/// Run `tatolab_arguments` in `working_directory` to its exit.
+fn run_tatolab_in(
+    isolated_machine_directories: &IsolatedMachineDirectories,
+    working_directory: &Path,
+    tatolab_arguments: &[&str],
+) -> Output {
+    isolated_machine_directories
+        .tatolab_command(tatolab_arguments)
+        .current_dir(working_directory)
+        .output()
+        .unwrap()
 }
 
 #[test]
@@ -100,112 +102,118 @@ fn help_lists_exactly_the_served_verbs() {
 }
 
 #[test]
-fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
-    let scratch_directory = tempfile::tempdir().unwrap();
-    let new_output = run_tatolab(scratch_directory.path(), &["new", "My Probe App"]);
-    assert!(
-        new_output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&new_output.stderr)
+fn new_in_a_directory_creates_the_project_there_through_the_runtime_and_says_how_to_follow_it() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let project_directory = working_directory.path().join("My Probe App");
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering_create_project(StubToolAnswer::tool_result(
+            &create_project_tool_result_text("Rabc-1", &project_directory),
+        ));
+
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        working_directory.path(),
+        &["new", "My Probe App"],
     );
-    let project_directory = scratch_directory.path().join("My Probe App");
+
     assert_eq!(
-        every_file_under(&project_directory),
-        expected_scaffolded_file_paths()
-    );
-
-    for scaffolded_file in expected_scaffolded_file_paths() {
-        let scaffolded_text = fs::read_to_string(project_directory.join(&scaffolded_file)).unwrap();
-        assert!(
-            !scaffolded_text.contains("SPDX-License-Identifier"),
-            "{scaffolded_file} kept the licence header"
-        );
-        assert!(
-            !scaffolded_text.contains("StreamLib") && !scaffolded_text.contains("streamlib"),
-            "{scaffolded_file} names the product's old name:\n{scaffolded_text}"
-        );
-    }
-
-    let stream_py = fs::read_to_string(project_directory.join("stream.py")).unwrap();
-    assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
-    assert!(stream_py.contains("stream_builder.add(H264Encoder)"));
-    assert!(
-        stream_py
-            .contains("stream_builder.expose(encoder.output(\"encoded_video\"), Exposure.PUBLIC)"),
-        "{stream_py}"
-    );
-    assert!(!stream_py.contains("DisplayWindow"), "{stream_py}");
-    assert_eq!(
-        stream_py,
-        scaffold_template_text("stream.py")
-            .strip_prefix(SCAFFOLD_TEMPLATE_LICENSE_HEADER)
-            .unwrap(),
-        "the sample stream is the template itself"
-    );
-
-    for node_module in [
-        "nodes/__init__.py",
-        "nodes/halftone_lens_effect.py",
-        "nodes/brightness_meter.py",
-    ] {
-        assert_eq!(
-            fs::read_to_string(project_directory.join(node_module)).unwrap(),
-            scaffold_template_text(node_module)
-                .strip_prefix(SCAFFOLD_TEMPLATE_LICENSE_HEADER)
-                .unwrap()
-        );
-    }
-
-    let pyproject_toml = fs::read_to_string(project_directory.join("pyproject.toml")).unwrap();
-    assert!(pyproject_toml.contains("name = \"my-probe-app\""));
-    assert!(
-        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.54.2\", \"numpy>=2.1\"]"),
-        "the written project floors tatolab-stream above PyPI's 0.0.0 placeholder: {pyproject_toml}"
+        finished.status.code(),
+        Some(0),
+        "{}",
+        standard_error_text(&finished)
     );
     assert_eq!(
-        pyproject_toml,
-        scaffold_template_text("pyproject.toml").replace(
-            "name = \"tatolab-stream-project\"",
-            "name = \"my-probe-app\""
+        standard_output_text(&finished),
+        format!(
+            "Rabc-1 queued: create of {0}\n  follow it: tatolab logs -f --dir {0}\n",
+            project_directory.display()
         )
     );
     assert_eq!(
-        fs::read_to_string(project_directory.join(".python-version")).unwrap(),
-        scaffold_template_text("python-version")
+        stub_local_api_server.recorded_tool_calls(),
+        [RecordedToolCall {
+            tool_name: "create_project".to_owned(),
+            tool_arguments: json!({ "project_directory": project_directory }),
+            tool_call_transport: StubToolCallTransport::StreamableHttpPost,
+        }]
     );
-    assert_eq!(
-        fs::read_to_string(project_directory.join(".gitignore")).unwrap(),
-        scaffold_template_text("gitignore")
-    );
-
-    let next_steps = String::from_utf8(new_output.stdout).unwrap();
     assert!(
-        next_steps.starts_with("Created a Tatolab stream project in `My Probe App`.\n"),
-        "{next_steps}"
+        !project_directory.exists(),
+        "the runtime writes the project, never the CLI"
     );
-    assert!(next_steps.contains("    cd My Probe App\n"), "{next_steps}");
-    assert!(next_steps.contains("    uv sync\n"), "{next_steps}");
-    assert!(next_steps.contains("    tatolab dev\n"), "{next_steps}");
 }
 
 #[test]
-fn new_refuses_a_directory_holding_a_scaffolded_file_and_writes_nothing() {
-    let scratch_directory = tempfile::tempdir().unwrap();
-    let project_directory = scratch_directory.path().join("taken");
-    fs::create_dir_all(&project_directory).unwrap();
-    fs::write(project_directory.join("stream.py"), "# the user's own\n").unwrap();
+fn new_with_no_directory_leaves_the_folder_to_the_runtime() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let drawn_project_directory = Path::new("/home/me/streams/brisk-otter");
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering_create_project(StubToolAnswer::tool_result(
+            &create_project_tool_result_text("Rabc-2", drawn_project_directory),
+        ));
 
-    let new_output = run_tatolab(scratch_directory.path(), &["new", "taken"]);
-    assert_eq!(new_output.status.code(), Some(1));
-    let refusal = String::from_utf8(new_output.stderr).unwrap();
-    assert!(refusal.starts_with("error: "), "{refusal}");
-    assert!(refusal.contains("already has stream.py"), "{refusal}");
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        working_directory.path(),
+        &["new"],
+    );
+
     assert_eq!(
-        every_file_under(&project_directory),
-        BTreeSet::from(["stream.py".to_owned()])
+        finished.status.code(),
+        Some(0),
+        "{}",
+        standard_error_text(&finished)
     );
     assert_eq!(
-        fs::read_to_string(project_directory.join("stream.py")).unwrap(),
-        "# the user's own\n"
+        standard_output_text(&finished),
+        "Rabc-2 queued: create of /home/me/streams/brisk-otter\n  follow it: tatolab logs -f \
+         --dir /home/me/streams/brisk-otter\n"
     );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("create_project"),
+        [json!({})]
+    );
+}
+
+#[test]
+fn a_refused_create_prints_the_runtimes_refusal_and_exits_one() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let (isolated_machine_directories, _stub_local_api_server) =
+        a_runtime_answering_create_project(StubToolAnswer::tool_failure(
+            "no folder for a new project could be created under /home/me/streams in 8 draws",
+        ));
+
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        working_directory.path(),
+        &["new"],
+    );
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(standard_output_text(&finished), "");
+    assert_eq!(
+        standard_error_text(&finished),
+        "error: create_project failed: no folder for a new project could be created under \
+         /home/me/streams in 8 draws\n"
+    );
+}
+
+#[test]
+fn new_with_no_runtime_fails_and_writes_nothing() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        working_directory.path(),
+        &["new", "probe"],
+    );
+
+    assert_ne!(finished.status.code(), Some(0));
+    assert!(
+        standard_error_text(&finished).starts_with("error: "),
+        "{}",
+        standard_error_text(&finished)
+    );
+    assert!(!working_directory.path().join("probe").exists());
 }

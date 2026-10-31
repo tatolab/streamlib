@@ -1,37 +1,43 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+//! The files a new stream project starts from, rendered from the templates the
+//! SDK carries, and their write into the project's directory.
+
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
-use crate::TatolabCommandFailure;
-use crate::verb_standard_output::write_verb_standard_output;
+use crate::core::{Error, Result};
 
-/// The licence header each `.py` template opens with; the project `new` writes is the user's own.
+/// The licence header each `.py` template opens with; the project it starts is the user's own.
 const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n";
 
+/// The `module:qualname` of the one `@stream` the scaffold's `stream.py` defines.
+pub(crate) const NEW_PROJECT_SCAFFOLD_STREAM_FUNCTION: &str = "stream:main";
+
 const STREAM_PY_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/stream.py");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/stream.py");
 const NODES_INIT_PY_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/__init__.py");
-const HALFTONE_LENS_EFFECT_PY_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/halftone_lens_effect.py");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/nodes/__init__.py");
+const HALFTONE_LENS_EFFECT_PY_TEMPLATE: &str = include_str!(
+    "../../../../../sdk/tatolab-stream/scaffold_template/nodes/halftone_lens_effect.py"
+);
 const BRIGHTNESS_METER_PY_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/brightness_meter.py");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/nodes/brightness_meter.py");
 const PYPROJECT_TOML_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/pyproject.toml");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/pyproject.toml");
 const PYTHON_VERSION_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/python-version");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/python-version");
 const GITIGNORE_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/gitignore");
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/gitignore");
 
 const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"tatolab-stream-project\"";
 
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
-/// One file `new` writes: its path inside the project and its rendered contents.
+/// One file a new project starts with: its path inside the project and its rendered contents.
 pub(crate) struct ScaffoldedProjectFile {
     /// The path relative to the project directory.
     pub(crate) path_in_project: &'static str,
@@ -45,7 +51,7 @@ fn without_license_header(python_template: &'static str) -> &'static str {
         .unwrap_or(python_template)
 }
 
-/// Every file `new` writes, in write order, rendered from the embedded templates.
+/// Every file a new project starts with, in write order, rendered from the embedded templates.
 pub(crate) fn render_scaffold_template_files(
     distribution_name: &str,
 ) -> Vec<ScaffoldedProjectFile> {
@@ -107,39 +113,14 @@ pub(crate) fn python_distribution_name_for(directory_name: &str) -> String {
     }
 }
 
-fn resolved_directory_name(target_directory: &Path) -> std::io::Result<String> {
-    let resolved_target_directory = match target_directory.canonicalize() {
-        Ok(canonical_target_directory) => canonical_target_directory,
-        Err(_) => {
-            let mut lexically_resolved = PathBuf::new();
-            for component in std::path::absolute(target_directory)?.components() {
-                match component {
-                    Component::ParentDir => {
-                        lexically_resolved.pop();
-                    }
-                    Component::CurDir => {}
-                    other_component => lexically_resolved.push(other_component),
-                }
-            }
-            lexically_resolved
-        }
-    };
-    Ok(resolved_target_directory
+/// Write the files a new stream project starts from into `project_directory`,
+/// created when absent, its distribution named after the folder. Refused,
+/// with nothing written, when any of those files is already there.
+pub(crate) fn write_the_new_project_scaffold_into(project_directory: &Path) -> Result<()> {
+    let directory_name = project_directory
         .file_name()
         .map(|file_name| file_name.to_string_lossy().into_owned())
-        .unwrap_or_default())
-}
-
-/// `tatolab new`: write a working stream project into `target_directory`.
-pub(crate) fn scaffold_new_stream_project(
-    target_directory: &Path,
-) -> Result<(), TatolabCommandFailure> {
-    let directory_name = resolved_directory_name(target_directory).map_err(|io_failure| {
-        TatolabCommandFailure::refused(format!(
-            "cannot resolve `{}`: {io_failure}",
-            target_directory.display()
-        ))
-    })?;
+        .unwrap_or_default();
     let scaffolded_files =
         render_scaffold_template_files(&python_distribution_name_for(&directory_name));
 
@@ -148,22 +129,23 @@ pub(crate) fn scaffold_new_stream_project(
     let mut already_present: Vec<&str> = scaffolded_files
         .iter()
         .map(|scaffolded_file| scaffolded_file.path_in_project)
-        .filter(|path_in_project| target_directory.join(path_in_project).exists())
+        .filter(|path_in_project| project_directory.join(path_in_project).exists())
         .collect();
     already_present.sort_unstable();
     if !already_present.is_empty() {
-        return Err(TatolabCommandFailure::refused(format!(
-            "`{}` already has {} — scaffolding would overwrite it. Pick an empty directory.",
-            target_directory.display(),
+        return Err(Error::Configuration(format!(
+            "`{}` already has {}, and a new project's files would overwrite it; create the \
+             project in an empty directory",
+            project_directory.display(),
             already_present.join(", ")
         )));
     }
 
     for scaffolded_file in &scaffolded_files {
-        let scaffolded_file_path = target_directory.join(scaffolded_file.path_in_project);
+        let scaffolded_file_path = project_directory.join(scaffolded_file.path_in_project);
         if let Some(parent_directory) = scaffolded_file_path.parent() {
             fs::create_dir_all(parent_directory).map_err(|io_failure| {
-                TatolabCommandFailure::refused(format!(
+                Error::Runtime(format!(
                     "cannot create `{}`: {io_failure}",
                     parent_directory.display()
                 ))
@@ -171,19 +153,13 @@ pub(crate) fn scaffold_new_stream_project(
         }
         fs::write(&scaffolded_file_path, &scaffolded_file.rendered_contents).map_err(
             |io_failure| {
-                TatolabCommandFailure::refused(format!(
+                Error::Runtime(format!(
                     "cannot write `{}`: {io_failure}",
                     scaffolded_file_path.display()
                 ))
             },
         )?;
     }
-
-    write_verb_standard_output(&format!(
-        "Created a Tatolab stream project in `{target_directory}`.\n\nNext:\n    cd \
-         {target_directory}\n    uv sync\n    tatolab dev\n",
-        target_directory = target_directory.display()
-    ))?;
     Ok(())
 }
 
@@ -273,7 +249,19 @@ mod tests {
                 "{} kept the licence header",
                 rendered_file.path_in_project
             );
+            assert!(
+                !rendered_file.rendered_contents.contains("StreamLib")
+                    && !rendered_file.rendered_contents.contains("streamlib"),
+                "{} names the product's old name",
+                rendered_file.path_in_project
+            );
         }
+        assert!(
+            rendered_files[4]
+                .rendered_contents
+                .contains("dependencies = [\"tatolab-stream>=0.54.2\", \"numpy>=2.1\"]"),
+            "a new project floors tatolab-stream above PyPI's 0.0.0 placeholder"
+        );
         assert!(
             rendered_files[4]
                 .rendered_contents
@@ -297,6 +285,45 @@ mod tests {
         assert!(
             !rendered_stream_py.contains("DisplayWindow"),
             "{rendered_stream_py}"
+        );
+    }
+
+    #[test]
+    fn the_scaffold_is_written_into_a_missing_directory_naming_its_distribution_after_the_folder() {
+        let parent_directory = tempfile::tempdir().unwrap();
+        let project_directory = parent_directory.path().join("Bright Lens");
+
+        write_the_new_project_scaffold_into(&project_directory).unwrap();
+
+        for scaffolded_file in render_scaffold_template_files("bright-lens") {
+            assert_eq!(
+                fs::read_to_string(project_directory.join(scaffolded_file.path_in_project))
+                    .unwrap(),
+                scaffolded_file.rendered_contents,
+                "{}",
+                scaffolded_file.path_in_project
+            );
+        }
+    }
+
+    #[test]
+    fn a_directory_already_holding_a_scaffold_file_is_refused_with_nothing_written() {
+        let project_directory = tempfile::tempdir().unwrap();
+        fs::write(
+            project_directory.path().join("stream.py"),
+            "# the user's own\n",
+        )
+        .unwrap();
+
+        let refusal = write_the_new_project_scaffold_into(project_directory.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("already has stream.py"), "{refusal}");
+        assert!(!project_directory.path().join("pyproject.toml").exists());
+        assert_eq!(
+            fs::read_to_string(project_directory.path().join("stream.py")).unwrap(),
+            "# the user's own\n"
         );
     }
 }

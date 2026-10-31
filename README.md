@@ -94,7 +94,7 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`.
+A new project's `pyproject.toml` depends on `tatolab-stream>=0.54.2` and `numpy>=2.1`.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.
@@ -142,10 +142,15 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```
 
 ```bash
-tatolab new my-stream       # test pattern → GPU effect, plus a CPU meter, wired and working
+tatolab new my-stream       # the runtime writes a test pattern → GPU effect, plus a CPU meter, and runs it
 cd my-stream
 tatolab dev                 # the test pattern through a GPU lens, encoded and shared, its brightness logged
 ```
+
+`tatolab new` asks the runtime to create the project: it writes the files, makes the `.venv` and
+runs the stream under the folder's name, and `new` prints the action doing it and returns. With
+no directory, the runtime creates the project in a new folder under `~/streams` named
+`<adjective>-<noun>`.
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` queues a load of the project in the working directory and follows the project's
@@ -324,7 +329,7 @@ again replaces its stream under the same id.
 ## The `tatolab` CLI
 
 ```text
-tatolab new DIRECTORY
+tatolab new [DIRECTORY]
 tatolab run [--dir DIR]
 tatolab dev [--dir DIR]
 
@@ -350,8 +355,13 @@ tatolab mcp
 tatolab enable-virtual-camera [--print]
 ```
 
-- **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
-  `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
+- **`new`** has the runtime create a project in `DIRECTORY`, resolved against the working
+  directory, or with none in a folder `<adjective>-<noun>` it draws under `~/streams`, and
+  prints `<action> queued: create of <project>` and `follow it: tatolab logs -f --dir
+  <project>`, then returns 0 at once. The action writes `stream.py`, `nodes/`,
+  `pyproject.toml`, `.python-version` (3.12) and `.gitignore`, then loads the project as `run`
+  does, showing its stream under the folder's name. A directory already holding one of those
+  files fails the action with nothing written.
 - **`run`** queues a load of the project on the project's queue and prints
   `<action> queued: load of <project>` and how to follow it, then returns 0 at once. The runtime
   syncs the project's `.venv`, compiles every `@stream` function of `stream.py` in it, and loads
@@ -478,7 +488,8 @@ The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, 
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
 `remove_node` to change a running graph; `run_project`, which queues a run of a project and
 answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
-early, and `list_project_streams`; `stop_stream`, `start_stream`, `remove_project`,
+early, `create_project`, which creates a project as `tatolab new` does and queues its run the
+same way, and `list_project_streams`; `stop_stream`, `start_stream`, `remove_project`,
 `rename_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
 `add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside

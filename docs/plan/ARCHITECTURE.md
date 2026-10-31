@@ -3511,8 +3511,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   built zip and again after install. The same workflow runs as a dry run on every push to
   `main`, on a runner with no Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
-  against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new` then
-  `tatolab run` for twenty seconds, which must open the carried loader, raise nothing from the
+  against the lend, and into a directory whose venv holds only `tatolab-stream` runs `tatolab
+  new`, whose load runs for twenty seconds, which must open the carried loader, raise nothing from the
   effect, and show the stream loaded with `TestPatternSource.video` writing at least sixty
   frames in `graph` — `H264Encoder` either encoding or, on a runner with no encoder, refusing
   by name while the stream stays loaded. On release a failed macOS proof of

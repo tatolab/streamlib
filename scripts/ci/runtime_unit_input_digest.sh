@@ -40,7 +40,7 @@ sha256_of_standard_input() {
     ':(exclude).github/ISSUE_TEMPLATE/**' \
     ':(exclude)*.md' \
     ':(exclude)LICENSES/**'
-  # `tatolab new` compiles the scaffold into the CLI, and the wheel ships the
+  # The runtime compiles the scaffold `tatolab new` writes, and the wheel ships the
   # notices; both sit under an exclusion above.
   git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md'
   rustc -Vv

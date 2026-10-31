@@ -951,9 +951,9 @@ def start_tatolab(
     """Start `tatolab <arguments...>` in a session of its own; returns its `RuntimeProcessUnderTest`.
 
     `start_tatolab(*arguments, working_directory, extra_environment=None)`, in
-    this test's machine environment: every verb but `new` reaches the runtime
-    this test started with `start_tatolabd`, or refuses naming the socket
-    nothing answers at.
+    this test's machine environment: every verb reaches the runtime this test
+    started with `start_tatolabd`, or refuses naming the socket nothing answers
+    at.
     """
 
     def start(
@@ -997,6 +997,30 @@ def run_tatolab(
         )
 
     return run
+
+
+@pytest.fixture
+def make_scaffolded_tatolab_project(
+    make_tatolab_project: "Callable[..., Path]",
+    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+) -> "Callable[..., Path]":
+    """`tatolab new` into a project whose `.venv` is the suite venv, on a running `tatolabd`.
+
+    `make_scaffolded_tatolab_project(tatolabd, directory_name="app") -> Path`:
+    the runtime writes the scaffold beside the `.venv` and loads its stream;
+    returns once that action is `done`.
+    """
+
+    def make(tatolabd: TatolabdUnderTest, directory_name: str = "app") -> Path:
+        app_directory = make_tatolab_project(directory_name=directory_name)
+        created = run_tatolab("new", app_directory, working_directory=app_directory.parent)
+        assert created.returncode == 0, created.stdout + created.stderr
+        action = created.stdout.split(" ", 1)[0]
+        create_once_ended = tatolabd.local_api_client().stream_action_once_ended(action)
+        assert create_once_ended["state"] == "done", create_once_ended
+        return app_directory
+
+    return make
 
 
 @pytest.fixture

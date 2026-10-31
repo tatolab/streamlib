@@ -45,6 +45,7 @@ CONTROL_TOOL_NAMES = {
     "connect",
     "disconnect",
     "run_project",
+    "create_project",
     "describe_stream_action",
     "cancel_stream_action",
     "list_project_streams",
