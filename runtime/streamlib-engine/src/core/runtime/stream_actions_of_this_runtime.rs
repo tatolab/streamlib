@@ -1334,6 +1334,7 @@ impl Runner {
                 Ok(stream) => stream,
                 Err(retry_refusal)
                     if record.is_failed()
+                        && !is_interrupted()
                         && !matches!(
                             retry_refusal,
                             Error::EngineResourceRefusedAtAStreamsStart(_)
