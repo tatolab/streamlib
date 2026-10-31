@@ -10,7 +10,8 @@
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
 # lib/tatolab/watch/ — plus the systemd user units in lib/systemd/user/, where
-# install.sh takes them from.
+# install.sh takes them from, and streamlib-commit, the commit it was built
+# from, which names the build install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
 # every binary the tarball carries runs on glibc 2.28 and later, and the
@@ -31,6 +32,12 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 	output_directory="${1:?usage: build_linux_runtime_release_tarball.sh <output-directory>}"
 	mkdir -p "$output_directory"
 	output_directory="$(cd "$output_directory" && pwd)"
+	# Read here: inside the container git refuses a workspace another user owns.
+	streamlib_commit="$(git -C "$workspace_root" rev-parse HEAD)"
+	[ -z "$(git -C "$workspace_root" status --porcelain --untracked-files=no)" ] || {
+		echo "the workspace has uncommitted changes: the tarball would not be $streamlib_commit" >&2
+		exit 1
+	}
 	# In a container of its own, so the pinned LLVM it installs never meets the
 	# toolchain this build installs below; inside, build-runtime's staging is
 	# then a cache hit.
@@ -45,6 +52,7 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 		--volume "$bun_executable:/opt/bun/bin/bun:ro" \
 		--workdir /workspace \
 		--env STREAMLIB_RUNNING_IN_MANYLINUX_2_28_IMAGE="$MANYLINUX_2_28_IMAGE" \
+		--env STREAMLIB_COMMIT_OF_THE_RUNTIME_UNIT="$streamlib_commit" \
 		"$MANYLINUX_2_28_IMAGE" \
 		bash /workspace/scripts/build_linux_runtime_release_tarball.sh --inside-manylinux /output
 fi
@@ -117,6 +125,7 @@ VIRTUAL_ENV=/tmp/runtime-unit-gate-venv uv pip install /tmp/tatolab-stream-dist/
 release_version="$(cargo metadata --locked --no-deps --format-version 1 |
 	python3.12 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tatolabd"))')"
 tarball_name="tatolab-runtime-$release_version-x86_64-linux.tar.gz"
-tar -C "$runtime_unit_root" -czf "$output_directory/$tarball_name" bin lib
+printf '%s\n' "${STREAMLIB_COMMIT_OF_THE_RUNTIME_UNIT:?}" >"$runtime_unit_root/streamlib-commit"
+tar -C "$runtime_unit_root" -czf "$output_directory/$tarball_name" bin lib streamlib-commit
 (cd "$output_directory" && sha256sum "$tarball_name" >"$tarball_name.sha256")
 echo "built $output_directory/$tarball_name"
