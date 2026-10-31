@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.61.0](https://github.com/tatolab/streamlib/compare/v0.60.0...v0.61.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **stream:** a stream.py that defines no @stream is a failed project, not a refusal ([#2994](https://github.com/tatolab/streamlib/issues/2994))
+
+### Features
+
+* **stream:** a stream.py that defines no [@stream](https://github.com/stream) is a failed project, not a refusal ([#2994](https://github.com/tatolab/streamlib/issues/2994)) ([e7b0e5f](https://github.com/tatolab/streamlib/commit/e7b0e5f1af328644afd5cbfa9e828796fe84ec2e))
+
 ## [0.60.0](https://github.com/tatolab/streamlib/compare/v0.59.0...v0.60.0) (2026-10-30)
 
 
