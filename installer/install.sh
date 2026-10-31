@@ -224,6 +224,11 @@ write_the_launch_agent_plist() {
 	</dict>
 	<key>ProcessType</key>
 	<string>Interactive</string>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
 	<key>AssociatedBundleIdentifiers</key>
 	<array>
 		<string>$TATOLAB_APP_BUNDLE_IDENTIFIER</string>
