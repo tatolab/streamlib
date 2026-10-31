@@ -547,14 +547,17 @@ impl Runner {
                 not_defined_because,
             )?],
             WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
-                import_failed_because,
+                import_failed_because: failed_because,
+            }
+            | WhatTheProjectsCodeGaveTheCompile::StreamEntryDefinesNoStream {
+                no_stream_defined_because: failed_because,
             } => {
                 return Ok(StreamRunOutcome {
                     streams: self.fail_every_record_of_a_project_that_gave_no_stream(
                         stream_records,
                         &stream_environment,
                         display_name_the_run_gives,
-                        import_failed_because,
+                        failed_because,
                     )?,
                     project_directory,
                     compile_warnings,
@@ -2250,6 +2253,18 @@ mod tests {
             );
         }
 
+        /// From now on, the compile answers that `stream.py` imported and
+        /// defines no `@stream`, printing `no_stream_defined_because`.
+        fn define_no_stream_printing(&self, no_stream_defined_because: &str) {
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "project_directory": self.path(),
+                    "no_stream_defined_because": no_stream_defined_because,
+                }),
+                &[],
+            );
+        }
+
         /// From now on, the compile writes its arguments to
         /// [`Self::the_last_compiles_arguments`], each of `warnings` on a line
         /// of its standard error, then prints `document`.
@@ -2832,6 +2847,60 @@ mod tests {
             "a load whose entry imports forgets the project's record"
         );
         assert_eq!(records_in(state_directory.path()).read_every().len(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn a_stream_py_defining_no_stream_is_a_failed_project_until_a_load_defines_one() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let project_stream_id = project.location_of_the_project().stream_id();
+        let no_stream_defined = "`stream.py` defines no @stream function\n    @stream";
+        project.define_no_stream_printing(no_stream_defined);
+
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("a stream.py defining no @stream is taken in failed");
+
+        let (stream, failed_because) = the_one_failed_stream_of(&run);
+        assert_eq!(failed_because, no_stream_defined);
+        assert_eq!(stream.stream_id, project_stream_id);
+        assert_eq!(
+            the_record_of(state_directory.path(), &project_stream_id)
+                .failed_because
+                .as_deref(),
+            Some(no_stream_defined)
+        );
+
+        project.compile_to(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let defined_again = runner.run_stream(project.run_request()).unwrap();
+        assert_eq!(
+            defined_again
+                .streams
+                .iter()
+                .map(|stream| stream.stream_id.as_str())
+                .collect::<Vec<_>>(),
+            [project.stream_id_of("camera").as_str()]
+        );
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &project_stream_id),
+            None,
+            "a load that defines a stream forgets the project's record"
+        );
+
+        project.define_no_stream_printing(no_stream_defined);
+        let emptied = runner.run_stream(project.run_request()).unwrap();
+        let (stream, failed_because) = the_one_failed_stream_of(&emptied);
+        assert_eq!(stream.stream_id, project.stream_id_of("camera"));
+        assert_eq!(failed_because, no_stream_defined);
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
 
     #[test]

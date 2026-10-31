@@ -151,6 +151,13 @@ def import_failure_of(finished: "subprocess.CompletedProcess[str]") -> str:
     ]
 
 
+def no_stream_defined_of(finished: "subprocess.CompletedProcess[str]") -> str:
+    """Why an entry that imported defines no `@stream`."""
+    return the_one_document_of(finished, {"no_stream_defined_because", "project_directory"})[
+        "no_stream_defined_because"
+    ]
+
+
 def refusal_of(finished: "subprocess.CompletedProcess[str]") -> str:
     """A refusal's stderr, once it is known to have been one: exit 1, nothing on stdout."""
     assert finished.returncode == 1, finished.stdout + finished.stderr
@@ -806,16 +813,16 @@ def test_a_target_naming_a_second_name_of_a_stream_defined_in_the_file_selects_i
     assert document["stream_graph"]["stream"] == "back"
 
 
-def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(anchor_directory: Path):
+def test_an_entry_that_defines_no_stream_is_a_failed_project_with_a_sample(
+    anchor_directory: Path,
+):
     write_app(anchor_directory, "stream.py", "PIPELINE = 1\n")
 
-    message = refusal_of(run_compile_entry(anchor_directory, verb="dev"))
+    message = no_stream_defined_of(run_compile_entry(anchor_directory, verb="dev"))
 
     assert "stream.py` defines no @stream function" in message
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
     assert "stream_builder.add(CameraSource)" in message
-    assert "-f <file>" in message
-    assert "tatolab dev <file>.py:<function>" in message
 
 
 def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_its_streams(
@@ -841,7 +848,7 @@ def test_an_app_py_named_by_the_file_flag_that_defines_only_setup_defines_no_str
 ):
     write_app(anchor_directory, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
 
-    message = refusal_of(run_compile_entry(anchor_directory, "-f", "app.py"))
+    message = no_stream_defined_of(run_compile_entry(anchor_directory, "-f", "app.py"))
 
     assert f"`{anchor_directory / 'app.py'}` defines no @stream function\n" in message
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message

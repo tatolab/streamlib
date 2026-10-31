@@ -690,8 +690,9 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
 - **`<id> failed: <traceback>`** from `run`, or **`tatolab dev: <id> is failed — fix it and save
   again to load it`** — the stream's code raised, or its load was refused; the runtime lists it
   `failed` with that reason. Fix the code and run or save again; `tatolab start <id>` retries it.
-  A `stream.py` that does not import fails every stream of the project, or with none lists the
-  project as `<folder>-<hash>`.
+  A `stream.py` that does not import, or imports and defines no `@stream`, fails every stream of
+  the project, or with none lists the project as `<folder>-<hash>` with the traceback or the
+  missing `@stream` and a sample of one; the next run that defines a stream replaces it.
 - **`tatolab dev: no stream is loaded — fix it and save again`** — the runtime refused the load
   itself, with nothing running before it; its refusal is printed just above.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
