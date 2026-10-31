@@ -273,7 +273,13 @@ boot_out_the_launch_agent_and_wait_until_launchd_lets_it_go() {
 	fi
 	if launchctl print "$launch_agent_job" >/dev/null 2>&1; then
 		refuse "launchd still holds $launch_agent_job after booting it out. See $(how_to_see_the_service)."
+	else
+		launchctl_print_status="$?"
 	fi
+	# 113 is launchctl's answer for a domain holding no job under the label.
+	[ "$launchctl_print_status" = 113 ] ||
+		refuse "launchctl could not say whether launchd let go of $launch_agent_job" \
+			"(launchctl print exited $launchctl_print_status). See $(how_to_see_the_service)."
 }
 
 # Each step chained, because a function called where its status is tested
