@@ -16,7 +16,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -117,19 +116,18 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     assert not (tmp_path / "another-venv").exists(), "uv made the venv VIRTUAL_ENV names"
 
     shutil.rmtree(project_directory / ".venv")
-    refusal = local_api.call_tool_refusal(
-        "start_stream",
-        {"stream": failed_stream["stream"]},
-        timeout=STREAM_LOAD_TOOL_CALL_TIMEOUT_SECONDS,
-    )
+    queued_start = local_api.call_tool("start_stream", {"stream": failed_stream["stream"]})
+    start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
-    assert RAISED_ON_PURPOSE in refusal, refusal
+    assert start_once_ended["state"] == "done", start_once_ended
+    assert [stream["state"] for stream in start_once_ended["streams"]] == ["failed"], (
+        start_once_ended
+    )
+    [listed] = local_api.list_streams()
+    assert RAISED_ON_PURPOSE in listed["failed_because"], listed
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
 
 
-#: How long a `run_project` action is followed: a first sync fetches the project's dependencies.
-STREAM_ACTION_FOLLOW_DEADLINE_SECONDS = 480.0
-STREAM_ACTION_FOLLOW_POLL_SECONDS = 0.1
 #: What the lines `uv sync` writes are logged under, as `processor_id`.
 PROJECT_VENV_UV_SYNC_LOG_LABEL = "project-venv-uv-sync"
 
@@ -152,13 +150,7 @@ def test_a_run_project_answers_at_once_and_its_action_makes_the_venv_compiles_an
     assert preparing["state"] == "preparing", listed_while_it_runs
     assert preparing["action"] == action, listed_while_it_runs
 
-    deadline = time.monotonic() + STREAM_ACTION_FOLLOW_DEADLINE_SECONDS
-    while True:
-        described = local_api.call_tool("describe_stream_action", {"action": action})
-        if described["state"] in ("done", "failed"):
-            break
-        assert time.monotonic() < deadline, described
-        time.sleep(STREAM_ACTION_FOLLOW_POLL_SECONDS)
+    described = local_api.stream_action_once_ended(action)
 
     assert described["state"] == "done", described
     [failed_stream] = described["streams"]

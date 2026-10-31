@@ -151,6 +151,8 @@ RUNNING_STREAM_LINE_PATTERN = re.compile(
 #: The first line naming a stream a load recorded failed, its reason running on over the lines
 #: after it: on `tatolab run`'s standard output, or `tatolab dev`'s note on standard error.
 FAILED_STREAM_LINE_PATTERN = re.compile(r"^(?:tatolab dev: )?(?P<stream_id>\S+) failed: ")
+#: The line `tatolab stop`, `start` and `rm` print for the stream action they queued.
+QUEUED_STREAM_ACTION_LINE_PATTERN = re.compile(r"^(?P<action>\S+) queued: ", re.MULTILINE)
 
 TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
 
@@ -434,8 +436,9 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         return failed_stream[1] if failed_stream is not None else None
 
     def stop_the_stream(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> int:
-        """Run `tatolab stop <id>` on the stream this load started, to its exit; return its
-        exit status. The stream is unloaded and recorded stopped."""
+        """Run `tatolab stop <id>` on the stream this load started, to its exit, and follow
+        the stop it queued to its end; return its exit status. The stream is unloaded and
+        recorded stopped."""
         stream_id = self.await_loaded(timeout=timeout)["stream_id"]
         stop = self._tatolab_commands.start_tatolab(
             "stop", stream_id, working_directory=self.working_directory
@@ -445,6 +448,12 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
             f"`tatolab stop {stream_id}` exited {exit_status}; standard error:\n"
             f"{stop.recent_stderr()}"
         )
+        queued_stop = QUEUED_STREAM_ACTION_LINE_PATTERN.search(stop.stdout_text)
+        assert queued_stop is not None, f"`tatolab stop` printed no action: {stop.stdout_text}"
+        stop_once_ended = LocalApiClient(
+            self._tatolab_commands.private_machine_directories.machine_directories.local_api_socket_path
+        ).stream_action_once_ended(queued_stop.group("action"), timeout=timeout)
+        assert stop_once_ended["state"] == "done", stop_once_ended
         return exit_status
 
 
@@ -822,7 +831,12 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
                 f"`{stream_run.command_description}` printed {failed_stream_id} failed and left "
                 f"the runtime holding {listed_streams}"
             )
-            local_api.call_tool("remove_stream", {"stream": failed_stream_id})
+            [failed_listing] = listed_streams
+            removal = local_api.call_tool(
+                "remove_project",
+                {"project_directory": failed_listing["location"]["project_directory"]},
+            )
+            local_api.stream_action_once_ended(removal["action"])
             listed_streams = local_api.list_streams()
         tatolabd_stderr_text = tatolabd.stderr_text_since(tatolabd_stderr_mark)
         start_began = STREAM_START_BEGAN_LOG_LINE_PATTERN.search(tatolabd_stderr_text)

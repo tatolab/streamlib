@@ -319,7 +319,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn stop_stream(
                 &self,
                 _stream_id: &str,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStopOutcome> {
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "stop_stream",
                 ))
@@ -327,17 +327,17 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn start_stream(
                 &self,
                 _stream_id: &str,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStartOutcome> {
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "start_stream",
                 ))
             }
-            fn remove_stream(
+            fn remove_project(
                 &self,
-                _stream_id: &str,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRemoveOutcome> {
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "remove_stream",
+                    "remove_project",
                 ))
             }
             fn rename_stream(

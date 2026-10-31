@@ -50,7 +50,7 @@ CONTROL_TOOL_NAMES = {
     "list_project_streams",
     "stop_stream",
     "start_stream",
-    "remove_stream",
+    "remove_project",
     "rename_stream",
     "list_streams",
     "expose_port",

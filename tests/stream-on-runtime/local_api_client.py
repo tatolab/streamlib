@@ -37,6 +37,9 @@ LOCAL_API_REQUEST_TIMEOUT_SECONDS = 30.0
 EVERY_NODE_RUNNING_TIMEOUT_SECONDS = 90.0
 LINK_STATE_TIMEOUT_SECONDS = 15.0
 GRAPH_POLL_INTERVAL_SECONDS = 0.05
+#: How long a stream action is followed: a first sync fetches the project's dependencies.
+STREAM_ACTION_FOLLOW_DEADLINE_SECONDS = 480.0
+STREAM_ACTION_FOLLOW_POLL_SECONDS = 0.1
 
 RUNNING_NODE_STATE = "Running"
 #: The states a node passes through before its `setup` has run, as the engine renders them.
@@ -114,6 +117,20 @@ class LocalApiClient:
         """MCP `list_streams`: each stream the runtime holds, `{stream, display_name, location,
         state, node_count, failed_because}`, `stream` its id."""
         return self.call_tool("list_streams")["streams"]
+
+    def stream_action_once_ended(
+        self, action: str, *, timeout: float = STREAM_ACTION_FOLLOW_DEADLINE_SECONDS
+    ) -> "dict[str, Any]":
+        """MCP `describe_stream_action` of `action`, once its `state` is `done` or `failed`."""
+        deadline = time.monotonic() + timeout
+        while True:
+            described = self.call_tool("describe_stream_action", {"action": action})
+            if described["state"] in ("done", "failed"):
+                return described
+            assert time.monotonic() < deadline, (
+                f"the stream action {action} did not end within {timeout}s: {described}"
+            )
+            time.sleep(STREAM_ACTION_FOLLOW_POLL_SECONDS)
 
     def registry(self, stream: "str | None" = None) -> Any:
         """`GET /api/registry`: the node types the stream can add — the native

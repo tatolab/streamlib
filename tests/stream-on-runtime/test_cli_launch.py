@@ -1133,7 +1133,8 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     assert camera_records_while_loaded, every_record
     assert all(record["stream"] == camera_id for record in camera_records_while_loaded)
 
-    client.call_tool("remove_stream", {"stream": camera_id})
+    removal = client.call_tool("remove_project", {"project_directory": project_directory})
+    assert client.stream_action_once_ended(removal["action"])["state"] == "done"
     camera_records_after_rm = client.call_tool(
         "logs",
         {"project_directory": project_directory, "stream": camera_id, "count": 4096},

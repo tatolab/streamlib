@@ -18,7 +18,7 @@ use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
     HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime, OpenDescriptorSoftLimitRaise, Runner,
-    RunnerConstructionOptions, RuntimeRunInProgressRecord, StreamReloadAtTheStart,
+    RunnerConstructionOptions, RuntimeRunInProgressRecord, StreamActionQueued,
     note_what_the_engine_teardown_is_waiting_on,
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
@@ -144,8 +144,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                     A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
                 ),
             ));
-            log_the_recorded_streams_reloaded_at_the_start(
-                &engine.reload_every_recorded_stream_neither_stopped_nor_failed(),
+            log_the_reloads_queued_at_the_start(
+                &engine.queue_the_reload_of_every_project_at_the_start(),
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
@@ -263,17 +263,17 @@ fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise
     }
 }
 
-/// One line once the start's re-loads are over, counting them; the engine has
-/// already logged each by name, and the reason for each it skipped.
-fn log_the_recorded_streams_reloaded_at_the_start(reloads: &[StreamReloadAtTheStart]) {
-    let reloaded_count = reloads
+/// One line once the start's re-loads are queued, naming each action; the
+/// engine has already logged the reason for each record it skipped.
+fn log_the_reloads_queued_at_the_start(reloads: &[StreamActionQueued]) {
+    let actions: Vec<&str> = reloads
         .iter()
-        .filter(|reload| matches!(reload, StreamReloadAtTheStart::Reloaded { .. }))
-        .count();
+        .map(|reload| reload.action_id.as_str())
+        .collect();
     tracing::info!(
-        "the runtime is serving: {reloaded_count} recorded streams re-loaded, {} skipped; it runs \
-         until a signal stops it",
-        reloads.len() - reloaded_count
+        "the runtime is serving: {} project re-loads queued ({}); it runs until a signal stops it",
+        reloads.len(),
+        actions.join(", ")
     );
 }
 

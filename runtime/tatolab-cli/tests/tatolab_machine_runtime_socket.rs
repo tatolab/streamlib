@@ -94,7 +94,7 @@ mod against_an_isolated_machine {
             &["dev", "--dir", project_directory][..],
             &["stop", "camera"][..],
             &["start", "camera"][..],
-            &["rm", "camera"][..],
+            &["rm", "--dir", project_directory][..],
             &["streams"][..],
             &["expose", "camera", "effect", "video"][..],
             &["graph"][..],

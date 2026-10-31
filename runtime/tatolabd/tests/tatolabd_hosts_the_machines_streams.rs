@@ -16,7 +16,8 @@ mod common;
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_mode_of,
+    the_local_apis_answer_to_get, the_mode_of, the_reloads_queued_at_the_start,
+    the_stream_action_once_ended,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -172,6 +173,15 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
     );
+    let reloads_queued = the_reloads_queued_at_the_start(&runtime.standard_error());
+    assert_eq!(reloads_queued.len(), 1, "one re-load for the one project");
+    let reload_once_ended =
+        the_stream_action_once_ended(&machine_root.local_api_socket_path(), &reloads_queued[0]);
+    assert_eq!(
+        (&reload_once_ended["kind"], &reload_once_ended["state"]),
+        (&"reload_at_start".into(), &"done".into()),
+        "{reload_once_ended}"
+    );
 
     let standard_error = runtime.standard_error();
     assert!(
@@ -222,7 +232,7 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("0 recorded streams re-loaded, 3 skipped"),
+        standard_error.contains("1 project re-loads queued"),
         "{standard_error}"
     );
 
@@ -299,7 +309,7 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
 
 /// A recorded stream's record round-trips through the runtime: the owner's
 /// ruling it records is written owner-only, read again by the next runtime
-/// on the machine, and `remove_stream` forgets it.
+/// on the machine, and `remove_project` forgets it.
 #[test]
 fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -358,10 +368,16 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     .json();
     let removed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
-        "remove_stream",
-        serde_json::json!({"stream": parked_stream_id}),
+        "remove_project",
+        serde_json::json!({"project_directory": machine_root.project_directory()}),
     )
     .json();
+    let removal_once_ended = the_stream_action_once_ended(
+        &machine_root.local_api_socket_path(),
+        removed["action"]
+            .as_str()
+            .expect("`remove_project` answers its action"),
+    );
     second_runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
@@ -371,8 +387,9 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     );
     assert_eq!(listed["streams"][0]["state"], "stopped", "{listed}");
     assert_eq!(
-        removed,
-        serde_json::json!({"stream": parked_stream_id, "unloaded": false, "forgotten": true})
+        (&removal_once_ended["kind"], &removal_once_ended["state"]),
+        (&"remove".into(), &"done".into()),
+        "{removal_once_ended}"
     );
     assert!(
         !record_path.exists(),

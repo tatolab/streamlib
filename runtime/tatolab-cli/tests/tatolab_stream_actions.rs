@@ -319,7 +319,7 @@ fn run_prints_a_failed_stream_with_its_traceback_and_exits_one() {
 }
 
 #[test]
-fn stop_unloads_the_stream_and_says_it_stays_stopped() {
+fn stop_queues_the_streams_stop_and_says_so() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "stop_stream",
         StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam")),
@@ -327,10 +327,7 @@ fn stop_unloads_the_stream_and_says_it_stays_stopped() {
 
     let printed = printed_by_a_successful(&isolated_machine_directories, &["stop", "cam"]);
 
-    assert_eq!(
-        printed,
-        "cam stopped; it stays stopped across restarts until `tatolab start cam`\n"
-    );
+    assert_eq!(printed, "R-1 queued: stop of cam\n");
     assert_eq!(
         stub_local_api_server.recorded_arguments_of("stop_stream"),
         [json!({"stream": "cam"})]
@@ -338,40 +335,15 @@ fn stop_unloads_the_stream_and_says_it_stays_stopped() {
 }
 
 #[test]
-fn a_stop_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
-    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "stop_stream",
-        StubToolAnswer::tool_result(
-            &json!({
-                "stream": "cam",
-                "stopped": true,
-                "not_recorded_because": "the record /state/streams/cam.json cannot be read",
-            })
-            .to_string(),
-        ),
-    );
-
-    let finished = isolated_machine_directories.run_tatolab(&["stop", "cam"]);
-
-    assert_eq!(finished.status.code(), Some(0), "the stop took effect");
-    assert_eq!(standard_output_text(&finished), "cam stopped\n");
-    assert_eq!(
-        standard_error_text(&finished),
-        "warning: cam was not recorded stopped, so a restart of the runtime loads it again: the \
-         record /state/streams/cam.json cannot be read\n"
-    );
-}
-
-#[test]
-fn start_loads_a_stopped_stream_and_names_its_node_count() {
+fn start_queues_the_streams_start_and_says_so() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "start_stream",
-        StubToolAnswer::tool_result(r#"{"stream":"cam","node_count":4}"#),
+        StubToolAnswer::tool_result(r#"{"action":"R-2","stream":"cam"}"#),
     );
 
     let printed = printed_by_a_successful(&isolated_machine_directories, &["start", "cam"]);
 
-    assert_eq!(printed, "cam started (4 nodes)\n");
+    assert_eq!(printed, "R-2 queued: start of cam\n");
     assert_eq!(
         stub_local_api_server.recorded_arguments_of("start_stream"),
         [json!({"stream": "cam"})]
@@ -379,18 +351,48 @@ fn start_loads_a_stopped_stream_and_names_its_node_count() {
 }
 
 #[test]
-fn rm_unloads_and_forgets_the_stream() {
+fn rm_queues_the_removal_of_the_working_directorys_project_or_the_one_dir_names() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let removal_answer =
+        json!({"action": "R-3", "project_directory": canonical_project_directory}).to_string();
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "remove_stream",
-        StubToolAnswer::tool_result(r#"{"stream":"cam","unloaded":true,"forgotten":true}"#),
+        "remove_project",
+        StubToolAnswer::tool_result(&removal_answer),
     );
 
-    let printed = printed_by_a_successful(&isolated_machine_directories, &["rm", "cam"]);
+    let in_the_project = run_tatolab_in(
+        &isolated_machine_directories,
+        project_directory.path(),
+        &["rm"],
+    );
+    let naming_it = isolated_machine_directories.run_tatolab(&[
+        "rm",
+        "--dir",
+        project_directory.path().to_str().unwrap(),
+    ]);
 
-    assert_eq!(printed, "cam removed (unloaded and forgotten)\n");
+    for finished in [&in_the_project, &naming_it] {
+        assert_eq!(
+            finished.status.code(),
+            Some(0),
+            "{}",
+            standard_error_text(finished)
+        );
+        assert_eq!(
+            standard_output_text(finished),
+            format!(
+                "R-3 queued: remove of {}\n",
+                canonical_project_directory.display()
+            )
+        );
+    }
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("remove_stream"),
-        [json!({"stream": "cam"})]
+        stub_local_api_server.recorded_arguments_of("remove_project"),
+        [
+            json!({"project_directory": canonical_project_directory}),
+            json!({"project_directory": canonical_project_directory}),
+        ]
     );
 }
 
@@ -558,16 +560,14 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
             "main",
             &canonical_project_directory,
         )],
-        "remove_stream",
-        StubToolAnswer::tool_result(
-            r#"{"stream":"hello-main-3f2a9c","unloaded":true,"forgotten":true}"#,
-        ),
+        "stop_stream",
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c")),
     );
 
     let refused = run_tatolab_in(
         &isolated_machine_directories,
         project_directory.path(),
-        &["rm", ""],
+        &["stop", ""],
     );
 
     assert_eq!(refused.status.code(), Some(1));
@@ -577,7 +577,7 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
         standard_error_text(&refused)
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("remove_stream"),
+        stub_local_api_server.recorded_arguments_of("stop_stream"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -617,13 +617,7 @@ fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_n
         (
             &["start"][..],
             "start_stream",
-            json!({"stream": "hello-main-3f2a9c", "node_count": 3}).to_string(),
-            json!({"stream": "hello-main-3f2a9c"}),
-        ),
-        (
-            &["rm"][..],
-            "remove_stream",
-            json!({"stream": "hello-main-3f2a9c", "unloaded": true, "forgotten": true}).to_string(),
+            json!({"action": "R-2", "stream": "hello-main-3f2a9c"}).to_string(),
             json!({"stream": "hello-main-3f2a9c"}),
         ),
         (

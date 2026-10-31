@@ -27,8 +27,8 @@ use streamlib::sdk::runtime::{
     StreamRecordsInTheStateDirectory,
 };
 
-/// The line `tatolabd` logs once its local API is served and its recorded streams
-/// re-loaded.
+/// The line `tatolabd` logs once its local API is served and its re-loads
+/// queued.
 pub const THE_RUNTIME_IS_SERVING_LOG_LINE: &str = "the runtime is serving:";
 
 /// How long a `tatolabd` holding no started stream takes to start serving.
@@ -395,6 +395,7 @@ pub fn a_stream_record(
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,
         exposure_rulings: Vec::new(),
+        pending_stream_actions: Vec::new(),
     }
 }
 
@@ -749,6 +750,54 @@ pub fn call_a_tool_over_the_local_api(
                 .to_owned(),
         }
     })
+}
+
+/// The ids of the re-loads `tatolabd` logged it queued at its start, from its
+/// standard error once it serves.
+pub fn the_reloads_queued_at_the_start(standard_error: &str) -> Vec<String> {
+    let serving_line = standard_error
+        .lines()
+        .find(|line| line.contains(THE_RUNTIME_IS_SERVING_LOG_LINE))
+        .unwrap_or_else(|| panic!("the runtime logged no serving line:\n{standard_error}"));
+    let queued = serving_line
+        .split_once('(')
+        .and_then(|(_, after)| after.split_once(')'))
+        .map(|(queued, _)| queued)
+        .unwrap_or_else(|| panic!("the serving line names no re-load queued: {serving_line}"));
+    queued
+        .split(", ")
+        .filter(|action_id| !action_id.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How long a stream action queued over the local API takes to end.
+pub const A_STREAM_ACTION_ENDS_WITHIN: Duration = Duration::from_secs(120);
+
+/// `describe_stream_action`'s answer for `action_id` once its `state` is `done`
+/// or `failed`.
+pub fn the_stream_action_once_ended(
+    local_api_socket_path: &Path,
+    action_id: &str,
+) -> serde_json::Value {
+    let deadline = Instant::now() + A_STREAM_ACTION_ENDS_WITHIN;
+    loop {
+        let described = call_a_tool_over_the_local_api(
+            local_api_socket_path,
+            "describe_stream_action",
+            serde_json::json!({"action": action_id}),
+        )
+        .json();
+        if described["state"] == "done" || described["state"] == "failed" {
+            return described;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stream action `{action_id}` did not end within \
+             {A_STREAM_ACTION_ENDS_WITHIN:?}: {described}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// The mode bits of `path`.
