@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.67.0](https://github.com/tatolab/streamlib/compare/v0.66.0...v0.67.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** create_project and tatolab new [DIRECTORY] create a project under a drawn adjective-noun name and queue its load ([#3012](https://github.com/tatolab/streamlib/issues/3012))
+
+### Features
+
+* **runtime:** create_project and tatolab new [DIRECTORY] create a project under a drawn adjective-noun name and queue its load ([#3012](https://github.com/tatolab/streamlib/issues/3012)) ([7522942](https://github.com/tatolab/streamlib/commit/752294244b2f3f061e206d797e39748c4dfc0930))
+
 ## [0.66.0](https://github.com/tatolab/streamlib/compare/v0.65.1...v0.66.0) (2026-10-31)
 
 
