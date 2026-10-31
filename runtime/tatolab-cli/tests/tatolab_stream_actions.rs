@@ -397,6 +397,34 @@ fn rm_queues_the_removal_of_the_working_directorys_project_or_the_one_dir_names(
 }
 
 #[test]
+fn rm_of_a_deleted_project_names_it_as_given() {
+    let deleted_project_directory = tempfile::tempdir().unwrap().path().join("gone");
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "remove_project",
+        StubToolAnswer::tool_result(
+            &json!({"action": "R-4", "project_directory": deleted_project_directory}).to_string(),
+        ),
+    );
+
+    let printed = printed_by_a_successful(
+        &isolated_machine_directories,
+        &["rm", "--dir", deleted_project_directory.to_str().unwrap()],
+    );
+
+    assert_eq!(
+        printed,
+        format!(
+            "R-4 queued: remove of {}\n",
+            deleted_project_directory.display()
+        )
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("remove_project"),
+        [json!({"project_directory": deleted_project_directory})]
+    );
+}
+
+#[test]
 fn streams_prints_the_table_of_what_the_runtime_holds() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "list_streams",

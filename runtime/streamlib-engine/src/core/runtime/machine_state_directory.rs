@@ -27,8 +27,8 @@ use crate::core::{Error, Result};
 /// The schema version of a stream record this runtime writes and reads.
 pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 4;
 
-/// The schema version before pending stream actions were recorded; a record of
-/// it reads as one holding none.
+/// The schema version whose records hold no pending stream actions; a record
+/// of it reads as current, holding none.
 const STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION: u32 = 3;
 
 /// The extension every stream record's file name carries.

@@ -107,6 +107,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "the runtime cannot record streams: {stream_records_refusal}"
         ));
     }
+    engine.finish_the_pending_stream_actions_a_crash_left();
     engine.count_the_previous_runtime_runs_end_against_the_recorded_streams(
         how_the_previous_run_ended,
     );

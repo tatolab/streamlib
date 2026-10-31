@@ -733,6 +733,7 @@ impl Runner {
             StreamActionKind::Stop,
             PendingStreamActionKind::Stop,
             |record, _loaded| {
+                refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
                 if record.is_failed_once_its_pending_stream_actions_run() {
                     return Err(Error::Runtime(format!(
                         "the stream `{stream_id}` is failed, so it is not loaded to stop: {}. \
@@ -774,11 +775,14 @@ impl Runner {
             stream_id,
             StreamActionKind::Start,
             PendingStreamActionKind::Start,
-            |record, loaded| match loaded {
-                Some(loaded) if !record.is_stopped_once_its_pending_stream_actions_run() => {
-                    Err(a_start_of_a_loaded_stream_refusal(stream_id, loaded))
+            |record, loaded| {
+                refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
+                match loaded {
+                    Some(loaded) if !record.is_stopped_once_its_pending_stream_actions_run() => {
+                        Err(a_start_of_a_loaded_stream_refusal(stream_id, loaded))
+                    }
+                    _ => Ok(()),
                 }
-                _ => Ok(()),
             },
             |runner, action_id, stream_id| {
                 runner.start_the_stream_for_its_stream_action(action_id, stream_id)
@@ -802,15 +806,28 @@ impl Runner {
         let project_directory = std::fs::canonicalize(project_directory)
             .unwrap_or_else(|_| project_directory.to_path_buf());
         let action_id = self.next_stream_action_id();
-        let mut streams = Vec::new();
+        let mut streams: Vec<StreamOfAStreamAction> = Vec::new();
         for stream_id in self.ids_of_every_record_of_the_project(&project_directory) {
             let marked = match self.stream_records() {
-                Some(stream_records) => stream_records.change_the_record(&stream_id, |record| {
-                    record.queue_the_pending_stream_action(
-                        &action_id,
-                        PendingStreamActionKind::Remove,
-                    );
-                })?,
+                Some(stream_records) => {
+                    match stream_records.change_the_record(&stream_id, |record| {
+                        record.queue_the_pending_stream_action(
+                            &action_id,
+                            PendingStreamActionKind::Remove,
+                        );
+                    }) {
+                        Ok(marked) => marked,
+                        Err(not_marked) => {
+                            for stream_marked_already in &streams {
+                                self.finish_the_pending_stream_action_on_the_record(
+                                    &stream_marked_already.stream_id,
+                                    &action_id,
+                                );
+                            }
+                            return Err(not_marked);
+                        }
+                    }
+                }
                 None => None,
             };
             streams.push(StreamOfAStreamAction {
@@ -913,6 +930,8 @@ impl Runner {
             (None, Some(loaded)) => loaded.project_directory().to_path_buf(),
             (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
         };
+        let project_directory =
+            std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory,
@@ -984,6 +1003,9 @@ impl Runner {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Stopping);
         let stopped = self.stop_the_stream_finishing_its_pending_stop(stream_id, Some(action_id));
+        if stopped.is_err() {
+            self.finish_the_pending_stream_action_on_the_record(stream_id, action_id);
+        }
         progress.finish(match stopped {
             Ok(StreamStopOutcome {
                 stop_not_recorded_because: None,
@@ -1175,19 +1197,27 @@ impl Runner {
         stream_id: &str,
         progress: Option<&StreamActionProgress<'_>>,
     ) -> Result<StreamStartOutcome> {
-        let action_id = progress.map(|progress| progress.action_id.as_str());
         let started = self.start_the_recorded_stream(stream_id, progress);
-        if let (Some(action_id), Some(stream_records)) = (action_id, self.stream_records())
-            && let Err(not_finished) = stream_records.change_the_record(stream_id, |record| {
-                record.finish_the_pending_stream_action(action_id);
-            })
-        {
-            tracing::error!(
-                "the start {action_id} of the stream `{stream_id}` stays pending on its record: \
-                 {not_finished}"
-            );
+        if let Some(progress) = progress {
+            self.finish_the_pending_stream_action_on_the_record(stream_id, &progress.action_id);
         }
         started
+    }
+
+    /// Take the pending mark of the action `action_id` off the record of
+    /// `stream_id`, when it has one.
+    fn finish_the_pending_stream_action_on_the_record(&self, stream_id: &str, action_id: &str) {
+        let Some(stream_records) = self.stream_records() else {
+            return;
+        };
+        if let Err(not_finished) = stream_records.change_the_record(stream_id, |record| {
+            record.finish_the_pending_stream_action(action_id);
+        }) {
+            tracing::error!(
+                "the stream action {action_id} stays pending on the record of the stream \
+                 `{stream_id}`: {not_finished}"
+            );
+        }
     }
 
     /// [`Self::start_the_stream_finishing_its_pending_start`] before the
@@ -1460,6 +1490,9 @@ impl Runner {
                     }
                     None => Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
                 })??;
+                if let Some(loaded_since) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
+                    set_live(&loaded_since)?;
+                }
                 (true, None)
             }
         };
@@ -1475,16 +1508,23 @@ impl Runner {
 
     /// Finish, in order, every pending stream action a crash left on a
     /// record — a stop recorded stopped, a removal forgotten, a start recorded
-    /// neither stopped nor failed — then queue one re-load per project holding
-    /// a record neither stopped nor failed, as a runtime does at its start,
-    /// and answer the actions. Each loads only those records of its project; a
-    /// record failed, one an earlier runtime wrote, and one that cannot be
-    /// read are logged and left in place.
+    /// neither stopped nor failed, its crash count kept — before the runtime
+    /// counts its previous run's end and serves any call.
+    pub fn finish_the_pending_stream_actions_a_crash_left(&self) {
+        if let Some(stream_records) = self.stream_records() {
+            finish_the_pending_stream_actions_a_crash_left_on_the_records(stream_records);
+        }
+    }
+
+    /// Queue one re-load per project holding a record neither stopped nor
+    /// failed, as a runtime does at its start, and answer the actions. Each
+    /// loads only those records of its project; a record failed, one an
+    /// earlier runtime wrote, and one that cannot be read are logged and left
+    /// in place.
     pub fn queue_the_reload_of_every_project_at_the_start(&self) -> Vec<StreamActionQueued> {
         let Some(stream_records) = self.stream_records() else {
             return Vec::new();
         };
-        finish_the_pending_stream_actions_a_crash_left(stream_records);
         let mut streams_of_each_project: Vec<(PathBuf, Vec<StreamOfAStreamAction>)> = Vec::new();
         for read in stream_records.read_every() {
             let record = match read {
@@ -2018,6 +2058,7 @@ impl Runner {
         stream_record: &mut StreamRecord,
         record_it_once_loaded: bool,
     ) -> Result<StreamStateAfterItsRun> {
+        let rulings_the_load_applied = stream_record.exposure_rulings.clone();
         let loaded = match &stream_record.graph {
             Some(graph_json) => self.load_a_stream_with_the_owners_rulings(
                 OneStreamAStreamActionLoads::recorded_by(stream_record, graph_json),
@@ -2035,12 +2076,18 @@ impl Runner {
         };
         if record_it_once_loaded
             && let Err(not_written) = stream_records
-                .write_the_record_a_load_made(stream_record.clone(), true)
+                .write_the_record_a_load_made(stream_record.clone(), false)
                 .map(|written| *stream_record = written)
         {
             unload_a_stream_an_action_took_back(&stream, "its record was not written");
             return Err(not_written);
         }
+        apply_live_each_ruling_recorded_while_the_stream_loaded(
+            stream_records,
+            &stream,
+            &stream_record.stream_id,
+            &rulings_the_load_applied,
+        );
         if let Err(start_refusal) = stream.start() {
             unload_a_stream_an_action_took_back(&stream, "its start was refused");
             return record_a_refused_load_failed(stream_records, stream_record, start_refusal);
@@ -3036,7 +3083,7 @@ fn record_a_refused_load_failed(
     let failed_because = refusal.to_string();
     stream_record.failed_because = Some(failed_because.clone());
     if let Err(not_written) = stream_records
-        .write_the_record_a_load_made(stream_record.clone(), true)
+        .write_the_record_a_load_made(stream_record.clone(), false)
         .map(|written| *stream_record = written)
     {
         tracing::error!(
@@ -3047,10 +3094,59 @@ fn record_a_refused_load_failed(
     Ok(StreamStateAfterItsRun::Failed { failed_because })
 }
 
+/// Refuse a stop or a start of `stream_id`, whose record is `record`, once
+/// a removal of its project is queued.
+fn refuse_a_stream_whose_project_removal_is_queued(
+    stream_id: &str,
+    record: &StreamRecord,
+) -> Result<()> {
+    if record
+        .pending_stream_actions
+        .iter()
+        .any(|pending| pending.kind == PendingStreamActionKind::Remove)
+    {
+        return Err(Error::Runtime(format!(
+            "the stream `{stream_id}` is being removed with its project, so it is neither \
+             stopped nor started"
+        )));
+    }
+    Ok(())
+}
+
+/// Set live on `stream` each ruling its record holds beyond
+/// `rulings_the_load_applied`: one the owner recorded while it loaded.
+fn apply_live_each_ruling_recorded_while_the_stream_loaded(
+    stream_records: &StreamRecordsInTheStateDirectory,
+    stream: &LoadedStreamInThisRuntime,
+    stream_id: &str,
+    rulings_the_load_applied: &[OwnerExposureRuling],
+) {
+    let Ok(Some(StreamRecordAsRead::Current(record_once_loaded))) = stream_records.read(stream_id)
+    else {
+        return;
+    };
+    for ruling in record_once_loaded
+        .exposure_rulings
+        .iter()
+        .filter(|ruling| !rulings_the_load_applied.contains(ruling))
+    {
+        if let Err(not_set) = stream.log_route().run_entered(|| {
+            stream.set_output_port_exposure_level(&ruling.node, &ruling.port, ruling.level)
+        }) {
+            tracing::warn!(
+                "the owner's ruling on `{}/{}` of the stream `{stream_id}`, recorded while it \
+                 loaded, was not set live: {not_set}",
+                ruling.node,
+                ruling.port
+            );
+        }
+    }
+}
+
 /// Finish, in order, every pending stream action a crash left on a record
 /// of `stream_records`: a removal forgets the record, a stop records it
 /// stopped, and a start records it neither stopped nor failed.
-fn finish_the_pending_stream_actions_a_crash_left(
+fn finish_the_pending_stream_actions_a_crash_left_on_the_records(
     stream_records: &StreamRecordsInTheStateDirectory,
 ) {
     for read in stream_records.read_every() {
@@ -3085,7 +3181,8 @@ fn finish_the_pending_stream_actions_a_crash_left(
                 match pending.kind {
                     PendingStreamActionKind::Stop => record.stopped = true,
                     PendingStreamActionKind::Start => {
-                        record.mark_running_resetting_its_crash_count();
+                        record.stopped = false;
+                        record.failed_because = None;
                     }
                     PendingStreamActionKind::Remove => {}
                 }
@@ -7615,6 +7712,95 @@ mod tests {
 
     #[test]
     #[serial]
+    fn a_stop_refused_when_it_runs_takes_its_mark_off_the_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let failed = StreamRecord {
+            failed_because: Some("it crashed the runtime".to_string()),
+            ..a_record_of(&project, "camera", serde_json::json!([]))
+        };
+        records_in(state_directory.path()).write(&failed).unwrap();
+
+        let start = runner.start_stream(&failed.stream_id).unwrap();
+        let stop = runner.stop_stream(&failed.stream_id).unwrap();
+        the_stream_action_once_finished(&runner, &start.action_id);
+        let stop_once_finished = the_stream_action_once_finished(&runner, &stop.action_id);
+
+        assert_eq!(
+            stop_once_finished.state,
+            StreamActionState::Failed,
+            "{stop_once_finished:?}"
+        );
+        let record = the_record_of(state_directory.path(), &failed.stream_id);
+        assert!(record.pending_stream_actions.is_empty(), "{record:?}");
+        assert!(record.is_failed() && !record.stopped, "{record:?}");
+    }
+
+    #[test]
+    #[serial]
+    fn a_stop_or_a_start_queued_behind_a_removal_of_its_project_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let stopped = StreamRecord {
+            stopped: true,
+            ..a_record_of(&project, "camera", serde_json::json!([]))
+        };
+        records_in(state_directory.path()).write(&stopped).unwrap();
+        let mut removed_with_its_project = stopped.clone();
+        removed_with_its_project
+            .queue_the_pending_stream_action("R-1", PendingStreamActionKind::Remove);
+        records_in(state_directory.path())
+            .write(&removed_with_its_project)
+            .unwrap();
+
+        for refusal in [
+            refusal_of(runner.start_stream(&stopped.stream_id)),
+            refusal_of(runner.stop_stream(&stopped.stream_id)),
+        ] {
+            assert!(
+                refusal.contains("being removed with its project"),
+                "{refusal}"
+            );
+        }
+        assert_eq!(
+            the_pending_stream_actions_on(state_directory.path(), &stopped.stream_id).len(),
+            1
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_start_a_crash_left_pending_clears_failed_and_stopped_and_keeps_the_crash_count() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let mut retried = StreamRecord {
+            failed_because: Some("it crashed the runtime".to_string()),
+            stopped: true,
+            runtime_crashes_in_a_row_implicating_it: 1,
+            ..a_record_of(&project, "camera", serde_json::json!([]))
+        };
+        retried.queue_the_pending_stream_action("R-1", PendingStreamActionKind::Start);
+        records_in(state_directory.path()).write(&retried).unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+
+        runner.finish_the_pending_stream_actions_a_crash_left();
+
+        let record = the_record_of(state_directory.path(), &retried.stream_id);
+        assert!(!record.is_failed() && !record.stopped, "{record:?}");
+        assert_eq!(record.runtime_crashes_in_a_row_implicating_it, 1);
+        assert!(record.pending_stream_actions.is_empty(), "{record:?}");
+    }
+
+    #[test]
+    #[serial]
     fn a_fresh_runtime_finishes_the_marks_a_crash_left_in_order_before_it_queues_its_reloads() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
@@ -7635,6 +7821,7 @@ mod tests {
         }
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
+        runner.finish_the_pending_stream_actions_a_crash_left();
         let reloads = runner.queue_the_reload_of_every_project_at_the_start();
 
         assert_eq!(reloads.len(), 1, "one re-load per project: {reloads:?}");

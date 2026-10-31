@@ -377,13 +377,25 @@ pub(crate) fn start_stream(stream_argument: Option<&str>) -> Result<u8, TatolabC
 }
 
 /// `tatolab rm [--dir DIR]`: the removal of the whole project — `--dir` resolved against
-/// `caller_working_directory`, else the working directory itself.
+/// `caller_working_directory`, else the working directory itself. A `--dir` that no longer
+/// exists is passed as given, so the streams of a deleted project can still be forgotten.
 pub(crate) fn remove_project(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
-    let project_directory =
-        the_project_directory_a_verb_names(caller_working_directory, requested_project_directory)?;
+    let project_directory = match requested_project_directory {
+        Some(requested_project_directory)
+            if !caller_working_directory
+                .join(requested_project_directory)
+                .exists() =>
+        {
+            caller_working_directory.join(requested_project_directory)
+        }
+        _ => the_project_directory_a_verb_names(
+            caller_working_directory,
+            requested_project_directory,
+        )?,
+    };
     let mut remove_project_arguments = serde_json::Map::new();
     remove_project_arguments.insert(
         "project_directory".to_owned(),
