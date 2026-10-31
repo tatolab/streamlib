@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.65.1](https://github.com/tatolab/streamlib/compare/v0.65.0...v0.65.1) (2026-10-31)
+
+
+### Features
+
+* **runtime:** cancel_stream_action and tatolab cancel end a queued or running stream action ([#3006](https://github.com/tatolab/streamlib/issues/3006)) ([5a1efc6](https://github.com/tatolab/streamlib/commit/5a1efc6061ad808e53a2956a7dfd069ac49e45bd))
+
 ## [0.65.0](https://github.com/tatolab/streamlib/compare/v0.64.0...v0.65.0) (2026-10-31)
 
 
