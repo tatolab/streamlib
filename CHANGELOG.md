@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.64.0](https://github.com/tatolab/streamlib/compare/v0.63.2...v0.64.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** stop and start are queued stream actions and rm a queued removal of the whole project, with a pending mark per action ([#2999](https://github.com/tatolab/streamlib/issues/2999))
+
+### Features
+
+* **runtime:** stop and start are queued stream actions and rm a queued removal of the whole project, with a pending mark per action ([#2999](https://github.com/tatolab/streamlib/issues/2999)) ([e45fa4c](https://github.com/tatolab/streamlib/commit/e45fa4c47ace5ad670c68d9f58bce67b55289197))
+
 ## [0.63.2](https://github.com/tatolab/streamlib/compare/v0.63.1...v0.63.2) (2026-10-31)
 
 
