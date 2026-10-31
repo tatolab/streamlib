@@ -291,6 +291,15 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "run_project",
                 ))
             }
+            fn create_project(
+                &self,
+                _request: ::streamlib::sdk::runtime::CreateProjectRequest,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectCreationQueued>
+            {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "create_project",
+                ))
+            }
             fn describe_stream_action(
                 &self,
                 _action_id: &str,

@@ -408,6 +408,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory: request.project_directory,
         })
     }
+    fn create_project(
+        &self,
+        request: streamlib::sdk::runtime::CreateProjectRequest,
+    ) -> Result<streamlib::sdk::runtime::ProjectCreationQueued> {
+        self.engine.create_project(request)
+    }
     fn describe_stream_action(
         &self,
         action_id: &str,
@@ -1245,6 +1251,170 @@ async fn the_stream_action_once(
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// A project directory holding only a venv whose compile gives `stream:main`
+/// the graph `graph`, so `create_project` writes every file of a new project.
+fn a_directory_for_create_project_compiling(graph: Value) -> ProjectWhosePythonPrintsAGraph {
+    let project = ProjectWhosePythonPrintsAGraph::compiling(graph);
+    std::fs::remove_file(project.path().join("stream.py")).unwrap();
+    project
+}
+
+/// `create_project` named a directory: what it answers, and the action once finished.
+async fn create_project_in(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    project_directory: &Path,
+) -> (Value, Value) {
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "create_project",
+            json!({ "project_directory": project_directory }),
+        )
+        .await,
+    )
+    .expect("a create of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    let finished = the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+    (queued, finished)
+}
+
+/// `create_project` in a named directory writes a new project's files and runs its
+/// `stream:main` under the folder's name, answering the stream's id before it runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_under_the_folders_name()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
+    let folder_name = project
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let (queued, finished) =
+        create_project_in(operations_on_the_loaded_streams, project.path()).await;
+
+    let stream_id = project.stream_id_of("main");
+    assert_eq!(
+        queued,
+        json!({
+            "action": finished["action"],
+            "stream": stream_id,
+            "project_directory": project.path(),
+        })
+    );
+    assert_eq!(finished["state"], "done", "{finished}");
+    assert_eq!(
+        finished["streams"],
+        json!([{ "stream": stream_id, "display_name": folder_name, "state": "running" }])
+    );
+    for file_a_new_project_starts_with in [
+        "stream.py",
+        "pyproject.toml",
+        ".python-version",
+        ".gitignore",
+        "nodes/__init__.py",
+    ] {
+        assert!(
+            project
+                .path()
+                .join(file_a_new_project_starts_with)
+                .is_file(),
+            "{file_a_new_project_starts_with}"
+        );
+    }
+    assert_eq!(
+        engine
+            .current_record_of(&stream_id)
+            .expect("the stream is recorded")
+            .display_name,
+        folder_name
+    );
+}
+
+/// `create_project` over a directory already holding a file a new project starts with
+/// fails its action with nothing written.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_project_over_a_file_a_new_project_starts_with_fails_its_action_with_nothing_written()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
+    std::fs::write(project.path().join("stream.py"), "# the user's own\n").unwrap();
+
+    let (_queued, finished) =
+        create_project_in(operations_on_the_loaded_streams, project.path()).await;
+
+    assert_eq!(finished["state"], "failed", "{finished}");
+    assert!(
+        finished["failed_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("already has stream.py")),
+        "{finished}"
+    );
+    assert!(!project.path().join("pyproject.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("stream.py")).unwrap(),
+        "# the user's own\n"
+    );
+}
+
+/// `create_project` whose stream raises answers a failed stream, never a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_project_whose_stream_raises_records_it_failed_under_the_folders_name() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
+    project.raise_in_the_function_printing("main", "ValueError: no camera");
+    let folder_name = project
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let (queued, finished) =
+        create_project_in(operations_on_the_loaded_streams, project.path()).await;
+
+    assert_eq!(finished["state"], "done", "{finished}");
+    assert_eq!(
+        finished["streams"],
+        json!([{ "stream": queued["stream"], "display_name": folder_name, "state": "failed" }])
+    );
+    let record = engine
+        .current_record_of(queued["stream"].as_str().unwrap())
+        .expect("the failed stream is recorded");
+    assert!(
+        record
+            .failed_because
+            .as_deref()
+            .is_some_and(|why| why.contains("ValueError: no camera")),
+        "{record:?}"
+    );
+}
+
+/// `create_project` with a relative directory is refused, nothing created.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_project_with_a_relative_directory_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "create_project",
+            json!({ "project_directory": "a-relative-project" }),
+        )
+        .await,
+    )
+    .expect_err("a relative directory is refused");
+    assert!(refusal.contains("must be an absolute path"), "{refusal}");
+    assert!(!Path::new("a-relative-project").exists());
 }
 
 /// `run_project` answers its action at once; the action is followed to `done` with the

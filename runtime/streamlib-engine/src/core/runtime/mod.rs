@@ -12,6 +12,8 @@ mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
 mod machine_name;
 mod machine_state_directory;
+mod new_project_name_drawing;
+mod new_project_scaffold;
 mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
@@ -109,9 +111,9 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    LoadedStreamHolding, OutputPortExposureOutcome, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
-    RunProjectRequest, StreamListing, StreamListingState, StreamReloadAtTheStart,
-    StreamRenameOutcome,
+    CreateProjectRequest, LoadedStreamHolding, OutputPortExposureOutcome, ProjectCreationQueued,
+    RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, RunProjectRequest, StreamListing,
+    StreamListingState, StreamReloadAtTheStart, StreamRenameOutcome,
 };
 pub use stream_environment::StreamEnvironment;
 pub use stream_location_and_id::StreamLocation;

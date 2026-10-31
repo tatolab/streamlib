@@ -12,6 +12,10 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
+use super::new_project_name_drawing::draw_new_project_directory_under_the_streams_root;
+use super::new_project_scaffold::{
+    NEW_PROJECT_SCAFFOLD_STREAM_FUNCTION, write_the_new_project_scaffold_into,
+};
 use super::project_stream_action_queue::{
     ProjectStreamsListing, StreamAction, StreamActionCancelOutcome, StreamActionKind,
     StreamActionProgress, StreamActionQueueOfEachProject, StreamActionQueued, StreamActionState,
@@ -76,6 +80,25 @@ pub struct RunProjectRequest {
     pub project_directory: PathBuf,
 }
 
+/// The project [`Runner::create_project`] creates and queues a load of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectRequest {
+    /// Where the project is created, by absolute path; `None` draws an
+    /// `<adjective>-<noun>` folder under `$HOME/streams`.
+    pub project_directory: Option<PathBuf>,
+}
+
+/// The load [`Runner::create_project`] queued of the project it created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCreationQueued {
+    /// The queued action's id, which [`Runner::describe_stream_action`] follows.
+    pub action_id: String,
+    /// The project's directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The id of the stream the scaffold's `stream:main` loads as.
+    pub stream_id: String,
+}
+
 /// What a stream action's load of a project compiles and loads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProjectStreamsToCompileAndLoad {
@@ -86,6 +109,9 @@ struct ProjectStreamsToCompileAndLoad {
     /// a start compiles one recorded stream again, or `None` for every
     /// `@stream` in the project's `stream.py`, each its own stream.
     stream_function: Option<String>,
+    /// The display name a stream the load records for the first time is
+    /// given; `None` names it after its graph.
+    display_name_of_a_stream_first_recorded: Option<String>,
 }
 
 /// What a load of a project did: each stream it loaded and started, or
@@ -466,6 +492,7 @@ impl Runner {
         let ProjectStreamsToCompileAndLoad {
             project_directory,
             stream_function,
+            display_name_of_a_stream_first_recorded,
         } = request;
         let Some(stream_records) = self.stream_records() else {
             return Err(Error::Configuration(format!(
@@ -561,6 +588,8 @@ impl Runner {
                             stream_location,
                             stream_environment: &stream_environment,
                             graph_or_why_none,
+                            display_name_of_a_stream_first_recorded:
+                                display_name_of_a_stream_first_recorded.as_deref(),
                             is_interrupted,
                         },
                     )?);
@@ -593,6 +622,8 @@ impl Runner {
                     stream_location,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Ok(graph_json),
+                    display_name_of_a_stream_first_recorded:
+                        display_name_of_a_stream_first_recorded.as_deref(),
                     is_interrupted,
                 },
             )?],
@@ -605,6 +636,8 @@ impl Runner {
                     stream_location,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Err(failed_because),
+                    display_name_of_a_stream_first_recorded:
+                        display_name_of_a_stream_first_recorded.as_deref(),
                     is_interrupted,
                 },
             )?],
@@ -1944,6 +1977,7 @@ impl Runner {
             stream_location,
             stream_environment,
             graph_or_why_none,
+            display_name_of_a_stream_first_recorded,
             is_interrupted,
         } = compiled;
         let stream_id = stream_location.stream_id();
@@ -1952,6 +1986,7 @@ impl Runner {
         let display_name = previous_record
             .as_ref()
             .map(|previous| previous.display_name.clone())
+            .or_else(|| display_name_of_a_stream_first_recorded.map(str::to_string))
             .unwrap_or_else(|| match &graph_or_why_none {
                 Ok(graph_json) => graph_json
                     .get("stream")
@@ -2438,6 +2473,7 @@ impl Runner {
             ProjectStreamsToCompileAndLoad {
                 project_directory,
                 stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
+                display_name_of_a_stream_first_recorded: None,
             },
             progress,
             is_interrupted,
@@ -2619,10 +2655,82 @@ impl Runner {
         Ok(queue_of_each_project.queue_the_stream_action(
             action,
             Box::new(move |runner: &Runner| {
-                runner.load_the_project_for_its_stream_action(&action_id, project_directory);
+                runner.load_the_project_for_its_stream_action(&action_id, project_directory, None);
             }),
             &self.tokio_handle(),
         ))
+    }
+
+    /// Create a project from the scaffold `tatolab new` writes and queue its
+    /// load, answering the action's id and the id its `stream:main` loads as
+    /// at once. The directory is `request`'s, created when missing, or one
+    /// drawn under `$HOME/streams`. The action writes the scaffold, then runs
+    /// [`Runner::run_project`]'s load, a stream it records for the first time
+    /// shown under the folder's name; a directory already holding a file the
+    /// scaffold writes fails the action with nothing written. Refused for a
+    /// relative directory, one that cannot be created, and a draw that finds
+    /// no free name.
+    pub fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {
+        let project_directory = match request.project_directory {
+            Some(project_directory) => {
+                if !project_directory.is_absolute() {
+                    return Err(Error::Configuration(format!(
+                        "`project_directory` must be an absolute path; got `{}`",
+                        project_directory.display()
+                    )));
+                }
+                std::fs::create_dir_all(&project_directory).map_err(|not_created| {
+                    Error::Configuration(format!(
+                        "{} could not be created, so no project was created there: {not_created}",
+                        project_directory.display()
+                    ))
+                })?;
+                project_directory
+            }
+            None => draw_new_project_directory_under_the_streams_root()?,
+        };
+        let project_directory =
+            std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
+        let stream_id = StreamLocation {
+            project_directory: project_directory.clone(),
+            stream_function: NEW_PROJECT_SCAFFOLD_STREAM_FUNCTION.to_string(),
+        }
+        .stream_id();
+        let display_name_of_the_created_stream = project_directory
+            .file_name()
+            .map(|folder_name| folder_name.to_string_lossy().into_owned());
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        let action_id = queue_of_each_project.next_action_id(
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+        );
+        let action = StreamAction {
+            action_id: action_id.clone(),
+            project_directory: project_directory.clone(),
+            kind: StreamActionKind::Load,
+            state: StreamActionState::Queued,
+            step: None,
+            streams: Vec::new(),
+            failed_because: None,
+        };
+        let project_directory_the_action_creates = project_directory.clone();
+        let queued = queue_of_each_project.queue_the_stream_action(
+            action,
+            Box::new(move |runner: &Runner| {
+                runner.create_the_project_for_its_stream_action(
+                    &action_id,
+                    project_directory_the_action_creates,
+                    display_name_of_the_created_stream,
+                );
+            }),
+            &self.tokio_handle(),
+        );
+        Ok(ProjectCreationQueued {
+            action_id: queued.action_id,
+            project_directory: queued.project_directory,
+            stream_id,
+        })
     }
 
     /// The stream action `action_id`, refused when the engine never held it or
@@ -2710,8 +2818,30 @@ impl Runner {
     /// Run the load the stream action `action_id` queued of the project in
     /// `project_directory`, reporting its steps, and finish the action done,
     /// failed, or cancelled once it saw its cancel.
-    fn load_the_project_for_its_stream_action(&self, action_id: &str, project_directory: PathBuf) {
+    fn load_the_project_for_its_stream_action(
+        &self,
+        action_id: &str,
+        project_directory: PathBuf,
+        display_name_of_a_stream_first_recorded: Option<String>,
+    ) {
         let progress = self.progress_of_the_stream_action(action_id);
+        self.load_the_project_reporting_to(
+            action_id,
+            &progress,
+            project_directory,
+            display_name_of_a_stream_first_recorded,
+        );
+    }
+
+    /// Run the load of the project in `project_directory` for the stream
+    /// action `action_id`, reporting to `progress`, and finish the action.
+    fn load_the_project_reporting_to(
+        &self,
+        action_id: &str,
+        progress: &StreamActionProgress<'_>,
+        project_directory: PathBuf,
+        display_name_of_a_stream_first_recorded: Option<String>,
+    ) {
         let run_outcome = match why_a_directory_is_no_project(&project_directory) {
             Some(why_it_is_no_project) => {
                 tracing::warn!("the stream action {action_id} failed: {why_it_is_no_project}");
@@ -2722,12 +2852,64 @@ impl Runner {
                     ProjectStreamsToCompileAndLoad {
                         project_directory,
                         stream_function: None,
+                        display_name_of_a_stream_first_recorded,
                     },
-                    Some(&progress),
+                    Some(progress),
                     &|| progress.is_interrupted(),
                 )
                 .map_err(|refusal| refusal.to_string()),
         };
+        self.finish_the_load_action(action_id, progress, run_outcome);
+    }
+
+    /// Write the scaffold into `project_directory` for the stream action
+    /// `action_id` [`Runner::create_project`] queued, then run its load; a
+    /// scaffold that cannot be written fails the action, written to the
+    /// project's log, and a cancel seen before the write ends it cancelled
+    /// with nothing written.
+    fn create_the_project_for_its_stream_action(
+        &self,
+        action_id: &str,
+        project_directory: PathBuf,
+        display_name_of_the_created_stream: Option<String>,
+    ) {
+        let progress = self.progress_of_the_stream_action(action_id);
+        if progress.is_interrupted() {
+            self.finish_the_load_action(
+                action_id,
+                &progress,
+                Err("it was interrupted before the project's files were written".to_string()),
+            );
+            return;
+        }
+        if let Err(not_written) = write_the_new_project_scaffold_into(&project_directory) {
+            ProjectLogRouteEntry::for_the_project_in(
+                &project_directory,
+                self.engine_resources_shared_by_every_stream
+                    .runtime_id
+                    .as_str(),
+                Some(action_id),
+            )
+            .run_entered(|| tracing::warn!("the stream action {action_id} failed: {not_written}"));
+            self.finish_the_load_action(action_id, &progress, Err(not_written.to_string()));
+            return;
+        }
+        self.load_the_project_reporting_to(
+            action_id,
+            &progress,
+            project_directory,
+            display_name_of_the_created_stream,
+        );
+    }
+
+    /// Finish the load action `action_id` done with the streams `run_outcome`
+    /// gave, failed for why, or cancelled once `progress` saw its cancel.
+    fn finish_the_load_action(
+        &self,
+        action_id: &str,
+        progress: &StreamActionProgress<'_>,
+        run_outcome: std::result::Result<StreamRunOutcome, String>,
+    ) {
         let saw_its_cancel = progress.saw_its_cancel();
         self.stream_actions
             .stream_action_queue_of_each_project
@@ -3015,6 +3197,7 @@ struct StreamARunCompiled<'run> {
     stream_location: StreamLocation,
     stream_environment: &'run StreamEnvironment,
     graph_or_why_none: std::result::Result<serde_json::Value, String>,
+    display_name_of_a_stream_first_recorded: Option<&'run str>,
     is_interrupted: &'run dyn Fn() -> bool,
 }
 
@@ -3763,6 +3946,7 @@ mod tests {
             ProjectStreamsToCompileAndLoad {
                 project_directory: self.path().to_path_buf(),
                 stream_function: None,
+                display_name_of_a_stream_first_recorded: None,
             }
         }
     }
@@ -7314,6 +7498,119 @@ mod tests {
         RunProjectRequest {
             project_directory: project_directory.to_path_buf(),
         }
+    }
+
+    /// A project directory holding only a venv whose compile gives the
+    /// scaffold's one `stream:main`, so a create writes every scaffold file.
+    fn a_directory_holding_only_a_venv_compiling_the_scaffolds_stream() -> ProjectWithAStubCompile {
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "main",
+            serde_json::json!([]),
+        ));
+        project.compile_every_stream_to(&["main"], &[]);
+        std::fs::remove_file(project.path().join("pyproject.toml")).unwrap();
+        project
+    }
+
+    #[test]
+    #[serial]
+    fn a_create_project_writes_the_scaffold_and_loads_its_stream_under_the_folders_name() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = a_directory_holding_only_a_venv_compiling_the_scaffolds_stream();
+        let project_directory = std::fs::canonicalize(project.path()).unwrap();
+        let folder_name = project_directory
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let queued = runner
+            .create_project(CreateProjectRequest {
+                project_directory: Some(project.path().to_path_buf()),
+            })
+            .expect("a create of a project is queued");
+
+        assert_eq!(queued.project_directory, project_directory);
+        assert_eq!(queued.stream_id, project.stream_id_of("main"));
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        assert_eq!(done.kind, StreamActionKind::Load);
+        assert_eq!(
+            done.streams
+                .iter()
+                .map(|stream| (
+                    stream.stream_id.clone(),
+                    stream.display_name.clone(),
+                    stream.state
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                queued.stream_id.clone(),
+                folder_name.clone(),
+                Some(StreamListingState::Running)
+            )]
+        );
+        for scaffolded_file in
+            super::super::new_project_scaffold::render_scaffold_template_files(&folder_name)
+        {
+            assert!(
+                project_directory
+                    .join(scaffolded_file.path_in_project)
+                    .is_file(),
+                "{}",
+                scaffolded_file.path_in_project
+            );
+        }
+        assert_eq!(
+            the_record_of(state_directory.path(), &queued.stream_id).display_name,
+            folder_name
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_create_over_a_scaffold_file_fails_its_action_with_nothing_written() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = a_directory_holding_only_a_venv_compiling_the_scaffolds_stream();
+        std::fs::write(project.path().join("stream.py"), "# the user's own\n").unwrap();
+
+        let queued = runner
+            .create_project(CreateProjectRequest {
+                project_directory: Some(project.path().to_path_buf()),
+            })
+            .expect("a create over a scaffold file is queued, and its action fails");
+
+        let failed = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(failed.state, StreamActionState::Failed, "{failed:?}");
+        assert!(
+            failed
+                .failed_because
+                .as_deref()
+                .is_some_and(|why| why.contains("already has stream.py")),
+            "{failed:?}"
+        );
+        assert!(!project.path().join("pyproject.toml").exists());
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("stream.py")).unwrap(),
+            "# the user's own\n"
+        );
+        assert!(runner.list_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_create_in_a_relative_directory_is_refused_with_nothing_created() {
+        let runner = a_runner_recording_its_streams_in(None);
+        let refusal = runner
+            .create_project(CreateProjectRequest {
+                project_directory: Some(PathBuf::from("a-relative-project")),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("must be an absolute path"), "{refusal}");
+        assert!(!Path::new("a-relative-project").exists());
     }
 
     #[test]

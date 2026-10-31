@@ -8,9 +8,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 
 use super::operations::RuntimeOperations;
 use super::{
-    LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
-    ProjectStreamsListing, RunProjectRequest, Runner, StreamAction, StreamActionQueued,
-    StreamListing, StreamRenameOutcome,
+    CreateProjectRequest, LoadedStreamAndTheOutputPortsItExposes, MachineName,
+    OutputPortExposureOutcome, ProjectCreationQueued, ProjectStreamsListing, RunProjectRequest,
+    Runner, StreamAction, StreamActionQueued, StreamListing, StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -67,6 +67,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::run_project`].
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued>;
+
+    /// [`Runner::create_project`].
+    fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued>;
 
     /// [`Runner::describe_stream_action`].
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction>;
@@ -150,6 +153,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
         Runner::run_project(self, request)
+    }
+
+    fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {
+        Runner::create_project(self, request)
     }
 
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {

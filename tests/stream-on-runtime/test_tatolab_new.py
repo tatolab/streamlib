@@ -1,12 +1,13 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab new` end to end: the project the runtime unit's `tatolab` writes.
+"""`tatolab new` end to end: the project the runtime writes for the runtime unit's `tatolab`.
 
 The templates are checked as files in the stream suite; this checks what the
-binary renders from them, as a user receives it: every
+runtime renders from them, as a user receives it: every
 Python file lints and is formatted, and the stream compiles in a venv holding
-`tatolab-stream` and no runtime. Needs no GPU.
+`tatolab-stream` and no runtime. The create loads the scaffold's stream, which
+runs a GPU effect.
 """
 
 from __future__ import annotations
@@ -20,8 +21,11 @@ from pathlib import Path
 
 import pytest
 
+from conftest import TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
 from tatolab.stream import H264Encoder, TestPatternSource
+
+pytestmark = pytest.mark.requires_gpu
 
 # ruff is pointed at the template tree for each rendered file, so it reads the
 # `[tool.ruff]` the stream package checks the templates under.
@@ -40,21 +44,21 @@ SCAFFOLDED_FILE_PATHS = {
 }
 
 def scaffold_with_tatolab_new(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> Path:
     """`tatolab new` into a project whose `.venv` is the suite venv; returns the project."""
-    app_directory = make_tatolab_project(directory_name="demo")
-    scaffolded = run_tatolab("new", app_directory, working_directory=app_directory.parent)
-    assert scaffolded.returncode == 0, scaffolded.stdout + scaffolded.stderr
-    return app_directory
+    return make_scaffolded_tatolab_project(start_tatolabd(), directory_name="demo")
 
 
 def files_written_into(app_directory: Path) -> "dict[str, str]":
-    """Every file under the project but its `.venv`, by its path in the project."""
+    """Every file under the project but its `.venv`, the bytecode its load
+    compiled and the runtime's own `.streamlib`, by its path in the project."""
     written_files: "dict[str, str]" = {}
     for directory, subdirectory_names, file_names in os.walk(app_directory):
-        subdirectory_names[:] = [name for name in subdirectory_names if name != ".venv"]
+        subdirectory_names[:] = [
+            name for name in subdirectory_names if name not in (".venv", "__pycache__", ".streamlib")
+        ]
         for file_name in file_names:
             path = Path(directory) / file_name
             written_files[path.relative_to(app_directory).as_posix()] = path.read_text(
@@ -65,13 +69,13 @@ def files_written_into(app_directory: Path) -> "dict[str, str]":
 
 @pytest.mark.parametrize("ruff_arguments", [("check",), ("format", "--check")])
 def test_every_scaffolded_python_file_passes_ruff(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
     ruff_arguments: "tuple[str, ...]",
 ):
     """Linted as rendered, not as templated: a render drops the licence header
     every template opens with."""
-    app_directory = scaffold_with_tatolab_new(make_tatolab_project, run_tatolab)
+    app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
     written_files = files_written_into(app_directory)
 
     assert set(written_files) == SCAFFOLDED_FILE_PATHS
@@ -103,11 +107,11 @@ def test_every_scaffolded_python_file_passes_ruff(
 
 
 def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The compile `tatolab run` makes, in the project's own venv, over what `new` wrote."""
-    app_directory = scaffold_with_tatolab_new(make_tatolab_project, run_tatolab)
+    app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
     project_venv_interpreter = app_directory / ".venv" / "bin" / "python"
 
     runtime_probe = subprocess.run(
@@ -159,13 +163,13 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
 
 
 def test_the_sample_stream_runs_no_camera_and_names_no_window(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The sample stream runs on a machine with no capture device and no display:
     nothing `new` writes mentions a window, and the camera appears only in the
     comment naming the one-line swap to it, never in code."""
-    app_directory = scaffold_with_tatolab_new(make_tatolab_project, run_tatolab)
+    app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
 
     for path_in_project, contents in files_written_into(app_directory).items():
         assert "window" not in contents.lower(), (

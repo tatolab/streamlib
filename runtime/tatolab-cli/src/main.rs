@@ -24,7 +24,6 @@ mod runtime_gone_while_following_a_stream;
 mod runtime_log_record_decoding_and_filters;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
-mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_argument_resolution_through_the_listing;
 mod stream_followed_and_reloaded_on_every_save;
@@ -101,15 +100,20 @@ struct TatolabCommandLine {
 
 #[derive(Subcommand)]
 enum TatolabVerb {
-    /// Scaffold a new stream project.
+    /// Create a new stream project on the runtime, print the action, and return.
     #[command(
-        long_about = "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore into \
-                      DIRECTORY — one @stream wiring the sample animation through a GPU effect \
-                      into an H.264 encoder it exposes publicly, with a meter on a fan-out."
+        long_about = "Create a project in DIRECTORY, or with none in a folder <adjective>-<noun> \
+                      the runtime draws under ~/streams, and queue its load: the runtime writes \
+                      stream.py, nodes/, pyproject.toml, .python-version and .gitignore — one \
+                      @stream wiring the sample animation through a GPU effect into an H.264 \
+                      encoder it exposes publicly, with a meter on a fan-out — then makes its \
+                      .venv and loads the stream under the folder's name. A DIRECTORY already \
+                      holding one of those files fails the action with nothing written. Needs \
+                      the runtime running."
     )]
     New {
-        /// Directory to scaffold the project into.
-        directory: PathBuf,
+        /// Where to create the project (default: a new folder under ~/streams).
+        directory: Option<PathBuf>,
     },
     /// Queue a load of this project's streams on the runtime, print the action, and return.
     #[command(
@@ -315,7 +319,12 @@ fn main() -> ExitCode {
 fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
     match verb {
         TatolabVerb::New { directory } => {
-            scaffold_new_stream_project::scaffold_new_stream_project(&directory).map(|()| 0)
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::create_project(
+                    &caller_working_directory,
+                    directory.as_deref(),
+                )
+            })
         }
         TatolabVerb::Run { project_directory } => {
             caller_working_directory().and_then(|caller_working_directory| {

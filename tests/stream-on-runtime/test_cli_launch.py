@@ -185,17 +185,6 @@ def project_files_with_helper_placed_processors(helper_count: int) -> "dict[str,
     }
 
 
-def make_scaffolded_sample_stream_project(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-) -> Path:
-    """`tatolab new` into a project whose `.venv` is the suite venv."""
-    app_directory = make_tatolab_project()
-    scaffolded = run_tatolab("new", app_directory, working_directory=app_directory.parent)
-    assert scaffolded.returncode == 0, scaffolded.stdout + scaffolded.stderr
-    return app_directory
-
-
 def load_the_projects_stream(
     tatolabd: TatolabdUnderTest, app_directory: Path, verb: str = "run"
 ) -> TatolabRunOrDevOnTheRuntime:
@@ -600,15 +589,14 @@ def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest, stream_id: s
 
 
 def test_the_scaffolded_app_reaches_a_running_graph(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
     Run exactly as scaffolded:
-    `dev` has the runtime compile the scaffold's `@stream` and load the graph
-    it builds, so the graph the local API renders carries the stream's name and
+    `new` has the runtime write the scaffold, compile its `@stream` and load
+    the graph it builds, so the graph the local API renders carries the stream's name and
     the exposure it declared. A listed stream alone proves almost nothing here:
     it is listed whether or not `process()` ever succeeds, so the assertions
     that carry this test are the ones on the run's own records. `process()
@@ -618,13 +606,12 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     fan-out reader that never reports is a graph that carries the picture and
     drops the rest.
     """
-    app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
     tatolabd = start_tatolabd()
+    app_directory = make_scaffolded_tatolab_project(tatolabd)
+    local_api = tatolabd.local_api_client()
 
-    dev = load_the_projects_stream(tatolabd, app_directory, "dev")
-    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     stream_id = stream_id_of_the_project(app_directory)
-    live_graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    live_graph = local_api.call_tool("graph", {"stream": stream_id})
     assert live_graph["stream"] == stream_id, (
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
@@ -645,9 +632,8 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
     frames_written = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
-    dev.interrupt()
-    assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
-    assert dev.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    queued_stop = local_api.call_tool("stop_stream", {"stream": stream_id})
+    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
 
     stream_output = the_first_streams_output(tatolabd, stream_id)
     assert_the_effect_carried_live_video(
@@ -673,7 +659,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 
 
 def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
-    make_tatolab_project: "Callable[..., Path]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
@@ -685,7 +671,8 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
     load's action, which `tatolab logs --action` reads — without costing the
     start.
     """
-    app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
+    tatolabd = start_tatolabd()
+    app_directory = make_scaffolded_tatolab_project(tatolabd)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
     effect_module.write_text(
         effect_module.read_text()
@@ -694,7 +681,6 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
         "    import torch\n"
         '    return torch.device("cuda")\n'
     )
-    tatolabd = start_tatolabd()
 
     tatolab_run = load_the_projects_stream(tatolabd, app_directory)
     loaded = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
@@ -860,8 +846,7 @@ def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
 
 
 def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
-    make_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The MVP edit loop: `dev` queuing another load of the project on every save.
@@ -874,11 +859,11 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     is only meaningful if the second follows: a loop that survives a bad save by
     ignoring the file entirely would pass the first alone.
     """
-    app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
+    tatolabd = start_tatolabd()
+    app_directory = make_scaffolded_tatolab_project(tatolabd)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
     last_good_effect_source = effect_module.read_text()
     stream_id = stream_id_of_the_project(app_directory)
-    tatolabd = start_tatolabd()
     local_api = tatolabd.local_api_client()
 
     dev = load_the_projects_stream(tatolabd, app_directory, "dev")

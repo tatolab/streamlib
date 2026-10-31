@@ -902,7 +902,9 @@ jobs:
             sleep 1
           done
 
-          "$tatolab_executable" new /tmp/scaffold-check
+          # The venv is made first, from this run's build, so the create's
+          # load finds an interpreter that runs and syncs nothing.
+          mkdir -p /tmp/scaffold-check
           python3 -m venv /tmp/scaffold-check/.venv
           # `--no-index` keeps `tatolab-stream` to this run's build, so its one
           # dependency comes from PyPI first.
@@ -943,16 +945,17 @@ jobs:
             fi
           }
 
-          cd /tmp/scaffold-check
-          "$tatolab_executable" run > /tmp/scaffold-run.log 2>&1 &
-          tatolab_pid=$!
+          if ! "$tatolab_executable" new /tmp/scaffold-check > /tmp/scaffold-new.log 2>&1; then
+            cat /tmp/scaffold-new.log /tmp/tatolabd.log
+            echo "::error::tatolab new did not queue the create"
+            exit 1
+          fi
           sleep 20
-          "$tatolab_executable" graph --stream main > /tmp/scaffold-graph.json || true
-          interrupt_and_expect_a_clean_exit "tatolab run" "$tatolab_pid" /tmp/scaffold-run.log
+          "$tatolab_executable" graph > /tmp/scaffold-graph.json || true
           interrupt_and_expect_a_clean_exit tatolabd "$tatolabd_pid" /tmp/tatolabd.log
           trap - EXIT
-          echo "::group::tatolab run"
-          cat /tmp/scaffold-run.log
+          echo "::group::tatolab new"
+          cat /tmp/scaffold-new.log
           echo "::endgroup::"
           echo "::group::tatolabd"
           cat /tmp/tatolabd.log
@@ -962,7 +965,7 @@ jobs:
             echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
-          echo "::group::graph --stream main"
+          echo "::group::graph"
           cat /tmp/scaffold-graph.json
           echo "::endgroup::"
           # The stream loaded, and its source wrote frames into the graph. Far
@@ -974,10 +977,12 @@ jobs:
               graph = json.load(open("/tmp/scaffold-graph.json"))
           except ValueError:
               raise SystemExit(0)
-          for node in graph.get("nodes", []):
-              if node.get("name") == "testpatternsource":
-                  metrics = node.get("components", {}).get("metrics", {})
-                  print(metrics.get("written_bags_by_output_port", {}).get("video", ""))
+          streams = graph.get("streams", [])
+          for stream_graph in streams.values() if isinstance(streams, dict) else streams:
+              for node in stream_graph.get("nodes", []):
+                  if node.get("name") == "testpatternsource":
+                      metrics = node.get("components", {}).get("metrics", {})
+                      print(metrics.get("written_bags_by_output_port", {}).get("video", ""))
           ')"
           if [ -z "$frames_written" ] || [ "$frames_written" -lt 60 ]; then
             echo "::error::TestPatternSource.video wrote ${frames_written:-no} frames in 20s, by the stream's graph"
@@ -1006,10 +1011,12 @@ jobs:
               graph = json.load(open("/tmp/scaffold-graph.json"))
           except ValueError:
               raise SystemExit(0)
-          for node in graph.get("nodes", []):
-              if node.get("name") == "h264encoder":
-                  metrics = node.get("components", {}).get("metrics", {})
-                  print(sum(metrics.get("dropped_bags_by_link", {}).values()))
+          streams = graph.get("streams", [])
+          for stream_graph in streams.values() if isinstance(streams, dict) else streams:
+              for node in stream_graph.get("nodes", []):
+                  if node.get("name") == "h264encoder":
+                      metrics = node.get("components", {}).get("metrics", {})
+                      print(sum(metrics.get("dropped_bags_by_link", {}).values()))
           ')"
           echo "H264Encoder.video dropped ${frames_dropped_into_the_encoder:-an unknown number of} frames, by the stream's graph"
 
