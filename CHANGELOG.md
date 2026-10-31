@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.65.0](https://github.com/tatolab/streamlib/compare/v0.64.0...v0.65.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** tatolab run and dev queue a load of the project and follow its log ([#3004](https://github.com/tatolab/streamlib/issues/3004))
+
+### Features
+
+* **cli:** tatolab run and dev queue a load of the project and follow its log ([#3004](https://github.com/tatolab/streamlib/issues/3004)) ([cbd70ab](https://github.com/tatolab/streamlib/commit/cbd70ab7c391d736b12f0a4b6004b9e77e186801))
+
 ## [0.64.0](https://github.com/tatolab/streamlib/compare/v0.63.2...v0.64.0) (2026-10-31)
 
 
