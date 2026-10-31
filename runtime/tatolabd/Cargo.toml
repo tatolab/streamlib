@@ -64,7 +64,7 @@ libc = { workspace = true, optional = true }
 zbus-secret-service-keyring-store = { version = "=1.0.1", features = ["rt-async-io-crypto-rust"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
+apple-native-keyring-store = { version = "=1.0.2", features = ["protected"] }
 
 [dev-dependencies]
 # The relay-adapter catalog's icons, read back from their `data:` URIs.
