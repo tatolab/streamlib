@@ -196,11 +196,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Who starts the runtime. With no runtime running, every `tatolab` verb that needs
   one fails at once, unable to reach the local API's socket, naming the socket and how to start
   the runtime — Docker's shape when its daemon is down; nothing a verb does starts a runtime. On
-  Apple, `Tatolab.app` registers `tatolabd` as its login service, as Docker Desktop does, and a
-  `run` against a running runtime connects as usual; a developer may still run `tatolabd` in a
-  terminal. On Linux the installer — `curl | sh` or a distro package — registers
-  `tatolabd` as a systemd user service, the service being the end state on Linux, not a stand-in
-  for the app. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2721, #2722]
+  Apple, `Tatolab.app` runs the installer it carries, which registers `tatolabd` as a per-user
+  launch agent, as Docker Desktop installs its components, and a `run` against a running
+  runtime connects as usual; a developer may still run `tatolabd` in a terminal. On Linux the
+  installer — `curl | sh`, or the copy the app carries — registers `tatolabd` as a systemd user
+  service, the service being the end state on Linux. Owner, 2026-10-02 and 2026-10-31.
+  [runtime-hosting — SHIPPED #2711, #2721, #2722; amended by runtime-installed-as-a-component:
+  the installer the app carries]
 - **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it, and the
   runtime records the graph its function compiled to at that load, the project's venv path and
   the exposures in its state directory, and re-loads that recorded graph on every start, a
@@ -1578,7 +1580,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   free-threaded, a foreign architecture) writes a refusal to raw stderr naming its path,
   implementation, version, free-threading, architecture and the import error, and exits —
   then checks the build id, then runs its node. `tatolabd` finds the lend relative to its own
-  executable, at `../lib/tatolab/lend`, or at `Contents/Resources/lend` inside `Tatolab.app`. Describe is the same command with `--describe <import
+  executable, at `../lib/tatolab/lend`, or at `Contents/Resources/lend` inside the bundle holding it. Describe is the same command with `--describe <import
   paths>`, run at load for every Python `type` a graph names and at a live `add_node` for one
   not yet described; the bootstrap prints each declaration as JSON, and a type that will not
   import or carries no stamp is refused by name, quoting the interpreter's stderr. It costs one
@@ -2082,7 +2084,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — SHIPPED (unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — SHIPPED (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
 - **DECIDED** — First-party camera and audio are native built-in processors
   in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
@@ -2922,18 +2924,20 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   by the app's own project, the shader precedent — never discovered from
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
-- **DECIDED** — Camera, microphone and local-network permission on Apple. `tatolabd` ships
-  inside `Tatolab.app` as a launch agent the app registers with `SMAppService`, so macOS
-  credits the app — its prompts name Tatolab, and grants are per user and persist across
-  restarts and updates while the signing identity and bundle id hold. The app's `Info.plist`
-  carries the camera, microphone and local-network usage strings; the app and `tatolabd`
+- **DECIDED** — Camera, microphone and local-network permission on Apple. `tatolabd` runs
+  from `Tatolab Runtime.app`, the helper bundle the installer installs and its launch agent
+  starts, so macOS credits the helper — its prompts name it, and grants are per user and
+  persist across restarts and updates while its signing identity and bundle id hold, whichever
+  build folder it runs from. The helper's `Info.plist` carries the camera, microphone and
+  local-network usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; only the runtime process opens devices,
   never a processor interpreter. The runtime checks authorization before opening a device and
   refuses by name, because a denied microphone delivers silence. A runtime started from a
   terminal credits that terminal — the
   responsible code — and only Apple's Terminal is exempt from the local-network check.
-  Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
-  #2721]
+  Owner, 2026-10-01, on #2560's research, and 2026-10-31. [one-runtime-per-machine;
+  runtime-hosting — SHIPPED #2721; amended by runtime-installed-as-a-component: the helper
+  bundle credited in the app's place]
 
 ## Networking — transport, moq, webrtc — SHIPPED (unbuilt: a publicly valid certificate on the every-interface listener)
 
@@ -3414,7 +3418,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722]
 
-## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name, `Tatolab.app`'s first launch without an administrator prompt, and `Tatolab.app` creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name, `Tatolab.app`'s first launch without an administrator prompt, `Tatolab.app` creating and loading through the runtime with the uv its bundle carries, and the runtime installed as a component by the installer the app carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3549,57 +3553,78 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine; package-split-and-lend — SHIPPED
   #2673, #2697; runtime-hosting — SHIPPED #2721, #2722]
-- **DECIDED** — The Linux installer. Each release attaches
+- **DECIDED** — The installer. One `install.sh` installs the runtime on Linux and on Apple
+  Silicon macOS, and the Tatolab app runs the copy it carries. Each release attaches
   `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28` with the
   portability gate run over it and carrying its user units in `lib/systemd/user/`, and serves
   it, `install.sh` and a `latest` naming the version from `get.tatolab.com`, an R2 bucket.
-  `curl -fsSL https://get.tatolab.com/install.sh | sh` checks the tarball's sha256, unpacks it
-  to `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and
-  `tatolabd` into `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service`
-  (`Restart=on-failure`, `WantedBy=default.target`, `After=graphical-session.target`) — always
-  on, and across logouts with `loginctl enable-linger`, which it offers. Re-running upgrades in
-  place and restarts the service, a failed restart keeping the previous release; `--uninstall`
-  removes the service and the files, never the state directory. On macOS the script refuses,
-  pointing at the app. The tarball carries the Vulkan loader and the software device in
-  `tatolab/runtime/_vulkan_driver/` and a pinned uv in `bin/`, and `install.sh` refuses a
-  tarball without the driver's manifest or the uv. Owner, 2026-10-11 and 2026-10-28.
+  `curl -fsSL https://get.tatolab.com/install.sh | sh` checks the tarball's sha256 and installs
+  it; `install.sh --from-unit <dir>` installs a runtime unit it is handed, as the app does.
+  Either way it installs the unit into a folder of its own per build, `<version>-<sha>` read
+  from the unit, points `current` at it, links `tatolab` into `~/.local/bin` through `current`,
+  and runs the per-user service, which names only `current` and never a path inside an app
+  bundle. On Linux that is `~/.local/share/tatolab/<build>/`, `tatolabd` linked beside
+  `tatolab`, and `~/.config/systemd/user/tatolabd.service` (`Restart=on-failure`,
+  `WantedBy=default.target`, `After=graphical-session.target`) — always on, and across logouts
+  with `loginctl enable-linger`, which it offers. On macOS it is
+  `~/Library/Application Support/com.tatolab.runtime/<build>/` and the launch agent
+  `~/Library/LaunchAgents/com.tatolab.tatolabd.plist` (`KeepAlive` on a failed exit,
+  `AssociatedBundleIdentifiers` naming the app), driven with `launchctl bootout` and
+  `launchctl bootstrap`. Installing a build stops the service, points `current` at the build,
+  starts the service, and waits until the runtime answers on its local API or the service
+  manager reports the job exited — no deadline ends the wait. An exit points `current` back at
+  the previous build, starts that, and the installer says so. It keeps the previous build,
+  removes older ones, and prints each step on a line of its own. `--uninstall` removes the
+  service and the files, never the state directory. `curl | sh` on a Mac refuses, pointing at
+  the app. The tarball carries the Vulkan loader and the software device in
+  `tatolab/runtime/_vulkan_driver/` and a pinned uv in `bin/`, and `install.sh` refuses a unit
+  without the driver's manifest or the uv. Owner, 2026-10-11, 2026-10-28 and 2026-10-31.
   [runtime-hosting — SHIPPED #2722; optional-accelerators — SHIPPED #2761; create-project —
-  SHIPPED #2982]
+  SHIPPED #2982; amended by runtime-installed-as-a-component: `--from-unit`, the folder per
+  build, the macOS arm, the wait for an answer and its rollback, pruning, the step lines]
+  Rejected: a `.pkg` or a system package as the runtime's updater — a `.pkg` asks for an administrator password at every update, and a system package cannot restart a per-user service (owner, 2026-10-31).
 - **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
-  private — and is a Tauri app registering its agent through `objc2-service-management`. On
-  macOS it ships as a notarised `.dmg` on this repository's release and as `brew install --cask
-  tatolab/tap/tatolab` from `tatolab/homebrew-tap`, whose `Casks/tatolab.rb` the app
-  repository bumps per release. The app repository checks this repository out at the release
-  tag, builds the runtime unit, lays it into the bundle, signs, notarises, and attaches the
-  `.dmg`. The bundle holds `Contents/MacOS/tatolabd`; an `SMAppService.agent` (plist in
-  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit); the CLI as
-  `Contents/MacOS/tatolab-cli`, a name that does not case-fold onto the app's own executable on a
-  default APFS volume, which the `tatolab` command links to; and the lend laid out by
-  Apple's code rules — every Mach-O under `Contents/Frameworks/tatolab-runtime/` at its path
-  below `tatolab/runtime/`, the lend in `Contents/Resources/lend/` with each Mach-O a relative
-  link into it — which `tatolabd` finds from `Contents/MacOS/`, `dladdr` finding
-  `_vulkan_driver/` through the link. Registration is the login item, so one switch, "Run
-  Tatolab", covers both; opening the app registers the agent unless the user turned the switch
-  off, which it remembers, and on `.requiresApproval` opens Login Items. The menu shows whether
-  the runtime is up and its stream count (`list_streams`); Quit quits the app, never the
-  runtime. First launch asks for no administrator password. It links `tatolab` into a folder
-  in the user's home directory, and offers a link in `/usr/local/bin`, behind an
-  administrator prompt, as an option. `Info.plist` carries the camera, microphone,
+  private — and is an Electron app. On macOS it ships as a notarised `.dmg` on this
+  repository's release and as `brew install --cask tatolab/tap/tatolab` from
+  `tatolab/homebrew-tap`, whose `Casks/tatolab.rb` the app repository bumps per release. The
+  app repository checks this repository out at the release tag, builds the runtime unit, wraps
+  it, signs, notarises, and attaches the `.dmg`. The bundle carries the runtime as
+  `Tatolab Runtime.app`, a helper bundle with a bundle id of its own, beside the `install.sh`
+  that installs it. The helper holds `tatolabd`, `moq-relay` and the CLI as `tatolab-cli` in
+  `Contents/MacOS/` — a name that does not case-fold onto an executable beside it on a default
+  APFS volume — and the lend laid out by Apple's code rules: every Mach-O under
+  `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the lend in
+  `Contents/Resources/lend/` with each Mach-O a relative link into it, which `tatolabd` finds
+  from `Contents/MacOS/`, `dladdr` finding `_vulkan_driver/` through the link. On every launch
+  whose carried build differs from the installed `current` — newer, older or the same version at
+  another commit — the app runs `install.sh --from-unit` with what it carries, behind a window
+  that shows the installer's steps and, when it fails, its words; nothing asks. An app opened
+  while another copy runs passes it its build: a different build makes the running copy quit
+  and open the new one, the same build shows the running copy's window. "Run Tatolab" starts and
+  stops the installed launch agent, which also covers login; opening the app starts it unless
+  the user turned the switch off, which it remembers, and when Login Items hold Tatolab off it
+  opens Login Items. The menu shows whether the runtime is up and its stream count
+  (`list_streams`); Quit quits the app, never the runtime. First launch asks for no
+  administrator password, and offers a link to `tatolab` in `/usr/local/bin`, behind an
+  administrator prompt, as an option. The helper's `Info.plist` carries the camera, microphone,
   local-network and Documents, Desktop and Downloads usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; every Mach-O is signed with the Developer ID
   and the `.dmg` notarised and stapled, the seven `APPLE_*` secrets synced from Infisical into
   the app repository. Uninstalling — the app's "Uninstall Tatolab…" or `brew uninstall --cask` —
   removes the service and the files, never the state directory. On Linux the app is a `.deb`
-  and an AppImage from the same repository: the same window and tray over the service the
-  installer registers, its switch `systemctl --user enable --now` / `disable --now
-  tatolabd.service`; it installs no runtime, so the installer stays Linux's one way to install
-  the runtime, and with no service the app points at the installer. The bundle carries the
-  runtime unit's pinned uv, and the app neither scaffolds nor syncs a project: it creates and
-  loads through `create_project` and `run_project`. Beyond its live stream list, graph and
-  logs, the app's stream actions and the rest of its GUI are the app step's. Owner,
-  2026-10-02, 2026-10-11, 2026-10-24 and 2026-10-28. [runtime-hosting — SHIPPED #2721;
-  machine-lock-without-administrator — SHIPPED #2929]
+  and an AppImage from the same repository, carrying the Linux runtime unit and `install.sh`
+  and installing the runtime the same way, with the same window and tray; its switch is
+  `systemctl --user enable --now` / `disable --now tatolabd.service`, and `curl | sh` stays for
+  machines without the app. The bundle carries the runtime unit's pinned uv, and the app
+  neither scaffolds nor syncs a project: it creates and loads through `create_project` and
+  `run_project`. Beyond its live stream list, graph and logs, the app's stream actions and the
+  rest of its GUI are the app step's. Owner, 2026-10-02, 2026-10-11, 2026-10-24, 2026-10-28
+  and 2026-10-31. [runtime-hosting — SHIPPED #2721; machine-lock-without-administrator —
+  SHIPPED #2929; amended by runtime-installed-as-a-component: the helper bundle, the install on
+  every launch whose build differs, the takeover of a running copy, the Linux app carrying the
+  runtime]
+  Rejected: running the runtime from inside the app bundle through an `SMAppService` agent — launchd keeps running the copy that registered first, and replacing the bundle leaves the old runtime running (owner, 2026-10-31).
 
 ## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields)
 
