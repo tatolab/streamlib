@@ -43,6 +43,7 @@ use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects
     WhatTheProjectsCodeGaveTheCompile, compile_the_stream_function_in_the_projects_interpreter,
     the_projects_venv_interpreter,
 };
+use crate::core::context::CaptureDeviceAccessPrompting;
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
     node_names_listed_for_a_refusal,
@@ -329,13 +330,15 @@ pub(crate) struct StreamActionsOfTheEngine {
 
 /// One stream a stream action loads, recorded by the runtime under the id its
 /// location computes to: its display name and location, the graph and the
-/// owner's rulings, and where its interpreters start.
+/// owner's rulings, where its interpreters start, and whether its capture
+/// devices may ask the user.
 struct OneStreamAStreamActionLoads<'load> {
     display_name: &'load str,
     stream_location: &'load StreamLocation,
     graph_json: &'load serde_json::Value,
     rulings: &'load [OwnerExposureRuling],
     stream_environment: StreamEnvironment,
+    capture_device_access_prompting: CaptureDeviceAccessPrompting,
     /// Abandons the load once it reports true.
     is_interrupted: &'load dyn Fn() -> bool,
 }
@@ -350,7 +353,20 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
             graph_json,
             rulings: &record.exposure_rulings,
             stream_environment: record.stream_environment(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             is_interrupted: &is_the_machines_shutdown_requested,
+        }
+    }
+
+    /// The same load, its capture devices asking the user as
+    /// `capture_device_access_prompting` says.
+    fn with_capture_device_access_prompting(
+        self,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    ) -> Self {
+        Self {
+            capture_device_access_prompting,
+            ..self
         }
     }
 
@@ -1245,26 +1261,29 @@ impl Runner {
                 ))),
             };
         };
-        let stream =
-            match self.load_a_recorded_stream_from_its_record(&record, graph_json, &is_interrupted)
+        let stream = match self.load_a_recorded_stream_from_its_record(
+            &record,
+            graph_json,
+            CaptureDeviceAccessPrompting::MayAskTheUser,
+            &is_interrupted,
+        ) {
+            Ok(stream) => stream,
+            Err(retry_refusal)
+                if record.is_failed()
+                    && !is_interrupted()
+                    && !matches!(
+                        retry_refusal,
+                        Error::EngineResourceRefusedAtAStreamsStart(_)
+                    ) =>
             {
-                Ok(stream) => stream,
-                Err(retry_refusal)
-                    if record.is_failed()
-                        && !is_interrupted()
-                        && !matches!(
-                            retry_refusal,
-                            Error::EngineResourceRefusedAtAStreamsStart(_)
-                        ) =>
-                {
-                    self.record_a_refused_start_failed_resetting_its_crash_count(
-                        &mut record,
-                        format!("`start` retried it, and it did not load: {retry_refusal}"),
-                    );
-                    return Err(retry_refusal);
-                }
-                Err(start_refusal) => return Err(start_refusal),
-            };
+                self.record_a_refused_start_failed_resetting_its_crash_count(
+                    &mut record,
+                    format!("`start` retried it, and it did not load: {retry_refusal}"),
+                );
+                return Err(retry_refusal);
+            }
+            Err(start_refusal) => return Err(start_refusal),
+        };
         if record.mark_running_resetting_its_crash_count()
             && let Err(write_refusal) = self.change_the_record_of_the_stream(stream_id, |record| {
                 record.mark_running_resetting_its_crash_count();
@@ -1721,7 +1740,12 @@ impl Runner {
                 continue;
             };
             let reloaded = venv_made_outside_the_lock.and_then(|()| {
-                self.load_a_recorded_stream_from_its_record(&record, graph_json, is_interrupted)
+                self.load_a_recorded_stream_from_its_record(
+                    &record,
+                    graph_json,
+                    CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+                    is_interrupted,
+                )
             });
             match reloaded {
                 Ok(stream) => {
@@ -2530,16 +2554,19 @@ impl Runner {
     }
 
     /// Load and start a recorded stream from `record` and the graph
-    /// `graph_json` it holds, the load abandoned once `is_interrupted` reports
-    /// true.
+    /// `graph_json` it holds, its capture devices asking the user as
+    /// `capture_device_access_prompting` says, the load abandoned once
+    /// `is_interrupted` reports true.
     fn load_a_recorded_stream_from_its_record(
         &self,
         record: &StreamRecord,
         graph_json: &serde_json::Value,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
         is_interrupted: &dyn Fn() -> bool,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.load_and_start_a_stream(
             OneStreamAStreamActionLoads::recorded_by(record, graph_json)
+                .with_capture_device_access_prompting(capture_device_access_prompting)
                 .abandoned_once(is_interrupted),
         )
     }
@@ -2571,6 +2598,7 @@ impl Runner {
             graph_json,
             rulings,
             stream_environment,
+            capture_device_access_prompting,
             is_interrupted,
         } = stream_to_load;
         let OwnerExposureRulingsSplitAroundTheLoad {
@@ -2583,7 +2611,8 @@ impl Runner {
             &graph,
             OptionsForLoadingOneStream::in_stream_environment(stream_environment)
                 .with_display_name(display_name)
-                .at_stream_location(stream_location.clone()),
+                .at_stream_location(stream_location.clone())
+                .with_capture_device_access_prompting(capture_device_access_prompting),
             LoadedStreamHolding::RecordedByTheRuntime,
             is_interrupted,
         )? {
@@ -3603,7 +3632,8 @@ mod tests {
         }
     }
     use crate::core::test_support::{
-        MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
+        MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR, MockOutputOnlyProcessor,
+        MockSourceRefusingAnAccessNobodyAskedFor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
     };
     use serial_test::serial;
@@ -7394,6 +7424,87 @@ mod tests {
         );
         assert_eq!(reloads.len(), 2, "{reloads:?}");
         assert_eq!(stub_uv.runs(), ["sync"]);
+    }
+
+    /// A record of the function `function_name` of `project` whose one node
+    /// refuses an access nobody asked for unless its stream may ask the user.
+    fn a_record_of_a_stream_whose_node_asks_for_a_capture_device(
+        project: &ProjectWithAStubCompile,
+        function_name: &str,
+    ) -> StreamRecord {
+        StreamRecord::of_a_running_stream(
+            project.location_of(function_name),
+            function_name,
+            &project.stream_environment(),
+            serde_json::json!({
+                "stream": function_name,
+                "nodes": [{
+                    "name": "camera",
+                    "type": MockSourceRefusingAnAccessNobodyAskedFor::Processor::processor_class_import_path().as_str(),
+                    "config": {},
+                }],
+                "links": [],
+                "exposed": [],
+            }),
+        )
+    }
+
+    /// Mental revert: load the re-load's records as a start does, asking the
+    /// user, and the node sets up with its prompt up at login.
+    #[test]
+    #[serial]
+    fn the_reload_at_the_start_never_lets_a_node_ask_the_user_and_its_node_refuses_by_name() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        let camera = project.stream_id_of("camera");
+        records_in(state_directory.path())
+            .write(&a_record_of_a_stream_whose_node_asks_for_a_capture_device(
+                &project, "camera",
+            ))
+            .unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+
+        runner.reload_every_recorded_stream_neither_stopped_nor_failed_at_once();
+
+        let reloaded = runner
+            .loaded_stream_of_the_id_when_loaded(&camera)
+            .expect("the rest of the stream re-loads");
+        let refusal = reloaded
+            .wait_until_every_processor_is_running(STREAM_ACTION_TEST_DEADLINE)
+            .expect_err("the node may not ask, so its setup refuses")
+            .to_string();
+        assert!(
+            refusal.contains(MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_start_after_the_reload_lets_the_node_ask_the_user() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        let camera = project.stream_id_of("camera");
+        records_in(state_directory.path())
+            .write(&a_record_of_a_stream_whose_node_asks_for_a_capture_device(
+                &project, "camera",
+            ))
+            .unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        runner.reload_every_recorded_stream_neither_stopped_nor_failed_at_once();
+
+        runner
+            .stop_the_stream_finishing_its_pending_stop(&camera, None)
+            .expect("the re-loaded stream stops");
+        runner
+            .start_the_stream_finishing_its_pending_start(&camera, None)
+            .expect("the stopped stream starts");
+
+        runner
+            .loaded_stream_of_the_id_when_loaded(&camera)
+            .expect("the started stream is loaded")
+            .wait_until_every_processor_is_running(STREAM_ACTION_TEST_DEADLINE)
+            .expect("a start someone asked for may ask the user, so the node sets up");
     }
 
     #[test]

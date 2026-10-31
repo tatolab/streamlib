@@ -25,8 +25,8 @@ use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use crate::core::context::SoftwareAudioClock;
 use crate::core::context::{
-    AudioClockConfig, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
-    SharedAudioClock, TimeContext,
+    AudioClockConfig, CaptureDeviceAccessPrompting, GpuContext,
+    LoadedStreamARuntimeContextBelongsTo, RuntimeContext, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
@@ -210,6 +210,7 @@ impl LoadedStreamInThisRuntime {
         naming: LoadedStreamNaming,
         project_directory: PathBuf,
         stream_environment: Option<StreamEnvironment>,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
         teardown_watchdog_budget: Duration,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<Self>> {
@@ -275,6 +276,7 @@ impl LoadedStreamInThisRuntime {
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
                 this_stream: this_stream.clone(),
+                capture_device_access_prompting,
             }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(

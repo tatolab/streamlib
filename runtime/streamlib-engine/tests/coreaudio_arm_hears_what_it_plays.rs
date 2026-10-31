@@ -26,7 +26,8 @@ use std::time::Duration;
 use streamlib_engine::apple_coreaudio_audio_tier::CoreAudioStreamDirection;
 use streamlib_engine::core::context::{
     AudioBlockRequestedByDevice, AudioClockConfig, AudioDeviceStreamRequest, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
+    AudioStreamFormat, CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice,
+    SharedAudioClock, SoftwareAudioClock,
 };
 
 #[path = "support/coreaudio_audio_tier.rs"]
@@ -121,12 +122,14 @@ fn a_tone_played_through_the_built_in_speaker_is_heard_by_the_built_in_microphon
         .open_playback_stream(&AudioDeviceStreamRequest {
             device_id: Some(speaker_uid),
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the built-in speaker opens by its UID");
     let mut capture_stream = backend
         .open_capture_stream(&AudioDeviceStreamRequest {
             device_id: Some(microphone_uid),
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the built-in microphone opens by its UID");
     let playback_format = playback_stream.stream_format();

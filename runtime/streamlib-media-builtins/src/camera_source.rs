@@ -59,8 +59,10 @@ pub struct CameraSourceConfig {
                   the device captured it, on the machine's monotonic clock. A named `device_id` \
                   that cannot be opened is refused at `setup()` by name, as is every camera on a \
                   platform no capture backend serves.\n\n\
-                  On macOS the first run asks for camera access without waiting: the graph \
-                  starts, and frames begin once the user allows it. macOS asks on behalf of the \
+                  On macOS a stream someone loads or starts asks for camera access without \
+                  waiting: the graph starts, and frames begin once the user allows it. A stream \
+                  the runtime re-loads on its own as it starts never asks, and is refused at \
+                  `setup()` until camera access has been answered. macOS asks on behalf of the \
                   application that launched the process — the terminal, not Python — so a \
                   refusal names that application and the setting to change.",
     execution = manual,
@@ -94,6 +96,7 @@ impl ManualProcessor for CameraSource::Processor {
             max_height: self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT),
             gpu_context: ctx.gpu_limited_access().clone(),
             processor_id_of_the_capturing_node,
+            capture_device_access_prompting: ctx.capture_device_access_prompting(),
         })?;
         let stream_format = capture_stream.stream_format();
         let opened_device = capture_stream.opened_device();

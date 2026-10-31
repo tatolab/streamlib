@@ -31,7 +31,8 @@ use streamlib_engine::apple_coreaudio_audio_tier::{
 };
 use streamlib_engine::core::context::{
     AudioBlockRequestedByDevice, AudioCaptureStream, AudioClockConfig, AudioDeviceStreamRequest,
-    AudioSampleFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
+    AudioSampleFormat, CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice,
+    SharedAudioClock, SoftwareAudioClock,
 };
 use streamlib_engine::core::media_clock::MediaClock;
 
@@ -551,6 +552,7 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         .open_playback_stream(&AudioDeviceStreamRequest {
             device_id: None,
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the default output opens");
     let playback_format = playback_stream_started_before_the_tap.stream_format();
@@ -595,6 +597,7 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         .open_capture_stream(&AudioDeviceStreamRequest {
             device_id: Some(muted_process_tap.aggregate_device_uid().to_owned()),
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the tap's private aggregate opens as a named capture device");
     let capture_format = capture_stream.stream_format();

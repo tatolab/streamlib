@@ -248,6 +248,46 @@ impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
     }
 }
 
+/// Mock source whose `setup()` refuses, as a capture device does, when its
+/// stream may not ask the user for an access nobody has answered.
+#[crate::processor(
+    execution = manual,
+    output("out1"),
+)]
+pub(crate) struct MockSourceRefusingAnAccessNobodyAskedFor;
+
+/// What [`MockSourceRefusingAnAccessNobodyAskedFor`] refuses with.
+pub(crate) const MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR: &str =
+    "mock camera access has not been asked for yet: restart this stream to be asked";
+
+impl crate::core::ManualProcessor for MockSourceRefusingAnAccessNobodyAskedFor::Processor {
+    fn setup(
+        &mut self,
+        ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        match ctx.capture_device_access_prompting() {
+            crate::core::context::CaptureDeviceAccessPrompting::MayAskTheUser => Ok(()),
+            crate::core::context::CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor => {
+                Err(crate::core::error::Error::Configuration(
+                    MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR.to_string(),
+                ))
+            }
+        }
+    }
+    fn teardown(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register all engine-internal test mock processors with the global
 /// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
 /// fixture that builds a graph against `lookup_registered_ident` or
@@ -264,6 +304,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
         PROCESSOR_REGISTRY.register::<MockSourceTakingOneSetting::Processor>();
+        PROCESSOR_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Processor>();
     });
 }
 

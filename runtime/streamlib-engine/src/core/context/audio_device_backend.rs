@@ -10,12 +10,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use super::SharedAudioClock;
 use super::device_backend_probe_chain::{
     DeviceBackendArm, first_device_backend_arm_that_opens_among,
 };
 use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
+use super::{CaptureDeviceAccessPrompting, SharedAudioClock};
 use crate::core::Result;
 
 /// How the scalars an audio stream carries are encoded.
@@ -94,6 +94,9 @@ pub struct AudioDeviceStreamRequest {
     /// whose device provides the cadence ignores it, so device ticks and timer
     /// ticks never interleave.
     pub deviceless_pacing_clock: SharedAudioClock,
+    /// Whether opening a capture device may ask the user for access nobody
+    /// has answered yet; a playback stream asks for nothing.
+    pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
 }
 
 /// A capture stream a backend opened.

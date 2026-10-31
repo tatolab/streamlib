@@ -68,8 +68,10 @@ class CameraSource(BuiltInNode[CameraSourceConfig]):
     cannot be opened is refused at `setup()` by name, as is every camera on a platform
     no capture backend serves.
 
-    On macOS the first run asks for camera access without waiting: the graph starts, and
-    frames begin once the user allows it. macOS asks on behalf of the application that
+    On macOS a stream someone loads or starts asks for camera access without waiting:
+    the graph starts, and frames begin once the user allows it. A stream the runtime
+    re-loads on its own as it starts never asks, and is refused at `setup()` until
+    camera access has been answered. macOS asks on behalf of the application that
     launched the process — the terminal, not Python — so a refusal names that
     application and the setting to change.
 
@@ -338,10 +340,12 @@ class MicrophoneSource(BuiltInNode[MicrophoneSourceConfig]):
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID; naming
     one that is not attached is refused with the UIDs that are. Without a `device_id`
     the stream follows the system default input as it changes, keeping the format it
-    opened with. The first run asks for microphone access without waiting: the graph
-    starts, and blocks begin once the user allows it. macOS asks on behalf of the
-    application that launched the process — the terminal, not Python — so a refusal, or
-    a prompt left unanswered, names that application and the setting to change.
+    opened with. A stream someone loads or starts asks for microphone access without
+    waiting: the graph starts, and blocks begin once the user allows it. A stream the
+    runtime re-loads on its own as it starts never asks, and is refused at `setup()`
+    until microphone access has been answered. macOS asks on behalf of the application
+    that launched the process — the terminal, not Python — so a refusal, or a prompt
+    left unanswered, names that application and the setting to change.
 
     Outputs:
         `audio`: Timestamped blocks of interleaved capture samples.

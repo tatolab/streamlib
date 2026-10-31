@@ -39,6 +39,9 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     /// The stream itself, held weakly so the context is never part of the
     /// cycle its stop breaks.
     pub(crate) this_stream: std::sync::Weak<crate::core::runtime::LoadedStreamInThisRuntime>,
+    /// Whether the stream's capture devices may ask the user for access
+    /// nobody has answered yet.
+    pub(crate) capture_device_access_prompting: super::CaptureDeviceAccessPrompting,
 }
 
 #[derive(Clone)]
@@ -210,6 +213,14 @@ impl RuntimeContext {
     /// Where the records the threads of the stream this context serves emit go.
     pub fn this_streams_log_route(&self) -> &Arc<ProjectLogRouteEntry> {
         &self.loaded_stream.log_route
+    }
+
+    /// Whether the capture devices of the stream this context serves may ask
+    /// the user for access nobody has answered yet.
+    pub fn this_streams_capture_device_access_prompting(
+        &self,
+    ) -> super::CaptureDeviceAccessPrompting {
+        self.loaded_stream.capture_device_access_prompting
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
@@ -493,6 +504,14 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// shared/global context.
     pub fn processor_display_name(&self) -> Option<String> {
         self.host_base().processor_display_name().map(str::to_owned)
+    }
+
+    /// Whether a capture device this processor opens may ask the user for
+    /// access nobody has answered yet: a stream someone loaded or started may,
+    /// one the runtime re-loaded by itself may not.
+    pub fn capture_device_access_prompting(&self) -> super::CaptureDeviceAccessPrompting {
+        self.host_base()
+            .this_streams_capture_device_access_prompting()
     }
 
     /// Whether this processor is currently paused.

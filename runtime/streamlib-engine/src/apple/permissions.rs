@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::apple::responsible_gui_application::responsible_gui_application_name;
+use crate::core::context::CaptureDeviceAccessPrompting;
 use crate::core::{Error, Result};
 
 /// How long a request may sit unanswered before the user is told where the
@@ -201,13 +202,16 @@ pub(crate) enum CaptureDeviceAuthorizationAtOpen {
 /// once and `on_the_users_answer` runs whenever the answer arrives. A request
 /// still unanswered after [`UNANSWERED_REQUEST_REMINDER_DELAY`] is warned
 /// about once. A refusal already on record is refused here, naming the
-/// application macOS holds responsible and the setting to change.
+/// application macOS holds responsible and the setting to change; so is an
+/// access never asked for when `prompting` may not ask the user.
 pub(crate) fn authorize_the_capture_device_without_waiting_for_the_user(
     authority: &dyn CaptureDeviceAuthorizationAuthority,
+    prompting: CaptureDeviceAccessPrompting,
     on_the_users_answer: CaptureDeviceAuthorizationAnswer,
 ) -> Result<CaptureDeviceAuthorizationAtOpen> {
     authorize_the_capture_device_reminding_the_user_through(
         authority,
+        prompting,
         &GrandCentralDispatchOneShotReminderScheduler,
         on_the_users_answer,
     )
@@ -215,6 +219,7 @@ pub(crate) fn authorize_the_capture_device_without_waiting_for_the_user(
 
 fn authorize_the_capture_device_reminding_the_user_through(
     authority: &dyn CaptureDeviceAuthorizationAuthority,
+    prompting: CaptureDeviceAccessPrompting,
     reminder_scheduler: &dyn OneShotReminderScheduler,
     on_the_users_answer: CaptureDeviceAuthorizationAnswer,
 ) -> Result<CaptureDeviceAuthorizationAtOpen> {
@@ -222,6 +227,14 @@ fn authorize_the_capture_device_reminding_the_user_through(
     match authority.authorization_status() {
         CaptureDeviceAuthorizationStatus::Authorized => {
             Ok(CaptureDeviceAuthorizationAtOpen::Granted)
+        }
+        CaptureDeviceAuthorizationStatus::NotDetermined
+            if prompting == CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor =>
+        {
+            Err(Error::Configuration(capture_device_refusal_for_the_user(
+                device,
+                CaptureDeviceRefusal::NeverAskedForAndNobodyActed,
+            )))
         }
         CaptureDeviceAuthorizationStatus::NotDetermined => {
             let responsible_application = responsible_application_for_the_user();
@@ -272,6 +285,9 @@ pub(crate) enum CaptureDeviceRefusal {
     DeniedByTheUser,
     /// A device-management profile or Screen Time forbids it.
     RestrictedOnThisMac,
+    /// Nobody has asked yet, and nobody loaded or started the stream, so the
+    /// user was not asked out of nowhere.
+    NeverAskedForAndNobodyActed,
 }
 
 /// Why the device cannot be used, naming the application macOS holds
@@ -303,6 +319,12 @@ fn capture_device_refusal_naming(
              run again. If {responsible_application} is not in that list it has never asked, and \
              the list cannot add it by hand: run from a different terminal instead."
         ),
+        CaptureDeviceRefusal::NeverAskedForAndNobodyActed => format!(
+            "{setting} access has not been asked for yet. The runtime re-loaded this stream on \
+             its own as it started, and asks for the {lowercase_name} only when you load or \
+             start a stream yourself: restart this stream, or reload its project, and macOS \
+             will ask whether {responsible_application} may use the {lowercase_name}."
+        ),
     }
 }
 
@@ -319,6 +341,7 @@ fn responsible_application_for_the_user() -> String {
 fn request_capture_device_permission(device: PrivacyGatedCaptureDevice) -> Result<bool> {
     match authorize_the_capture_device_without_waiting_for_the_user(
         &AvFoundationCaptureDeviceAuthorizationAuthority(device),
+        CaptureDeviceAccessPrompting::MayAskTheUser,
         Box::new(move |granted| {
             if !granted {
                 tracing::error!(
@@ -494,6 +517,7 @@ mod tests {
         let answers_received = Arc::clone(answers_received);
         authorize_the_capture_device_reminding_the_user_through(
             user,
+            CaptureDeviceAccessPrompting::MayAskTheUser,
             reminders,
             Box::new(move |granted| answers_received.lock().expect("unpoisoned").push(granted)),
         )
@@ -576,6 +600,7 @@ mod tests {
             let reminders = RemindersTheTestBringsDue::default();
             let _ = authorize_the_capture_device_reminding_the_user_through(
                 &user,
+                CaptureDeviceAccessPrompting::MayAskTheUser,
                 &reminders,
                 Box::new(|_| {}),
             );
@@ -621,6 +646,7 @@ mod tests {
         std::thread::spawn(move || {
             let at_open = authorize_the_capture_device_without_waiting_for_the_user(
                 asking_authority.as_ref(),
+                CaptureDeviceAccessPrompting::MayAskTheUser,
                 Box::new(|_granted| {}),
             );
             let _ = returned.send(at_open.map_err(|e| e.to_string()));
@@ -640,8 +666,12 @@ mod tests {
         let authority =
             AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Authorized);
         assert_eq!(
-            authorize_the_capture_device_without_waiting_for_the_user(&authority, Box::new(|_| {}))
-                .map_err(|e| e.to_string()),
+            authorize_the_capture_device_without_waiting_for_the_user(
+                &authority,
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                Box::new(|_| {})
+            )
+            .map_err(|e| e.to_string()),
             Ok(CaptureDeviceAuthorizationAtOpen::Granted)
         );
         assert_eq!(authority.requests.load(Ordering::SeqCst), 0);
@@ -652,8 +682,12 @@ mod tests {
         let authority =
             AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Denied);
         assert!(
-            authorize_the_capture_device_without_waiting_for_the_user(&authority, Box::new(|_| {}))
-                .is_err()
+            authorize_the_capture_device_without_waiting_for_the_user(
+                &authority,
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                Box::new(|_| {})
+            )
+            .is_err()
         );
         assert_eq!(authority.requests.load(Ordering::SeqCst), 0);
     }
@@ -701,6 +735,82 @@ mod tests {
             refusal.contains("System Settings › Privacy & Security › Microphone"),
             "{refusal}"
         );
+        assert!(!refusal.contains("Camera"), "{refusal}");
+        assert!(!refusal.to_lowercase().contains("python"), "{refusal}");
+    }
+
+    /// Mental revert: drop the guard on the never-asked arm, and a runtime
+    /// re-loading its streams at login puts the prompt up with nobody having
+    /// done anything.
+    #[test]
+    fn an_access_never_asked_for_is_refused_without_asking_when_nobody_acted() {
+        for device in [
+            PrivacyGatedCaptureDevice::Camera,
+            PrivacyGatedCaptureDevice::Microphone,
+        ] {
+            let user = AUserWhoAnswersOnlyWhenTold::of_the(
+                device,
+                CaptureDeviceAuthorizationStatus::NotDetermined,
+            );
+            let reminders = RemindersTheTestBringsDue::default();
+            let refusal = authorize_the_capture_device_reminding_the_user_through(
+                &user,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+                &reminders,
+                Box::new(|_| panic!("nobody was asked, so no answer arrives")),
+            )
+            .expect_err("an access never asked for is refused when nobody acted");
+            assert_eq!(user.requests.load(Ordering::SeqCst), 0, "{device:?}");
+            assert!(reminders.delays_scheduled().is_empty(), "{device:?}");
+            assert!(
+                refusal.to_string().contains("restart this stream"),
+                "{device:?}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_access_already_decided_is_honoured_when_nobody_acted() {
+        let authorized =
+            AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Authorized);
+        assert_eq!(
+            authorize_the_capture_device_without_waiting_for_the_user(
+                &authorized,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+                Box::new(|_| {})
+            )
+            .map_err(|e| e.to_string()),
+            Ok(CaptureDeviceAuthorizationAtOpen::Granted)
+        );
+        let denied =
+            AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Denied);
+        let refusal = authorize_the_capture_device_without_waiting_for_the_user(
+            &denied,
+            CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+            Box::new(|_| {}),
+        )
+        .expect_err("a denial on record stays a denial");
+        assert!(
+            refusal
+                .to_string()
+                .contains("System Settings › Privacy & Security › Camera"),
+            "{refusal}"
+        );
+        assert_eq!(authorized.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(denied.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_refusal_for_an_access_never_asked_for_names_the_device_the_application_and_the_way_to_be_asked()
+     {
+        let refusal = capture_device_refusal_naming(
+            PrivacyGatedCaptureDevice::Microphone,
+            CaptureDeviceRefusal::NeverAskedForAndNobodyActed,
+            "Tatolab Runtime",
+        );
+        assert!(refusal.contains("Microphone access"), "{refusal}");
+        assert!(refusal.contains("Tatolab Runtime"), "{refusal}");
+        assert!(refusal.contains("restart this stream"), "{refusal}");
         assert!(!refusal.contains("Camera"), "{refusal}");
         assert!(!refusal.to_lowercase().contains("python"), "{refusal}");
     }

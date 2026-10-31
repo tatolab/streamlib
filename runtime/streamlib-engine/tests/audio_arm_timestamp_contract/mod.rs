@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use streamlib_engine::core::context::{
     AudioCaptureStream, AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
+    AudioStreamFormat, CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice,
+    SharedAudioClock, SoftwareAudioClock,
 };
 use streamlib_engine::core::media_clock::MediaClock;
 
@@ -63,6 +64,7 @@ fn open_capture_stream_on(
         .open_capture_stream(&AudioDeviceStreamRequest {
             device_id,
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("a device that answered the probe opens a capture stream")
 }

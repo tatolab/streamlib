@@ -369,7 +369,9 @@ fn ask_for_one_block_and_discard_it(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback};
+    use crate::core::context::{
+        AudioClock, AudioClockConfig, AudioTickCallback, CaptureDeviceAccessPrompting,
+    };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
@@ -470,6 +472,7 @@ mod tests {
             .open_capture_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(clock) as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
             .expect("the null backend opens its default device on any machine")
     }
@@ -484,6 +487,7 @@ mod tests {
             SilentNullAudioDeviceBackend.open_capture_stream(&AudioDeviceStreamRequest {
                 device_id: Some("alsa_input.pci-0000_00_1f.3".to_string()),
                 deviceless_pacing_clock: clock as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
         else {
             panic!("a named device cannot exist on a backend with no devices");
@@ -505,6 +509,7 @@ mod tests {
                 .open_capture_stream(&AudioDeviceStreamRequest {
                     device_id: None,
                     deviceless_pacing_clock: clock as SharedAudioClock,
+                    capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
                 })
                 .is_err(),
             "no block duration derives from a rate of zero"
@@ -678,6 +683,7 @@ mod tests {
             .open_playback_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(clock) as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
             .expect("the null backend opens its default device on any machine")
     }
@@ -704,6 +710,7 @@ mod tests {
             SilentNullAudioDeviceBackend.open_playback_stream(&AudioDeviceStreamRequest {
                 device_id: Some("alsa_output.pci-0000_00_1f.3".to_string()),
                 deviceless_pacing_clock: clock as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
         else {
             panic!("a named device cannot exist on a backend with no devices");

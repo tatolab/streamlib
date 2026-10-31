@@ -17,7 +17,8 @@
 use std::sync::Arc;
 
 use streamlib_engine::core::context::{
-    AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, SoftwareAudioClock,
+    AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
+    SoftwareAudioClock,
 };
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
@@ -50,6 +51,7 @@ fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
             deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
                 48_000, 512,
             ))),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .ok()?;
     Some(backend)

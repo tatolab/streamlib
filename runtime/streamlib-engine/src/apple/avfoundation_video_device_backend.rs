@@ -426,6 +426,7 @@ impl AvFoundationVideoCaptureStream {
         let answer_reaches = Arc::downgrade(&capture_session_control);
         match authorize_the_capture_device_without_waiting_for_the_user(
             camera_authorization_authority,
+            request.capture_device_access_prompting,
             Box::new(move |granted| the_users_camera_answer_arrived(&answer_reaches, granted)),
         )? {
             CaptureDeviceAuthorizationAtOpen::Granted => {

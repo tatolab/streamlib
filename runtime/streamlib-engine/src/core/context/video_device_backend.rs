@@ -12,12 +12,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use super::GpuContextLimitedAccess;
 use super::device_backend_probe_chain::{
     DeviceBackendArm, first_device_backend_arm_that_opens_among,
 };
 use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::refusing_null_video_device_backend::RefusingNullVideoDeviceBackend;
+use super::{CaptureDeviceAccessPrompting, GpuContextLimitedAccess};
 use crate::core::Result;
 use crate::core::color::H273ColorVui;
 use crate::core::rhi::PublishedPixelBufferFrameId;
@@ -92,6 +92,9 @@ pub struct VideoDeviceStreamRequest {
     /// The node the stream captures for: its frames are published from that
     /// node's own output pool, named by this id when the pool refuses.
     pub processor_id_of_the_capturing_node: String,
+    /// Whether opening the device may ask the user for access nobody has
+    /// answered yet.
+    pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
 }
 
 /// A capture stream a backend opened.

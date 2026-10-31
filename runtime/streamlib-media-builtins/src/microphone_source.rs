@@ -92,8 +92,10 @@ pub struct MicrophoneSourceConfig {
                   On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID; \
                   naming one that is not attached is refused with the UIDs that are. Without a \
                   `device_id` the stream follows the system default input as it changes, keeping \
-                  the format it opened with. The first run asks for microphone access without \
-                  waiting: the graph starts, and blocks begin once the user allows it. macOS \
+                  the format it opened with. A stream someone loads or starts asks for microphone \
+                  access without waiting: the graph starts, and blocks begin once the user \
+                  allows it. A stream the runtime re-loads on its own as it starts never asks, \
+                  and is refused at `setup()` until microphone access has been answered. macOS \
                   asks on behalf of the application that launched the process — the terminal, \
                   not Python — so a refusal, or a prompt left unanswered, names that application \
                   and the setting to change.",
@@ -126,6 +128,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
         let capture_stream = backend.open_capture_stream(&AudioDeviceStreamRequest {
             device_id: self.config.device_id.clone(),
             deviceless_pacing_clock: Arc::clone(ctx.audio_clock()),
+            capture_device_access_prompting: ctx.capture_device_access_prompting(),
         })?;
         let stream_format = capture_stream.stream_format();
         tracing::info!(
@@ -425,8 +428,8 @@ mod tests {
     use std::time::Instant;
     use streamlib::sdk::context::{
         AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
-        DeviceStreamFailureReason, DeviceStreamFailureRecorder, SharedAudioClock,
-        SilentNullAudioDeviceBackend,
+        CaptureDeviceAccessPrompting, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
+        SharedAudioClock, SilentNullAudioDeviceBackend,
     };
 
     use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLogLineCounts};
@@ -517,6 +520,7 @@ mod tests {
             .open_capture_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(&clock) as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
             .expect("the null backend opens its default device on any machine");
 
