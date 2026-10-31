@@ -69,8 +69,12 @@ fn main() {
     };
     let guard = init_for_tests(config).expect("install logging pathway");
     // The burst lands in a stream's log, as a processor's records do.
-    let route =
-        ProjectLogRouteEntry::for_a_stream_of_the_project_in(&jsonl_path, "RstraceEmit", "main");
+    let route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+        &jsonl_path,
+        "RstraceEmit",
+        "main",
+        None,
+    );
     let entered = route.enter_on_this_thread();
 
     // Unbuffered sentinels straddle the 1000-event burst. Between these

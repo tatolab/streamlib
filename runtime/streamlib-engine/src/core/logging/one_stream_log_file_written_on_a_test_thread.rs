@@ -41,6 +41,7 @@ impl OneStreamLogFileWrittenOnThisTestThread {
             project_directory,
             runtime_id,
             STREAM_NAME_OF_A_TEST_STREAM_LOG,
+            None,
         );
         let entered = route.enter_on_this_thread();
         #[cfg(unix)]

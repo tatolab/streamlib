@@ -956,18 +956,21 @@ pub(super) enum StreamInterpreterExitAwaited {
 
 /// Wait up to `bound` for `child` to exit, leaving it unreaped, cut short
 /// whenever `is_its_streams_shutdown_requested` or `is_interrupted_by_the_host`
-/// reports true.
+/// reports true; a bound past what an [`Instant`] holds never elapses.
 pub(super) fn wait_for_a_stream_interpreter_to_exit(
     child: &Child,
     bound: Duration,
     is_its_streams_shutdown_requested: &dyn Fn() -> bool,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> StreamInterpreterExitAwaited {
-    let deadline = Instant::now() + bound;
+    let deadline = Instant::now().checked_add(bound);
     loop {
-        let observation_slice = deadline
-            .saturating_duration_since(Instant::now())
-            .min(STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL);
+        let observation_slice =
+            deadline.map_or(STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL)
+            });
         if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
             return StreamInterpreterExitAwaited::Exited;
         }
@@ -977,7 +980,7 @@ pub(super) fn wait_for_a_stream_interpreter_to_exit(
         if is_interrupted_by_the_host() {
             return StreamInterpreterExitAwaited::InterruptedByTheHost;
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return StreamInterpreterExitAwaited::BoundElapsed;
         }
     }

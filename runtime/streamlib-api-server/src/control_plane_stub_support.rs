@@ -291,6 +291,31 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "run_stream",
                 ))
             }
+            fn run_project(
+                &self,
+                _request: ::streamlib::sdk::runtime::RunProjectRequest,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "run_project",
+                ))
+            }
+            fn describe_stream_action(
+                &self,
+                _action_id: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamAction> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "describe_stream_action",
+                ))
+            }
+            fn list_project_streams(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectStreamsListing>
+            {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "list_project_streams",
+                ))
+            }
             fn stop_stream(
                 &self,
                 _stream_id: &str,
@@ -332,6 +357,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,
+                    stream_action_under_way: None,
                 }]
             }
             fn expose_port(

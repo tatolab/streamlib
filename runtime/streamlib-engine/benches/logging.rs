@@ -56,7 +56,7 @@ fn install_pathway_writing_one_stream_log(
 ) -> BenchPathwayWritingOneStreamLog {
     let guard = init_for_tests(config).expect("install logging pathway");
     let route =
-        ProjectLogRouteEntry::for_a_stream_of_the_project_in(tmp.path(), runtime_id, "bench");
+        ProjectLogRouteEntry::for_a_stream_of_the_project_in(tmp.path(), runtime_id, "bench", None);
     (route.enter_on_this_thread(), route, guard)
 }
 

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::path::Path;
 use std::sync::Arc;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
@@ -8,8 +9,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 use super::operations::RuntimeOperations;
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
-    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRenameOutcome,
-    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    ProjectStreamsListing, RunProjectRequest, RunStreamRequest, Runner, StreamAction,
+    StreamActionQueued, StreamListing, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -19,8 +21,9 @@ use crate::core::graph::OutputPortExposureLevel;
 /// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
-/// Every stream action blocks — a load runs a compile and describes — so the
-/// local API calls each from a blocking task.
+/// `run_project` answers at once and its load runs on the project's stream
+/// action queue; every other stream action blocks — a load runs a compile and
+/// describes — so the local API calls each from a blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
@@ -64,6 +67,15 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::run_stream`].
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
+
+    /// [`Runner::run_project`].
+    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued>;
+
+    /// [`Runner::describe_stream_action`].
+    fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction>;
+
+    /// [`Runner::list_project_streams`].
+    fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing>;
 
     /// [`Runner::stop_stream`].
     fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome>;
@@ -138,6 +150,18 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
         Runner::run_stream(self, request)
+    }
+
+    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
+        Runner::run_project(self, request)
+    }
+
+    fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {
+        Runner::describe_stream_action(self, action_id)
+    }
+
+    fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing> {
+        Runner::list_project_streams(self, project_directory)
     }
 
     fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome> {
