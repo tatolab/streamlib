@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.66.0](https://github.com/tatolab/streamlib/compare/v0.65.1...v0.66.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** remove run_stream, the load timeouts and the venv sync bound ([#3009](https://github.com/tatolab/streamlib/issues/3009))
+
+### Features
+
+* **runtime:** remove run_stream, the load timeouts and the venv sync bound ([#3009](https://github.com/tatolab/streamlib/issues/3009)) ([1f83143](https://github.com/tatolab/streamlib/commit/1f83143c1b46485bc87fb3aadbc04996deb77226))
+
 ## [0.65.1](https://github.com/tatolab/streamlib/compare/v0.65.0...v0.65.1) (2026-10-31)
 
 
