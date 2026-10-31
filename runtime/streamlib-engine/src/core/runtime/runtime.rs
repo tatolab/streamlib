@@ -3482,8 +3482,8 @@ mod tests {
         };
         let first = load_named("first");
         let second = load_named("second");
-        let first_log = first.jsonl_log_path().expect("first logs").to_path_buf();
-        let second_log = second.jsonl_log_path().expect("second logs").to_path_buf();
+        let project_log = first.jsonl_log_path().expect("first logs").to_path_buf();
+        assert_eq!(second.jsonl_log_path(), Some(project_log.as_path()));
         first
             .add_processor(ProcessorSpec::new(
                 TickCountingInTheFirstStream::processor_class_import_path(),
@@ -3556,31 +3556,32 @@ mod tests {
         runner.shut_down().expect("the engine shuts down");
         assert!(second.has_ended());
 
-        for (stream_log, stream_id, own_token, other_token) in [
+        let project_records = every_record_of_the_stream_log_at(&project_log);
+        for (stream_id, own_token, other_token) in [
             (
-                &first_log,
                 "first",
                 TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
                 TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
             ),
             (
-                &second_log,
                 "second",
                 TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
                 TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
             ),
         ] {
-            let records = every_record_of_the_stream_log_at(stream_log);
+            let records: Vec<_> = project_records
+                .iter()
+                .filter(|record| record.stream.as_deref() == Some(stream_id))
+                .collect();
             for record in &records {
-                assert_eq!(record.stream.as_deref(), Some(stream_id), "{record:?}");
                 assert_ne!(
                     record.message, other_token,
-                    "the log of `{stream_id}` holds the other stream's processor record"
+                    "the records of `{stream_id}` hold the other stream's processor record"
                 );
             }
             assert!(
                 records.iter().any(|record| record.message == own_token),
-                "the log of `{stream_id}` lacks its processor thread's record: {records:#?}"
+                "the records of `{stream_id}` lack its processor thread's record: {records:#?}"
             );
         }
     }
