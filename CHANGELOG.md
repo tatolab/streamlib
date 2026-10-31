@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.1](https://github.com/tatolab/streamlib/compare/v0.68.0...v0.68.1) (2026-10-31)
+
+
+### Features
+
+* **installer:** install a runtime unit by build, on Linux and macOS ([#3022](https://github.com/tatolab/streamlib/issues/3022)) ([7943cfd](https://github.com/tatolab/streamlib/commit/7943cfd7a6bf6b6efd17f6650916b974330a56d1))
+
 ## [0.68.0](https://github.com/tatolab/streamlib/compare/v0.67.0...v0.68.0) (2026-10-31)
 
 

@@ -15,7 +15,7 @@ name = "streamlib_media_builtins"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.0", default-features = false }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.1", default-features = false }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
@@ -51,7 +51,7 @@ audible-hardware-tests = ["hardware-tests", "streamlib/audible-hardware-tests"]
 [dev-dependencies]
 # The relay source's tests run its output into input mailboxes over a channel in
 # the test process's own iceoryx2 domain.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.0", default-features = false, features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.1", default-features = false, features = ["test-support"] }
 serde_json = { workspace = true }
 # Pins each golden graph's bytes, so a golden is added beside the others and never edited.
 sha2 = { workspace = true }
