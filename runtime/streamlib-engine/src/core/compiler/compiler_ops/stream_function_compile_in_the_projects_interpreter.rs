@@ -94,6 +94,11 @@ pub(crate) enum WhatTheProjectsCodeGaveTheCompile {
         /// Its traceback, the compile entry's own frames left out.
         import_failed_because: String,
     },
+    /// The entry imported and defines no `@stream`.
+    StreamEntryDefinesNoStream {
+        /// The missing `@stream`, with a sample of one.
+        no_stream_defined_because: String,
+    },
 }
 
 /// The document the compile entry prints on its standard output: the project
@@ -106,6 +111,7 @@ struct ProjectStreamCompileDocument {
     failed_because: Option<String>,
     not_defined_because: Option<String>,
     import_failed_because: Option<String>,
+    no_stream_defined_because: Option<String>,
 }
 
 impl ProjectStreamCompileDocument {
@@ -122,30 +128,36 @@ impl ProjectStreamCompileDocument {
             self.failed_because,
             self.not_defined_because,
             self.import_failed_because,
+            self.no_stream_defined_because,
         ) {
-            (Some(stream_function), Some(graph_json), None, None, None) => {
+            (Some(stream_function), Some(graph_json), None, None, None, None) => {
                 Some(WhatTheProjectsCodeGaveTheCompile::Compiled {
                     stream_location: stream_location(stream_function),
                     graph_json,
                 })
             }
-            (Some(stream_function), None, Some(failed_because), None, None) => {
+            (Some(stream_function), None, Some(failed_because), None, None, None) => {
                 Some(WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
                     stream_location: stream_location(stream_function),
                     failed_because,
                 })
             }
-            (Some(stream_function), None, None, Some(not_defined_because), None) => Some(
+            (Some(stream_function), None, None, Some(not_defined_because), None, None) => Some(
                 WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
                     stream_location: stream_location(stream_function),
                     not_defined_because,
                 },
             ),
-            (None, None, None, None, Some(import_failed_because)) => {
+            (None, None, None, None, Some(import_failed_because), None) => {
                 Some(WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
                     import_failed_because,
                 })
             }
+            (None, None, None, None, None, Some(no_stream_defined_because)) => Some(
+                WhatTheProjectsCodeGaveTheCompile::StreamEntryDefinesNoStream {
+                    no_stream_defined_because,
+                },
+            ),
             _ => None,
         }
     }
@@ -366,8 +378,8 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             )));
         }
         return Err(not_the_compile_document(
-            &"it holds no one of a graph, `failed_because`, `not_defined_because` or \
-              `import_failed_because`",
+            &"it holds no one of a graph, `failed_because`, `not_defined_because`, \
+              `import_failed_because` or `no_stream_defined_because`",
         ));
     };
     Ok(StreamFunctionCompileInTheProjectsInterpreterReport {
@@ -598,6 +610,27 @@ mod tests {
             WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
                 import_failed_because: "  File \"stream.py\", line 5\nSyntaxError: expected ':'"
                     .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn an_entry_that_defines_no_stream_is_answered_with_the_missing_stream() {
+        let project =
+            ProjectWithAStubVenvInterpreter::running(&print_the_document(serde_json::json!({
+                "project_directory": "/srv/rig",
+                "no_stream_defined_because": "`stream.py` defines no @stream function",
+            })));
+
+        let compiled = project
+            .compile(None)
+            .unwrap_or_else(|refusal| panic!("a stream.py with no @stream is answered: {refusal}"));
+
+        assert_eq!(
+            compiled.what_the_projects_code_gave,
+            WhatTheProjectsCodeGaveTheCompile::StreamEntryDefinesNoStream {
+                no_stream_defined_because: "`stream.py` defines no @stream function".to_string(),
             }
         );
     }

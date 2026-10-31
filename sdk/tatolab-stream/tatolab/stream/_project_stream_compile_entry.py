@@ -17,6 +17,8 @@ exit code is 0. The object is one of:
   raised, with its traceback;
 - `{"project_directory", "stream_function", "not_defined_because"}` — the target named
   a function the entry does not define as a `@stream`;
+- `{"project_directory", "no_stream_defined_because"}` — the entry imported and defines no
+  `@stream`, with a sample of one;
 - `{"project_directory", "import_failed_because"}` — the entry raised before any stream
   function could be chosen, with its traceback.
 
@@ -51,6 +53,7 @@ from ._cross_floor_check import (
     render_cross_floor_warning_block,
 )
 from ._project_stream_entry_execution import (
+    StreamEntryDefinesNoStreamError,
     execute_app_entry_file,
     import_stream_entry_module,
     named_stream_function_location,
@@ -77,6 +80,7 @@ COMPILED_STREAM_FUNCTION_DOCUMENT_KEY = "stream_function"
 STREAM_FUNCTION_FAILED_BECAUSE_DOCUMENT_KEY = "failed_because"
 STREAM_FUNCTION_NOT_DEFINED_BECAUSE_DOCUMENT_KEY = "not_defined_because"
 STREAM_ENTRY_IMPORT_FAILED_BECAUSE_DOCUMENT_KEY = "import_failed_because"
+STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY = "no_stream_defined_because"
 
 _PROJECT_STREAM_COMPILE_MODULE_FILE_NAMES = (
     "_project_stream_compile_entry.py",
@@ -264,6 +268,11 @@ def compile_the_requested_stream(
             entry_namespace,
             stream_functions_defined_in(entry_namespace, str(entry_namespace.get("__name__", ""))),
         )
+    except StreamEntryDefinesNoStreamError as no_stream_defined:
+        return {
+            COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+            STREAM_ENTRY_DEFINES_NO_STREAM_BECAUSE_DOCUMENT_KEY: str(no_stream_defined),
+        }
     except StreamFunctionNotDefinedRefusalError as not_defined:
         return {
             COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),

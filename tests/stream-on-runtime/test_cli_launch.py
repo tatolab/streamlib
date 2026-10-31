@@ -1018,3 +1018,42 @@ def test_a_stream_function_that_raises_is_recorded_failed_with_its_traceback_and
     assert (listed["stream"], listed["state"]) == (stream_id, "failed"), listed
     assert "ValueError: bad wiring" in listed["failed_because"], listed
     assert "[start] Starting the stream" not in tatolabd.stderr_text, tatolabd.recent_stderr()
+
+
+def test_a_stream_py_defining_no_stream_is_a_failed_project_until_a_run_defines_one(
+    make_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """A `stream.py` that imports and defines no `@stream` is no refusal: `run`
+    lists the project as `<folder>-<hash>` failed with the missing `@stream` and
+    a sample of one, and exits 1; a run once it defines one replaces it."""
+    app_directory = make_tatolab_project({"stream.py": "PIPELINE = 1\n"})
+    tatolabd = start_tatolabd()
+
+    stream_run = load_the_projects_stream(tatolabd, app_directory)
+
+    assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, stream_run.recent_stderr()
+    failed_stream = stream_run.failed_stream()
+    assert failed_stream is not None, stream_run.stdout_text + stream_run.stderr_text
+    failed_project_id, failed_because = failed_stream
+    assert "stream.py` defines no @stream function" in failed_because, failed_because
+    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in failed_because
+    [listed] = tatolabd.local_api_client().list_streams()
+    assert (listed["stream"], listed["state"]) == (failed_project_id, "failed"), listed
+    assert listed["location"]["stream_function"] == "", listed
+
+    (app_directory / "stream.py").write_text(
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        "    stream_builder.add(TestPatternSource)\n",
+        encoding="utf-8",
+    )
+    defined_run = load_the_projects_stream(tatolabd, app_directory)
+    defined_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+
+    [listed] = tatolabd.local_api_client().list_streams()
+    assert listed["stream"] == stream_id_of_the_project(app_directory), listed
+    assert listed["state"] == "running", listed
