@@ -12,11 +12,11 @@ One Python processor, one helper process, one GIL. There is no second placement.
   `docs/plan/ARCHITECTURE.md` §Processor model & scheduling; ADR:
   `docs/decisions/helper-process-placement-only.md`.
 
-## STOP-WORK shapes
+## Banned shapes
 
-Encountering any of these — in a diff, a design, a doc, a ticket, or your own next step —
-stops the work. Do not build it, do not measure it, do not diagnose with it, do not grade its
-quality. Say what it is and take it to the owner.
+Any of these — in a diff, a design, a doc, a ticket, or your own next step — is out of
+bounds. Don't build it, measure it, diagnose with it, or grade its quality. Say what it is,
+tell the owner, and carry on with the work that doesn't need it.
 
 - Running or registering a user processor class in the app's own interpreter.
 - A GIL-contention, GIL-hold, slow-callback, or stall-attribution watchdog; any per-callback
@@ -54,6 +54,6 @@ for these is **app-process**:
   `sys.modules`, and the processor reports a child pid — lands with #1714). Until the code that hosts in-process is
   deleted by #1714, the current tree is transitional debt, never evidence of intent — never
   read the tree as the model.
-- `review-pr` and `rust-craftsmanship-reviewer` return `blocker` on any STOP-WORK shape.
+- `review-pr` and `rust-craftsmanship-reviewer` return `blocker` on any banned shape.
   Vocabulary is not the invariant; a violation that uses none of these words is still a
   violation.

@@ -1,7 +1,6 @@
 ---
 name: snapshot-architecture
 description: Rebuild the code-derived architecture snapshot — Claude's current understanding of how the system actually works — as a living Claude Artifact with Mermaid diagrams, code references, and a drift table against the plan. Use when the owner wants the snapshot refreshed, suspects code and plan have drifted, or wants a shared picture to discuss and correct.
-disable-model-invocation: true
 ---
 
 # Snapshot architecture
@@ -9,7 +8,8 @@ disable-model-invocation: true
 Two truths, kept separate: **code is the authority on what IS; the plan is the authority
 on what we AGREED to build.** The snapshot is descriptive — derived from code, never from
 the plan — and its whole value is showing where the two disagree so the owner can pick
-which one moves. This skill never edits the plan, the docs, or the code.
+which one moves. So the snapshot itself leaves the plan, the docs and the code alone;
+the fixes it surfaces happen afterwards, where they belong.
 
 1. **Survey, read-only.** Fan out Explore/domain-expert subagents across `runtime/`,
    `sdk/`, `adapters/`, `xtask/` — what subsystems exist, how they connect,
@@ -26,7 +26,7 @@ which one moves. This skill never edits the plan, the docs, or the code.
 3. **Publish as ONE living artifact.** Stable title "StreamLib Architecture Snapshot
    (code view)", stable favicon. In a session that didn't create it, find it with the
    Artifact tool's `action: "list"` and pass its `url` to redeploy — never mint a second
-   snapshot URL.
+   snapshot URL, so the owner's link stays live.
 4. **Close the loop.** End by telling the owner: corrections go through
    `/reconcile-understanding`; drift resolutions go through `/align` (plan moves) or a
    bug ticket (code regressed). The snapshot is regenerated after either.

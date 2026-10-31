@@ -10,9 +10,10 @@ Phases in order. The feedback loop is the skill; everything else is mechanical.
 1. **Build a red-capable feedback loop first**: one command — already run at least once
    (paste the invocation and its output) — deterministic, fast, that shows the failure.
    Failing test > script > throwaway harness > bisection. Catching yourself reading code
-   to build a theory before this command exists is the exact failure this skill
-   prevents: **no red-capable command, no phase 2.** Genuinely can't build one → stop
-   and say what access or artifact you need.
+   to build a theory before this command exists is the trap this skill exists to avoid
+   — theories built without a loop tend to be wrong and hard to falsify. If you
+   genuinely can't build one, say what access or artifact you'd need, and carry on with
+   the best evidence available.
 2. **Reproduce the reporter's failure mode** (wrong bug = wrong fix), then minimize one
    element at a time until everything left is load-bearing.
 3. **3–5 ranked falsifiable hypotheses before testing any** — single-hypothesis
@@ -27,5 +28,5 @@ Phases in order. The feedback loop is the skill; everything else is mechanical.
 6. **Cleanup**: repro gone, every `[DEBUG-` gone, the confirmed hypothesis stated in the
    commit message.
 
-The fix itself lands through `/implement` against a bug ticket — bug fixes are tier 1 of
-the scale gate and need no change artifact.
+The fix usually lands like any ticket (`/implement`) — bug fixes are the first scale
+tier and need no change artifact.

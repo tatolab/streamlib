@@ -1,15 +1,15 @@
 ---
 name: explore-idea
 description: Free-form what-if exploration of a direction before it becomes architecture — a sandbox with zero commitments that ends with a concrete recommended starting shape (spike / prototype / MVP slice). Use when an idea is fuzzy, when unknowns are too many for a change proposal, when a milestone has become a mess of tickets with no clear architecture behind it, or when the owner says "what if", "explore", or "I want to think through".
-disable-model-invocation: true
 ---
 
 # Explore idea
 
 The pressure-release valve before the pipeline: ideas too fuzzy or too broad for
 `/propose-change` get explored here first, so unknowns are burned down before any work
-stream exists. Nothing in this skill commits anything: **no tickets, no plan edits, no
-code, no milestones.**
+stream exists. It is a sandbox with no commitments — no tickets, plan edits, or
+milestones come out of it, and code only as a throwaway spike when that is the fastest
+way to answer a question.
 
 This skill is proactive, not just inquisitive — the owner brings a fuzzy want; Claude's
 job is to give it a shape they can react to. Digging and questioning are means; the
@@ -41,9 +41,9 @@ deliverable is a formed picture plus the smallest sensible way to start.
    **deferred list** (what the full idea includes that this deliberately does not), and
    the iteration path from smallest to target. When the idea is iterable, bias one rung
    smaller than feels natural — iteration is cheap, unbuilding is not.
-5. **Drive to identical understanding.** Say the idea AND the recommended starting shape
-   back in your own words until the owner confirms it matches what is in their head.
-   Unconfirmed = unexplored.
+5. **Drive to identical understanding.** Say the idea and the recommended starting shape
+   back in your own words and check it matches what is in the owner's head — an
+   exploration whose conclusion the owner doesn't recognise hasn't done its job.
 6. **Exit explicitly**, one of three ways — the recommended starting shape travels with
    the exit:
    - **Graduate** → `/align` (it needs plan sections decided) or `/propose-change` (the

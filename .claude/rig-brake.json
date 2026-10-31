@@ -1,6 +1,0 @@
-{
-  "mode": "warn",
-  "rules": {
-    "e2e_fixture": "off"
-  }
-}

@@ -12,5 +12,6 @@ description: Answer a question from primary sources and file a memo. Use when a 
    with URLs, and what remains unknown.
 3. Report the answer's summary in chat.
 
-This skill never files tickets, never edits code, never edits the plan. If the findings
-demand a decision, say so and point at `/align` or `/propose-change`.
+The output is the memo — tickets, code and plan edits come afterwards, if the findings
+call for them. If they demand a decision, say so and point at `/align` or
+`/propose-change`.
