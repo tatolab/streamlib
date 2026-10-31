@@ -4,7 +4,7 @@
 //! `tatolab graph`: what the machine's runtime reports, printed. It mutates no graph.
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
+use crate::local_api_mcp_tool_client::ONE_SHOT_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
 use crate::verb_standard_output::write_verb_standard_output;
 
@@ -19,7 +19,7 @@ pub(crate) fn print_local_api_tool_result_of_the_running_runtime(
     let tool_result_text = call_one_tool_of_the_running_runtime(
         tool_name,
         tool_arguments,
-        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+        ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
     )?;
     write_verb_standard_output(&format!("{tool_result_text}\n"))
 }

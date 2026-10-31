@@ -17,7 +17,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
+use crate::local_api_mcp_tool_client::ONE_SHOT_VERB_TOOL_CALL_TIMEOUT;
 use crate::stream_actions_on_the_runtime::call_one_tool_reading_its_result;
 use crate::verb_output_table::rendered_padded_table;
 use crate::verb_standard_output::write_verb_standard_output;
@@ -47,7 +47,7 @@ impl RelayActionTool {
 
     fn tool_call_timeout(self) -> Duration {
         match self {
-            RelayActionTool::ListRelays => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            RelayActionTool::ListRelays => ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
             RelayActionTool::AddRelay
             | RelayActionTool::ConfigureRelay
             | RelayActionTool::RemoveRelay => RELAY_ACTION_TOOL_CALL_TIMEOUT,

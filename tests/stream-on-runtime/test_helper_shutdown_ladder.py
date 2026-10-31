@@ -335,12 +335,12 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
     tmp_path: Path,
 ):
-    """#2657: a stop during a load never leaves the load succeeding on a stopped runtime.
+    """A stop during a load never leaves the load succeeding on a stopped runtime.
 
     The describe of the stream's one node parks the load `tatolab run` asked
     for. A Ctrl-C to `tatolabd` then ends it cleanly — the load given up, not
-    reported as loaded; no engine started; the stream never listed by the
-    runtime; and no processor interpreter left behind, the describing one
+    reported as loaded; no engine started; the stream never listed past
+    `preparing`; and no processor interpreter left behind, the describing one
     included.
     """
     tatolabd = start_tatolabd_running_stream(
@@ -385,7 +385,7 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     )
     assert ENGINE_STARTED_LOG_LINE not in stderr_text, tatolabd.recent_stderr()
     assert not stream_listing_watcher.is_alive()
-    assert streams_ever_listed == [], (
+    assert all(listed["state"] == "preparing" for listed in streams_ever_listed), (
         f"tatolabd listed {streams_ever_listed} while the load was being given up"
     )
     assert helper_process_ids_started_in(stderr_text) == [], tatolabd.recent_stderr()

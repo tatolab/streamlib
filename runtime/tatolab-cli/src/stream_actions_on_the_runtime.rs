@@ -4,24 +4,20 @@
 //! The streams the machine's runtime holds, managed one call at a time: `run`, `stop`, `start`,
 //! `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
 //! lines or table each prints. A verb naming one stream resolves its stream argument to an id
-//! through `list_streams` first. `run` and `dev` share the load request.
+//! through `list_streams` first. `run` and `dev` share the project load request.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, RemoveProjectToolResult, RenameStreamToolResult, RunStreamToolResult,
-    RunStreamToolResultStream, RunStreamToolResultStreamState,
-    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
+    ListedStreamState, RemoveProjectToolResult, RenameStreamToolResult, RunProjectToolResult,
     StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
+use crate::local_api_mcp_tool_client::ONE_SHOT_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
 use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::verb_output_table::rendered_padded_table;
@@ -30,8 +26,8 @@ use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard
 /// A local API tool that runs, stops or reads the streams the runtime holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamActionTool {
-    /// Compiles a project's stream in its own interpreter and loads it.
-    RunStream,
+    /// Queues a load of every `@stream` of a project.
+    RunProject,
     /// Unloads a stream, recording it stopped.
     StopStream,
     /// Loads a stopped stream again, or retries a failed one.
@@ -50,26 +46,13 @@ impl StreamActionTool {
     /// The tool's name on the local API.
     pub(crate) fn tool_name(self) -> &'static str {
         match self {
-            StreamActionTool::RunStream => "run_stream",
+            StreamActionTool::RunProject => "run_project",
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
             StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
-        }
-    }
-
-    /// How long a caller waits for the tool's result: as long as the runtime may take to answer.
-    pub(crate) fn tool_call_timeout(self) -> Duration {
-        match self {
-            StreamActionTool::RunStream => STREAM_LOAD_TOOL_CALL_TIMEOUT,
-            StreamActionTool::StartStream
-            | StreamActionTool::StopStream
-            | StreamActionTool::RemoveProject
-            | StreamActionTool::RenameStream
-            | StreamActionTool::ExposePort => STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
-            StreamActionTool::ListStreams => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         }
     }
 }
@@ -97,94 +80,41 @@ const STREAM_ACTION_STILL_QUEUED_CELL: &str = "queued";
 /// or a record an earlier runtime wrote.
 const NO_LOCATION_CELL: &str = "-";
 
-/// The flags `run` and `dev` name the stream to load with.
-#[derive(Args, Debug, Clone, Default)]
-pub(crate) struct StreamLoadArguments {
-    /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: every
-    /// @stream in stream.py, each its own stream).
-    #[arg(value_name = "TARGET", conflicts_with = "requested_entry_file")]
-    pub(crate) requested_stream_target: Option<OsString>,
-    /// Entry file to load, overriding the stream.py convention; not with TARGET.
-    #[arg(short = 'f', long = "file", value_name = "FILE")]
-    pub(crate) requested_entry_file: Option<OsString>,
-    /// Project directory the runtime compiles the stream in, with its .venv (default: CWD, no
-    /// walk-up).
-    #[arg(long = "dir", value_name = "DIR")]
-    pub(crate) requested_project_directory: Option<OsString>,
-    /// Show the stream under this display name instead of its function's; a re-load without it
-    /// keeps the name the stream has.
-    #[arg(long = "name", value_name = "NAME")]
-    pub(crate) requested_display_name: Option<OsString>,
-}
-
-/// What `run` and `dev` ask the runtime to load: a project, the stream function in it, and the
-/// display name to show it under.
+/// What `run` and `dev` ask the runtime to load: the project, every `@stream` of its
+/// `stream.py`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StreamLoadRequest {
-    /// The absolute project directory the runtime compiles in.
+pub(crate) struct ProjectLoadRequest {
+    /// The absolute project directory the runtime loads, symlinks resolved.
     pub(crate) project_directory: String,
-    /// TARGET or FILE verbatim; `None` for every @stream in stream.py.
-    pub(crate) stream_function: Option<String>,
-    /// The display name asked for; `None` keeps the one the stream has.
-    pub(crate) display_name: Option<String>,
 }
 
-impl StreamLoadRequest {
-    /// The request `stream_load_arguments` names, its project resolved against
-    /// `caller_working_directory`: the canonical `--dir`, else the working directory itself.
-    pub(crate) fn from_arguments(
-        stream_load_arguments: &StreamLoadArguments,
+impl ProjectLoadRequest {
+    /// The request for the project `--dir` names against `caller_working_directory`, else the
+    /// working directory itself.
+    pub(crate) fn of_the_project_a_verb_names(
         caller_working_directory: &Path,
+        requested_project_directory: Option<&Path>,
     ) -> Result<Self, TatolabCommandFailure> {
-        let project_directory = match &stream_load_arguments.requested_project_directory {
-            None => caller_working_directory.to_path_buf(),
-            Some(requested_project_directory) => caller_working_directory
-                .join(requested_project_directory)
-                .canonicalize()
-                .ok()
-                .filter(|canonical_project_directory| canonical_project_directory.is_dir())
-                .ok_or_else(|| {
-                    TatolabCommandFailure::refused(format!(
-                        "--dir {} is not a directory",
-                        Path::new(requested_project_directory).display()
-                    ))
-                })?,
-        };
+        let project_directory = the_project_directory_a_verb_names(
+            caller_working_directory,
+            requested_project_directory,
+        )?;
         Ok(Self {
             project_directory: utf8_text_of(
                 "the project directory",
                 project_directory.as_os_str(),
             )?,
-            stream_function: stream_load_arguments
-                .requested_stream_target
-                .as_ref()
-                .or(stream_load_arguments.requested_entry_file.as_ref())
-                .filter(|stream_function| !stream_function.is_empty())
-                .map(|stream_function| utf8_text_of("the stream to load", stream_function))
-                .transpose()?,
-            display_name: stream_load_arguments
-                .requested_display_name
-                .as_ref()
-                .map(|display_name| utf8_text_of("--name", display_name))
-                .transpose()?,
         })
     }
 
-    /// `run_stream`'s arguments for this request.
-    pub(crate) fn run_stream_tool_arguments(&self) -> serde_json::Map<String, serde_json::Value> {
-        let mut run_stream_arguments = serde_json::Map::new();
-        run_stream_arguments.insert(
+    /// `run_project`'s arguments for this request.
+    pub(crate) fn run_project_tool_arguments(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut run_project_arguments = serde_json::Map::new();
+        run_project_arguments.insert(
             "project_directory".to_owned(),
             self.project_directory.clone().into(),
         );
-        if let Some(stream_function) = &self.stream_function {
-            run_stream_arguments
-                .insert("stream_function".to_owned(), stream_function.clone().into());
-        }
-        if let Some(display_name) = &self.display_name {
-            run_stream_arguments.insert("name".to_owned(), display_name.clone().into());
-        }
-        run_stream_arguments
+        run_project_arguments
     }
 }
 
@@ -200,16 +130,6 @@ fn utf8_text_of(
             Path::new(value).display()
         ))
     })
-}
-
-/// What `run` and `dev` write to their standard error before anything else a load says: each
-/// line its compile wrote to its own.
-pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolResult) -> String {
-    run_stream_result
-        .compile_warnings
-        .iter()
-        .map(|compile_warning| format!("{compile_warning}\n"))
-        .collect()
 }
 
 /// The answer `tool` gave, read as `ToolResult`, or the refusal naming what it was instead, for
@@ -238,100 +158,60 @@ pub(crate) fn call_one_tool_reading_its_result<ToolResult: DeserializeOwned>(
     tool_result_from(tool_name, &tool_result_text).map_err(TatolabCommandFailure::refused)
 }
 
-/// Call `tool` once on the machine's running runtime, bounded by its own timeout, and read its
-/// result as `ToolResult`.
+/// Call `tool` once on the machine's running runtime, bounded as every one-shot verb is, and read
+/// its result as `ToolResult`.
 pub(crate) fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     tool: StreamActionTool,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ToolResult, TatolabCommandFailure> {
-    call_one_tool_reading_its_result(tool.tool_name(), tool_arguments, tool.tool_call_timeout())
+    call_one_tool_reading_its_result(
+        tool.tool_name(),
+        tool_arguments,
+        ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
+    )
 }
 
-/// `tatolab run`: load the stream, print the lines naming each stream the load took in and how to
-/// follow it, and return 0 when every one runs, 1 when any is failed.
-pub(crate) fn run_stream(
-    stream_load_arguments: &StreamLoadArguments,
+/// `tatolab run [--dir DIR]`: queue a load of the project, print the action it queued and how to
+/// follow it, and return; the load's outcome is in the project's log and in `tatolab streams`.
+pub(crate) fn run_project(
     caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
-    let stream_load_request =
-        StreamLoadRequest::from_arguments(stream_load_arguments, caller_working_directory)?;
-    let run_stream_result: RunStreamToolResult = call_one_stream_action_tool(
-        StreamActionTool::RunStream,
-        stream_load_request.run_stream_tool_arguments(),
-    )?;
-    write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
-    let output_written = write_verb_standard_output(&rendered_run_stream_lines(
-        &run_stream_result,
+    let project_load_request = ProjectLoadRequest::of_the_project_a_verb_names(
         caller_working_directory,
-    ))?;
-    let any_stream_failed = run_stream_result
-        .streams
-        .iter()
-        .any(|stream| stream.state == RunStreamToolResultStreamState::Failed);
-    Ok(if any_stream_failed {
-        RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED
-    } else {
-        output_written
-    })
+        requested_project_directory,
+    )?;
+    let run_project_result: RunProjectToolResult = call_one_stream_action_tool(
+        StreamActionTool::RunProject,
+        project_load_request.run_project_tool_arguments(),
+    )?;
+    write_verb_standard_output(&rendered_run_project_lines(
+        &run_project_result,
+        caller_working_directory,
+    ))
 }
 
-/// What `run` exits with when a stream its load took in is failed, as it does when the load is
-/// refused.
-const RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED: u8 = 1;
-
-/// Each stream `run_stream` took in, then how to follow each one running from
-/// `caller_working_directory`: its project's log, named with `--dir` when the caller is elsewhere,
-/// narrowed to the stream with `--stream` when the run took in several.
-fn rendered_run_stream_lines(
-    run_stream_result: &RunStreamToolResult,
+/// `<action> queued: load of <project>`, then how to follow it from `caller_working_directory`:
+/// the project's log, named with `--dir` when the caller is elsewhere.
+fn rendered_run_project_lines(
+    run_project_result: &RunProjectToolResult,
     caller_working_directory: &Path,
 ) -> String {
     let resolved_caller_working_directory = std::fs::canonicalize(caller_working_directory)
         .unwrap_or_else(|_| caller_working_directory.to_path_buf());
-    let the_run_took_in_several_streams = run_stream_result.streams.len() > 1;
-    run_stream_result
-        .streams
-        .iter()
-        .map(|stream| {
-            let project_directory = &stream.location.project_directory;
-            let follow_it = match stream.state {
-                RunStreamToolResultStreamState::Running => {
-                    let mut follow_it = "\n  follow it: tatolab logs -f".to_owned();
-                    if *project_directory != resolved_caller_working_directory {
-                        follow_it.push_str(&format!(" --dir {}", project_directory.display()));
-                    }
-                    if the_run_took_in_several_streams {
-                        follow_it.push_str(&format!(" --stream {}", stream.stream));
-                    }
-                    follow_it
-                }
-                RunStreamToolResultStreamState::Failed => String::new(),
-            };
-            format!(
-                "{}{follow_it}\n",
-                the_stream_a_run_took_in_described(stream)
-            )
-        })
-        .collect()
-}
-
-/// `<id> running as "<display name>" (project <dir>, <module:function>)`, or
-/// `<id> failed: <reason>` for a stream the load recorded failed.
-pub(crate) fn the_stream_a_run_took_in_described(stream: &RunStreamToolResultStream) -> String {
-    match stream.state {
-        RunStreamToolResultStreamState::Running => format!(
-            "{} running as \"{}\" (project {}, {})",
-            stream.stream,
-            stream.display_name,
-            stream.location.project_directory.display(),
-            stream.location.stream_function
-        ),
-        RunStreamToolResultStreamState::Failed => format!(
-            "{} failed: {}",
-            stream.stream,
-            stream.failed_because.as_deref().unwrap_or_default()
-        ),
+    let project_directory = &run_project_result.project_directory;
+    let mut follow_it = "  follow it: tatolab logs -f".to_owned();
+    if *project_directory != resolved_caller_working_directory {
+        follow_it.push_str(&format!(" --dir {}", project_directory.display()));
     }
+    format!(
+        "{}{follow_it}\n",
+        rendered_queued_stream_action_line(
+            &run_project_result.action,
+            "load",
+            &project_directory.display().to_string(),
+        )
+    )
 }
 
 /// `{"stream": stream}`, the arguments of every tool that names one stream and nothing else.
@@ -414,7 +294,11 @@ pub(crate) fn remove_project(
 }
 
 /// `<action> queued: <verb> of <what>`, the line a verb whose stream action is queued prints.
-fn rendered_queued_stream_action_line(action: &str, verb: &str, what_it_acts_on: &str) -> String {
+pub(crate) fn rendered_queued_stream_action_line(
+    action: &str,
+    verb: &str,
+    what_it_acts_on: &str,
+) -> String {
     format!("{action} queued: {verb} of {what_it_acts_on}\n")
 }
 
@@ -627,232 +511,51 @@ mod tests {
     use std::path::PathBuf;
 
     use serde_json::json;
-    use streamlib_runtime_client_contract::local_api_wire_contract::{
-        LoadedStreamInstance, StreamLocationOnTheWire,
-    };
 
     use super::*;
 
-    fn load_arguments(
-        requested_stream_target: Option<&str>,
-        requested_entry_file: Option<&str>,
-        requested_display_name: Option<&str>,
-    ) -> StreamLoadArguments {
-        StreamLoadArguments {
-            requested_stream_target: requested_stream_target.map(OsString::from),
-            requested_entry_file: requested_entry_file.map(OsString::from),
-            requested_project_directory: None,
-            requested_display_name: requested_display_name.map(OsString::from),
-        }
-    }
-
     #[test]
-    fn the_project_is_the_working_directory_and_the_target_goes_verbatim() {
-        let stream_load_request = StreamLoadRequest::from_arguments(
-            &load_arguments(Some("stream.py:main"), None, Some("cam")),
-            Path::new("/srv/project"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            serde_json::Value::Object(stream_load_request.run_stream_tool_arguments()),
-            json!({
-                "project_directory": "/srv/project",
-                "stream_function": "stream.py:main",
-                "name": "cam",
-            })
-        );
-    }
-
-    #[test]
-    fn a_file_is_the_stream_function_and_nothing_named_sends_none() {
-        let from_a_file = StreamLoadRequest::from_arguments(
-            &load_arguments(None, Some("other.py"), None),
-            Path::new("/srv/project"),
-        )
-        .unwrap();
-        let from_nothing = StreamLoadRequest::from_arguments(
-            &load_arguments(None, None, None),
-            Path::new("/srv/project"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            serde_json::Value::Object(from_a_file.run_stream_tool_arguments()),
-            json!({"project_directory": "/srv/project", "stream_function": "other.py"})
-        );
-        assert_eq!(
-            serde_json::Value::Object(from_nothing.run_stream_tool_arguments()),
-            json!({"project_directory": "/srv/project"})
-        );
-    }
-
-    #[test]
-    fn an_empty_name_is_sent_for_the_runtime_to_refuse_never_dropped_as_no_name() {
-        let named_nothing = StreamLoadRequest::from_arguments(
-            &load_arguments(None, None, Some("")),
-            Path::new("/srv/project"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            serde_json::Value::Object(named_nothing.run_stream_tool_arguments()),
-            json!({"project_directory": "/srv/project", "name": ""})
-        );
-    }
-
-    #[test]
-    fn dir_is_canonicalised_and_refused_when_it_is_not_a_directory() {
+    fn run_asks_for_the_canonical_project_and_refuses_a_dir_that_is_not_one() {
         let scratch_directory = tempfile::tempdir().unwrap();
         let project_directory = scratch_directory.path().join("project");
         std::fs::create_dir(&project_directory).unwrap();
-        let mut stream_load_arguments = load_arguments(None, None, None);
-        stream_load_arguments.requested_project_directory = Some(OsString::from("./project/."));
 
+        let project_load_request = ProjectLoadRequest::of_the_project_a_verb_names(
+            scratch_directory.path(),
+            Some(Path::new("./project/.")),
+        )
+        .unwrap();
         assert_eq!(
-            StreamLoadRequest::from_arguments(&stream_load_arguments, scratch_directory.path())
-                .unwrap()
-                .project_directory,
-            project_directory.canonicalize().unwrap().to_str().unwrap()
+            serde_json::Value::Object(project_load_request.run_project_tool_arguments()),
+            json!({
+                "project_directory": project_directory.canonicalize().unwrap().to_str().unwrap()
+            })
         );
-
-        stream_load_arguments.requested_project_directory = Some(OsString::from("absent"));
         assert_eq!(
-            TatolabCommandFailure::refusal_message_of(StreamLoadRequest::from_arguments(
-                &stream_load_arguments,
-                scratch_directory.path()
-            )),
+            TatolabCommandFailure::refusal_message_of(
+                ProjectLoadRequest::of_the_project_a_verb_names(
+                    scratch_directory.path(),
+                    Some(Path::new("absent")),
+                )
+            ),
             "--dir absent is not a directory"
         );
     }
 
-    fn run_stream_result_warning(compile_warnings: &[&str]) -> RunStreamToolResult {
-        RunStreamToolResult {
+    #[test]
+    fn the_run_lines_name_the_queued_load_and_how_to_follow_it() {
+        let run_project_result = RunProjectToolResult {
+            action: "Rabc-1".to_owned(),
             project_directory: PathBuf::from("/srv/project"),
-            streams: vec![RunStreamToolResultStream {
-                stream: "project-camera-3f2a9c".to_owned(),
-                display_name: "camera".to_owned(),
-                state: RunStreamToolResultStreamState::Running,
-                stream_instance: Some(LoadedStreamInstance("4".to_owned())),
-                location: StreamLocationOnTheWire {
-                    project_directory: PathBuf::from("/srv/project"),
-                    stream_function: "stream:camera".to_owned(),
-                },
-                node_count: Some(3),
-                replaced_a_recorded_stream: false,
-                failed_because: None,
-            }],
-            compile_warnings: compile_warnings
-                .iter()
-                .map(|compile_warning| compile_warning.to_string())
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn each_stream_action_tool_waits_for_the_bound_of_its_kind() {
-        assert_eq!(
-            StreamActionTool::RunStream.tool_call_timeout(),
-            STREAM_LOAD_TOOL_CALL_TIMEOUT
-        );
-        for tool_that_loads_nothing in [
-            StreamActionTool::StartStream,
-            StreamActionTool::StopStream,
-            StreamActionTool::RemoveProject,
-            StreamActionTool::ExposePort,
-        ] {
-            assert_eq!(
-                tool_that_loads_nothing.tool_call_timeout(),
-                STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
-                "{tool_that_loads_nothing:?}"
-            );
-        }
-        assert_eq!(
-            StreamActionTool::ListStreams.tool_call_timeout(),
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT
-        );
-    }
-
-    #[test]
-    fn the_running_lines_name_the_stream_id_display_name_location_and_how_to_follow_it() {
-        assert_eq!(
-            rendered_run_stream_lines(&run_stream_result_warning(&[]), Path::new("/srv/project")),
-            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
-             follow it: tatolab logs -f\n"
-        );
-        assert_eq!(
-            rendered_run_stream_lines(&run_stream_result_warning(&[]), Path::new("/srv")),
-            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
-             follow it: tatolab logs -f --dir /srv/project\n"
-        );
-    }
-
-    #[test]
-    fn each_running_stream_of_a_run_taking_in_several_is_followed_by_its_stream_id() {
-        let mut run_stream_result = run_stream_result_warning(&[]);
-        let mut preview = run_stream_result.streams[0].clone();
-        preview.stream = "project-preview-7b1d04".to_owned();
-        preview.display_name = "preview".to_owned();
-        preview.location.stream_function = "stream:preview".to_owned();
-        let mut broken = preview.clone();
-        broken.stream = "project-broken-c90e11".to_owned();
-        broken.state = RunStreamToolResultStreamState::Failed;
-        broken.stream_instance = None;
-        broken.node_count = None;
-        broken.failed_because = Some("ValueError: broken".to_owned());
-        run_stream_result.streams.extend([preview, broken]);
+        };
 
         assert_eq!(
-            rendered_run_stream_lines(&run_stream_result, Path::new("/srv/project")),
-            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
-             follow it: tatolab logs -f --stream project-camera-3f2a9c\n\
-             project-preview-7b1d04 running as \"preview\" (project /srv/project, stream:preview)\n  \
-             follow it: tatolab logs -f --stream project-preview-7b1d04\n\
-             project-broken-c90e11 failed: ValueError: broken\n"
-        );
-    }
-
-    #[test]
-    fn a_failed_stream_is_a_line_naming_its_id_and_why() {
-        let mut run_stream_result = run_stream_result_warning(&[]);
-        let stream = &mut run_stream_result.streams[0];
-        stream.state = RunStreamToolResultStreamState::Failed;
-        stream.stream_instance = None;
-        stream.node_count = None;
-        stream.failed_because =
-            Some("Traceback (most recent call last):\nValueError: bad wiring".to_owned());
-
-        assert_eq!(
-            rendered_run_stream_lines(&run_stream_result, Path::new("/srv/project")),
-            "project-camera-3f2a9c failed: Traceback (most recent call last):\n\
-             ValueError: bad wiring\n"
-        );
-    }
-
-    #[test]
-    fn each_compile_warning_is_a_line_of_its_own_and_none_writes_nothing() {
-        assert_eq!(
-            rendered_compile_warning_lines(&run_stream_result_warning(&[
-                "tatolab: the cross-floor check found 1 thing binding this app to one floor.",
-                "  processors/effect.py:4: imports `cupy`",
-            ])),
-            "tatolab: the cross-floor check found 1 thing binding this app to one floor.\n  \
-             processors/effect.py:4: imports `cupy`\n"
+            rendered_run_project_lines(&run_project_result, Path::new("/srv/project")),
+            "Rabc-1 queued: load of /srv/project\n  follow it: tatolab logs -f\n"
         );
         assert_eq!(
-            rendered_compile_warning_lines(&run_stream_result_warning(&[])),
-            ""
-        );
-    }
-
-    #[test]
-    fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
-        assert!(
-            serde_json::from_str::<RunStreamToolResult>(
-                r#"{"project_directory": "/srv/project", "streams": []}"#
-            )
-            .is_err(),
-            "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"
+            rendered_run_project_lines(&run_project_result, Path::new("/srv")),
+            "Rabc-1 queued: load of /srv/project\n  follow it: tatolab logs -f --dir /srv/project\n"
         );
     }
 

@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_stream_graph_load_on_tatolabd.py` runs, each
-compiled in the suite project's own interpreter by `tatolab run <module>:<function>`."""
+"""The `@stream` functions `test_stream_graph_load_on_tatolabd.py` runs,
+each run as a one-stream project whose `stream.py` delegates to it."""
 
 from typing import Any
 
@@ -10,9 +10,10 @@ from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
 from tatolab.stream import H264Encoder, StreamBuilder, TestPatternSource, stream
 
-#: The deepest config the builder compiles: 126 containers from the graph's
-#: root, less the graph, its `nodes` list and the node enclosing the config.
-CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 123
+#: The deepest config the builder compiles: 126 containers from the compile
+#: document's root, less the document, its `streams` list, the stream's entry,
+#: its graph, the graph's `nodes` list and the node enclosing the config.
+CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 121
 
 
 def config_nesting_containers_deep(containers_counting_the_config: int) -> "dict[str, Any]":

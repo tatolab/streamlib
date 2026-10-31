@@ -19,8 +19,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, failed_run_stream_tool_result_text, run_stream_tool_result_text,
-    stop_stream_tool_result_text,
+    StubToolCallTransport, run_project_tool_result_text, stop_stream_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -102,47 +101,34 @@ fn printed_by_a_successful(
 }
 
 #[test]
-fn run_loads_the_stream_prints_its_id_and_how_to_follow_it_and_returns() {
+fn run_queues_a_load_of_the_project_prints_the_action_and_how_to_follow_it_and_returns() {
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "run_stream",
-        StubToolAnswer::tool_result(&run_stream_tool_result_text(
-            "cam",
+        "run_project",
+        StubToolAnswer::tool_result(&run_project_tool_result_text(
+            "Rabc-1",
             &canonical_project_directory,
-            3,
-            &[],
         )),
     );
 
     let printed = printed_by_a_successful(
         &isolated_machine_directories,
-        &[
-            "run",
-            "stream.py:main",
-            "--dir",
-            project_directory.path().to_str().unwrap(),
-            "--name",
-            "cam",
-        ],
+        &["run", "--dir", project_directory.path().to_str().unwrap()],
     );
 
     assert_eq!(
         printed,
         format!(
-            "cam running as \"main\" (project {0}, stream:main)\n  follow it: tatolab logs -f --dir {0}\n",
+            "Rabc-1 queued: load of {0}\n  follow it: tatolab logs -f --dir {0}\n",
             canonical_project_directory.display()
         )
     );
     assert_eq!(
         stub_local_api_server.recorded_tool_calls(),
         [RecordedToolCall {
-            tool_name: "run_stream".to_owned(),
-            tool_arguments: json!({
-                "project_directory": canonical_project_directory,
-                "stream_function": "stream.py:main",
-                "name": "cam",
-            }),
+            tool_name: "run_project".to_owned(),
+            tool_arguments: json!({"project_directory": canonical_project_directory}),
             tool_call_transport: StubToolCallTransport::StreamableHttpPost,
         }]
     );
@@ -154,117 +140,40 @@ fn run_loads_the_stream_prints_its_id_and_how_to_follow_it_and_returns() {
 }
 
 #[test]
-fn run_takes_no_detach_flag() {
+fn run_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("run_stream", StubToolAnswer::tool_failure("unreached"));
+        a_runtime_answering("run_project", StubToolAnswer::tool_failure("unreached"));
 
-    for detach_flag in ["-d", "--detach"] {
-        let refused = isolated_machine_directories.run_tatolab(&[
-            "run",
-            detach_flag,
-            "--dir",
-            project_directory.path().to_str().unwrap(),
-        ]);
+    for refused_arguments in [
+        &["stream.py:main"][..],
+        &["-f", "other.py"],
+        &["--file", "other.py"],
+        &["--name", "cam"],
+        &["-d"],
+        &["--detach"],
+    ] {
+        let mut tatolab_arguments = vec!["run"];
+        tatolab_arguments.extend_from_slice(refused_arguments);
+        tatolab_arguments.extend(["--dir", project_directory.path().to_str().unwrap()]);
+        let refused = isolated_machine_directories.run_tatolab(&tatolab_arguments);
 
-        assert_eq!(refused.status.code(), Some(2), "{detach_flag}");
+        assert_eq!(refused.status.code(), Some(2), "{refused_arguments:?}");
         assert!(
-            standard_error_text(&refused).contains(&format!("unexpected argument '{detach_flag}'")),
-            "{detach_flag}: {}",
+            standard_error_text(&refused).contains("unexpected argument"),
+            "{refused_arguments:?}: {}",
             standard_error_text(&refused)
         );
     }
     assert_eq!(stub_local_api_server.recorded_tool_calls(), []);
 }
 
-/// The compile's standard error reaches the user's terminal: each line on `tatolab`'s stderr,
-/// and the running lines alone on its stdout.
-#[test]
-fn run_prints_each_line_the_compile_wrote_on_its_standard_error() {
-    let project_directory = tempfile::tempdir().unwrap();
-    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
-    let compile_warnings = [
-        "tatolab: the cross-floor check found 1 thing binding this app to one floor (Linux or macOS). The app starts anyway.",
-        "  processors/effect.py:4: imports `cupy`",
-    ];
-    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "run_stream",
-        StubToolAnswer::tool_result(&run_stream_tool_result_text(
-            "cam",
-            &canonical_project_directory,
-            3,
-            &compile_warnings,
-        )),
-    );
-
-    let finished = isolated_machine_directories.run_tatolab(&[
-        "run",
-        "--dir",
-        project_directory.path().to_str().unwrap(),
-    ]);
-
-    assert_eq!(
-        finished.status.code(),
-        Some(0),
-        "{}",
-        standard_error_text(&finished)
-    );
-    assert_eq!(
-        standard_error_text(&finished),
-        format!("{}\n{}\n", compile_warnings[0], compile_warnings[1])
-    );
-    assert_eq!(
-        standard_output_text(&finished),
-        format!(
-            "cam running as \"main\" (project {0}, stream:main)\n  follow it: tatolab logs -f --dir {0}\n",
-            canonical_project_directory.display()
-        )
-    );
-}
-
-#[test]
-fn run_sends_a_file_as_the_stream_function() {
-    let project_directory = tempfile::tempdir().unwrap();
-    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
-    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "run_stream",
-        StubToolAnswer::tool_result(&run_stream_tool_result_text(
-            "other",
-            &canonical_project_directory,
-            1,
-            &[],
-        )),
-    );
-
-    printed_by_a_successful(
-        &isolated_machine_directories,
-        &[
-            "run",
-            "-f",
-            "other.py",
-            "--dir",
-            project_directory.path().to_str().unwrap(),
-        ],
-    );
-
-    assert_eq!(
-        stub_local_api_server.recorded_arguments_of("run_stream"),
-        [json!({
-            "project_directory": canonical_project_directory,
-            "stream_function": "other.py",
-        })]
-    );
-}
-
 #[test]
 fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "run_stream",
-        StubToolAnswer::tool_failure(
-            "a stream named `cam` is already loaded from /srv/other; load it under another name \
-             with --name",
-        ),
+        "run_project",
+        StubToolAnswer::tool_failure("`project_directory` must be absolute"),
     );
 
     let refused = isolated_machine_directories.run_tatolab(&[
@@ -276,46 +185,25 @@ fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         standard_error_text(&refused),
-        "error: run_stream failed: a stream named `cam` is already loaded from /srv/other; load \
-         it under another name with --name\n"
+        "error: run_project failed: `project_directory` must be absolute\n"
     );
     assert_eq!(standard_output_text(&refused), "");
 }
 
-/// A stream whose code fails is answered, not refused: `run` prints it failed with its traceback
-/// on its standard output, offers no `logs -f` for it, and exits 1.
 #[test]
-fn run_prints_a_failed_stream_with_its_traceback_and_exits_one() {
-    let project_directory = tempfile::tempdir().unwrap();
-    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
-    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "run_stream",
-        StubToolAnswer::tool_result(&failed_run_stream_tool_result_text(
-            "cam",
-            &canonical_project_directory,
-            "Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
-             ValueError: bad wiring",
-        )),
-    );
+fn run_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering("run_project", StubToolAnswer::tool_failure("unreached"));
 
-    let finished = isolated_machine_directories.run_tatolab(&[
-        "run",
-        "--dir",
-        project_directory.path().to_str().unwrap(),
-    ]);
+    let refused =
+        isolated_machine_directories.run_tatolab(&["run", "--dir", "/nonexistent-project"]);
 
+    assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
-        finished.status.code(),
-        Some(1),
-        "{}",
-        standard_error_text(&finished)
+        standard_error_text(&refused),
+        "error: --dir /nonexistent-project is not a directory\n"
     );
-    assert_eq!(standard_error_text(&finished), "");
-    assert_eq!(
-        standard_output_text(&finished),
-        "cam failed: Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
-         ValueError: bad wiring\n"
-    );
+    assert_eq!(stub_local_api_server.recorded_tool_calls(), []);
 }
 
 #[test]

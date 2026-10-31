@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab dev` and `tatolab logs -f` run as a user runs them, against a stub local API at an
-//! isolated machine's fixed socket: `dev` loads over a `/mcp/stdio` connection of its own,
-//! follows the stream's records and runs it again on a saved edit; Ctrl-C ends either verb and
-//! never stops the stream; a runtime that goes away ends `logs -f` naming its log, while `dev`
-//! waits for it and follows the re-loaded stream again without loading it.
+//! isolated machine's fixed socket: `dev` queues a load of the project over a `/mcp/stdio`
+//! connection of its own, follows the project's log and queues another load for each saved edit;
+//! Ctrl-C ends either verb and never stops a stream; a runtime that goes away ends `logs -f`
+//! naming its log, while `dev` waits for it and follows the log again without queuing a load.
 
 #![cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
 
@@ -22,16 +22,19 @@ use common::running_tatolab::{RunningTatolab, wait_until};
 use common::runtime_log_line_fixtures::a_log_record;
 use common::stub_local_api_server::{
     StubLocalApiScript, StubLocalApiServer, StubMcpStdioUpgradeAnswer, StubStreamLogRecords,
-    StubToolAnswer, StubToolCallTransport, failed_run_stream_tool_result_text,
-    run_stream_tool_result_text,
+    StubToolAnswer, StubToolCallTransport, run_project_tool_result_text,
 };
 
-/// The stream every load here is loaded as.
+/// The stream `logs -f` follows here.
 const STREAM_ID: &str = "cam";
 
 /// Far inside the 30 s `dev`'s connection waits on an unanswered request: a stop signal that
 /// waited on one would not exit within it.
 const STOP_SIGNAL_EXIT_BOUND: Duration = Duration::from_secs(5);
+
+/// What `dev` notes when a stop signal ends its following.
+const STOPPED_FOLLOWING_NOTE: &str = "tatolab dev: stopped following; the project's streams keep \
+    running — `tatolab stop` stops one, `tatolab rm` removes the project";
 
 /// A project directory of a test's own, holding a `stream.py`, and its canonical path.
 struct ScratchProject {
@@ -66,44 +69,16 @@ impl ScratchProject {
     }
 }
 
-fn loaded_answer(project_directory: &Path) -> StubToolAnswer {
-    loaded_answer_warning(project_directory, &[])
+/// `run_project`'s answer: the load `action` of the project in `project_directory` queued.
+fn queued_answer(action: &str, project_directory: &Path) -> StubToolAnswer {
+    StubToolAnswer::tool_result(&run_project_tool_result_text(action, project_directory))
 }
 
-/// The load's answer, its compile having written `compile_warnings` to its standard error.
-fn loaded_answer_warning(project_directory: &Path, compile_warnings: &[&str]) -> StubToolAnswer {
-    StubToolAnswer::tool_result(&run_stream_tool_result_text(
-        STREAM_ID,
-        project_directory,
-        3,
-        compile_warnings,
-    ))
-}
-
-/// `dev`'s note once the stream loaded, for `project_directory`.
-fn running_note(project_directory: &Path) -> String {
+/// `dev`'s note once the load `action` of `project_directory` is queued.
+fn queued_note(action: &str, project_directory: &Path) -> String {
     format!(
-        "tatolab dev: cam running as \"main\" (project {}, stream:main)",
+        "tatolab dev: {action} queued: load of {}",
         project_directory.display()
-    )
-}
-
-/// A cross-floor warning block, as a compile writes it to its standard error.
-const CROSS_FLOOR_WARNING_LINES: [&str; 3] = [
-    "tatolab: the cross-floor check found 1 thing binding this app to one floor (Linux or macOS). The app starts anyway.",
-    "  processors/effect.py:4: imports `cupy`",
-    "      portable: tatolab.stream's GPU context",
-];
-
-/// `list_streams`' answer: `cam`, loaded from `project_directory`, running with three nodes.
-fn the_stream_listed_running_from(project_directory: &Path) -> StubToolAnswer {
-    StubToolAnswer::tool_result(
-        &json!({"streams": [{
-            "stream": STREAM_ID, "display_name": "main", "state": "running",
-            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
-            "node_count": 3, "failed_because": null,
-        }]})
-        .to_string(),
     )
 }
 
@@ -120,25 +95,17 @@ fn a_runtime_logging_in(runtime_log_directory: &str) -> StubToolAnswer {
     )
 }
 
-/// A runtime that loads the stream as `run_stream_answers` say, in order, lists it running, and
-/// pages the project log one record per `logs` call, `stream_log_records` written by the first
-/// run.
+/// A runtime that answers each `run_project` as `run_project_answers` say, in order, and pages the
+/// project log one record per `logs` call, `project_log_records` written by the first load.
 fn a_runtime_holding(
     isolated_machine_directories: &IsolatedMachineDirectories,
-    project_directory: &Path,
-    run_stream_answers: Vec<StubToolAnswer>,
-    stream_log_records: Vec<serde_json::Value>,
+    run_project_answers: Vec<StubToolAnswer>,
+    project_log_records: Vec<serde_json::Value>,
 ) -> StubLocalApiServer {
     isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-        tool_answers_by_name: HashMap::from([
-            ("run_stream".to_owned(), run_stream_answers),
-            (
-                "list_streams".to_owned(),
-                vec![the_stream_listed_running_from(project_directory)],
-            ),
-        ]),
+        tool_answers_by_name: HashMap::from([("run_project".to_owned(), run_project_answers)]),
         stream_log_records: Some(StubStreamLogRecords {
-            records: stream_log_records,
+            records: project_log_records,
             page_size: 1,
             first_written_by_a_run: true,
         }),
@@ -217,29 +184,24 @@ fn spawn_dev(
 }
 
 #[test]
-fn dev_loads_the_stream_and_prints_each_record_as_the_runtime_mirrors_it() {
+fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let stub_local_api_server = a_runtime_holding(
         &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![loaded_answer(&scratch_project.canonical_path())],
+        vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
         vec![
             a_log_record(json!({"message": "first"})),
             a_log_record(json!({"message": "second"})),
         ],
     );
 
-    let mut running_tatolab =
-        RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
-            "dev",
-            "stream.py:main",
-            "--dir",
-            scratch_project.path_as_given(),
-            "--name",
-            "Desk camera",
-        ]));
+    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
 
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-1",
+        &scratch_project.canonical_path(),
+    ));
     assert_eq!(
         running_tatolab.next_standard_output_line("the first record"),
         dev_rendered_line(&scratch_project, "first")
@@ -248,18 +210,12 @@ fn dev_loads_the_stream_and_prints_each_record_as_the_runtime_mirrors_it() {
         running_tatolab.next_standard_output_line("the second record"),
         dev_rendered_line(&scratch_project, "second")
     );
-    running_tatolab
-        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
     wait_until("a fourth `logs` call", || {
         calls_to(&stub_local_api_server, "logs") >= 4
     });
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("run_stream"),
-        [json!({
-            "project_directory": scratch_project.canonical_path(),
-            "stream_function": "stream.py:main",
-            "name": "Desk camera",
-        })]
+        stub_local_api_server.recorded_arguments_of("run_project"),
+        [json!({"project_directory": scratch_project.canonical_path()})]
     );
     assert_eq!(
         stub_local_api_server
@@ -268,7 +224,7 @@ fn dev_loads_the_stream_and_prints_each_record_as_the_runtime_mirrors_it() {
         1,
         "dev rides one /mcp/stdio connection of its own"
     );
-    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_stream");
+    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_project");
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "logs");
     let logs_afters: Vec<serde_json::Value> = stub_local_api_server
         .recorded_arguments_of("logs")
@@ -279,62 +235,28 @@ fn dev_loads_the_stream_and_prints_each_record_as_the_runtime_mirrors_it() {
                 json!(scratch_project.canonical_path())
             );
             assert!(logs_arguments.get("stream").is_none(), "{logs_arguments}");
+            assert!(logs_arguments.get("action").is_none(), "{logs_arguments}");
             logs_arguments.get("after").cloned().unwrap_or_default()
         })
         .collect();
     assert_eq!(
         logs_afters[..4],
         [json!(null), json!("1:0"), json!("1:1"), json!("1:2")],
-        "the log is read to its end before the run, then each record after the last one read"
+        "the log is read to its end before the load, then each record after the last one read"
     );
     drop(running_tatolab);
 }
 
-/// The compile's standard error reaches the user's terminal: each line on `dev`'s own stderr,
-/// ahead of the note that the stream is running and of its records.
+/// Ctrl-C ends `dev`'s following and leaves the project's streams loaded: no `stop_stream`, no
+/// `remove_project`, exit 0.
 #[test]
-fn dev_prints_each_line_the_compile_wrote_before_the_running_note() {
-    let isolated_machine_directories = IsolatedMachineDirectories::new();
-    let scratch_project = ScratchProject::new();
-    let _stub_local_api_server = a_runtime_holding(
-        &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![loaded_answer_warning(
-            &scratch_project.canonical_path(),
-            &CROSS_FLOOR_WARNING_LINES,
-        )],
-        vec![a_log_record(json!({"message": "first"}))],
-    );
-    let running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.next_standard_output_line("the first record");
-
-    let (exit_status, standard_error_lines) =
-        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
-
-    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    let running_note_index = standard_error_lines
-        .iter()
-        .position(|standard_error_line| {
-            *standard_error_line == running_note(&scratch_project.canonical_path())
-        })
-        .unwrap_or_else(|| panic!("dev noted no load: {standard_error_lines:?}"));
-    assert_eq!(
-        standard_error_lines[..running_note_index],
-        CROSS_FLOOR_WARNING_LINES,
-        "the compile's lines, verbatim and in order, ahead of the running note"
-    );
-}
-
-/// Ctrl-C ends `dev`'s following and leaves the stream loaded: no `stop_stream`, exit 0.
-#[test]
-fn ctrl_c_on_dev_ends_the_following_and_never_stops_the_stream() {
+fn ctrl_c_on_dev_ends_the_following_and_never_stops_a_stream() {
     for stop_signal in [libc::SIGINT, libc::SIGTERM] {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let scratch_project = ScratchProject::new();
         let stub_local_api_server = a_runtime_holding(
             &isolated_machine_directories,
-            &scratch_project.canonical_path(),
-            vec![loaded_answer(&scratch_project.canonical_path())],
+            vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
             vec![a_log_record(json!({"message": "running"}))],
         );
         let running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
@@ -344,15 +266,11 @@ fn ctrl_c_on_dev_ends_the_following_and_never_stops_the_stream() {
             signal_and_wait_for_a_prompt_exit(running_tatolab, stop_signal);
 
         assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-        assert_eq!(calls_to(&stub_local_api_server, "stop_stream"), 0);
         assert_eq!(
             tool_calls_besides_logs(&stub_local_api_server),
-            ["run_stream"]
+            ["run_project"]
         );
-        assert_eq!(
-            standard_error_lines.last().unwrap(),
-            "tatolab dev: stopped following; cam keeps running — `tatolab stop cam` stops it"
-        );
+        assert_eq!(standard_error_lines.last().unwrap(), STOPPED_FOLLOWING_NOTE);
     }
 }
 
@@ -378,181 +296,85 @@ fn ctrl_c_before_the_runtime_opens_the_connection_exits_zero_at_once() {
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         standard_error_lines,
-        ["tatolab dev: stopped before the runtime opened a connection; nothing was loaded"]
+        ["tatolab dev: stopped before the runtime opened a connection; nothing was queued"]
     );
     assert!(stub_local_api_server.recorded_tool_calls().is_empty());
 }
 
+/// A refused load ends nothing: `dev` names the refusal, follows the project's log on, and each
+/// save queues another load over the same connection, never stopping a stream first.
 #[test]
-fn a_refused_first_load_waits_for_a_save_and_loads_again_on_it() {
+fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
-    let refusal = format!(
-        "`{0}/.venv/bin/python` cannot import `tatolab.stream`: add `tatolab-stream` to the \
-         project's dependencies and run `uv sync` in {0}.",
-        scratch_project.canonical_path().display()
-    );
+    let refusal = "the runtime holds no state directory, so it records no stream";
     let stub_local_api_server = a_runtime_holding(
         &isolated_machine_directories,
-        &scratch_project.canonical_path(),
         vec![
-            StubToolAnswer::tool_failure(&refusal),
-            loaded_answer(&scratch_project.canonical_path()),
+            StubToolAnswer::tool_failure(refusal),
+            queued_answer("Rabc-2", &scratch_project.canonical_path()),
+            queued_answer("Rabc-3", &scratch_project.canonical_path()),
         ],
-        vec![a_log_record(json!({"message": "loaded at last"}))],
+        vec![a_log_record(
+            json!({"message": "written by the refused load"}),
+        )],
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
     running_tatolab.wait_for_standard_error_line_containing(&format!(
-        "tatolab dev: run_stream failed: {refusal}"
+        "tatolab dev: run_project failed: {refusal}; save again to queue another load"
     ));
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: no stream is loaded — fix it and save again",
-    );
-
-    scratch_project.save_stream_py("# the fixed version, longer than the first\n");
-
     assert_eq!(
-        running_tatolab.next_standard_output_line("the record of the load after the save"),
-        dev_rendered_line(&scratch_project, "loaded at last")
+        running_tatolab.next_standard_output_line("the record the refused load wrote"),
+        dev_rendered_line(&scratch_project, "written by the refused load")
     );
-    let (exit_status, standard_error_lines) =
-        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
-    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(
-        tool_calls_besides_logs(&stub_local_api_server),
-        ["run_stream", "run_stream"]
-    );
-}
 
-/// A save runs the stream again over the same connection, never stopping it first: a save the
-/// runtime refuses leaves the running stream as it was, and `dev` follows it on from the record
-/// it had reached.
-#[test]
-fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refused_save() {
-    let isolated_machine_directories = IsolatedMachineDirectories::new();
-    let scratch_project = ScratchProject::new();
-    let stub_local_api_server = a_runtime_holding(
-        &isolated_machine_directories,
+    scratch_project.save_stream_py("# the second version, longer than the first\n");
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-2",
         &scratch_project.canonical_path(),
-        vec![
-            loaded_answer(&scratch_project.canonical_path()),
-            StubToolAnswer::tool_failure(
-                "the project's `tatolab-stream` is older than this runtime",
-            ),
-            loaded_answer(&scratch_project.canonical_path()),
-        ],
-        vec![a_log_record(json!({"message": "before the bad save"}))],
-    );
-    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab
-        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
+    ));
+    stub_local_api_server.append_stream_log_records(vec![a_log_record(
+        json!({"message": "the stream `cam` failed: ValueError: bad wiring"}),
+    )]);
     assert_eq!(
-        running_tatolab.next_standard_output_line("the record before the bad save"),
-        dev_rendered_line(&scratch_project, "before the bad save")
-    );
-
-    scratch_project.save_stream_py("this is not python (\n");
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: run_stream failed: the project's `tatolab-stream` is older than this runtime",
-    );
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam keeps running the last save that loaded — fix it and save again",
-    );
-    stub_local_api_server
-        .append_stream_log_records(vec![a_log_record(json!({"message": "after the bad save"}))]);
-    assert_eq!(
-        running_tatolab.next_standard_output_line("the record after the bad save"),
-        dev_rendered_line(&scratch_project, "after the bad save"),
-        "the stream running before the bad save is followed on, past the record already printed"
+        running_tatolab.next_standard_output_line("the failed load's record"),
+        dev_rendered_line(
+            &scratch_project,
+            "the stream `cam` failed: ValueError: bad wiring"
+        ),
+        "a save whose code fails is a record of the project's log, followed on"
     );
     assert!(
         running_tatolab.is_still_running(),
-        "a refused save ends nothing"
+        "a failed load ends nothing"
     );
 
-    scratch_project.save_stream_py("# the fixed version, longer than the first\n");
-    wait_until("the run after the fixed save", || {
-        calls_to(&stub_local_api_server, "run_stream") == 3
-    });
-    running_tatolab
-        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
+    scratch_project.save_stream_py("# the fixed version, longer than every save before it\n");
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-3",
+        &scratch_project.canonical_path(),
+    ));
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["run_stream", "run_stream", "run_stream"],
-        "each save runs the stream again over the connection; nothing stops it"
+        ["run_project", "run_project", "run_project"],
+        "each save queues a load over the connection; nothing stops a stream"
     );
     assert_eq!(
         stub_local_api_server
             .recorded_mcp_stdio_request_heads()
             .len(),
         1,
-        "every run rides the one connection"
+        "every load rides the one connection"
     );
-    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_stream");
+    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_project");
 }
 
-/// A save whose code fails comes back as the stream failed: `dev` prints its traceback, says
-/// it waits for a fix, and loads the stream again on the next save.
-#[test]
-fn dev_prints_a_failed_saves_traceback_and_loads_again_on_the_fixed_save() {
-    let isolated_machine_directories = IsolatedMachineDirectories::new();
-    let scratch_project = ScratchProject::new();
-    let traceback = "Traceback (most recent call last):\n  File \"stream.py\", line 6, in main\n\
-                     ValueError: bad wiring";
-    let stub_local_api_server = a_runtime_holding(
-        &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![
-            loaded_answer(&scratch_project.canonical_path()),
-            StubToolAnswer::tool_result(&failed_run_stream_tool_result_text(
-                STREAM_ID,
-                &scratch_project.canonical_path(),
-                traceback,
-            )),
-            loaded_answer(&scratch_project.canonical_path()),
-        ],
-        vec![a_log_record(json!({"message": "before the bad save"}))],
-    );
-    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    assert_eq!(
-        running_tatolab.next_standard_output_line("the record before the bad save"),
-        dev_rendered_line(&scratch_project, "before the bad save")
-    );
-
-    scratch_project.save_stream_py("# a save whose function raises, longer than the first\n");
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam failed: Traceback (most recent call last):",
-    );
-    running_tatolab.wait_for_standard_error_line_containing("ValueError: bad wiring");
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam is failed — fix it and save again to load it",
-    );
-    assert!(
-        running_tatolab.is_still_running(),
-        "a failed save ends nothing"
-    );
-
-    scratch_project.save_stream_py("# the fixed version, longer than every save before it\n");
-    wait_until("the run after the fixed save", || {
-        calls_to(&stub_local_api_server, "run_stream") == 3
-    });
-    running_tatolab
-        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
-    let (exit_status, standard_error_lines) =
-        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
-    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(
-        tool_calls_besides_logs(&stub_local_api_server),
-        ["run_stream", "run_stream", "run_stream"]
-    );
-}
-
-/// A page `dev` cannot read leaves the stream running unfollowed, never replaying the project's
-/// whole log, and waits for a save rather than stopping the stream or driving a load loop.
+/// A page `dev` cannot read leaves the streams running unfollowed, never replaying the project's
+/// whole log, and waits for a save rather than driving a load loop.
 #[test]
 fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
@@ -561,8 +383,8 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "run_stream".to_owned(),
-                    vec![loaded_answer(&scratch_project.canonical_path())],
+                    "run_project".to_owned(),
+                    vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
                     "logs".to_owned(),
@@ -572,24 +394,26 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
             ..StubLocalApiScript::default()
         });
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.wait_for_standard_error_line_containing("save again to load it");
+    running_tatolab
+        .wait_for_standard_error_line_containing("save again to queue another load and follow it");
     // Ten of `dev`'s runtime polls: a page it cannot read must not drive a load loop.
     std::thread::sleep(Duration::from_millis(2500));
 
     assert!(running_tatolab.is_still_running());
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["run_stream"]
+        ["run_project"]
     );
     assert_eq!(
         calls_to(&stub_local_api_server, "logs"),
-        1,
-        "the read to the log's end before the run, and no follow from an unknown end"
+        2,
+        "the read to the log's end before the load, once more before the follow, and no follow \
+         from an unknown end"
     );
 
     scratch_project.save_stream_py("# the edited version, longer than the first\n");
     wait_until("the load after the save", || {
-        calls_to(&stub_local_api_server, "run_stream") == 2
+        calls_to(&stub_local_api_server, "run_project") == 2
     });
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
@@ -598,28 +422,22 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
 }
 
 /// The runtime closing `dev`'s connection is a crash: `dev` names it and the log folder the
-/// runtime described, waits for the runtime, and follows the stream once the runtime has re-loaded
-/// it from its record — never sending `run_stream` for it.
+/// runtime described, waits for the runtime, and follows the project's log on from where it read
+/// up to while the runtime re-loads the project from its records — never queuing a load for it.
 #[test]
-fn dev_survives_a_dropped_runtime_and_follows_the_re_loaded_stream_without_loading_it() {
+fn dev_survives_a_dropped_runtime_and_follows_the_log_on_without_queuing_a_load() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let stub_local_api_server =
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "run_stream".to_owned(),
-                    vec![loaded_answer(&scratch_project.canonical_path())],
+                    "run_project".to_owned(),
+                    vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
                     "describe_runtime".to_owned(),
                     vec![a_runtime_logging_in("/home/u/.local/state/tatolab/logs")],
-                ),
-                (
-                    "list_streams".to_owned(),
-                    vec![the_stream_listed_running_from(
-                        &scratch_project.canonical_path(),
-                    )],
                 ),
             ]),
             stream_log_records: Some(StubStreamLogRecords {
@@ -643,7 +461,7 @@ fn dev_survives_a_dropped_runtime_and_follows_the_re_loaded_stream_without_loadi
          /home/u/.local/state/tatolab/logs/",
     );
     running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam is loaded again — following the project's log on",
+        "tatolab dev: the runtime answers again — following the project's log on",
     );
     assert_eq!(
         running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
@@ -654,11 +472,10 @@ fn dev_survives_a_dropped_runtime_and_follows_the_re_loaded_stream_without_loadi
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
-        calls_to(&stub_local_api_server, "run_stream"),
+        calls_to(&stub_local_api_server, "run_project"),
         1,
-        "the crash never sends `run_stream` again"
+        "the crash never queues another load"
     );
-    assert_eq!(calls_to(&stub_local_api_server, "stop_stream"), 0);
     assert_eq!(
         stub_local_api_server
             .recorded_mcp_stdio_request_heads()
@@ -668,15 +485,59 @@ fn dev_survives_a_dropped_runtime_and_follows_the_re_loaded_stream_without_loadi
     );
 }
 
-/// A runtime that comes back holding the stream not yet re-loaded is asked again until it is.
+/// A load the runtime went away before answering stays owed: once a runtime answers again, `dev`
+/// queues it there rather than following a log no load of its own writes to.
 #[test]
-fn dev_waits_for_the_restarted_runtime_to_re_load_the_stream_before_following_it() {
+fn a_load_the_runtime_went_away_before_answering_is_queued_again_once_it_answers() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tools_that_never_answer: ["run_project".to_owned()].into_iter().collect(),
+            stream_log_records: Some(StubStreamLogRecords {
+                records: Vec::new(),
+                page_size: 1,
+                first_written_by_a_run: true,
+            }),
+            ..StubLocalApiScript::default()
+        });
+    let running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
+    wait_until("dev's first load reaches the runtime", || {
+        calls_to(&stub_local_api_server, "run_project") == 1
+    });
+
+    stub_local_api_server.close_every_mcp_stdio_connection();
+    wait_until("dev queues the load again once the runtime answers", || {
+        calls_to(&stub_local_api_server, "run_project") == 2
+    });
+    let (exit_status, standard_error_lines) =
+        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
+
+    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+    assert!(
+        standard_error_lines
+            .iter()
+            .any(|line| line.starts_with("tatolab dev: the runtime went away")),
+        "{standard_error_lines:?}"
+    );
+    assert_eq!(
+        stub_local_api_server
+            .recorded_mcp_stdio_request_heads()
+            .len(),
+        2,
+        "the load is asked again over a new connection"
+    );
+}
+
+/// A restarted runtime is followed from the cursor the session read up to: the project's log is
+/// on disk, so a record written before the crash is never printed twice.
+#[test]
+fn dev_follows_a_restarted_runtimes_project_log_from_where_it_read_up_to() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let first_runtime = a_runtime_holding(
         &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![loaded_answer(&scratch_project.canonical_path())],
+        vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
         vec![a_log_record(json!({"message": "before the crash"}))],
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
@@ -685,22 +546,7 @@ fn dev_waits_for_the_restarted_runtime_to_re_load_the_stream_before_following_it
     drop(first_runtime);
     running_tatolab.wait_for_standard_error_line_containing("tatolab dev: the runtime went away");
     running_tatolab.wait_for_standard_error_line_containing("waiting for a runtime to answer");
-    let not_yet_re_loaded = json!({"streams": [{
-        "stream": STREAM_ID, "display_name": "main", "state": "running",
-        "location": {"project_directory": scratch_project.canonical_path(),
-                     "stream_function": "stream:main"},
-        "node_count": null, "failed_because": null,
-    }]})
-    .to_string();
     let restarted_runtime = isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-        tool_answers_by_name: HashMap::from([(
-            "list_streams".to_owned(),
-            vec![
-                StubToolAnswer::tool_result(&not_yet_re_loaded),
-                StubToolAnswer::tool_result(&not_yet_re_loaded),
-                the_stream_listed_running_from(&scratch_project.canonical_path()),
-            ],
-        )]),
         stream_log_records: Some(StubStreamLogRecords {
             records: vec![
                 a_log_record(json!({"message": "before the crash"})),
@@ -711,57 +557,15 @@ fn dev_waits_for_the_restarted_runtime_to_re_load_the_stream_before_following_it
         }),
         ..StubLocalApiScript::default()
     });
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: the runtime answers again — waiting for it to re-load cam",
-    );
 
     assert_eq!(
         running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
         dev_rendered_line(&scratch_project, "after the re-load")
     );
-    assert!(calls_to(&restarted_runtime, "list_streams") >= 3);
-    assert_eq!(calls_to(&restarted_runtime, "run_stream"), 0);
-    let (exit_status, standard_error_lines) =
-        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
-    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-}
-
-/// A restarted runtime that recorded the stream failed leaves `dev` waiting for a save.
-#[test]
-fn dev_waits_for_a_save_when_the_restarted_runtime_holds_the_stream_failed() {
-    let isolated_machine_directories = IsolatedMachineDirectories::new();
-    let scratch_project = ScratchProject::new();
-    let first_runtime = a_runtime_holding(
-        &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![loaded_answer(&scratch_project.canonical_path())],
-        vec![a_log_record(json!({"message": "before the crash"}))],
+    assert_eq!(
+        tool_calls_besides_logs(&restarted_runtime),
+        Vec::<String>::new()
     );
-    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.next_standard_output_line("the record before the crash");
-
-    drop(first_runtime);
-    running_tatolab.wait_for_standard_error_line_containing("waiting for a runtime to answer");
-    let restarted_runtime = isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-        tool_answers_by_name: HashMap::from([(
-            "list_streams".to_owned(),
-            vec![StubToolAnswer::tool_result(
-                &json!({"streams": [{
-                    "stream": STREAM_ID, "display_name": "main", "state": "failed",
-                    "location": null, "node_count": null,
-                    "failed_because": "it was implicated in the runtime's last 2 crashes",
-                }]})
-                .to_string(),
-            )],
-        )]),
-        ..StubLocalApiScript::default()
-    });
-
-    running_tatolab.wait_for_standard_error_line_containing(
-        "tatolab dev: cam came back failed, so it is not followed; save again to load it",
-    );
-    assert!(running_tatolab.is_still_running());
-    assert_eq!(calls_to(&restarted_runtime, "run_stream"), 0);
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
@@ -773,13 +577,14 @@ fn ctrl_c_while_dev_reconnects_to_a_runtime_that_never_opens_the_connection_exit
     let scratch_project = ScratchProject::new();
     let first_runtime = a_runtime_holding(
         &isolated_machine_directories,
-        &scratch_project.canonical_path(),
-        vec![loaded_answer(&scratch_project.canonical_path())],
+        vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
         Vec::new(),
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab
-        .wait_for_standard_error_line_containing(&running_note(&scratch_project.canonical_path()));
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-1",
+        &scratch_project.canonical_path(),
+    ));
 
     drop(first_runtime);
     running_tatolab.wait_for_standard_error_line_containing("waiting for a runtime to answer");
@@ -798,6 +603,18 @@ fn ctrl_c_while_dev_reconnects_to_a_runtime_that_never_opens_the_connection_exit
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+}
+
+/// `list_streams`' answer: `cam`, loaded from `project_directory`, running with three nodes.
+fn the_stream_listed_running_from(project_directory: &Path) -> StubToolAnswer {
+    StubToolAnswer::tool_result(
+        &json!({"streams": [{
+            "stream": STREAM_ID, "display_name": "main", "state": "running",
+            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+            "node_count": 3, "failed_because": null,
+        }]})
+        .to_string(),
+    )
 }
 
 /// A machine whose runtime lists `cam` from `project_directory`, describes its log folder, and

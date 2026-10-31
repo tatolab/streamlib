@@ -38,6 +38,15 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             &["logs", "--count", "4"][..],
             "unexpected argument '--count'",
         ),
+        (
+            &["run", "stream.py:main"][..],
+            "unexpected argument 'stream.py:main'",
+        ),
+        (&["dev", "-f", "x.py"][..], "unexpected argument '-f'"),
+        (
+            &["dev", "--name", "cam"][..],
+            "unexpected argument '--name'",
+        ),
     ] {
         let refused = run_tatolab_reading_no_runtime_directory(retired_arguments);
 
@@ -48,16 +57,6 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             "{retired_arguments:?}: {usage_error}"
         );
     }
-}
-
-#[test]
-fn a_target_beside_a_file_is_a_usage_error() {
-    let refused =
-        run_tatolab_reading_no_runtime_directory(&["run", "stream.py:main", "-f", "x.py"]);
-
-    assert_eq!(refused.status.code(), Some(2));
-    let usage_error = standard_error_text(&refused);
-    assert!(usage_error.contains("cannot be used with"), "{usage_error}");
 }
 
 #[test]

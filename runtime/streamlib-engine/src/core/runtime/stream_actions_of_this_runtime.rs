@@ -87,7 +87,7 @@ pub struct RunStreamRequest {
     /// The project whose `.venv/bin/python` compiles the stream function, by
     /// absolute path.
     pub project_directory: PathBuf,
-    /// The stream function as `tatolab run` takes it — `stream.py:main`,
+    /// The stream function as a target — `stream.py:main`,
     /// `x.py`, `mod.sub:fn` — or `None` for every `@stream` in the project's
     /// `stream.py`, each its own stream.
     pub stream_function: Option<String>,

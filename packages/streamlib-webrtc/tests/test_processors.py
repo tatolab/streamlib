@@ -173,7 +173,6 @@ TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
 LOAD_DEADLINE_SECONDS = 120.0
 SERVING_DEADLINE_SECONDS = 30.0
 LOCAL_API_PROBE_DEADLINE_SECONDS = 5.0
-LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS = 10.0
 STOP_DEADLINE_SECONDS = 30.0
 
 
@@ -397,14 +396,16 @@ def node_names_loaded_by_tatolabd(
 ) -> "list[str]":
     """Compile `stream_function`, load it on `tatolabd` with `tatolab run`, and name the nodes it held.
 
-    The engine loads the compiled names unsuffixed, so they are the names it
-    holds. Its start is then refused at the GPU, and its unload counts the
-    processors the load added. Fails naming the refusal when the load is refused.
+    `tatolab run` queues the load and exits 0. The engine loads the compiled
+    names unsuffixed, so they are the names it holds. Its start is then refused
+    at the GPU, which the runtime logs, and its unload counts the processors the
+    load added. Fails naming what the runtime said when the load is refused.
     """
     graph = compile_stream_to_graph(stream_function)
     stream_name = stream_function.__name__
     project_directory = working_directory / "project"
     write_a_project_whose_compile_prints(project_directory, graph)
+    (project_directory / "stream.py").touch()
 
     standard_error_mark = len(tatolabd.standard_error_lines)
     tatolab_run = subprocess.run(
@@ -413,8 +414,6 @@ def node_names_loaded_by_tatolabd(
             "run",
             "--dir",
             str(project_directory),
-            "--name",
-            stream_name,
         ],
         cwd=working_directory,
         env=tatolabd.cli_environment,
@@ -432,14 +431,15 @@ def node_names_loaded_by_tatolabd(
             f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
         )
 
-    # Both lines reach this process through the drain thread, which can trail
-    # `tatolab run`'s exit.
-    load_and_unload_lines_deadline = time.monotonic() + LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS
+    # The queued load runs after `tatolab run` exits, and its lines reach this
+    # process through the drain thread.
+    load_and_unload_lines_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
     while True:
         standard_error_text = tatolabd.standard_error_text_since(standard_error_mark)
         start_began = STREAM_START_BEGAN_LINE.search(standard_error_text)
         unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(standard_error_text)
-        if (start_began is not None and unload is not None) or (
+        refused_at_the_gpu = NO_VULKAN_DRIVER_REFUSAL in standard_error_text
+        if (start_began is not None and unload is not None and refused_at_the_gpu) or (
             time.monotonic() > load_and_unload_lines_deadline
         ):
             break
@@ -448,7 +448,7 @@ def node_names_loaded_by_tatolabd(
     if start_began is None:
         pytest.fail("tatolabd did not load the stream:\n" + what_the_run_and_the_runtime_said())
     assert f"-{stream_name}-" in start_began.group("stream_id"), what_the_run_and_the_runtime_said()
-    assert tatolab_run.returncode == 1 and NO_VULKAN_DRIVER_REFUSAL in tatolab_run.stdout, (
+    assert tatolab_run.returncode == 0 and refused_at_the_gpu, (
         "the loaded stream was to be refused at its start for the missing Vulkan driver; "
         + what_the_run_and_the_runtime_said()
     )

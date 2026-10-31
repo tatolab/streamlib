@@ -28,8 +28,8 @@ use crate::local_api_unix_socket_http_client::{
 /// address.
 const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
 
-/// Bounds an observation verb's tool call, and every one-shot verb's connect.
-pub(crate) const OBSERVATION_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bounds every one-shot verb's tool call and connect: none waits for a stream action to run.
+pub(crate) const ONE_SHOT_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What an MCP request to a runtime's local API came back with instead of a result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,7 +365,7 @@ pub(crate) fn call_one_local_api_tool(
     call_timeout: Duration,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
     let mut local_api_connection =
-        LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
+        LocalApiConnection::open(local_api_socket_path, ONE_SHOT_VERB_TOOL_CALL_TIMEOUT)?;
     local_api_connection
         .call_tool_bounded_by(tool_name, tool_arguments, call_timeout)
         .map_err(|call_failure| {
@@ -416,7 +416,7 @@ mod tests {
                 let local_api_mcp_tool_client =
                     LocalApiMcpToolClient::connect_over_an_mcp_stdio_upgrade(
                         local_api_socket_path,
-                        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+                        ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
                     )
                     .await
                     .unwrap();
@@ -431,7 +431,7 @@ mod tests {
                 Path::new(undialable_socket_path),
                 "graph",
                 serde_json::Map::new(),
-                OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+                ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
             )
             .unwrap_err();
             assert_eq!(
@@ -544,7 +544,7 @@ mod tests {
             .unwrap()
             .block_on(LocalApiMcpToolClient::connect_over_an_mcp_stdio_upgrade(
                 &stub_local_api_server.local_api_socket_path,
-                OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+                ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
             ))
             .err()
             .unwrap();
@@ -573,7 +573,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "graph",
             json_object(json!({"stream": "camera"})),
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap();
 
@@ -600,7 +600,7 @@ mod tests {
         });
         let mut local_api_connection = LocalApiConnection::open(
             &stub_local_api_server.local_api_socket_path,
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap();
 
@@ -627,7 +627,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "graph",
             json_object(json!({"stream": "nope"})),
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 
@@ -650,7 +650,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "nope",
             serde_json::Map::new(),
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 
@@ -668,7 +668,7 @@ mod tests {
             Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
             "graph",
             serde_json::Map::new(),
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 
