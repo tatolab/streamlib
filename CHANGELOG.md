@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.63.0](https://github.com/tatolab/streamlib/compare/v0.62.0...v0.63.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** a run naming no function takes in every @stream in stream.py ([#2995](https://github.com/tatolab/streamlib/issues/2995))
+
+### Features
+
+* **runtime:** a run naming no function takes in every [@stream](https://github.com/stream) in stream.py ([#2995](https://github.com/tatolab/streamlib/issues/2995)) ([baa2c1d](https://github.com/tatolab/streamlib/commit/baa2c1d7f1e7f0e841aae0f3663e5d2bac1bbdcb))
+
 ## [0.62.0](https://github.com/tatolab/streamlib/compare/v0.61.0...v0.62.0) (2026-10-31)
 
 
