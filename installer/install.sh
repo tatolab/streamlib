@@ -10,9 +10,9 @@
 #
 # The first downloads a release; the second installs a runtime unit it is
 # handed, which is how the Tatolab app installs the runtime it carries. A Linux
-# unit is the release tarball's bin/ and lib/; a macOS unit is
-# `Tatolab Runtime.app`. Either carries `streamlib-commit`, the commit it was
-# built from.
+# unit is the release tarball's bin/, lib/ and `streamlib-commit`, the commit it
+# was built from; a macOS unit is `Tatolab Runtime.app`, carrying that file in
+# its Contents/Resources/.
 #
 # Each build is installed into a folder of its own, <version>-<commit>, and
 # `current` names the one running; the service names only `current`. An install
@@ -116,6 +116,7 @@ use_the_install_locations_of_this_platform() {
 		TATOLAB_STATE_DIRECTORY="${XDG_STATE_HOME:-$HOME/.local/state}/tatolab"
 		runtime_executable_in_a_build="bin/tatolabd"
 		command_line_executable_in_a_build="bin/tatolab"
+		streamlib_commit_file_in_a_unit="$STREAMLIB_COMMIT_FILE_NAME"
 		;;
 	Darwin)
 		[ "$installing_from_a_unit" = yes ] ||
@@ -127,6 +128,7 @@ use_the_install_locations_of_this_platform() {
 		TATOLAB_STATE_DIRECTORY="$HOME/Library/Application Support/Tatolab"
 		runtime_executable_in_a_build="$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME/Contents/MacOS/tatolabd"
 		command_line_executable_in_a_build="$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME/Contents/MacOS/tatolab-cli"
+		streamlib_commit_file_in_a_unit="$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME/Contents/Resources/$STREAMLIB_COMMIT_FILE_NAME"
 		;;
 	*) refuse "there is no Tatolab runtime for $operating_system" ;;
 	esac
@@ -136,7 +138,7 @@ use_the_install_locations_of_this_platform() {
 top_level_entries_of_a_unit() {
 	case "$operating_system" in
 	Linux) printf '%s\n' bin lib "$STREAMLIB_COMMIT_FILE_NAME" ;;
-	Darwin) printf '%s\n' "$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME" "$STREAMLIB_COMMIT_FILE_NAME" ;;
+	Darwin) printf '%s\n' "$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME" ;;
 	esac
 }
 
@@ -148,7 +150,7 @@ required_members_of_a_unit() {
 			lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json \
 			lib/tatolab/watch/index.html \
 			"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" \
-			"$STREAMLIB_COMMIT_FILE_NAME"
+			"$streamlib_commit_file_in_a_unit"
 		;;
 	Darwin)
 		helper_contents="$TATOLAB_RUNTIME_HELPER_BUNDLE_NAME/Contents"
@@ -156,7 +158,7 @@ required_members_of_a_unit() {
 			"$helper_contents/MacOS/moq-relay" "$helper_contents/MacOS/uv" \
 			"$helper_contents/Resources/lend/tatolab/runtime/_vulkan_driver/MoltenVK_icd.json" \
 			"$helper_contents/Resources/watch/index.html" \
-			"$STREAMLIB_COMMIT_FILE_NAME"
+			"$streamlib_commit_file_in_a_unit"
 		;;
 	esac
 }
@@ -340,9 +342,9 @@ build_of_the_staged_unit() {
 		refuse "the runtime unit's tatolabd does not run here: $runtime_version_line"
 	unit_version="${runtime_version_line#tatolabd }"
 	is_a_version "$unit_version" || refuse "the runtime unit's tatolabd names no version: $runtime_version_line"
-	unit_commit="$(tr -d ' \t\r\n' <"$staged_unit_directory/$STREAMLIB_COMMIT_FILE_NAME")"
+	unit_commit="$(tr -d ' \t\r\n' <"$staged_unit_directory/$streamlib_commit_file_in_a_unit")"
 	is_a_full_commit "$unit_commit" ||
-		refuse "the runtime unit's $STREAMLIB_COMMIT_FILE_NAME names no full commit: \`$unit_commit\`"
+		refuse "the runtime unit's $streamlib_commit_file_in_a_unit names no full commit: \`$unit_commit\`"
 	printf '%s-%s' "$unit_version" "$unit_commit"
 }
 
