@@ -1,8 +1,10 @@
 name: Installer test
 
-# install.sh against releases its test makes, on a machine booting systemd, so
-# the service it registers runs under a real user manager: install, a kill -9
-# restarted, an upgrade in place, a download refused on its sha256, macOS
+# install.sh against releases and runtime units its test makes, on a machine
+# booting systemd, so the service it registers runs under a real user manager:
+# install, a kill -9 restarted, an upgrade keeping the build before, a download
+# refused on its sha256 or a missing member, two units of one version at
+# different commits, a unit whose runtime exits at start put back, macOS
 # pointed at the app, and an uninstall that leaves the state directory.
 on:
   pull_request:

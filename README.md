@@ -81,10 +81,12 @@ curl -fsSL https://get.tatolab.com/install.sh | sh
 ```
 
 On Linux x86_64 that installs **the runtime** — `tatolabd`, the native program that hosts this
-machine's streams, and `tatolab`, the CLI that loads, manages and inspects them — into
-`~/.local/share/tatolab/`, links both into `~/.local/bin`, and runs `tatolabd` as the systemd user
-service `tatolabd.service`, restarted if it fails. Re-run it to upgrade. `sh -s -- --uninstall` in
-place of `sh` removes it and leaves your streams' records and logs.
+machine's streams, and `tatolab`, the CLI that loads, manages and inspects them — into a folder
+of its own per build under `~/.local/share/tatolab/`, links both into `~/.local/bin`, and runs
+`tatolabd` as the systemd user service `tatolabd.service`, restarted if it fails. Re-run it to
+upgrade: it waits until the new runtime answers, keeps the build before, and puts that back if the
+new one does not start. `sh -s -- --uninstall` in place of `sh` removes it and leaves your streams'
+records and logs.
 
 **Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
 `import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
