@@ -93,7 +93,7 @@ pub struct RunStreamToolResultStream {
     pub display_name: String,
     /// Whether it runs, or is recorded failed.
     pub state: RunStreamToolResultStreamState,
-    /// This load of it, as its `logs` pages name it; `null` for a failed stream.
+    /// This run of it in the runtime; `null` for a failed stream.
     pub stream_instance: Option<LoadedStreamInstance>,
     /// Where the stream's code lives.
     pub location: StreamLocationOnTheWire,

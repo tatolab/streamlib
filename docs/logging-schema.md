@@ -113,9 +113,15 @@ the active segment. `project_log_records_after` in the
 `streamlib-runtime-client-contract` crate does this, and is what the `logs` tool
 answers with: at most `count` records after an opaque cursor, narrowed to one
 `stream` when it is given, and the cursor after the last. A cursor survives a
-restart; one whose segment retention deleted, or that no longer fits the segment
-it names, resumes at the oldest record held and says so (`records_no_longer_held`). A line
-still being written, or one that is no JSON record, is not answered.
+restart. Where a cursor no longer holds, the page says so
+(`records_no_longer_held`) and resumes:
+
+- at the oldest record held, when retention deleted the cursor's segment;
+- at the start of its segment, when the offset no longer fits that segment;
+- at the start of the active segment, when the cursor names a segment past it.
+
+A page the log rotated under while it was read is read again. A line still being
+written, or one that is no JSON record, is not answered.
 
 ## Fields
 

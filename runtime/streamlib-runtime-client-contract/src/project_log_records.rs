@@ -70,12 +70,15 @@ impl ProjectLogCursor {
     }
 }
 
+/// How many times a page is read again when the log rotated under the read.
+const PROJECT_LOG_READS_BEFORE_A_ROTATION_IS_ANSWERED_AS_IT_WAS: usize = 3;
+
 /// At most `count` records of the log of the project in `project_directory`
 /// after the cursor `after` — from its oldest held record when `None` — each
 /// written by the stream `stream` and for the stream action `action` when
 /// they are given. A cursor whose segment retention deleted resumes at the
 /// oldest held, saying so; a line still being written, or one that is not a
-/// JSON record, is not answered.
+/// JSON record, is not answered. A page the log rotated under is read again.
 pub fn project_log_records_after(
     project_directory: &Path,
     stream: Option<&str>,
@@ -84,20 +87,62 @@ pub fn project_log_records_after(
     count: usize,
 ) -> Result<ProjectLogRecordsPage, ProjectLogRecordsNotRead> {
     let active_segment_path = project_log_path(project_directory);
-    let rotated_sequences =
-        match rotated_runtime_log_segment_sequences_on_disk(&active_segment_path) {
-            Ok(rotated_sequences) => rotated_sequences,
-            Err(not_listed) if not_listed.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(not_listed) => {
-                return Err(ProjectLogRecordsNotRead::SegmentUnreadable {
-                    path: active_segment_path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_default(),
-                    source: not_listed,
-                });
-            }
-        };
+    let mut reads_left = PROJECT_LOG_READS_BEFORE_A_ROTATION_IS_ANSWERED_AS_IT_WAS;
+    loop {
+        reads_left -= 1;
+        let rotated_sequences = rotated_project_log_sequences(&active_segment_path)?;
+        let page = project_log_records_after_one_listing(
+            &active_segment_path,
+            &rotated_sequences,
+            stream,
+            action,
+            after,
+            count,
+        )?;
+        let the_log_rotated_under_the_read = page.a_segment_listed_was_gone
+            || rotated_project_log_sequences(&active_segment_path)? != rotated_sequences;
+        if !the_log_rotated_under_the_read || reads_left == 0 {
+            return Ok(page.page);
+        }
+    }
+}
+
+/// The sequences of the rotated segments beside `active_segment_path`,
+/// ascending; none when the log's directory does not exist.
+fn rotated_project_log_sequences(
+    active_segment_path: &Path,
+) -> Result<Vec<u64>, ProjectLogRecordsNotRead> {
+    match rotated_runtime_log_segment_sequences_on_disk(active_segment_path) {
+        Ok(rotated_sequences) => Ok(rotated_sequences),
+        Err(not_listed) if not_listed.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(not_listed) => Err(ProjectLogRecordsNotRead::SegmentUnreadable {
+            path: active_segment_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            source: not_listed,
+        }),
+    }
+}
+
+/// A page read against one listing of the rotated segments, and whether a
+/// segment that listing named was gone when opened.
+struct ProjectLogRecordsPageOfOneListing {
+    page: ProjectLogRecordsPage,
+    a_segment_listed_was_gone: bool,
+}
+
+/// [`project_log_records_after`] against the listing `rotated_sequences`; a
+/// listed segment gone when opened ends the page before it.
+fn project_log_records_after_one_listing(
+    active_segment_path: &Path,
+    rotated_sequences: &[u64],
+    stream: Option<&str>,
+    action: Option<&str>,
+    after: Option<&str>,
+    count: usize,
+) -> Result<ProjectLogRecordsPageOfOneListing, ProjectLogRecordsNotRead> {
+    let active_segment_path = active_segment_path.to_path_buf();
     let active_segment_sequence = rotated_sequences.last().map_or(1, |highest| highest + 1);
     let mut segments: Vec<(u64, PathBuf)> = rotated_sequences
         .iter()
@@ -149,11 +194,14 @@ pub fn project_log_records_after(
         let segment = match File::open(&segment_path) {
             Ok(segment) => segment,
             Err(not_read) if not_read.kind() == io::ErrorKind::NotFound => {
-                next_after = ProjectLogCursor {
-                    segment_sequence,
-                    byte_offset: 0,
-                };
-                continue;
+                return Ok(ProjectLogRecordsPageOfOneListing {
+                    page: ProjectLogRecordsPage {
+                        records,
+                        next_after: next_after.spelled(),
+                        records_no_longer_held,
+                    },
+                    a_segment_listed_was_gone: true,
+                });
             }
             Err(not_read) => {
                 return Err(ProjectLogRecordsNotRead::SegmentUnreadable {
@@ -198,18 +246,24 @@ pub fn project_log_records_after(
             }
             records.push(record);
             if records.len() >= count {
-                return Ok(ProjectLogRecordsPage {
-                    records,
-                    next_after: next_after.spelled(),
-                    records_no_longer_held,
+                return Ok(ProjectLogRecordsPageOfOneListing {
+                    page: ProjectLogRecordsPage {
+                        records,
+                        next_after: next_after.spelled(),
+                        records_no_longer_held,
+                    },
+                    a_segment_listed_was_gone: false,
                 });
             }
         }
     }
-    Ok(ProjectLogRecordsPage {
-        records,
-        next_after: next_after.spelled(),
-        records_no_longer_held,
+    Ok(ProjectLogRecordsPageOfOneListing {
+        page: ProjectLogRecordsPage {
+            records,
+            next_after: next_after.spelled(),
+            records_no_longer_held,
+        },
+        a_segment_listed_was_gone: false,
     })
 }
 
@@ -364,6 +418,34 @@ mod tests {
         assert_eq!(
             messages_of(&past_the_active_segment),
             ["after the rotation"]
+        );
+    }
+
+    #[test]
+    fn a_listed_segment_gone_when_opened_ends_the_page_before_it_without_passing_it() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_log_directory(project.path())).unwrap();
+        let active = project_log_path(project.path());
+        let first_line = a_record(None, "R-1", "in the first rotated");
+        std::fs::write(rotated_runtime_log_segment_path(&active, 1), &first_line).unwrap();
+        std::fs::write(&active, a_record(None, "R-1", "in the active")).unwrap();
+
+        let read_against_a_stale_listing =
+            project_log_records_after_one_listing(&active, &[1, 2], None, None, None, 10).unwrap();
+
+        assert!(read_against_a_stale_listing.a_segment_listed_was_gone);
+        assert_eq!(
+            messages_of(&read_against_a_stale_listing.page),
+            ["in the first rotated"]
+        );
+        assert_eq!(
+            read_against_a_stale_listing.page.next_after,
+            format!("1:{}", first_line.len())
+        );
+        let read_again = project_log_records_after(project.path(), None, None, None, 10).unwrap();
+        assert_eq!(
+            messages_of(&read_again),
+            ["in the first rotated", "in the active"]
         );
     }
 
