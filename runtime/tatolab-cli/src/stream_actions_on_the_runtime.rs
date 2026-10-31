@@ -97,8 +97,8 @@ const NO_LOCATION_CELL: &str = "-";
 /// The flags `run` and `dev` name the stream to load with.
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct StreamLoadArguments {
-    /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: the sole
-    /// @stream in stream.py).
+    /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: every
+    /// @stream in stream.py, each its own stream).
     #[arg(value_name = "TARGET", conflicts_with = "requested_entry_file")]
     pub(crate) requested_stream_target: Option<OsString>,
     /// Entry file to load, overriding the stream.py convention; not with TARGET.
@@ -120,7 +120,7 @@ pub(crate) struct StreamLoadArguments {
 pub(crate) struct StreamLoadRequest {
     /// The absolute project directory the runtime compiles in.
     pub(crate) project_directory: String,
-    /// TARGET or FILE verbatim; `None` for the sole @stream in stream.py.
+    /// TARGET or FILE verbatim; `None` for every @stream in stream.py.
     pub(crate) stream_function: Option<String>,
     /// The display name asked for; `None` keeps the one the stream has.
     pub(crate) display_name: Option<String>,
@@ -285,29 +285,32 @@ pub(crate) fn run_stream(
 /// refused.
 const RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED: u8 = 1;
 
-/// Each stream `run_stream` took in, then how to follow the one running from
-/// `caller_working_directory`: its project's log, named with `--dir` when the caller is elsewhere.
+/// Each stream `run_stream` took in, then how to follow each one running from
+/// `caller_working_directory`: its project's log, named with `--dir` when the caller is elsewhere,
+/// narrowed to the stream with `--stream` when the run took in several.
 fn rendered_run_stream_lines(
     run_stream_result: &RunStreamToolResult,
     caller_working_directory: &Path,
 ) -> String {
     let resolved_caller_working_directory = std::fs::canonicalize(caller_working_directory)
         .unwrap_or_else(|_| caller_working_directory.to_path_buf());
+    let the_run_took_in_several_streams = run_stream_result.streams.len() > 1;
     run_stream_result
         .streams
         .iter()
         .map(|stream| {
             let project_directory = &stream.location.project_directory;
             let follow_it = match stream.state {
-                RunStreamToolResultStreamState::Running
-                    if *project_directory == resolved_caller_working_directory =>
-                {
-                    "\n  follow it: tatolab logs -f".to_owned()
+                RunStreamToolResultStreamState::Running => {
+                    let mut follow_it = "\n  follow it: tatolab logs -f".to_owned();
+                    if *project_directory != resolved_caller_working_directory {
+                        follow_it.push_str(&format!(" --dir {}", project_directory.display()));
+                    }
+                    if the_run_took_in_several_streams {
+                        follow_it.push_str(&format!(" --stream {}", stream.stream));
+                    }
+                    follow_it
                 }
-                RunStreamToolResultStreamState::Running => format!(
-                    "\n  follow it: tatolab logs -f --dir {}",
-                    project_directory.display()
-                ),
                 RunStreamToolResultStreamState::Failed => String::new(),
             };
             format!(
@@ -761,6 +764,31 @@ mod tests {
             rendered_run_stream_lines(&run_stream_result_warning(&[]), Path::new("/srv")),
             "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
              follow it: tatolab logs -f --dir /srv/project\n"
+        );
+    }
+
+    #[test]
+    fn each_running_stream_of_a_run_taking_in_several_is_followed_by_its_stream_id() {
+        let mut run_stream_result = run_stream_result_warning(&[]);
+        let mut preview = run_stream_result.streams[0].clone();
+        preview.stream = "project-preview-7b1d04".to_owned();
+        preview.display_name = "preview".to_owned();
+        preview.location.stream_function = "stream:preview".to_owned();
+        let mut broken = preview.clone();
+        broken.stream = "project-broken-c90e11".to_owned();
+        broken.state = RunStreamToolResultStreamState::Failed;
+        broken.stream_instance = None;
+        broken.node_count = None;
+        broken.failed_because = Some("ValueError: broken".to_owned());
+        run_stream_result.streams.extend([preview, broken]);
+
+        assert_eq!(
+            rendered_run_stream_lines(&run_stream_result, Path::new("/srv/project")),
+            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
+             follow it: tatolab logs -f --stream project-camera-3f2a9c\n\
+             project-preview-7b1d04 running as \"preview\" (project /srv/project, stream:preview)\n  \
+             follow it: tatolab logs -f --stream project-preview-7b1d04\n\
+             project-broken-c90e11 failed: ValueError: broken\n"
         );
     }
 

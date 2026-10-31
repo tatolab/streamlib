@@ -33,9 +33,9 @@ use super::{
 use crate::core::compiler::compiler_ops::{
     processor_interpreter_describe::PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
     stream_function_compile_in_the_projects_interpreter::{
-        STREAM_FUNCTION_COMPILE_BOUND, StreamFunctionCompileInTheProjectsInterpreterReport,
-        WhatTheProjectsCodeGaveTheCompile, compile_the_stream_function_in_the_projects_interpreter,
-        the_projects_venv_interpreter,
+        OneStreamOfTheProjectCompiled, STREAM_FUNCTION_COMPILE_BOUND,
+        StreamFunctionCompileInTheProjectsInterpreterReport, WhatTheProjectsCodeGaveTheCompile,
+        compile_the_stream_function_in_the_projects_interpreter, the_projects_venv_interpreter,
     },
 };
 use crate::core::graph::{
@@ -74,8 +74,8 @@ pub struct RunStreamRequest {
     /// absolute path.
     pub project_directory: PathBuf,
     /// The stream function as `tatolab run` takes it — `stream.py:main`,
-    /// `x.py`, `mod.sub:fn` — or `None` for the sole `@stream` in the
-    /// project's `stream.py`.
+    /// `x.py`, `mod.sub:fn` — or `None` for every `@stream` in the project's
+    /// `stream.py`, each its own stream.
     pub stream_function: Option<String>,
     /// The display name the load gives the stream. `None` keeps a replaced
     /// stream's display name, and shows a new one under its function's name.
@@ -517,6 +517,56 @@ impl Runner {
 
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let streams = match what_the_projects_code_gave {
+            WhatTheProjectsCodeGaveTheCompile::EveryStreamOfTheProject { streams }
+                if !streams.is_empty() =>
+            {
+                let ids_the_project_defines: Vec<String> = streams
+                    .iter()
+                    .map(|stream| stream.stream_location.stream_id())
+                    .collect();
+                for stream in &streams {
+                    self.refuse_a_run_of_a_location_whose_id_another_holds(
+                        &stream.stream_location,
+                    )?;
+                }
+                let mut streams_loaded_or_failed = Vec::with_capacity(streams.len());
+                for OneStreamOfTheProjectCompiled {
+                    stream_location,
+                    description: _,
+                    graph_or_why_none,
+                } in streams
+                {
+                    streams_loaded_or_failed.push(self.record_and_load_one_stream_a_run_compiled(
+                        stream_records,
+                        StreamARunCompiled {
+                            stream_location,
+                            display_name_the_run_gives: display_name_the_run_gives.clone(),
+                            stream_environment: &stream_environment,
+                            graph_or_why_none,
+                        },
+                    )?);
+                }
+                streams_loaded_or_failed.extend(
+                    self.fail_every_record_of_the_project_its_stream_py_no_longer_defines(
+                        stream_records,
+                        &stream_environment.project_directory,
+                        &ids_the_project_defines,
+                    )?,
+                );
+                streams_loaded_or_failed
+            }
+            WhatTheProjectsCodeGaveTheCompile::EveryStreamOfTheProject { .. } => {
+                return Ok(StreamRunOutcome {
+                    streams: self.fail_every_record_of_a_project_that_gave_no_stream(
+                        stream_records,
+                        &stream_environment,
+                        display_name_the_run_gives,
+                        "its stream.py defines no @stream".to_string(),
+                    )?,
+                    project_directory,
+                    compile_warnings,
+                });
+            }
             WhatTheProjectsCodeGaveTheCompile::Compiled {
                 stream_location,
                 graph_json,
@@ -1467,6 +1517,53 @@ impl Runner {
         ))
     }
 
+    /// Record failed every record of the project in `project_directory` whose
+    /// function in its `stream.py` the project's every-stream compile no longer
+    /// lists, naming the function, and unload each one loaded; never
+    /// forgotten.
+    fn fail_every_record_of_the_project_its_stream_py_no_longer_defines(
+        &self,
+        stream_records: &StreamRecordsInTheStateDirectory,
+        project_directory: &Path,
+        ids_the_project_defines: &[String],
+    ) -> Result<Vec<StreamLoadedOrFailedByARun>> {
+        let mut streams_failed = Vec::new();
+        let mut streams_to_unload = Vec::new();
+        for read in stream_records.read_every() {
+            let Ok(StreamRecordAsRead::Current(mut record)) = read else {
+                continue;
+            };
+            let defined_in_stream_py = record
+                .location
+                .stream_function
+                .split_once(':')
+                .is_some_and(|(module, _)| module == STREAM_PY_ENTRY_MODULE_NAME);
+            if !the_same_directory(&record.location.project_directory, project_directory)
+                || !defined_in_stream_py
+                || ids_the_project_defines.contains(&record.stream_id)
+            {
+                continue;
+            }
+            let failed_because = format!(
+                "`{}` is no longer defined in stream.py",
+                record.location.stream_function
+            );
+            record.failed_because = Some(failed_because.clone());
+            stream_records.write(&record)?;
+            streams_to_unload.extend(self.loaded_stream_of_the_id_when_loaded(&record.stream_id));
+            streams_failed.push(StreamLoadedOrFailedByARun::of_the_record(
+                record,
+                StreamStateAfterItsRun::Failed { failed_because },
+                true,
+            ));
+        }
+        unload_every_stream_an_action_took_back(
+            &streams_to_unload,
+            "its function is no longer defined in stream.py",
+        );
+        Ok(streams_failed)
+    }
+
     /// Record failed, with `failed_because`, every stream recorded from the
     /// project that gave no stream — its `.venv` was not made, or its entry did
     /// not import or defines no `@stream` — unloading each one loaded; with none, record the project
@@ -1908,6 +2005,10 @@ impl Drop for TheProjectsLogEnteredForOneLoad {
     }
 }
 
+/// The module a project's `stream.py` imports as, the module part of every
+/// stream function it defines.
+const STREAM_PY_ENTRY_MODULE_NAME: &str = "stream";
+
 /// Whether `first` and `second` name one directory, symlinks resolved; spelled
 /// alike when either cannot be resolved.
 fn the_same_directory(first: &Path, second: &Path) -> bool {
@@ -2108,6 +2209,28 @@ mod tests {
         runner
     }
 
+    /// What a compile of every stream answers where a compile of one stream
+    /// function answers `document`: a graph or a traceback as the one entry
+    /// of `streams`; any other answer as it is.
+    fn the_every_stream_answer_of(document: &serde_json::Value) -> serde_json::Value {
+        let Some(stream_function) = document.get("stream_function") else {
+            return document.clone();
+        };
+        let mut one_stream = serde_json::json!({
+            "stream_function": stream_function,
+            "description": null,
+        });
+        for answer_key in ["stream_graph", "failed_because"] {
+            if let Some(answer) = document.get(answer_key) {
+                one_stream[answer_key] = answer.clone();
+            }
+        }
+        serde_json::json!({
+            "project_directory": document["project_directory"],
+            "streams": [one_stream],
+        })
+    }
+
     /// The graph a stream function named `function_name` compiles to: one
     /// node, `source`, with the output ports `out1` and `out2`, exposing
     /// `exposed`.
@@ -2305,6 +2428,39 @@ mod tests {
             );
         }
 
+        /// From now on, the compile answers every `@stream` of `stream.py`:
+        /// each of `functions_compiled` to its graph, each of
+        /// `functions_raising` raising its name.
+        fn compile_every_stream_to(&self, functions_compiled: &[&str], functions_raising: &[&str]) {
+            let streams: Vec<serde_json::Value> = functions_compiled
+                .iter()
+                .map(|function_name| {
+                    serde_json::json!({
+                        "stream_function": format!("stream:{function_name}"),
+                        "description": null,
+                        "stream_graph": the_graph_of_a_function_named(
+                            function_name,
+                            serde_json::json!([]),
+                        ),
+                    })
+                })
+                .chain(functions_raising.iter().map(|function_name| {
+                    serde_json::json!({
+                        "stream_function": format!("stream:{function_name}"),
+                        "description": null,
+                        "failed_because": format!("ValueError: {function_name}"),
+                    })
+                }))
+                .collect();
+            self.print_the_compile_document_warning(
+                serde_json::json!({
+                    "project_directory": self.path(),
+                    "streams": streams,
+                }),
+                &[],
+            );
+        }
+
         /// From now on, the compile answers that `stream.py` imported and
         /// defines no `@stream`, printing `no_stream_defined_because`.
         fn define_no_stream_printing(&self, no_stream_defined_because: &str) {
@@ -2319,7 +2475,9 @@ mod tests {
 
         /// From now on, the compile writes its arguments to
         /// [`Self::the_last_compiles_arguments`], each of `warnings` on a line
-        /// of its standard error, then prints `document`.
+        /// of its standard error, then prints `document` — to a compile of
+        /// every stream, a document answering one stream function as the one
+        /// entry of its `streams`.
         fn print_the_compile_document_warning(
             &self,
             document: serde_json::Value,
@@ -2329,11 +2487,14 @@ mod tests {
                 .iter()
                 .map(|warning| format!("echo '{warning}' >&2\n"))
                 .collect();
+            let every_stream_document = the_every_stream_answer_of(&document);
             write_an_executable_script_from_a_child_process(
                 &self.interpreter(),
                 &format!(
                     "{STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE}printf '%s\\n' \"$@\" > \
-                     compile-arguments\n{warnings_written}cat <<'COMPILED'\n{document}\nCOMPILED\n"
+                     compile-arguments\n{warnings_written}case \" $* \" in\n*' --every-stream \
+                     '*) cat <<'COMPILED'\n{every_stream_document}\nCOMPILED\n;;\n*) cat \
+                     <<'COMPILED'\n{document}\nCOMPILED\n;;\nesac\n"
                 ),
             );
         }
@@ -2957,6 +3118,106 @@ mod tests {
 
     #[test]
     #[serial]
+    fn a_run_of_every_stream_one_of_whose_ids_the_host_holds_is_refused_loading_none() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let hosted = a_stream_its_host_loaded(&runner, &project, "preview");
+        project.compile_every_stream_to(&["camera", "preview"], &[]);
+
+        let refusal = refusal_of(runner.run_stream(project.run_request()));
+
+        assert!(
+            refusal.contains(&project.stream_id_of("preview")),
+            "{refusal}"
+        );
+        assert_eq!(runner.ids_of_the_loaded_streams(), [hosted.stream_id()]);
+        assert!(records_in(state_directory.path()).read_every().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_takes_in_every_stream_of_stream_py_and_fails_one_whose_function_is_no_longer_defined()
+    {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        project.compile_every_stream_to(&["camera", "preview"], &["broken"]);
+
+        let run = runner
+            .run_stream(project.run_request())
+            .expect("every stream of stream.py is taken in");
+
+        let states: Vec<(&str, Option<&str>)> = run
+            .streams
+            .iter()
+            .map(|stream| {
+                (
+                    stream.stream_id.as_str(),
+                    match &stream.state {
+                        StreamStateAfterItsRun::Running { .. } => None,
+                        StreamStateAfterItsRun::Failed { failed_because } => {
+                            Some(failed_because.as_str())
+                        }
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [
+                (project.stream_id_of("camera").as_str(), None),
+                (project.stream_id_of("preview").as_str(), None),
+                (
+                    project.stream_id_of("broken").as_str(),
+                    Some("ValueError: broken")
+                ),
+            ]
+        );
+        let mut loaded = runner.ids_of_the_loaded_streams();
+        loaded.sort();
+        let mut expected_loaded = vec![
+            project.stream_id_of("camera"),
+            project.stream_id_of("preview"),
+        ];
+        expected_loaded.sort();
+        assert_eq!(loaded, expected_loaded);
+        assert_eq!(records_in(state_directory.path()).read_every().len(), 3);
+
+        project.compile_every_stream_to(&["camera"], &["broken"]);
+        let rerun = runner.run_stream(project.run_request()).unwrap();
+
+        let preview_failed = rerun
+            .streams
+            .iter()
+            .find(|stream| stream.stream_id == project.stream_id_of("preview"))
+            .expect("the vanished stream is answered");
+        assert_eq!(
+            preview_failed.state,
+            StreamStateAfterItsRun::Failed {
+                failed_because: "`stream:preview` is no longer defined in stream.py".to_string()
+            }
+        );
+        assert_eq!(
+            the_record_of(state_directory.path(), &project.stream_id_of("preview"))
+                .failed_because
+                .as_deref(),
+            Some("`stream:preview` is no longer defined in stream.py")
+        );
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            [project.stream_id_of("camera")]
+        );
+    }
+
+    #[test]
+    #[serial]
     fn an_entry_that_does_not_import_fails_every_record_of_the_project_and_unloads_each_one_loaded()
     {
         let state_directory = tempfile::tempdir().unwrap();
@@ -3186,8 +3447,8 @@ mod tests {
         );
         assert_eq!(
             project.the_last_compiles_arguments(),
-            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\n",
-            "the project's run names no function"
+            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\n--every-stream\n",
+            "the project's run compiles every stream"
         );
         assert_eq!(
             the_current_record_in(state_directory.path(), &project_stream_id),
@@ -4531,12 +4792,16 @@ mod tests {
         let recorded =
             a_recorded_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
 
+        let run_of_studio = RunStreamRequest {
+            stream_function: Some("stream.py:studio".to_string()),
+            ..project.run_request()
+        };
         for (run_request, what_the_run_is) in [
-            (project.run_request(), "a run of another function"),
+            (run_of_studio.clone(), "a run of another function"),
             (
                 RunStreamRequest {
                     display_name: Some("recorded-camera".to_string()),
-                    ..project.run_request()
+                    ..run_of_studio.clone()
                 },
                 "a run giving the display name of a recorded stream",
             ),

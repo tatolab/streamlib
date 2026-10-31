@@ -537,7 +537,7 @@ def write_the_record_run_leaves(
     stopped: bool,
 ) -> "dict[str, Any]":
     """Write the stream record `tatolab run` leaves for the project's
-    sole stream — and, `stopped`, the one a `tatolab stop` after it leaves —
+    one stream — and, `stopped`, the one a `tatolab stop` after it leaves —
     its graph and location compiled by the project's own interpreter as the
     runtime compiles them, under the id that location computes to; return the
     record.
@@ -556,7 +556,12 @@ def write_the_record_run_leaves(
         check=True,
         env={name: value for name, value in os.environ.items() if not name.startswith("PYTHON")},
     )
-    compile_document = json.loads(compiled.stdout)
+    every_stream_document = json.loads(compiled.stdout)
+    [only_stream] = every_stream_document["streams"]
+    compile_document = {
+        "project_directory": every_stream_document["project_directory"],
+        **only_stream,
+    }
     record = {
         "schema_version": STREAM_RECORD_SCHEMA_VERSION,
         "stream_id": stream_id_of_the_location(

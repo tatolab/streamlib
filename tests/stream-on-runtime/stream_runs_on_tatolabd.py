@@ -42,6 +42,9 @@ COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_
 #: The compile document a hand-written graph's project prints, beside its `.venv`.
 HAND_WRITTEN_COMPILE_DOCUMENT_FILE_NAME = "hand-written-compile-document.json"
 
+#: The compile document a hand-written graph's project prints when every `@stream` is asked for.
+HAND_WRITTEN_EVERY_STREAM_COMPILE_DOCUMENT_FILE_NAME = "hand-written-every-stream-compile-document.json"
+
 #: The module a hand-written graph's compile document reports its stream function in.
 HAND_WRITTEN_STREAM_FUNCTION_MODULE = "stream"
 
@@ -227,7 +230,8 @@ def write_a_hand_written_graph_project(
     processor_interpreter: "Path | None" = None,
 ) -> HandWrittenGraphProject:
     """Write a project at `project_directory` whose compile prints `graph` verbatim, its
-    stream function reported as `stream:<the graph's stream>`.
+    stream function reported as `stream:<the graph's stream>`, and its only stream when
+    every `@stream` is asked for.
 
     `reported_project_directory` defaults to the suite directory, so the
     suite's node modules describe; `processor_interpreter` to the suite venv's.
@@ -236,21 +240,39 @@ def write_a_hand_written_graph_project(
     processor_interpreter = processor_interpreter or SUITE_VENV_INTERPRETER
     venv_interpreter = project_directory / ".venv" / "bin" / "python"
     venv_interpreter.parent.mkdir(parents=True)
+    reported_project_directory_text = json.dumps(str(reported_project_directory))
+    stream_function_text = json.dumps(hand_written_stream_function_of(graph))
     compile_document_path = project_directory / HAND_WRITTEN_COMPILE_DOCUMENT_FILE_NAME
     compile_document_path.write_text(
         '{"stream_graph": '
         + graph_text_of(graph)
         + ', "project_directory": '
-        + json.dumps(str(reported_project_directory))
+        + reported_project_directory_text
         + ', "stream_function": '
-        + json.dumps(hand_written_stream_function_of(graph))
+        + stream_function_text
         + "}\n",
+        encoding="utf-8",
+    )
+    every_stream_compile_document_path = (
+        project_directory / HAND_WRITTEN_EVERY_STREAM_COMPILE_DOCUMENT_FILE_NAME
+    )
+    every_stream_compile_document_path.write_text(
+        '{"project_directory": '
+        + reported_project_directory_text
+        + ', "streams": [{"stream_function": '
+        + stream_function_text
+        + ', "description": null, "stream_graph": '
+        + graph_text_of(graph)
+        + "}]}\n",
         encoding="utf-8",
     )
     first, second, third = (shlex.quote(argument) for argument in COMPILE_ENTRY_INVOCATION)
     venv_interpreter.write_text(
         "#!/bin/sh\n"
         f'if [ "$1" = {first} ] && [ "$2" = {second} ] && [ "$3" = {third} ]; then\n'
+        '    case " $* " in\n'
+        f"    *' --every-stream '*) exec cat {shlex.quote(str(every_stream_compile_document_path))} ;;\n"
+        "    esac\n"
         f"    exec cat {shlex.quote(str(compile_document_path))}\n"
         "fi\n"
         f'exec {shlex.quote(str(processor_interpreter))} "$@"\n',

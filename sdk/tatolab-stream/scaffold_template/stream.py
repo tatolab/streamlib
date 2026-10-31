@@ -3,8 +3,8 @@
 
 """A Tatolab stream: the sample animation → GPU effect → H.264, shared publicly.
 
-`tatolab dev` loads the one `@stream` below by convention — there is no
-manifest — prints its stream id, and runs it again when you edit
+`tatolab dev` loads every `@stream` below by convention — there is no
+manifest — each as its own stream, and loads them again when you edit
 `nodes/halftone_lens_effect.py` or `nodes/brightness_meter.py`. While it runs,
 http://127.0.0.1:4446/ lists the stream's public track and
 http://127.0.0.1:4446/watch/<machine>/<stream id> plays it in a browser.

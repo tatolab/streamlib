@@ -39,7 +39,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the `tatolab.runtime` portion processor interpreters borrow, one unit never shipped
   through pip (§Packages, the package split and the lend); a stream is a normal Python
   codebase — one venv, one Python version, ordinary PyPI dependencies, nothing dynamically
-  downloaded; `dev`/`run` load the sole `@stream` in `stream.py` by convention —
+  downloaded; `dev`/`run` load every `@stream` in `stream.py`, each its own stream —
   `run <file>.py:<fn>` or `run <module>:<fn>` loads one, `-f <file>` overrides the file,
   `--name` its display name — and a directory holding an `app.py` but no `stream.py` is
   refused naming `stream.py` and `-f`; nodes are Python classes written in the project or
