@@ -38,8 +38,8 @@ wait on the service manager or the runtime.
 
 - **Running `tatolabd` from inside the app bundle through an `SMAppService` agent.** launchd
   keeps the job as Service Management recorded it for the copy that registered it: a second
-  copy's registration has been seen to keep launching the first copy's binary, which Apple
-  confirmed as a bug and whose only workaround is deleting the other copy and logging out;
+  copy's registration has been seen to keep launching the first copy's binary, which Apple's
+  developer support called a bug and whose only reported workaround is deleting the other copy and logging out;
   `register()` straight after `unregister()` has been seen to fail; and replacing a bundle
   leaves the process started from it running. Every update then rested on a heuristic: the app
   remembered which app version it last restarted the runtime under, which no dev build of an
