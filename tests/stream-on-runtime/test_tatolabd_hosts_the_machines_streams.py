@@ -228,6 +228,7 @@ def listing_of(
         "state": state,
         "node_count": node_count,
         "failed_because": None,
+        "capture_devices_whose_access_was_never_asked_for": [],
         "action": None,
         "step": None,
     }
