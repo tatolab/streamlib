@@ -457,7 +457,7 @@ mod tests {
             async |local_api_mcp_tool_client| {
                 let first = local_api_mcp_tool_client
                     .call_tool(
-                        "run_stream",
+                        "run_project",
                         json_object(json!({"project_directory": "/srv/project"})),
                     )
                     .await
@@ -483,7 +483,7 @@ mod tests {
             stub_local_api_server.recorded_tool_calls(),
             [
                 RecordedToolCall {
-                    tool_name: "run_stream".to_owned(),
+                    tool_name: "run_project".to_owned(),
                     tool_arguments: json!({"project_directory": "/srv/project"}),
                     tool_call_transport: StubToolCallTransport::McpStdioConnection,
                 },

@@ -46,7 +46,7 @@ Fixtures, each documented where it is defined:
 `TatolabdUnderTest` is the started `tatolabd`: every wait of a
 `RuntimeProcessUnderTest` (marker lines of every loaded stream land on its
 standard error), plus `local_api_socket_path`, `await_serving()`,
-`local_api_client()` and `run_stream(stream_or_graph, ...)` →
+`local_api_client()` and `run_stream(stream_or_graph, ...)`, which starts `tatolab run --dir` →
 `TatolabRunOrDevOnTheRuntime`. `tatolabd.interrupt()` is a machine shutdown:
 every loaded stream is unloaded and `tatolabd` exits.
 `TatolabRunOrDevOnTheRuntime.await_loaded()` follows the load it queued with

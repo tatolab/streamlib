@@ -9,8 +9,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 use super::operations::RuntimeOperations;
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
-    ProjectStreamsListing, RunProjectRequest, RunStreamRequest, Runner, StreamAction,
-    StreamActionQueued, StreamListing, StreamRenameOutcome, StreamRunOutcome,
+    ProjectStreamsListing, RunProjectRequest, Runner, StreamAction, StreamActionQueued,
+    StreamListing, StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -22,8 +22,8 @@ use crate::core::graph::OutputPortExposureLevel;
 ///
 /// `run_project`, `start_stream`, `stop_stream` and `remove_project` answer at
 /// once, their actions running on the project's stream action queue; every
-/// other call may block — `run_stream` runs a compile and describes — so the
-/// local API calls each from a blocking task.
+/// other call may block on the stream table, so the local API calls each from a
+/// blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
@@ -64,9 +64,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn every_loaded_stream_and_the_output_ports_it_exposes(
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
-
-    /// [`Runner::run_stream`].
-    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
 
     /// [`Runner::run_project`].
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued>;
@@ -149,10 +146,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
         Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
-    }
-
-    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
-        Runner::run_stream(self, request)
     }
 
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {

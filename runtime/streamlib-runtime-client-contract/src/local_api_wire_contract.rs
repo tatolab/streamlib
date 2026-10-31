@@ -6,7 +6,6 @@
 //! them and every client that calls them.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -19,32 +18,6 @@ pub const MCP_STDIO_UPGRADE_REQUEST_TARGET: &str = "/mcp/stdio";
 /// The `Upgrade` protocol token [`MCP_STDIO_UPGRADE_REQUEST_TARGET`] switches to, matched
 /// case-insensitively.
 pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
-
-/// How long a client waits for `run_stream` or `start_stream`. The engine asserts at build time
-/// that its `PROJECT_VENV_MAKING_BOUND`, `STREAM_FUNCTION_COMPILE_BOUND`,
-/// `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for
-/// this load and one stream action queued ahead of it; more actions queued ahead can outlast it,
-/// and the runtime still takes the action.
-pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
-
-/// How long a client waits for `stop_stream`, `start_stream`, `remove_project` or `expose_port`. The engine
-/// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND`,
-/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` and `PROJECT_VENV_MAKING_BOUND` fit within it for this action
-/// and one stream action — or the re-load of one record at the runtime's start — queued ahead of
-/// it; more queued ahead can outlast it, and the runtime still takes the action.
-pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
-
-/// Which load of a stream a `run_stream` result is about: opaque, compared only for equality. A
-/// stream re-loaded under the same name is another instance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct LoadedStreamInstance(pub String);
-
-impl std::fmt::Display for LoadedStreamInstance {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
 
 /// The `logs` tool's result: one project's log records after the cursor asked for, read from
 /// the project's log on disk.
@@ -70,50 +43,6 @@ pub struct StreamLocationOnTheWire {
     pub project_directory: PathBuf,
     /// The stream function as `module:qualname`.
     pub stream_function: String,
-}
-
-/// The `run_stream` tool's result: each stream a project's load took in, running or failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunStreamToolResult {
-    /// The project the load was given.
-    pub project_directory: PathBuf,
-    /// Each stream the load started, or recorded failed.
-    pub streams: Vec<RunStreamToolResultStream>,
-    /// Each line the compile wrote to its standard error, the cross-floor check's warnings
-    /// among them; empty when it wrote nothing.
-    pub compile_warnings: Vec<String>,
-}
-
-/// One stream of a [`RunStreamToolResult`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunStreamToolResultStream {
-    /// The stream's id, computed from its location; every tool naming the stream takes it.
-    pub stream: String,
-    /// The label the stream is shown under.
-    pub display_name: String,
-    /// Whether it runs, or is recorded failed.
-    pub state: RunStreamToolResultStreamState,
-    /// This run of it in the runtime; `null` for a failed stream.
-    pub stream_instance: Option<LoadedStreamInstance>,
-    /// Where the stream's code lives.
-    pub location: StreamLocationOnTheWire,
-    /// How many nodes the loaded graph holds; `null` for a failed stream.
-    pub node_count: Option<usize>,
-    /// Whether the load replaced the recorded stream of the same location.
-    pub replaced_a_recorded_stream: bool,
-    /// Why it is failed — a traceback, or the refused load's reason; `null` when it runs.
-    pub failed_because: Option<String>,
-}
-
-/// The state of one stream a `run_stream` load took in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RunStreamToolResultStreamState {
-    /// Loaded and started.
-    Running,
-    /// Recorded failed and not loaded; `start_stream` retries it, and a load of its fixed code
-    /// replaces it.
-    Failed,
 }
 
 /// The `stop_stream` tool's result: the stop queued on its stream's project.
@@ -637,41 +566,6 @@ mod tests {
             serde_json::to_string(result).unwrap()
         }
 
-        assert_eq!(
-            wire_text(&RunStreamToolResult {
-                project_directory: PathBuf::from("/srv/project"),
-                streams: vec![
-                    RunStreamToolResultStream {
-                        stream: "project-main-3f2a9c".to_owned(),
-                        display_name: "main".to_owned(),
-                        state: RunStreamToolResultStreamState::Running,
-                        stream_instance: Some(LoadedStreamInstance("4".to_owned())),
-                        location: StreamLocationOnTheWire {
-                            project_directory: PathBuf::from("/srv/project"),
-                            stream_function: "stream:main".to_owned(),
-                        },
-                        node_count: Some(3),
-                        replaced_a_recorded_stream: false,
-                        failed_because: None,
-                    },
-                    RunStreamToolResultStream {
-                        stream: "project-side-1b2c3d".to_owned(),
-                        display_name: "side".to_owned(),
-                        state: RunStreamToolResultStreamState::Failed,
-                        stream_instance: None,
-                        location: StreamLocationOnTheWire {
-                            project_directory: PathBuf::from("/srv/project"),
-                            stream_function: "stream:side".to_owned(),
-                        },
-                        node_count: None,
-                        replaced_a_recorded_stream: true,
-                        failed_because: Some("ValueError: bad wiring".to_owned()),
-                    },
-                ],
-                compile_warnings: vec!["tatolab: one warning".to_owned()],
-            }),
-            r#"{"project_directory":"/srv/project","streams":[{"stream":"project-main-3f2a9c","display_name":"main","state":"running","stream_instance":"4","location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_a_recorded_stream":false,"failed_because":null},{"stream":"project-side-1b2c3d","display_name":"side","state":"failed","stream_instance":null,"location":{"project_directory":"/srv/project","stream_function":"stream:side"},"node_count":null,"replaced_a_recorded_stream":true,"failed_because":"ValueError: bad wiring"}],"compile_warnings":["tatolab: one warning"]}"#
-        );
         assert_eq!(
             wire_text(&StartStreamToolResult {
                 action: "R-7".to_owned(),

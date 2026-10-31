@@ -477,9 +477,9 @@ the host's connection: an agent's next session finds it in `list_streams`.
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
 `remove_node` to change a running graph; `run_project`, which queues a run of a project and
-answers at once with an action `describe_stream_action` follows, and `list_project_streams`;
-`run_stream`, `stop_stream`, `start_stream`, `remove_project`, `rename_stream`, `list_streams` and
-`expose_port` to manage the streams the runtime holds; and
+answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
+early, and `list_project_streams`; `stop_stream`, `start_stream`, `remove_project`,
+`rename_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
 `add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every

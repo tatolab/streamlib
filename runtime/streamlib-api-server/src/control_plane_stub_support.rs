@@ -283,14 +283,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
-            fn run_stream(
-                &self,
-                _request: ::streamlib::sdk::runtime::RunStreamRequest,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRunOutcome> {
-                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "run_stream",
-                ))
-            }
             fn run_project(
                 &self,
                 _request: ::streamlib::sdk::runtime::RunProjectRequest,
