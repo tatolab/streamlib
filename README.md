@@ -148,16 +148,16 @@ tatolab dev                 # the test pattern through a GPU lens, encoded and s
 ```
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
-starts one. `dev` asks it to load the project in the working directory: the runtime compiles
-`stream.py`'s one `@stream` function to the stream's graph in the project's `.venv` — making the
-`.venv` first with the uv it carries when it has none — loads it and
-starts it, and `dev` prints the stream's id and its records in your terminal. Save an edit and
-`dev` runs the stream again, and the runtime replaces the running stream with the edit. An edit
-whose code fails unloads the stream and records it failed: `dev` prints the traceback and loads
-it again on the next save. Ctrl-C ends `dev` and leaves the stream running. Every stream the runtime
-loads is recorded: it runs until `tatolab stop` or `tatolab rm`, and the runtime loads it again each
-time it starts. `tatolab run` loads the stream once, without watching for edits, prints its id and
-returns; `tatolab logs -f` follows its records.
+starts one. `dev` queues a load of the project in the working directory and follows the project's
+log: the runtime syncs the project's `.venv` with the uv it carries, compiles every `@stream`
+function of `stream.py` to its graph there, loads each one and starts it, and `dev` prints every
+record in your terminal. Save an edit and `dev` queues another load, and the runtime replaces the
+running streams with the edit. An edit whose code fails unloads its stream and records it failed:
+the traceback lands in the log `dev` prints, and the next save loads it again. Ctrl-C ends `dev`
+and leaves the streams running. Every stream the runtime loads is recorded: it runs until
+`tatolab stop` or `tatolab rm`, and the runtime loads it again each time it starts. `tatolab run`
+queues the load once, without watching for edits, prints the action's id and returns at once;
+`tatolab logs -f` follows the load and the streams' records.
 
 ## Writing a stream
 
@@ -309,13 +309,10 @@ A node class lives in a module of its own, never in `stream.py`: its process imp
 name, and `stream.py` is not importable under that name. `add` refuses such a class with a message
 naming the fix.
 
-A file may define several streams. With more than one, name the one to run:
-`tatolab dev stream.py:<function>`, or `tatolab run <module>:<function>` for a stream in an
-installed package.
-`-f FILE` runs another entry file in place of `stream.py`, `--dir DIR` resolves against another
-project directory, and `--name NAME` shows the stream under a display name other than its
-function's; a load without it keeps the display name the stream has, and `tatolab rename` changes
-it.
+A file may define several streams, and a load of the project loads every `@stream` function
+`stream.py` defines. `--dir DIR` names another project directory than the working one. A stream
+shows under its function's name until `tatolab rename` gives it another display name, which a
+load of the project keeps.
 A stream is keyed and addressed by its **stream id**, `<folder>-<function>-<hash>`, which the
 runtime computes from where its code lives: the project directory, resolved, and the stream
 function as `module:function`. Two checkouts of one project get two ids, and running a project
@@ -325,8 +322,8 @@ again replaces its stream under the same id.
 
 ```text
 tatolab new DIRECTORY
-tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME]
-tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME]
+tatolab run [--dir DIR]
+tatolab dev [--dir DIR]
 
 tatolab streams
 tatolab stop [STREAM]
@@ -351,18 +348,20 @@ tatolab enable-virtual-camera [--print]
 
 - **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
   `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
-- **`run`** asks the runtime to compile the project's stream in its `.venv`, load it and record it,
-  then prints `<id> running as "<display name>" (project <dir>, <module:function>)` and returns
-  0. A stream whose code fails is not refused: the runtime records it failed and `run` prints
-  `<id> failed: <reason>` with its traceback and exits 1, as it does naming why when the load is
-  refused. The runtime loads the stream again at each of its own starts until `stop` or `rm`,
-  and running the same project and function again replaces it under the same id — a failed one
-  included. `TARGET` is `<file>.py[:<function>]` or
-  `<module>:<function>`. The id it prints is the one the other verbs take.
-- **`dev`** is `run`, then the project's log followed from where it ended, run again on every saved edit to a `.py`
-  file or `pyproject.toml` in the project; the runtime replaces the running stream, and an edit
-  whose code fails unloads it and records it failed, its traceback printed, until the next save. Ctrl-C ends `dev` and leaves the stream running. When the runtime goes away, `dev`
-  says so, waits for it to load the stream again from its record, and follows it again.
+- **`run`** queues a load of the project on the project's queue and prints
+  `<action> queued: load of <project>` and how to follow it, then returns 0 at once. The runtime
+  syncs the project's `.venv`, compiles every `@stream` function of `stream.py` in it, and loads
+  and records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went.
+  A stream whose code fails is not refused: the runtime records it failed, with its traceback in
+  the project's log. `run` exits 1 only when the runtime refuses to queue the load. The runtime
+  loads each stream again at each of its own starts until `stop` or `rm`, and loading the same
+  project again replaces its streams under the same ids — failed ones included.
+- **`dev`** is `run`, then the project's log followed from where it ended, with another load
+  queued on every saved edit to a `.py` file or `pyproject.toml` in the project; the runtime
+  replaces the running streams, and an edit whose code fails unloads its stream and records it
+  failed, its traceback printed from the log, until the next save. Ctrl-C ends `dev` and leaves
+  the streams running. When the runtime goes away, `dev` says so, waits for it to answer again,
+  and follows the project's log on from where it read up to.
 - **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
   running, stopped or failed, its node count, its project and its stream function, and why each
   failed one failed. A
@@ -380,8 +379,8 @@ tatolab enable-virtual-camera [--print]
   the project's queue and prints its id at once: `tatolab streams` shows the stream `stopping` or
   `preparing` until it has run, and a runtime that crashes first finishes it at its next start.
   **`rename`** shows a stream under another display name — any text, never part of
-  its address. The stream's record holds it, across the runtime's restarts and re-loads without
-  `--name`.
+  its address. The stream's record holds it, across the runtime's restarts and the project's
+  loads.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. The level is recorded and
@@ -498,10 +497,11 @@ Support/Tatolab/` on macOS: a record of each stream it runs — its graph, proje
 whether it is stopped, and the levels `expose` set — and its own log. At each start it loads every
 recorded stream that is neither stopped nor failed.
 
-`tatolab run` asks it to load a project's stream. The runtime runs `tatolab.stream`'s compile entry
-in the project's `.venv` interpreter, which imports `stream.py`, calls the `@stream` function and
-hands back the graph it built; the CLI compiles nothing. The runtime loads that graph, starts it and
-records it, and `tatolab run` returns.
+`tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, then runs
+`tatolab.stream`'s compile entry in its interpreter, which imports `stream.py`, calls each
+`@stream` function and hands back the graphs they built; the CLI compiles nothing. The runtime
+loads each graph, starts it and records it, writing every step to the project's log;
+`tatolab run` returns as soon as the load is queued.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
 talk to. No Python runs in its process, and it never imports your code — it learns a Python node's
@@ -693,14 +693,14 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
   import it from there.
-- **`<id> failed: <traceback>`** from `run`, or **`tatolab dev: <id> is failed — fix it and save
-  again to load it`** — the stream's code raised, or its load was refused; the runtime lists it
+- **``the stream `<id>` failed: <traceback>``** in the project's log, shown by `dev` and
+  `tatolab logs` — the stream's code raised, or its load was refused; the runtime lists it
   `failed` with that reason. Fix the code and run or save again; `tatolab start <id>` retries it.
   A `stream.py` that does not import, or imports and defines no `@stream`, fails every stream of
   the project, or with none lists the project as `<folder>-<hash>` with the traceback or the
   missing `@stream` and a sample of one; the next run that defines a stream replaces it.
-- **`tatolab dev: no stream is loaded — fix it and save again`** — the runtime refused the load
-  itself, with nothing running before it; its refusal is printed just above.
+- **`tatolab dev: <refusal>; save again to queue another load`** — the runtime refused to queue
+  the load at all; its refusal names why.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
   (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that

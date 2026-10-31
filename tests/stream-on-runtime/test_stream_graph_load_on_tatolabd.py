@@ -52,7 +52,7 @@ from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
 from stream_runs_on_tatolabd import (
     TatolabRunOfAProject,
     stream_id_of_a_hand_written_graph,
-    stream_id_of_a_suite_stream_function,
+    stream_id_of_a_one_stream_project,
 )
 from tatolab.stream import (
     H264Encoder,
@@ -129,8 +129,8 @@ def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
         f"the graph loaded; it should have been refused:\n"
         f"{run_outcome.tatolabd_stderr_text_during_the_run[-4000:]}"
     )
-    assert run_outcome.tatolab_run_exit_status == 1, run_outcome.tatolab_run_stderr_text
-    assert run_outcome.failed_or_refused_because is not None, run_outcome.tatolab_run_stderr_text
+    assert run_outcome.failed_or_refused, run_outcome.tatolabd_stderr_text_during_the_run
+    assert run_outcome.failed_or_refused_because is not None
     return run_outcome.failed_or_refused_because
 
 
@@ -540,8 +540,7 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in tatolabd.stderr_text, tatolabd.recent_stderr()
     assert interrupt_honoured_within_seconds < HELD_DESCRIBE_DEADLINE_SECONDS / 2
     (stream_run,) = tatolabd.stream_runs
-    assert stream_run.await_exit() != 0, stream_run.recent_stderr()
-    assert " running as " not in stream_run.stdout_text, stream_run.recent_stderr()
+    assert stream_run.queued_action()
 
 
 # ---- a loaded stream, run and read back by name -----------------------------
@@ -562,8 +561,8 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    assert served_graph["stream"] == stream_id_of_a_suite_stream_function(
-        named_pattern_into_a_named_sink
+    assert served_graph["stream"] == stream_id_of_a_one_stream_project(
+        tatolabd.stream_runs[-1].working_directory, named_pattern_into_a_named_sink
     )
     assert served_graph["machine"], served_graph
     assert served_graph["machine"] == machine_wide_graph["machine"], machine_wide_graph

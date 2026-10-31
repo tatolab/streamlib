@@ -302,9 +302,7 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
     )
 
     load_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        TatolabRunOfAProject(
-            working_directory=callers_directory, tatolab_run_arguments=("--dir", "project")
-        )
+        TatolabRunOfAProject(working_directory=callers_directory, dir_as_typed="project")
     )
 
     assert loaded_with(load_outcome) == 1
@@ -358,11 +356,14 @@ def test_a_node_runs_in_a_processor_interpreter_started_from_a_venv_holding_only
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
+    project_venv_interpreter = str(
+        tatolabd.stream_runs[-1].working_directory / ".venv" / "bin" / "python"
+    )
     processor_interpreter = reported["PROCESSOR_INTERPRETER"]
     bags_processed = reported["BAGS_PROCESSED"]
-    assert processor_interpreter["processor_interpreter"] == str(SUITE_VENV_INTERPRETER)
-    assert bags_processed["sink_interpreter"] == str(SUITE_VENV_INTERPRETER)
-    assert bags_processed["upstream_interpreter"] == str(SUITE_VENV_INTERPRETER)
+    assert processor_interpreter["processor_interpreter"] == project_venv_interpreter
+    assert bags_processed["sink_interpreter"] == project_venv_interpreter
+    assert bags_processed["upstream_interpreter"] == project_venv_interpreter
     assert Path(processor_interpreter["lent_runtime_file"]).resolve().is_relative_to(
         runtime_unit.lend_directory.resolve()
     ), (processor_interpreter["lent_runtime_file"], runtime_unit.lend_directory)

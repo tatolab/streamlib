@@ -43,11 +43,8 @@ pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-te
 /// The local API tool that pages a project's log records by cursor.
 const LOGS_TOOL_NAME: &str = "logs";
 
-/// The local API tool a stream action runs a project's streams with.
-const RUN_STREAM_TOOL_NAME: &str = "run_stream";
-
-/// The instance the stub's stream is loaded as.
-pub const STUB_FIRST_STREAM_INSTANCE: &str = "1";
+/// The local API tool that queues a load of a project.
+const RUN_PROJECT_TOOL_NAME: &str = "run_project";
 
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
@@ -132,8 +129,8 @@ pub struct RecordedHttpRequestHead {
 
 /// The project log a stub's `logs` tool pages through: the cursor after record `n` (from 0) is
 /// `1:<n + 1>`, and one call answers at most `page_size` of the records after the call's `after`.
-/// Records `first_written_by_a_run` reach the log once a `run_stream` call is answered, as the
-/// run's own writing does.
+/// Records `first_written_by_a_run` reach the log once a `run_project` call is answered, as the
+/// load's own writing does.
 #[derive(Debug, Clone)]
 pub struct StubStreamLogRecords {
     pub records: Vec<serde_json::Value>,
@@ -282,7 +279,7 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
 
 impl StubLocalApiState {
     fn answer_for(&self, request: &CallToolRequestParams) -> StubToolAnswer {
-        if request.name == RUN_STREAM_TOOL_NAME {
+        if request.name == RUN_PROJECT_TOOL_NAME {
             let written_by_the_run =
                 std::mem::take(&mut *self.stream_log_records_a_run_writes.lock().unwrap());
             self.stream_log_records
@@ -692,53 +689,10 @@ impl Drop for StubLocalApiServer {
     }
 }
 
-/// The text a runtime's `run_stream` answers with when it started `stream`, its compile having
-/// written `compile_warnings` to its standard error.
-pub fn run_stream_tool_result_text(
-    stream: &str,
-    project_directory: &Path,
-    node_count: usize,
-    compile_warnings: &[&str],
-) -> String {
-    serde_json::json!({
-        "project_directory": project_directory,
-        "streams": [{
-            "stream": stream,
-            "display_name": "main",
-            "state": "running",
-            "stream_instance": STUB_FIRST_STREAM_INSTANCE,
-            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
-            "node_count": node_count,
-            "replaced_a_recorded_stream": false,
-            "failed_because": null,
-        }],
-        "compile_warnings": compile_warnings,
-    })
-    .to_string()
-}
-
-/// The text a runtime's `run_stream` answers with when it recorded `stream` failed because of
-/// `failed_because`.
-pub fn failed_run_stream_tool_result_text(
-    stream: &str,
-    project_directory: &Path,
-    failed_because: &str,
-) -> String {
-    serde_json::json!({
-        "project_directory": project_directory,
-        "streams": [{
-            "stream": stream,
-            "display_name": "main",
-            "state": "failed",
-            "stream_instance": null,
-            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
-            "node_count": null,
-            "replaced_a_recorded_stream": true,
-            "failed_because": failed_because,
-        }],
-        "compile_warnings": [],
-    })
-    .to_string()
+/// The text a runtime's `run_project` answers with once it queued the load `action` of the
+/// project in `project_directory`.
+pub fn run_project_tool_result_text(action: &str, project_directory: &Path) -> String {
+    serde_json::json!({ "action": action, "project_directory": project_directory }).to_string()
 }
 
 /// The text a runtime's `stop_stream` answers with, the stop queued as the action `R-1`.

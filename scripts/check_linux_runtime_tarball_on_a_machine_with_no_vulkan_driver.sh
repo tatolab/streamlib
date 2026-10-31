@@ -98,11 +98,10 @@ python3 -m venv /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 
 cd /tmp/stream-on-the-software-device
-"$tatolab_executable" run >/tmp/tatolab-run.log 2>&1 &
-tatolab_run_pid=$!
+"$tatolab_executable" run >/tmp/tatolab-run.log 2>&1 || true
 device_deadline=$((SECONDS + 120))
 until grep -q 'Selected Vulkan device' /tmp/tatolabd.log; do
-	if [ "$SECONDS" -ge "$device_deadline" ] || ! kill -0 "$tatolab_run_pid" 2>/dev/null; then
+	if [ "$SECONDS" -ge "$device_deadline" ] || ! kill -0 "$tatolabd_pid" 2>/dev/null; then
 		break
 	fi
 	sleep 1
@@ -110,8 +109,6 @@ done
 
 tatolabd_survived_the_stream_start=yes
 kill -0 "$tatolabd_pid" 2>/dev/null || tatolabd_survived_the_stream_start=no
-kill -INT "$tatolab_run_pid" 2>/dev/null || true
-wait "$tatolab_run_pid" 2>/dev/null || true
 kill -INT "$tatolabd_pid" 2>/dev/null || true
 wait "$tatolabd_pid" 2>/dev/null || true
 

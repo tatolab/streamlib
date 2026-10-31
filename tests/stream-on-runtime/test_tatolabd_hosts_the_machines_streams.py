@@ -161,7 +161,7 @@ def follow_the_action_the_verb_queued(
     *,
     timeout: float = STREAM_RUNNING_TIMEOUT_SECONDS,
 ) -> "dict[str, Any]":
-    """Follow the stream action a `tatolab stop`, `start` or `rm` printed it queued to
+    """Follow the stream action a `tatolab run`, `stop`, `start` or `rm` printed it queued to
     `done`; return it as `describe_stream_action` ended it."""
     queued = QUEUED_STREAM_ACTION_LINE_PATTERN.search(verb_standard_output)
     assert queued is not None, verb_standard_output
@@ -479,7 +479,7 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
     local_api_socket_path = private_machine_directories.machine_directories.local_api_socket_path
     every_verb_reaching_the_runtime = (
         ("run",),
-        ("run", "--dir", str(project_directory), "--name", "other"),
+        ("run", "--dir", str(project_directory)),
         ("dev",),
         ("stop", alpha_stream_id),
         ("start", alpha_stream_id),
@@ -737,12 +737,15 @@ def test_two_projects_streams_run_come_back_after_a_restart_and_stop_start_rm_ho
         (alpha_stream_id, ALPHA_STREAM_FUNCTION, alpha_project),
         (bravo_stream_id, BRAVO_STREAM_FUNCTION, bravo_project),
     ):
-        running = assert_tatolab_succeeded(run_tatolab("run", working_directory=project_directory))
-        assert running == (
-            f'{stream_id} running as "{stream_function_name}" (project {project_directory}, '
-            f"{stream_function_of_the_pattern_project(stream_function_name)})\n"
+        queued = assert_tatolab_succeeded(run_tatolab("run", working_directory=project_directory))
+        loaded = follow_the_action_the_verb_queued(tatolabd, queued)
+        assert queued == (
+            f"{loaded['action']} queued: load of {project_directory}\n"
             f"  follow it: tatolab logs -f\n"
         )
+        assert loaded["streams"] == [
+            {"stream": stream_id, "display_name": stream_function_name, "state": "running"}
+        ], loaded
     alpha_running = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "running", alpha_project, PROJECT_STREAM_NODE_COUNT)
     bravo_running = listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "running", bravo_project, PROJECT_STREAM_NODE_COUNT)
 
@@ -852,7 +855,9 @@ def test_a_stream_dev_loaded_runs_on_past_a_ctrl_c_and_a_killed_cli_with_the_own
     bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM_FUNCTION)
     bravo_stream_id = stream_id_of_the_pattern_project(bravo_project, BRAVO_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
-    assert_tatolab_succeeded(run_tatolab("run", working_directory=bravo_project))
+    follow_the_action_the_verb_queued(
+        tatolabd, assert_tatolab_succeeded(run_tatolab("run", working_directory=bravo_project))
+    )
     local_api = tatolabd.local_api_client()
     bravo_running = listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "running", bravo_project, PROJECT_STREAM_NODE_COUNT)
     alpha_running = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "running", alpha_project, PROJECT_STREAM_NODE_COUNT)
@@ -922,7 +927,9 @@ def test_expose_sets_a_running_streams_port_internal_private_or_public_live_and_
     alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
     alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
-    assert_tatolab_succeeded(run_tatolab("run", working_directory=alpha_project))
+    follow_the_action_the_verb_queued(
+        tatolabd, assert_tatolab_succeeded(run_tatolab("run", working_directory=alpha_project))
+    )
     local_api = tatolabd.local_api_client()
     running_graph = local_api.await_every_node_running(
         stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
@@ -986,7 +993,9 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
     alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
     alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
-    assert_tatolab_succeeded(run_tatolab("run", working_directory=alpha_project))
+    follow_the_action_the_verb_queued(
+        tatolabd, assert_tatolab_succeeded(run_tatolab("run", working_directory=alpha_project))
+    )
     tatolabd.local_api_client().await_every_node_running(
         stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
@@ -1199,12 +1208,19 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     def listed_through(agent: McpJsonRpcClientOverTheVerb) -> "dict[str, dict[str, Any]]":
         return {listed["stream"]: listed for listed in agent.call_tool("list_streams")["streams"]}
 
-    def run_stream(agent: McpJsonRpcClientOverTheVerb, project_directory: Path) -> "dict[str, Any]":
-        """The one stream `run_stream` took in from `project_directory`."""
-        run = agent.call_tool("run_stream", {"project_directory": str(project_directory)})
-        assert run["project_directory"] == str(project_directory), run
-        assert run["compile_warnings"] == [], run
-        [stream] = run["streams"]
+    def run_project(agent: McpJsonRpcClientOverTheVerb, project_directory: Path) -> "dict[str, Any]":
+        """The one stream the load `run_project` queued of `project_directory` took in, once
+        `describe_stream_action` says the load is done."""
+        queued = agent.call_tool("run_project", {"project_directory": str(project_directory)})
+        assert queued["project_directory"] == str(project_directory), queued
+        deadline = time.monotonic() + STREAM_RUNNING_TIMEOUT_SECONDS
+        while (
+            described := agent.call_tool("describe_stream_action", {"action": queued["action"]})
+        )["state"] not in ("done", "failed"):
+            assert time.monotonic() < deadline, described
+            time.sleep(0.1)
+        assert described["state"] == "done", described
+        [stream] = described["streams"]
         return stream
 
     # Two projects run, both running; the owner sets one port at each level
@@ -1214,20 +1230,10 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
         (alpha_stream_id, ALPHA_STREAM_FUNCTION, alpha_project),
         (bravo_stream_id, BRAVO_STREAM_FUNCTION, bravo_project),
     ):
-        run = run_stream(agent, project_directory)
-        stream_instance = run.pop("stream_instance")
-        assert isinstance(stream_instance, str) and stream_instance, run
-        assert run == {
+        assert run_project(agent, project_directory) == {
             "stream": stream_id,
             "display_name": stream_function_name,
-            "location": {
-                "project_directory": str(project_directory),
-                "stream_function": stream_function_of_the_pattern_project(stream_function_name),
-            },
             "state": "running",
-            "node_count": PROJECT_STREAM_NODE_COUNT,
-            "replaced_a_recorded_stream": False,
-            "failed_because": None,
         }
         local_api.await_every_node_running(stream=stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert listed_through(agent) == {alpha_stream_id: alpha_running, bravo_stream_id: bravo_running}
@@ -1310,7 +1316,7 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     assert not stream_record_path(tatolabd.machine_directories, bravo_stream_id).exists()
 
     # Run again by the agent, then the agent quits: the stream runs on, recorded.
-    assert run_stream(agent, bravo_project)["replaced_a_recorded_stream"] is False
+    assert run_project(agent, bravo_project)["state"] == "running"
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert listed_through(agent)[bravo_stream_id] == bravo_running
     assert agent.close_standard_input() == 0, agent.standard_error_text
@@ -1323,7 +1329,7 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     # Run again over a connection whose host then crashes: the run replaces the
     # recorded stream, and the killed verb leaves it running.
     crashing_agent = start_mcp_session_over_the_verb()
-    assert run_stream(crashing_agent, bravo_project)["replaced_a_recorded_stream"] is True
+    assert run_project(crashing_agent, bravo_project)["state"] == "running"
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert crashing_agent.kill() == -signal.SIGKILL
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)

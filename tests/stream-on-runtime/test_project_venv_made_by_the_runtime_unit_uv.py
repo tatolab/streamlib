@@ -22,8 +22,6 @@ from pathlib import Path
 from conftest import TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
 
-#: `STREAM_LOAD_TOOL_CALL_TIMEOUT`: a first sync fetches the project's dependencies.
-STREAM_LOAD_TOOL_CALL_TIMEOUT_SECONDS = 480.0
 VENV_INTERPRETER_PROBE_TIMEOUT_SECONDS = 30.0
 
 RAISED_ON_PURPOSE = "the stream function raised on purpose"
@@ -103,15 +101,14 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     )
     local_api = tatolabd.local_api_client()
 
-    run = local_api.call_tool(
-        "run_stream",
-        {"project_directory": str(project_directory)},
-        timeout=STREAM_LOAD_TOOL_CALL_TIMEOUT_SECONDS,
-    )
+    queued_load = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
+    load_once_ended = local_api.stream_action_once_ended(queued_load["action"])
 
-    [failed_stream] = run["streams"]
-    assert failed_stream["state"] == "failed", run
-    assert RAISED_ON_PURPOSE in failed_stream["failed_because"], run
+    assert load_once_ended["state"] == "done", load_once_ended
+    [failed_stream] = load_once_ended["streams"]
+    assert failed_stream["state"] == "failed", load_once_ended
+    [listed_failed] = local_api.list_streams()
+    assert RAISED_ON_PURPOSE in listed_failed["failed_because"], listed_failed
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
     assert not (tmp_path / "another-venv").exists(), "uv made the venv VIRTUAL_ENV names"
 

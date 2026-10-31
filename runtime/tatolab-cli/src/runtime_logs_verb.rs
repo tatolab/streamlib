@@ -20,7 +20,7 @@ use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 use crate::TatolabCommandFailure;
 use crate::local_api_connection::LocalApiConnection;
 use crate::local_api_mcp_tool_client::{
-    LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+    LocalApiMcpToolClientFailure, ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
     tool_call_failure_worded_as_an_observation_verb_reports_it,
 };
 use crate::machine_runtime_local_api_socket::local_api_socket_of_the_running_runtime;
@@ -151,7 +151,7 @@ pub(crate) fn run_runtime_logs_verb(
     };
     route_ctrl_c_to_the_end_of_the_read()?;
     let mut local_api_connection =
-        LocalApiConnection::open(&local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
+        LocalApiConnection::open(&local_api_socket_path, ONE_SHOT_VERB_TOOL_CALL_TIMEOUT)?;
     let runtime_log_directory = if logs_arguments.follow_appended_records {
         RuntimeLogDirectoryAsDescribed::from_the_describe_runtime_answer(
             local_api_connection.call_tool(DESCRIBE_RUNTIME_TOOL_NAME, serde_json::Map::new()),

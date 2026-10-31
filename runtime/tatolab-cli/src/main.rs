@@ -46,9 +46,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
-use crate::stream_actions_on_the_runtime::{
-    STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP, StreamLoadArguments,
-};
+use crate::stream_actions_on_the_runtime::{STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -113,35 +111,40 @@ enum TatolabVerb {
         /// Directory to scaffold the project into.
         directory: PathBuf,
     },
-    /// Load this project's stream into the runtime, print its id, and return.
+    /// Queue a load of this project's streams on the runtime, print the action, and return.
     #[command(
-        long_about = "The runtime compiles the stream in the project's own .venv, loads it, and \
-                      records it: it runs across the runtime's restarts until `tatolab stop` or \
-                      `tatolab rm`. Running the same project and function again replaces it under \
-                      the same id. A stream whose code fails is not refused: it is recorded \
-                      failed and printed as `<id> failed: <reason>` with its traceback, until a \
-                      run of the fixed code replaces it or `tatolab start` retries it. Prints \
-                      the stream's id and how to follow it with `tatolab logs -f`; exits 0 when \
-                      every stream it loaded runs, and 1 when one is failed or the load is \
-                      refused, naming why."
+        long_about = "Queue a load of the project on its stream action queue and return at once: \
+                      once the project's earlier actions have run, the runtime makes its .venv \
+                      when it does not run, compiles every @stream in its stream.py, and loads \
+                      each as its own stream, recorded so it runs across the runtime's restarts \
+                      until `tatolab stop` or `tatolab rm`. Loading the project again replaces \
+                      each stream under the same id. A stream whose code fails is recorded \
+                      failed, with its traceback in the project's log, until a load of the fixed \
+                      code replaces it or `tatolab start` retries it. Prints `<action> queued: \
+                      load of <project>` and how to follow it with `tatolab logs -f`; \
+                      `tatolab streams` shows each stream `preparing` until the load has run. \
+                      Exits 0 once queued, and 1 only when the request is refused or no runtime \
+                      answers."
     )]
     Run {
-        #[command(flatten)]
-        stream_load_arguments: StreamLoadArguments,
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
     },
-    /// Load this project's stream, follow its records, and load it again on every saved edit.
+    /// Queue a load of this project, follow its log, and queue another on every saved edit.
     #[command(
-        long_about = "`run`, then the stream's records followed, plus a watch on the project's \
-                      .py files: each settled save runs the stream again, which replaces it. A \
-                      save whose code fails records the stream failed, and dev prints its \
-                      traceback and waits for the next save. Ctrl-C ends dev and leaves the \
-                      stream loaded. When the runtime \
-                      goes away, dev says so, waits for it to re-load the stream from its record, \
-                      and follows it again."
+        long_about = "`run`, then the project's log followed — each record under the project's \
+                      folder name — plus a watch on the project's .py files: each settled save \
+                      queues another load, which replaces each stream. A save whose code fails \
+                      records its stream failed, with the traceback in the log, until a save \
+                      that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \
+                      goes away, dev says so, waits for it, and follows the log again as the \
+                      restarted runtime re-loads the project from its records."
     )]
     Dev {
-        #[command(flatten)]
-        stream_load_arguments: StreamLoadArguments,
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
     },
     /// Stop a stream: queue its unload, and keep it stopped across restarts.
     Stop {
@@ -172,8 +175,7 @@ enum TatolabVerb {
         after_long_help = STREAM_ARGUMENT_LONG_HELP,
         long_about = "Show a stream under another display name — any text, never cast and never \
                       unique. Its id, its address and its broadcast stay as they are, so no reader \
-                      of its ports is cut off, and the name holds across restarts and re-loads \
-                      without --name."
+                      of its ports is cut off, and the name holds across restarts and re-loads."
     )]
     Rename {
         /// [STREAM], as every stream verb takes it, then the display name to show it under.
@@ -301,22 +303,22 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         TatolabVerb::New { directory } => {
             scaffold_new_stream_project::scaffold_new_stream_project(&directory).map(|()| 0)
         }
-        TatolabVerb::Run {
-            stream_load_arguments,
-        } => caller_working_directory().and_then(|caller_working_directory| {
-            stream_actions_on_the_runtime::run_stream(
-                &stream_load_arguments,
-                &caller_working_directory,
-            )
-        }),
-        TatolabVerb::Dev {
-            stream_load_arguments,
-        } => caller_working_directory().and_then(|caller_working_directory| {
-            stream_followed_and_reloaded_on_every_save::follow_the_stream_and_reload_it_on_every_save(
-                &stream_load_arguments,
-                &caller_working_directory,
-            )
-        }),
+        TatolabVerb::Run { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::run_project(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
+        }
+        TatolabVerb::Dev { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_followed_and_reloaded_on_every_save::follow_the_project_log_and_load_the_project_on_every_save(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
+        }
         TatolabVerb::Stop { stream } => {
             stream_actions_on_the_runtime::stop_stream(stream.as_deref())
         }

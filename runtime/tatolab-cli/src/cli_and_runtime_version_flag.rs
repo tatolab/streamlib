@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::current_proc
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::{
-    OBSERVATION_VERB_TOOL_CALL_TIMEOUT, call_one_local_api_tool,
+    ONE_SHOT_VERB_TOOL_CALL_TIMEOUT, call_one_local_api_tool,
 };
 use crate::machine_runtime_local_api_socket::{
     holder_serving_another_user, local_api_socket_of_the_running_runtime,
@@ -52,7 +52,7 @@ fn runtime_line_of_the_machines_runtime() -> String {
         &local_api_socket_path,
         DESCRIBE_RUNTIME_TOOL_NAME,
         serde_json::Map::new(),
-        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+        ONE_SHOT_VERB_TOOL_CALL_TIMEOUT,
     )
     .map_err(|tool_call_failure| tool_call_failure.to_string())
     .and_then(|tool_result_text| {
