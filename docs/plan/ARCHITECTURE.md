@@ -211,8 +211,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the exposures in its state directory, and re-loads that recorded graph on every start, a
   crash's restart included. There are no restart policies: a recorded stream always comes back
   unless stopped or failed. `tatolab stop` unloads a stream and remembers it as stopped, across
-  restarts too; `tatolab start` re-loads a stopped stream from its record; `tatolab rm` forgets
-  a stream, the only verb that loses one (owner, 2026-10-02). Live edits are never recorded, so
+  restarts too; `tatolab start` re-loads a stopped stream from its record; `tatolab rm` removes
+  the whole project from the runtime, unloading each of its streams and forgetting their
+  records, the only verb that loses one (owner, 2026-10-02; a project, not a stream, owner,
+  2026-10-31). Live edits are never recorded, so
   the function wins on the next start, and picking up a changed source is another `run`; a
   stream implicated in the runtime's last two crashes in a row — a clean stop of the runtime or
   a manual restart is no crash and resets the count — or one that cannot re-load at start (a
@@ -235,7 +237,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   whichever connection carries the call, and the stream outlives that connection. `logs
   {stream, after}` pages a stream's records, `after` a record sequence number. The tools:
   `stop_stream` (unload; record `stopped`), `start_stream` (a stopped or failed one),
-  `remove_stream` (unload, forget), `rename_stream` (the display name), `list_streams` (id,
+  `remove_project {project_directory}` (unload every stream of the project, forget every
+  record of it), `rename_stream` (the display name), `list_streams` (id,
   display name, location, running / stopped / failed and why, node count) and `expose_port
   {stream, node, port, level}`, `level` one of `internal`, `private`, `public`, which sets the
   port's level live, cutting at once every reader the level no longer allows, and records the
@@ -247,7 +250,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; amended by create-project:
   `create_project`; amended by project-loads-every-stream: `list_project_streams`; amended by
   queued-stream-actions: `run_stream` is renamed `run_project`; `run_project`, `start_stream`,
-  `stop_stream` and `remove_stream` queue a stream action and answer its action id, `describe_stream_action` reads one and
+  `stop_stream` and `remove_project` queue a stream action and answer its action id, `describe_stream_action` reads one and
   `cancel_stream_action` ends one, `list_streams` shows `preparing` and `stopping`, and `logs`
   takes a project]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
@@ -283,7 +286,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   re-loaded at every start unless stopped or failed; there is no attached stream, `run_stream` takes no `keep`,
   `tatolab run` has no `-d`, and a closing `/mcp/stdio` connection unloads nothing. A stream is
   running, stopped or failed — the two-crashes-in-a-row and cannot-re-load rules apply to every
-  stream — and only `stop` / `stop_stream` and `rm` / `remove_stream` end one. A load of a
+  stream — and only `stop` / `stop_stream` and `rm` / `remove_project` end one. A load of a
   location already loaded or recorded replaces that stream under the same id, keeping its
   display name unless the load gives one, and the owner's exposure rulings; the running stream is unloaded only once the
   compile succeeded, and a refused load re-loads it. `tatolab run` loads and returns, printing
@@ -337,7 +340,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `tatolab run` or `tatolab dev` with no argument, `run_stream` with no `stream_function`,
   `Tatolab.app`'s Add, and create — loads every `@stream` in the project's `stream.py`, each as
   its own stream: its own location, stream id, display name, record, logs and lifecycle, so
-  `stop`, `start`, `rm` and `rename` act on one. Naming a function loads that one alone. The
+  `stop`, `start` and `rename` act on one; `rm` removes the whole project. Naming a function loads that one alone. The
   project compiles once, and a stream whose part of the compile fails is recorded `failed` (the
   entry below). `--name` and `run_stream {name}` are refused when the load would load more
   than one stream. A re-load of the project replaces each of its streams in place, and a recorded
@@ -379,8 +382,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a record, never where it is kept. The venv's making and the compile write records with no
   stream. The records keep the log schema's fields, with `action` added. `logs` takes the
   project and reads its log from disk, narrowed to a stream or an action when asked; `logs -f`
-  and `dev` follow it, each record shown under the project's folder name. `rm` forgets a
-  stream's record and deletes no log; its records age out with the log's rotation. Owner,
+  and `dev` follow it, each record shown under the project's folder name. `rm` forgets every
+  record of the project and deletes no log; its records age out with the log's rotation. Owner,
   2026-10-29 and 2026-10-30. [load-never-refused-for-code; failed-load-logs;
   queued-stream-actions]
   Rejected: refusing a load whose code fails, or putting the previous version back — a person or
@@ -389,7 +392,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream is a programmatic concept a project defines any number of; the project is a real
   location on disk and the storage unit for its log (owner, 2026-10-30).
 - **DECIDED** — Every load and unload is a queued stream action. `run_project`, `start_stream`,
-  `create_project`, `stop_stream`, `remove_stream` and the runtime's re-load at start each queue
+  `create_project`, `stop_stream`, `remove_project` and the runtime's re-load at start each queue
   one **stream action** and answer at once with its **action id**. The runtime makes the venv,
   compiles, describes, loads, starts, stops and unloads in the background, and no call waits for
   what its action does. `tatolab run`, `new`, `start`, `stop` and `rm` exit 0 once the action
@@ -398,15 +401,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - **Loads take a project.** `tatolab run`, `tatolab dev` and `run_project {project_directory}`
     load every `@stream` in the project's `stream.py` and take no stream function, no display
     name and no other entry file; one
-    stream is managed afterwards by its own `start`, `stop`, `rm` and `rename`.
+    stream is managed afterwards by its own `start`, `stop` and `rename`, and `rm` removes the
+    project with every stream of it. A stream is never removed alone: a `@stream` in
+    `stream.py` runs, and commenting it out is how a stream leaves (owner, 2026-10-31).
   - **Steps.** An action runs in order: queued, then making the venv, compiling and starting,
     or stopping. It ends done, failed with its reason, or cancelled. `describe_stream_action
     {action}` returns its state, its current step, the streams it touched and, when failed,
     why.
   - **States.** While an action works on a stream, `list_streams` and `tatolab streams` show it
-    `preparing` (a load or a start) or `stopping` (a stop or a remove), the step as the why.
-  - **Pending marks.** Queuing a stop, a remove or a start writes a pending mark on the
-    stream's record, and the action finalises it when done: a stop records `stopped`, a remove
+    `preparing` (a load or a start) or `stopping` (a stop, or a remove of its project), the
+    step as the why.
+  - **Pending marks.** Queuing a stop or a start writes a pending mark on the stream's
+    record, and queuing a remove writes one on every record of the project, and the action finalises it when done: a stop records `stopped`, a remove
     forgets the record, a start clears `stopped` or `failed`. Cancelling the action clears the
     mark, leaving the record as it was. The re-load at start first finishes any mark a crash
     left — a pending stop recorded `stopped`, a pending remove forgotten, a pending start
@@ -3623,7 +3629,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
   folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
   `disconnect` — the seven stream actions — `run_stream`, `stop_stream`, `start_stream`,
-  `remove_stream`, `rename_stream`, `list_streams` and `expose_port` (§Product) — and the four relay verbs —
+  `remove_project`, `rename_stream`, `list_streams` and `expose_port` (§Product) — and the four relay verbs —
   `add_relay`, `configure_relay`, `remove_relay` and `list_relays` (§Networking, the
   adapters); `health` is a REST route, not a tool. The MCP handshake's server version is the
   runtime's crate version. The runtime has no shutdown verb: it stays on as a service does, stopped by

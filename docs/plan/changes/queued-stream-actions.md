@@ -2,6 +2,10 @@
 
 > **Approved by the owner, 2026-10-30:** "I approve the pr merge it then /derive-tickets" (PR #2985).
 > Ticketed as #2986, #2987, #2988, #2989, #2990, #2991.
+>
+> **Amended by the owner, 2026-10-31:** "Yes rm removes the entire project from the runtime, we
+> don't delete streams from the runtime since that would make no sense to have code in the
+> project marked as a @stream but not run it". `remove_stream` becomes `remove_project`.
 
 Builds §Product's "Every load and unload is a queued stream action" and the project-log clauses
 of "A load is never refused", with every `amended by queued-stream-actions` pointer in §Product
@@ -12,13 +16,16 @@ Today every stream tool is a synchronous engine call. A load makes the venv (a s
 re-load at start syncs under the engine-wide lock. Each loaded stream writes its own log.
 
 **After this change:**
-- **Actions.** `run_project`, `start_stream`, `stop_stream`, `remove_stream` and the re-load at
+- **Actions.** `run_project`, `start_stream`, `stop_stream`, `remove_project` and the re-load at
   start queue a stream action on the project's serial queue and answer its action id at once.
   `describe_stream_action` reads one, and `cancel_stream_action` ends one early.
 - **Loads take a project.** `run_project {project_directory}` loads every `@stream`. `run` and
   `dev` name no function and no display name.
 - **Listing.** `list_streams` shows `preparing` and `stopping`, with the action's step.
-- **Records.** A queued stop, remove or start writes a pending mark that the action finalises.
+- **Records.** A queued stop or start writes a pending mark on its stream's record, and a queued
+  remove one on every record of its project; the action finalises it.
+- **`rm` removes a project.** `remove_project {project_directory}` unloads every stream of the
+  project and forgets every record of it; no tool removes one stream.
 - **Attributes.** `rename_stream` and `expose_port` never wait behind an action.
 - **Logs.** One log per project, every record carrying `action`, and `stream` when a stream
   wrote it. `logs` takes the project.
@@ -124,7 +131,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
     through `spawn_blocking`.
   - Queues never wait on each other. The one-action lock stays engine-wide and is held only
     for an action's load and unload steps, never for the venv or the compile.
-  - The existing bodies (`run_project`, `start_stream`, `stop_stream`, `remove_stream` and the
+  - The existing bodies (`run_project`, `start_stream`, `stop_stream`, `remove_project` and the
     re-load of one project) become the actions' steps and gain a `StreamActionProgress` they
     report their step to.
 - **A stream action.** `StreamAction {action_id, project_directory, kind, state, step,
@@ -142,7 +149,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   Streams it had not reached stay as recorded. A stop or remove whose teardown has started is
   past cancelling: cancel answers so, and the action ends `done`, its mark finalised.
 - **Pending marks.** `StreamRecord.pending_stream_actions: Vec<PendingStreamActionOnTheRecord>`,
-  each `{action_id, kind}` with kind `Stop`, `Remove` or `Start`, in queue order;
+  each `{action_id, kind}` with kind `Stop`, `Remove` or `Start`, in queue order — a `Remove`
+  mark on every record of its project;
   `STREAM_RECORD_SCHEMA_VERSION` goes to 4, and a schema-3 file reads as having none.
   - Queuing appends the action's mark. Only that action finalises it (records `stopped`,
     forgets the record, or clears `stopped` and `failed`), and only its cancel removes it.
@@ -152,7 +160,7 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   each other's fields (`write` replaces the whole record from a caller's snapshot today,
   `machine_state_directory.rs:456`). Every record change goes through it.
 - **Engine trait.** `OperationsOnTheStreamsLoadedInThisRuntime` gains `describe_stream_action`
-  and `cancel_stream_action`; `run_project`, `start_stream`, `stop_stream` and `remove_stream`
+  and `cancel_stream_action`; `run_project`, `start_stream`, `stop_stream` and `remove_project`
   return `StreamActionQueued {action_id, project_directory}`; the stub and test engine follow.
 - **Last compile per project.** Every compile records its project's streams (each function and
   its docstring), or why `stream.py` did not import, in memory. `list_project_streams` (#2973)
@@ -209,6 +217,11 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
 - **`rename_stream` and `expose_port`** stop taking `one_stream_action_at_a_time`
   (S:766, S:862) and write through `update`. `expose_port`'s live cut runs as today when the
   stream is loaded; otherwise the ruling applies at load.
+- **`remove_stream` becomes `remove_project {project_directory}`** (`tatolab rm [--dir]`, the
+  working directory's project unless `--dir` names one). Its `Remove` action unloads every
+  loaded stream of the project and forgets every record of it, and deletes no file. A stream
+  of the project that is not recorded is not an error; a project with nothing loaded or
+  recorded ends the action `done` with no streams.
 - **Listing.**
   - `StreamListingState` and `ListedStreamState` gain `Preparing` and `Stopping` (wire
     `preparing` and `stopping`).
@@ -217,8 +230,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
 - **Wire.**
   - The tool `run_stream` is renamed `run_project`: `RunProjectToolArguments
     {project_directory}`, `RunProjectToolResult {action, project_directory}`.
-  - `StartStreamToolResult`, `StopStreamToolResult` and `RemoveStreamToolResult` become
-    `{action, stream}`.
+  - `StartStreamToolResult` and `StopStreamToolResult` become `{action, stream}`;
+    `RemoveProjectToolResult` is `{action, project_directory}`.
   - `LogsToolArguments` is `{project_directory, stream?, action?, after?, count?}`, `after` the
     opaque cursor. `LogsToolResult` is `{project_directory, records, next_after,
     records_no_longer_held}`.
@@ -230,7 +243,8 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
   - `run` takes `--dir` only (`TARGET`, `-f`, `--name` go) and prints `<action> queued: load of <project>` and `follow it:
     tatolab logs -f`. It exits 0 once queued, and 1 only for a malformed request or an
     unreachable runtime.
-  - `start`, `stop` and `rm` print `<action> queued: <verb> of <stream>`.
+  - `start` and `stop` print `<action> queued: <verb> of <stream>`, and `rm` prints
+    `<action> queued: remove of <project>`.
   - Every stream verb uses the 30s ordinary timeout.
   - `logs [--dir] [--stream <stream>] [--action <action>] [-f]` takes the working directory's
     project unless `--dir` names one.
@@ -289,6 +303,9 @@ Paths are under `runtime/`. S = `streamlib-engine/src/core/runtime/stream_action
 - REMOVED: requested_stream_target
 - REMOVED: Omit it for the sole
   The `stream_function` argument's description.
+- REMOVED: remove_stream
+  With `RemoveStreamToolResult`: `rm` removes the project (owner, 2026-10-31).
+- REMOVED: RemoveStreamToolResult
 - REMOVED: tatolab_run_of_a_suite_stream_function
   The harness's `run <module>:<qualname>`; replaced by the one-stream project.
 

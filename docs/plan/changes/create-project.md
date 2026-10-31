@@ -1,6 +1,11 @@
 # create-project
 
 > **Approved by the owner, 2026-10-29:** "Approved, merge the pr" (PR #2969).
+>
+> **Amended by queued-stream-actions** (owner, on #2974, 2026-10-30; confirmed 2026-10-31):
+> `create_project` is a queued load of the scaffold, answering `{action, stream,
+> project_directory}` at once. §Amended by queued-stream-actions below supersedes every clause
+> here that it names.
 
 Built from #2951 and the aligns merged in #2968 and #2970. It builds three §Product entries:
 - "Creating a project" (ADR `docs/decisions/create-project.md`);
@@ -344,6 +349,31 @@ Paths are under `runtime/` unless marked otherwise.
   3. delete `.venv` and `start_stream`: it is made again;
   4. add a second `@stream` that raises and `run_stream`: one `running`, one `failed` with the
      traceback in `logs`.
+
+## Amended by queued-stream-actions
+
+`docs/plan/changes/queued-stream-actions.md` shipped the queue, `run_project`, the project log
+and `--every-stream`; these clauses replace what they name above.
+
+- **Creating a project** (replaces ADDED's step 4, its reply and its budget):
+  - The call resolves the directory, or draws one under `$HOME/streams`, then queues a `Load`
+    of the project and answers `CreateProjectToolResult {action, stream, project_directory}`.
+    `stream` is the id of the scaffold's `stream:main` at that directory.
+  - The action's first step writes the scaffold. A directory already holding a file the
+    scaffold writes fails the action, with nothing written (§Product's "A load is never
+    refused"). The steps after are `run_project`'s: the venv, the every-stream compile and the
+    start.
+  - The created stream's display name is the folder's name, carried by the action and never a
+    tool argument; a later load keeps it as it keeps any recorded display name.
+  - A relative directory is refused by the call as a malformed request.
+  - REMOVED from this change before it was built: `PROJECT_CREATE_TOOL_CALL_TIMEOUT` and its
+    const-asserts.
+- **`tatolab new [DIRECTORY]`** prints `<action> queued: create of <dir>` and `follow it:
+  tatolab logs -f --dir <dir>`, and exits 0 once queued.
+- **Superseded, already built by queued-stream-actions:** `run_stream`'s result shape and the
+  CLI's `run` and `dev` output (MODIFIED), `--list-streams` and `list_project_streams` making
+  the venv (`list_project_streams` answers from the project's last compile), and the per-stream
+  `failed_because` traceback in `logs` (it is in the project's log).
 
 ## Out of scope
 

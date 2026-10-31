@@ -14,7 +14,7 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
 - Making a project's venv is an asynchronous side effect that can take minutes: one large wheel
   can outlast any bound. So no call that promises its final answer contains it. Every load and
   unload is a **stream action**, queued and answered at once with an **action id**:
-  `run_stream`, `start_stream`, `create_project`, `stop_stream`, `remove_stream` and the
+  `run_stream`, `start_stream`, `create_project`, `stop_stream`, `remove_project` and the
   runtime's re-load at start. The venv, the compile, the describe, the load, the start and the
   teardown run in the background, as a workflow engine runs a job.
   `describe_stream_action {action}` reads an action's state, step, streams and reason.
@@ -25,11 +25,15 @@ before making `tatolab run` wait for a stream to settle; and before writing a lo
 - A load takes a project and loads every `@stream` in its `stream.py`; it names no function,
   gives no display name and takes no other entry file. The local-API tool is `run_project`, as
   `create_project` and `list_project_streams` are named for what they take. A project defines any number of streams, and each is managed afterwards by its
-  own `start`, `stop`, `rm` and `rename`.
+  own `start`, `stop` and `rename`.
+- `rm` removes the whole project from the runtime: every stream of it is unloaded and every
+  record of it forgotten. No verb removes one stream — a `@stream` in `stream.py` is meant to
+  run, and commenting it out is how a stream leaves (owner, 2026-10-31).
 - A load refuses nothing. A missing directory and an id another location holds fail the
   action, with the reason in the action and the log. The call errors only on a malformed
   request.
-- Queuing a stop, a remove or a start writes a pending mark on the stream's record, which the
+- Queuing a stop or a start writes a pending mark on the stream's record, and a remove one on
+  every record of its project, which the
   action finalises when done and a cancel clears, so the record never says what has not
   happened and a crash still finishes the action: the re-load at start completes any mark left.
   The queue itself lives in memory.
