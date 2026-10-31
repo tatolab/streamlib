@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.1](https://github.com/tatolab/streamlib/compare/v0.63.0...v0.63.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **logs:** a page the log rotated under on every read answers no record, and the log-path tests compare resolved paths ([#3001](https://github.com/tatolab/streamlib/issues/3001)) ([a251bb7](https://github.com/tatolab/streamlib/commit/a251bb740147fce484207dcfdef186c51ad6ffc0))
+
 ## [0.63.0](https://github.com/tatolab/streamlib/compare/v0.62.0...v0.63.0) (2026-10-31)
 
 
