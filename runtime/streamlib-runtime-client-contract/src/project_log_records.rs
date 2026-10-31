@@ -78,7 +78,9 @@ const PROJECT_LOG_READS_BEFORE_A_ROTATION_IS_ANSWERED_AS_IT_WAS: usize = 3;
 /// written by the stream `stream` and for the stream action `action` when
 /// they are given. A cursor whose segment retention deleted resumes at the
 /// oldest held, saying so; a line still being written, or one that is not a
-/// JSON record, is not answered. A page the log rotated under is read again.
+/// JSON record, is not answered. A page the log rotated under is read again,
+/// and one it rotated under every time answers no records and the cursor it
+/// was given.
 pub fn project_log_records_after(
     project_directory: &Path,
     stream: Option<&str>,
@@ -101,9 +103,36 @@ pub fn project_log_records_after(
         )?;
         let the_log_rotated_under_the_read = page.a_segment_listed_was_gone
             || rotated_project_log_sequences(&active_segment_path)? != rotated_sequences;
-        if !the_log_rotated_under_the_read || reads_left == 0 {
+        if !the_log_rotated_under_the_read {
             return Ok(page.page);
         }
+        if reads_left == 0 {
+            return Ok(the_page_answered_when_the_log_rotated_under_every_read(
+                after,
+                &rotated_sequences,
+            ));
+        }
+    }
+}
+
+/// No records, and a cursor that names no offset a rotation could have moved:
+/// `after` itself, or with none the start of the oldest segment listed.
+fn the_page_answered_when_the_log_rotated_under_every_read(
+    after: Option<&str>,
+    rotated_sequences: &[u64],
+) -> ProjectLogRecordsPage {
+    let next_after = match after {
+        Some(cursor) => cursor.to_string(),
+        None => ProjectLogCursor {
+            segment_sequence: rotated_sequences.first().copied().unwrap_or(1),
+            byte_offset: 0,
+        }
+        .spelled(),
+    };
+    ProjectLogRecordsPage {
+        records: Vec::new(),
+        next_after,
+        records_no_longer_held: false,
     }
 }
 
@@ -447,6 +476,23 @@ mod tests {
             messages_of(&read_again),
             ["in the first rotated", "in the active"]
         );
+    }
+
+    #[test]
+    fn a_log_rotated_under_every_read_answers_no_record_and_a_cursor_no_rotation_moves() {
+        let after_a_cursor =
+            the_page_answered_when_the_log_rotated_under_every_read(Some("4:120"), &[3, 4]);
+        assert!(after_a_cursor.records.is_empty());
+        assert_eq!(after_a_cursor.next_after, "4:120");
+        assert!(!after_a_cursor.records_no_longer_held);
+
+        let from_the_start = the_page_answered_when_the_log_rotated_under_every_read(None, &[3, 4]);
+        assert!(from_the_start.records.is_empty());
+        assert_eq!(from_the_start.next_after, "3:0");
+
+        let with_no_segment_rotated =
+            the_page_answered_when_the_log_rotated_under_every_read(None, &[]);
+        assert_eq!(with_no_segment_rotated.next_after, "1:0");
     }
 
     #[test]

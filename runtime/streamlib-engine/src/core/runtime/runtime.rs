@@ -3812,7 +3812,7 @@ mod tests {
         let second = load_named("second");
         let project_log =
             streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
-                project_directory.path(),
+                &std::fs::canonicalize(project_directory.path()).unwrap(),
             );
         assert_eq!(first.jsonl_log_path(), Some(project_log.as_path()));
         assert_eq!(second.jsonl_log_path(), Some(project_log.as_path()));
@@ -3907,7 +3907,7 @@ mod tests {
 
         let records = every_record_of_the_stream_log_at(
             &streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
-                project_directory.path(),
+                &std::fs::canonicalize(project_directory.path()).unwrap(),
             ),
         );
         for runner in [&first_runner, &second_runner] {
@@ -3944,7 +3944,7 @@ mod tests {
             stream.jsonl_log_path(),
             Some(
                 streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
-                    project_directory.path()
+                    &std::fs::canonicalize(project_directory.path()).unwrap()
                 )
                 .as_path()
             )
