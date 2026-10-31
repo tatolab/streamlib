@@ -1551,7 +1551,7 @@ fn tear_down_a_stream_that_never_entered_the_table(stream: &Arc<LoadedStreamInTh
             )
         });
     }
-    stream.log_route().close_the_jsonl_log_file();
+    stream.log_route().write_every_record_it_emitted_and_sync();
 }
 
 /// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
@@ -3789,13 +3789,13 @@ mod tests {
         crate::core::logging::one_stream_log_file_written_on_a_test_thread::read_every_record_of_a_jsonl_log(path)
     }
 
-    /// Each stream's records — from its own threads, from a thread it spawned,
-    /// and from engine code acting on it — land in its own JSONL file under its
-    /// project and never in the other's, and a record no stream emitted lands
-    /// in neither. Each file is whole on disk once its stream is unloaded.
+    /// Two streams of one project log into the project's one file: each
+    /// record — from a stream's own threads, from a thread it spawned, and
+    /// from engine code acting on it — stamped with its stream's id, and a
+    /// record no stream emitted lands in neither.
     #[test]
     #[serial]
-    fn two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither() {
+    fn two_streams_of_one_project_log_to_its_one_file_each_record_stamped_with_its_stream() {
         let project_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let runner = Runner::new().expect("Runner::new");
@@ -3809,25 +3809,16 @@ mod tests {
         };
         let first = load_named("first");
         let second = load_named("second");
-        let first_log = first.jsonl_log_path().expect("first logs").to_path_buf();
-        let second_log = second.jsonl_log_path().expect("second logs").to_path_buf();
-        assert_ne!(first_log, second_log);
-        for stream_log in [&first_log, &second_log] {
-            assert_eq!(
-                stream_log.parent(),
-                Some(
-                    project_directory
-                        .path()
-                        .join(".streamlib")
-                        .join("logs")
-                        .as_path()
-                )
+        let project_log =
+            streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
+                project_directory.path(),
             );
-        }
+        assert_eq!(first.jsonl_log_path(), Some(project_log.as_path()));
+        assert_eq!(second.jsonl_log_path(), Some(project_log.as_path()));
 
         first.log_route().run_entered(|| {
             std::thread::spawn(
-                crate::core::logging::carrying_this_threads_loaded_stream_log_route(|| {
+                crate::core::logging::carrying_this_threads_project_log_route_entry(|| {
                     tracing::info!("token-from-a-thread-the-first-stream-spawned")
                 }),
             )
@@ -3842,21 +3833,39 @@ mod tests {
         runner.unload_stream("second").expect("second unloads");
 
         let runtime_id = runner.runtime_id().to_string();
-        let first_token = "token-from-a-thread-the-first-stream-spawned";
-        let second_token = "token-of-the-second-stream";
-        for (stream_log, stream_id, own_token, other_stream_id, other_token) in [
-            (&first_log, "first", first_token, "second", second_token),
-            (&second_log, "second", second_token, "first", first_token),
+        let records = every_record_of_the_stream_log_at(&project_log);
+        assert!(
+            !records
+                .iter()
+                .any(|record| record.message == "token-no-stream-emitted"),
+            "a record no stream emitted reached the project's log"
+        );
+        for record in &records {
+            assert_eq!(record.runtime_id, runtime_id, "{record:?}");
+        }
+        for (stream_id, own_token, other_stream_id, other_token) in [
+            (
+                "first",
+                "token-from-a-thread-the-first-stream-spawned",
+                "second",
+                "token-of-the-second-stream",
+            ),
+            (
+                "second",
+                "token-of-the-second-stream",
+                "first",
+                "token-from-a-thread-the-first-stream-spawned",
+            ),
         ] {
-            let records = every_record_of_the_stream_log_at(stream_log);
-            for record in &records {
-                assert_eq!(record.stream.as_deref(), Some(stream_id), "{record:?}");
-                assert_eq!(record.runtime_id, runtime_id, "{record:?}");
+            let records_of_the_stream: Vec<_> = records
+                .iter()
+                .filter(|record| record.stream.as_deref() == Some(stream_id))
+                .collect();
+            for record in &records_of_the_stream {
                 assert!(
                     !record.message.contains(&format!("`{other_stream_id}`"))
-                        && record.message != other_token
-                        && record.message != "token-no-stream-emitted",
-                    "the log of `{stream_id}` holds a record it did not emit: {record:?}"
+                        && record.message != other_token,
+                    "a record of `{stream_id}` was emitted by `{other_stream_id}`: {record:?}"
                 );
             }
             for message_the_stream_logged in [
@@ -3865,67 +3874,57 @@ mod tests {
                 own_token.to_string(),
             ] {
                 assert!(
-                    records
+                    records_of_the_stream
                         .iter()
                         .any(|record| record.message.starts_with(&message_the_stream_logged)),
-                    "the log of `{stream_id}` lacks `{message_the_stream_logged}`: {records:#?}"
+                    "the records of `{stream_id}` lack `{message_the_stream_logged}`: \
+                     {records_of_the_stream:#?}"
                 );
             }
         }
     }
 
-    /// A second runner in one process logs fully: each runner's stream writes
-    /// its own file, every record carrying that runner's id.
+    /// A second runner in one process logs fully: both runners' streams of
+    /// one project write the project's one file, each record carrying its
+    /// runner's id.
     #[test]
     #[serial]
-    fn a_second_runner_in_one_process_logs_to_its_own_stream_files() {
+    fn a_second_runner_in_one_process_logs_into_the_projects_file_under_its_own_id() {
         let project_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let first_runner = Runner::new().expect("the first runner constructs");
         let second_runner = Runner::new().expect("the second runner constructs");
-        let mut stream_logs_by_runtime_id = Vec::new();
         for runner in [&first_runner, &second_runner] {
-            let stream = runner
+            runner
                 .load_an_empty_stream(
                     OptionsForLoadingOneStream::in_project_directory(project_directory.path())
                         .with_stream_id("main"),
                 )
                 .expect("an empty stream loads");
-            stream_logs_by_runtime_id.push((
-                runner.runtime_id().to_string(),
-                stream
-                    .jsonl_log_path()
-                    .expect("each runner's stream logs")
-                    .to_path_buf(),
-            ));
             runner.unload_stream("main").expect("the stream unloads");
         }
 
-        assert_ne!(
-            stream_logs_by_runtime_id[0].1,
-            stream_logs_by_runtime_id[1].1
+        let records = every_record_of_the_stream_log_at(
+            &streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
+                project_directory.path(),
+            ),
         );
-        for (runtime_id, stream_log) in &stream_logs_by_runtime_id {
-            let records = every_record_of_the_stream_log_at(stream_log);
+        for runner in [&first_runner, &second_runner] {
+            let runtime_id = runner.runtime_id().to_string();
             assert!(
-                records
-                    .iter()
-                    .any(|record| record.message == "[stop] The stream `main` stopped"),
-                "the stream of runtime {runtime_id} wrote no record of its stop: {records:#?}"
+                records.iter().any(|record| record.runtime_id == runtime_id
+                    && record.stream.as_deref() == Some("main")
+                    && record.message == "[stop] The stream `main` stopped"),
+                "the project's log lacks the stop `{runtime_id}` logged: {records:#?}"
             );
-            for record in &records {
-                assert_eq!(&record.runtime_id, runtime_id, "{record:?}");
-                assert_eq!(record.stream.as_deref(), Some("main"), "{record:?}");
-            }
         }
     }
 
-    /// A stream's records are numbered from 1 in the order its route wrote
-    /// them, readable by sequence number while the stream is loaded, and its
-    /// JSONL file holds the same records with no number added.
+    /// A stream's records land in its project's log, each stamped with the
+    /// stream's id, and the project's reader reads them back by stream.
     #[test]
     #[serial]
-    fn a_streams_records_are_read_by_sequence_number_and_its_jsonl_file_carries_none() {
+    fn a_streams_records_land_in_its_projects_log_stamped_with_its_id() {
         let project_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let runner = Runner::new().expect("Runner::new");
@@ -3940,46 +3939,40 @@ mod tests {
                 tracing::info!("token-of-the-stream-{token_index}");
             }
         });
-        let stream_log = stream
-            .jsonl_log_path()
-            .expect("the stream logs")
-            .to_path_buf();
-        stream.log_route().close_the_jsonl_log_file();
+        assert_eq!(
+            stream.jsonl_log_path(),
+            Some(
+                streamlib_runtime_client_contract::runtime_log_file_paths::project_log_path(
+                    project_directory.path()
+                )
+                .as_path()
+            )
+        );
+        stream.log_route().write_every_record_it_emitted_and_sync();
 
-        let every_record = stream.log_records_after(0, 4096);
-        assert_eq!(every_record.records_no_longer_held, 0);
-        let sequences: Vec<u64> = every_record.records.iter().map(|r| r.sequence).collect();
-        assert_eq!(sequences, (1..=sequences.len() as u64).collect::<Vec<_>>());
-        assert_eq!(every_record.next_after, sequences.len() as u64);
-        let token_sequences: Vec<u64> = every_record
+        let page =
+            streamlib_runtime_client_contract::project_log_records::project_log_records_after(
+                project_directory.path(),
+                Some("main"),
+                None,
+                None,
+                4096,
+            )
+            .unwrap();
+        let tokens: Vec<&str> = page
             .records
             .iter()
-            .filter(|numbered| {
-                numbered.record["message"]
-                    .as_str()
-                    .is_some_and(|message| message.starts_with("token-of-the-stream-"))
-            })
-            .map(|numbered| numbered.sequence)
+            .filter_map(|record| record["message"].as_str())
+            .filter(|message| message.starts_with("token-of-the-stream-"))
             .collect();
-        assert_eq!(token_sequences.len(), 3, "{every_record:#?}");
-
-        let after_the_first_token = stream.log_records_after(token_sequences[0], 1);
-        assert_eq!(after_the_first_token.records.len(), 1);
         assert_eq!(
-            after_the_first_token.records[0].sequence,
-            token_sequences[0] + 1
+            tokens,
+            [
+                "token-of-the-stream-0",
+                "token-of-the-stream-1",
+                "token-of-the-stream-2"
+            ]
         );
-
-        let lines_on_disk: Vec<serde_json::Value> = std::fs::read_to_string(&stream_log)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("a JSONL line"))
-            .collect();
-        assert!(!lines_on_disk.is_empty());
-        for (line_on_disk, numbered) in lines_on_disk.iter().zip(&every_record.records) {
-            assert_eq!(line_on_disk, &numbered.record);
-            assert!(line_on_disk.get("sequence").is_none(), "{line_on_disk}");
-        }
         runner.unload_stream("main").expect("the stream unloads");
     }
 

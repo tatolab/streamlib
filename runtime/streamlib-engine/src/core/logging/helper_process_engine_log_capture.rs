@@ -223,7 +223,7 @@ mod tests {
             source: None,
             source_ts: None,
             source_seq: None,
-            loaded_stream_log_route: None,
+            project_log_route_entry: None,
         }
     }
 

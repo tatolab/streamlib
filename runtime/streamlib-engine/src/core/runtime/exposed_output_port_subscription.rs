@@ -208,7 +208,7 @@ impl LoadedStreamInThisRuntime {
         // A stream's graph lock is held across a compile, which may take a
         // processor's whole setup, so the subscription waits off the async workers.
         tokio::task::spawn_blocking(
-            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+            crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 subscribe_holding_the_source_side_open(
                     &compiler,
                     iceoryx2_node,

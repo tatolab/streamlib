@@ -283,26 +283,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
-            fn log_records_of_the_stream_a_call_names(
-                &self,
-                stream_id: &str,
-                after: u64,
-                _max_count: usize,
-            ) -> ::streamlib::sdk::error::Result<
-                ::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream,
-            > {
-                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_id,
-                )?;
-                Ok(::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream {
-                    stream_tag: $crate::control_plane_stub_support::the_stub_streams_tag(),
-                    records_page: ::streamlib::sdk::logging::LoadedStreamLogRecordsPage {
-                        records: Vec::new(),
-                        next_after: after,
-                        records_no_longer_held: 0,
-                    },
-                })
-            }
             fn run_stream(
                 &self,
                 _request: ::streamlib::sdk::runtime::RunStreamRequest,

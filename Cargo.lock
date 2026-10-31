@@ -6241,7 +6241,6 @@ name = "tatolab-cli"
 version = "0.61.0"
 dependencies = [
  "axum",
- "chrono",
  "clap",
  "http-body-util",
  "hyper",

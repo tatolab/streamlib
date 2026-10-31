@@ -117,9 +117,9 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         reason: "stamps the record at its Python origin, before the relay hop",
     },
     PermittedWallClockSurface {
-        path: "runtime/streamlib-engine/src/core/logging/loaded_stream_log_route.rs",
+        path: "runtime/streamlib-engine/src/core/logging/project_log_route.rs",
         surface: PermittedWallClockSurfaceKind::LogFileName,
-        reason: "mints `started_at_millis`, which humans read off a stream's JSONL file name",
+        reason: "mints `started_at_millis`, which humans read off the runtime's own JSONL file name",
     },
     PermittedWallClockSurface {
         path: "runtime/streamlib-relay-adapter-local/src/local_relay_certificate.rs",

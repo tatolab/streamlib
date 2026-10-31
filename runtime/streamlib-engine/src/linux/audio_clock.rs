@@ -72,7 +72,7 @@ impl AudioClock for LinuxTimerFdAudioClock {
         let handle = thread::Builder::new()
             .name("audio-clock-timerfd".to_string())
             .spawn(
-                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                     if let Err(e) = run_timerfd_loop(config, &callbacks, &running, &tick_count) {
                         tracing::error!("[LinuxTimerFdAudioClock] Timer loop failed: {}", e);
                         running.store(false, Ordering::SeqCst);

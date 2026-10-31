@@ -11,7 +11,7 @@ use streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent;
 
 use crate::core::logging::init::init_for_tests_intercepting_nothing_yet;
 use crate::core::logging::{
-    LoadedStreamLogRoute, LoadedStreamLogRouteEnteredOnThisThread, StreamlibLoggingConfig,
+    ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread, StreamlibLoggingConfig,
     StreamlibLoggingGuard,
 };
 
@@ -21,8 +21,8 @@ pub(crate) const STREAM_NAME_OF_A_TEST_STREAM_LOG: &str = "main";
 /// A test pathway, and the stream route its thread carries until it
 /// finishes.
 pub(crate) struct OneStreamLogFileWrittenOnThisTestThread {
-    entered: Option<LoadedStreamLogRouteEnteredOnThisThread>,
-    route: Arc<LoadedStreamLogRoute>,
+    entered: Option<ProjectLogRouteEntryEnteredOnThisThread>,
+    route: Arc<ProjectLogRouteEntry>,
     guard: Option<StreamlibLoggingGuard>,
 }
 
@@ -37,10 +37,10 @@ impl OneStreamLogFileWrittenOnThisTestThread {
     ) -> Self {
         let mut guard =
             init_for_tests_intercepting_nothing_yet(&config).expect("the test pathway installs");
-        let route = LoadedStreamLogRoute::open_in_project_directory(
+        let route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+            project_directory,
             runtime_id,
             STREAM_NAME_OF_A_TEST_STREAM_LOG,
-            project_directory,
         );
         let entered = route.enter_on_this_thread();
         #[cfg(unix)]
@@ -64,8 +64,8 @@ impl OneStreamLogFileWrittenOnThisTestThread {
             .to_path_buf()
     }
 
-    /// The route the test thread carries.
-    pub(crate) fn route(&self) -> &Arc<LoadedStreamLogRoute> {
+    /// The log route entry the test thread carries.
+    pub(crate) fn log_route_entry(&self) -> &Arc<ProjectLogRouteEntry> {
         &self.route
     }
 

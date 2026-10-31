@@ -13,7 +13,7 @@ use super::{
     OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::logging::LoadedStreamLogRoute;
+use crate::core::logging::ProjectLogRouteEntry;
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::{
     LoadedStreamTag, RuntimeOperations, RuntimeUniqueId, ShutdownEscalationOfOneStream,
@@ -35,7 +35,7 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     /// What the stream's teardown is waiting on, read by its watchdog.
     pub(crate) teardown_progress_note: TeardownProgressNoteOfOneStream,
     /// Where the records the stream's threads emit go.
-    pub(crate) log_route: Arc<LoadedStreamLogRoute>,
+    pub(crate) log_route: Arc<ProjectLogRouteEntry>,
     /// The stream itself, held weakly so the context is never part of the
     /// cycle its stop breaks.
     pub(crate) this_stream: std::sync::Weak<crate::core::runtime::LoadedStreamInThisRuntime>,
@@ -208,7 +208,7 @@ impl RuntimeContext {
     }
 
     /// Where the records the threads of the stream this context serves emit go.
-    pub fn this_streams_log_route(&self) -> &Arc<LoadedStreamLogRoute> {
+    pub fn this_streams_log_route(&self) -> &Arc<ProjectLogRouteEntry> {
         &self.loaded_stream.log_route
     }
 

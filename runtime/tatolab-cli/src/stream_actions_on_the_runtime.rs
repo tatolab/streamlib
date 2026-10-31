@@ -266,8 +266,10 @@ pub(crate) fn run_stream(
         stream_load_request.run_stream_tool_arguments(),
     )?;
     write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
-    let output_written =
-        write_verb_standard_output(&rendered_run_stream_lines(&run_stream_result))?;
+    let output_written = write_verb_standard_output(&rendered_run_stream_lines(
+        &run_stream_result,
+        caller_working_directory,
+    ))?;
     let any_stream_failed = run_stream_result
         .streams
         .iter()
@@ -283,16 +285,30 @@ pub(crate) fn run_stream(
 /// refused.
 const RUN_EXIT_CODE_WHEN_A_STREAM_IT_LOADED_IS_FAILED: u8 = 1;
 
-/// Each stream `run_stream` took in, then how to follow the one running.
-fn rendered_run_stream_lines(run_stream_result: &RunStreamToolResult) -> String {
+/// Each stream `run_stream` took in, then how to follow the one running from
+/// `caller_working_directory`: its project's log, named with `--dir` when the caller is elsewhere.
+fn rendered_run_stream_lines(
+    run_stream_result: &RunStreamToolResult,
+    caller_working_directory: &Path,
+) -> String {
+    let resolved_caller_working_directory = std::fs::canonicalize(caller_working_directory)
+        .unwrap_or_else(|_| caller_working_directory.to_path_buf());
     run_stream_result
         .streams
         .iter()
         .map(|stream| {
-            let follow_it = if stream.state == RunStreamToolResultStreamState::Running {
-                "\n  follow it: tatolab logs -f"
-            } else {
-                ""
+            let project_directory = &stream.location.project_directory;
+            let follow_it = match stream.state {
+                RunStreamToolResultStreamState::Running
+                    if *project_directory == resolved_caller_working_directory =>
+                {
+                    "\n  follow it: tatolab logs -f".to_owned()
+                }
+                RunStreamToolResultStreamState::Running => format!(
+                    "\n  follow it: tatolab logs -f --dir {}",
+                    project_directory.display()
+                ),
+                RunStreamToolResultStreamState::Failed => String::new(),
             };
             format!(
                 "{}{follow_it}\n",
@@ -737,9 +753,14 @@ mod tests {
     #[test]
     fn the_running_lines_name_the_stream_id_display_name_location_and_how_to_follow_it() {
         assert_eq!(
-            rendered_run_stream_lines(&run_stream_result_warning(&[])),
+            rendered_run_stream_lines(&run_stream_result_warning(&[]), Path::new("/srv/project")),
             "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
              follow it: tatolab logs -f\n"
+        );
+        assert_eq!(
+            rendered_run_stream_lines(&run_stream_result_warning(&[]), Path::new("/srv")),
+            "project-camera-3f2a9c running as \"camera\" (project /srv/project, stream:camera)\n  \
+             follow it: tatolab logs -f --dir /srv/project\n"
         );
     }
 
@@ -754,7 +775,7 @@ mod tests {
             Some("Traceback (most recent call last):\nValueError: bad wiring".to_owned());
 
         assert_eq!(
-            rendered_run_stream_lines(&run_stream_result),
+            rendered_run_stream_lines(&run_stream_result, Path::new("/srv/project")),
             "project-camera-3f2a9c failed: Traceback (most recent call last):\n\
              ValueError: bad wiring\n"
         );

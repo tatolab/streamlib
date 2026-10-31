@@ -34,9 +34,8 @@ pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(480);
 /// it; more queued ahead can outlast it, and the runtime still takes the action.
 pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
 
-/// Which load of a stream a `run_stream` result or a `logs` page is about: opaque, compared only
-/// for equality. A stream re-loaded under the same name is another instance, and numbers its log
-/// records from 1 again.
+/// Which load of a stream a `run_stream` result is about: opaque, compared only for equality. A
+/// stream re-loaded under the same name is another instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LoadedStreamInstance(pub String);
@@ -47,29 +46,20 @@ impl std::fmt::Display for LoadedStreamInstance {
     }
 }
 
-/// The `logs` tool's result: one loaded stream's records after the sequence number asked for.
+/// The `logs` tool's result: one project's log records after the cursor asked for, read from
+/// the project's log on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogsToolResult {
-    /// The stream's id.
-    pub stream: String,
-    /// The load whose records these are; a page naming another instance than the last numbers
-    /// its records afresh.
-    pub stream_instance: LoadedStreamInstance,
-    /// The records after `after`, oldest first.
-    pub records: Vec<LogsToolResultRecord>,
-    /// The `after` the next call passes to read on from this page.
-    pub next_after: u64,
-    /// Records after `after` the runtime dropped from its in-memory history before this read.
-    pub records_no_longer_held: u64,
-}
-
-/// One record of a [`LogsToolResult`], numbered by the runtime from 1 per loaded stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LogsToolResultRecord {
-    /// The record's place in its stream's log.
-    pub sequence: u64,
-    /// The record as its stream's JSONL log file holds it.
-    pub record: serde_json::Value,
+    /// The project whose log these are.
+    pub project_directory: PathBuf,
+    /// The records after `after` that match the call's `stream` and `action`, oldest first, each
+    /// as the project's JSONL log holds it.
+    pub records: Vec<serde_json::Value>,
+    /// The opaque cursor the next call passes as `after` to read on from this page.
+    pub next_after: String,
+    /// Whether retention deleted the segment `after` named, so the page resumes at the oldest
+    /// record held.
+    pub records_no_longer_held: bool,
 }
 
 /// Where a stream's code lives, as the local API reports it: its project directory, resolved,
@@ -568,16 +558,12 @@ mod tests {
         );
         assert_eq!(
             wire_text(&LogsToolResult {
-                stream: "camera".to_owned(),
-                stream_instance: LoadedStreamInstance("4".to_owned()),
-                records: vec![LogsToolResultRecord {
-                    sequence: 7,
-                    record: serde_json::json!({"message": "hello"}),
-                }],
-                next_after: 7,
-                records_no_longer_held: 2,
+                project_directory: PathBuf::from("/srv/project"),
+                records: vec![serde_json::json!({"message": "hello"})],
+                next_after: "2:17".to_owned(),
+                records_no_longer_held: false,
             }),
-            r#"{"stream":"camera","stream_instance":"4","records":[{"sequence":7,"record":{"message":"hello"}}],"next_after":7,"records_no_longer_held":2}"#
+            r#"{"project_directory":"/srv/project","records":[{"message":"hello"}],"next_after":"2:17","records_no_longer_held":false}"#
         );
     }
 

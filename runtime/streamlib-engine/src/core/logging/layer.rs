@@ -19,7 +19,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::core::logging::config::ResolvedTunables;
-use crate::core::logging::loaded_stream_log_route::the_loaded_stream_log_route_of_this_thread;
+use crate::core::logging::project_log_route::the_project_log_route_entry_of_this_thread;
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::worker::{DrainWorkerRecordQueue, now_ns};
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
@@ -56,9 +56,9 @@ impl JsonlSinkLayer {
         }
     }
 
-    /// The queue a stream log file opened through this layer is written
+    /// The queue a project log file opened through this layer is written
     /// from, and how that file batches, syncs and rotates.
-    pub(crate) fn record_queue_that_writes_stream_log_files(
+    pub(crate) fn record_queue_that_writes_project_log_files(
         &self,
     ) -> Option<(DrainWorkerRecordQueue, ResolvedTunables)> {
         self.stream_log_file_tunables
@@ -67,7 +67,7 @@ impl JsonlSinkLayer {
 
     /// Queue `record`, stamped with the route of the calling thread.
     pub(crate) fn enqueue_in_this_threads_route(&self, mut record: LogRecord) {
-        record.loaded_stream_log_route = the_loaded_stream_log_route_of_this_thread();
+        record.project_log_route_entry = the_project_log_route_entry_of_this_thread();
         self.record_queue.enqueue(record);
     }
 }
@@ -101,7 +101,7 @@ where
             source: visitor.source,
             source_ts: None,
             source_seq: None,
-            loaded_stream_log_route: None,
+            project_log_route_entry: None,
         };
 
         self.enqueue_in_this_threads_route(record);

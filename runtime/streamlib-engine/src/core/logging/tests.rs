@@ -845,7 +845,7 @@ fn a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after
     for i in 0..200u64 {
         tracing::info!(i, "queued-before-the-close");
     }
-    logging.route().close_the_jsonl_log_file();
+    logging.log_route_entry().route().close_the_jsonl_log_file();
     let records_on_disk_at_the_close = read_every_record_of_a_jsonl_log(&path);
     tracing::info!("emitted-after-the-close");
     logging.finish();
@@ -866,12 +866,12 @@ fn a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after
     );
 }
 
-/// A stream's log close waits for the readers of its helpers' pipes to reach
-/// the end of what the helper wrote, so a line still in the pipe at the close
-/// lands in the stream's file.
+/// A sync of a stream's records waits for the readers of its helpers' pipes
+/// to reach the end of what the helper wrote, so a line still in the pipe at
+/// the sync lands in the project's log.
 #[test]
 #[serial]
-fn a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_ended() {
+fn a_synced_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_ended() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
     let config = StreamlibLoggingConfig {
@@ -898,7 +898,9 @@ fn a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_end
         writeln!(helper_pipe_write_end, "written-just-before-the-pipe-ended").unwrap();
     });
 
-    logging.route().close_the_jsonl_log_file();
+    logging
+        .log_route_entry()
+        .write_every_record_it_emitted_and_sync();
     let records_on_disk_at_the_close = read_every_record_of_a_jsonl_log(&path);
     helper_writing_until_its_pipe_ends.join().unwrap();
     logging.finish();
@@ -907,6 +909,6 @@ fn a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_end
         records_on_disk_at_the_close
             .iter()
             .any(|e| e.message == "written-just-before-the-pipe-ended"),
-        "the close finished before the helper's pipe reader reached the pipe's end"
+        "the sync finished before the helper's pipe reader reached the pipe's end"
     );
 }

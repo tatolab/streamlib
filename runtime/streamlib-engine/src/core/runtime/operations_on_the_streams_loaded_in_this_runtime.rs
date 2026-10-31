@@ -7,28 +7,16 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 
 use super::operations::RuntimeOperations;
 use super::{
-    LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
-    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
-    StreamRenameOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
+    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRenameOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
 use crate::core::graph::OutputPortExposureLevel;
-use crate::core::logging::LoadedStreamLogRecordsPage;
-
-/// One page of a loaded stream's log records, and the tag of the load that
-/// numbered them: a re-load under the same name numbers its records from 1
-/// again under another tag.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogRecordsPageOfOneLoadedStream {
-    /// The tag of the load whose records the page holds.
-    pub stream_tag: LoadedStreamTag,
-    /// The records, numbered by that load.
-    pub records_page: LoadedStreamLogRecordsPage,
-}
 
 /// What the local API reaches a runtime through: the runtime's description, the
-/// stream a call names, a stream's node catalog and log records, and the stream
+/// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
 /// Every stream action blocks — a load runs a compile and describes — so the
@@ -73,17 +61,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn every_loaded_stream_and_the_output_ports_it_exposes(
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
-
-    /// The log records of the loaded stream `stream_id` names, numbered
-    /// after `after`, at most `max_count` of them, with the tag of the load
-    /// that numbered them; refused naming the loaded streams when it is not
-    /// loaded.
-    fn log_records_of_the_stream_a_call_names(
-        &self,
-        stream_id: &str,
-        after: u64,
-        max_count: usize,
-    ) -> Result<LogRecordsPageOfOneLoadedStream>;
 
     /// [`Runner::run_stream`].
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
@@ -157,19 +134,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
         Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
-    }
-
-    fn log_records_of_the_stream_a_call_names(
-        &self,
-        stream_id: &str,
-        after: u64,
-        max_count: usize,
-    ) -> Result<LogRecordsPageOfOneLoadedStream> {
-        self.loaded_stream_of_the_id(stream_id)
-            .map(|stream| LogRecordsPageOfOneLoadedStream {
-                stream_tag: stream.stream_tag(),
-                records_page: stream.log_records_after(after, max_count),
-            })
     }
 
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
