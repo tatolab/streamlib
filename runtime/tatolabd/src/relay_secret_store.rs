@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Where a relay instance's secrets live: the OS secret store — the macOS
-//! Keychain, the Secret Service on Linux — one item per relay instance and
-//! setting under the `tatolab` service, or, where no store answers, an
-//! owner-only file in the state directory.
+//! data-protection keychain, the Secret Service on Linux — one item per relay
+//! instance and setting under the `tatolab` service, or, where no store
+//! answers, an owner-only file in the state directory. Which one is chosen at
+//! the first secret read, written or deleted, never as the runtime starts, so
+//! a runtime that needs no relay secret never touches the OS secret store.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 
@@ -26,20 +28,80 @@ pub(crate) trait RelaySecretStore: Send + Sync {
     fn delete(&self, relay_id: &str, setting: &str) -> Result<(), String>;
 }
 
-/// The store this machine's relay secrets live in, said once: the OS secret
-/// store when one answers, else the owner-only file at `fallback_file_path`.
+/// The store this machine's relay secrets live in, chosen at its first use:
+/// the OS secret store when one answers, else the owner-only file at
+/// `fallback_file_path`.
 pub(crate) fn the_relay_secret_store_of_this_machine(
     fallback_file_path: PathBuf,
 ) -> Box<dyn RelaySecretStore> {
-    match the_os_secret_store_answering_now() {
+    Box::new(RelaySecretStoreChosenAtItsFirstUse::choosing_between(
+        the_os_secret_store_answering_now,
+        fallback_file_path,
+    ))
+}
+
+/// The OS secret store, or why none answers.
+type OsSecretStoreAnsweringNow = fn() -> Result<Box<dyn RelaySecretStore>, String>;
+
+/// A relay secret store chosen, and said, at the first secret read, written
+/// or deleted.
+struct RelaySecretStoreChosenAtItsFirstUse {
+    os_secret_store_answering_now: OsSecretStoreAnsweringNow,
+    fallback_file_path: PathBuf,
+    chosen_store: OnceLock<Box<dyn RelaySecretStore>>,
+}
+
+impl RelaySecretStoreChosenAtItsFirstUse {
+    fn choosing_between(
+        os_secret_store_answering_now: OsSecretStoreAnsweringNow,
+        fallback_file_path: PathBuf,
+    ) -> Self {
+        Self {
+            os_secret_store_answering_now,
+            fallback_file_path,
+            chosen_store: OnceLock::new(),
+        }
+    }
+
+    fn chosen_store(&self) -> &dyn RelaySecretStore {
+        self.chosen_store
+            .get_or_init(|| {
+                the_store_answering_now(
+                    self.os_secret_store_answering_now,
+                    self.fallback_file_path.clone(),
+                )
+            })
+            .as_ref()
+    }
+}
+
+impl RelaySecretStore for RelaySecretStoreChosenAtItsFirstUse {
+    fn read(&self, relay_id: &str, setting: &str) -> Result<Option<SecretString>, String> {
+        self.chosen_store().read(relay_id, setting)
+    }
+
+    fn write(&self, relay_id: &str, setting: &str, secret: &SecretString) -> Result<(), String> {
+        self.chosen_store().write(relay_id, setting, secret)
+    }
+
+    fn delete(&self, relay_id: &str, setting: &str) -> Result<(), String> {
+        self.chosen_store().delete(relay_id, setting)
+    }
+}
+
+/// The OS secret store when one answers now, else the owner-only file at
+/// `fallback_file_path`, said once.
+fn the_store_answering_now(
+    os_secret_store_answering_now: OsSecretStoreAnsweringNow,
+    fallback_file_path: PathBuf,
+) -> Box<dyn RelaySecretStore> {
+    match os_secret_store_answering_now() {
         Ok(os_secret_store) => {
             tracing::info!("relay secrets are kept in the OS secret store");
             if fallback_file_path.exists() {
-                tracing::warn!(
-                    "{} holds relay secrets from a start with no OS secret store, and is not \
-                     read while the OS secret store answers; a relay whose secret is there \
-                     lists it unset",
-                    fallback_file_path.display()
+                move_the_fallback_files_secrets_into(
+                    os_secret_store.as_ref(),
+                    &RelaySecretsFallbackFile::at(fallback_file_path),
                 );
             }
             os_secret_store
@@ -52,6 +114,38 @@ pub(crate) fn the_relay_secret_store_of_this_machine(
             );
             Box::new(RelaySecretsFallbackFile::at(fallback_file_path))
         }
+    }
+}
+
+/// Every secret `fallback_file` holds written to `os_secret_store`, then the
+/// file removed; a secret not written leaves the file whole, said.
+fn move_the_fallback_files_secrets_into(
+    os_secret_store: &dyn RelaySecretStore,
+    fallback_file: &RelaySecretsFallbackFile,
+) {
+    let moved = fallback_file.read_every_secret().and_then(|every_secret| {
+        for (relay_id, secrets_of_the_relay) in every_secret {
+            for (setting, secret) in secrets_of_the_relay {
+                os_secret_store.write(&relay_id, &setting, &SecretString::from(secret))?;
+            }
+        }
+        std::fs::remove_file(&fallback_file.path).map_err(|not_removed| {
+            format!(
+                "{} was not removed: {not_removed}",
+                fallback_file.path.display()
+            )
+        })
+    });
+    match moved {
+        Ok(()) => tracing::info!(
+            "the relay secrets kept in {} are moved into the OS secret store",
+            fallback_file.path.display()
+        ),
+        Err(why) => tracing::warn!(
+            "the relay secrets kept in {} are not moved into the OS secret store, and are not \
+             read while it answers: {why}",
+            fallback_file.path.display()
+        ),
     }
 }
 
@@ -201,6 +295,75 @@ mod tests {
         assert!(
             reopened.read("moqpro-1", "signing_key").unwrap().is_some(),
             "deleting one secret keeps the others"
+        );
+    }
+
+    static OS_SECRET_STORE_ASKED: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    fn an_os_secret_store_that_never_answers() -> Result<Box<dyn RelaySecretStore>, String> {
+        OS_SECRET_STORE_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err("no OS secret store on this machine".to_string())
+    }
+
+    #[test]
+    fn the_os_secret_store_is_first_asked_at_the_first_secret_read_and_only_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let fallback_path = directory.path().join("relay-credentials.json");
+        let store = RelaySecretStoreChosenAtItsFirstUse::choosing_between(
+            an_os_secret_store_that_never_answers,
+            fallback_path.clone(),
+        );
+        let asked = || OS_SECRET_STORE_ASKED.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            asked(),
+            0,
+            "making the store asks the OS secret store nothing"
+        );
+
+        assert!(store.read("relay-1", "token").unwrap().is_none());
+        assert_eq!(asked(), 1);
+        store.write("relay-1", "token", &a_secret("abc")).unwrap();
+        store.delete("relay-1", "token").unwrap();
+        assert_eq!(asked(), 1, "the store is chosen once");
+        assert!(fallback_path.exists());
+    }
+
+    #[test]
+    fn once_an_os_secret_store_answers_the_fallback_files_secrets_move_into_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let fallback_path = directory.path().join("relay-credentials.json");
+        let fallback_file = RelaySecretsFallbackFile::at(fallback_path.clone());
+        fallback_file
+            .write("cloudflare-1", "token", &a_secret("cf"))
+            .unwrap();
+        fallback_file
+            .write("moqpro-1", "signing_key", &a_secret("key"))
+            .unwrap();
+        let os_secret_store =
+            RelaySecretsFallbackFile::at(directory.path().join("os-secret-store.json"));
+
+        move_the_fallback_files_secrets_into(&os_secret_store, &fallback_file);
+
+        assert!(
+            !fallback_path.exists(),
+            "the fallback file is removed once moved"
+        );
+        assert_eq!(
+            os_secret_store
+                .read("cloudflare-1", "token")
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "cf"
+        );
+        assert_eq!(
+            os_secret_store
+                .read("moqpro-1", "signing_key")
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "key"
         );
     }
 
