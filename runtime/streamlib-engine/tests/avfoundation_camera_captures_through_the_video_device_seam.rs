@@ -25,7 +25,9 @@ use objc2_core_video::{
     kCVReturnSuccess,
 };
 use parking_lot::Mutex;
-use streamlib::sdk::context::{GpuContext, VideoDeviceStreamRequest, probe_video_device_backend};
+use streamlib::sdk::context::{
+    CaptureDeviceAccessPrompting, GpuContext, VideoDeviceStreamRequest, probe_video_device_backend,
+};
 use streamlib::sdk::media_clock::MediaClock;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -148,6 +150,7 @@ fn the_default_camera_delivers_stamped_frames_with_real_content() {
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
             processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the default camera opens");
     let stream_format = stream.stream_format();
@@ -296,6 +299,7 @@ fn a_stop_while_the_camera_powers_up_does_not_wait_for_the_camera() {
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
             processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the default camera opens");
     for _ in 0..3 {
@@ -323,6 +327,7 @@ fn a_named_camera_that_is_not_attached_is_refused_naming_it() {
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
             processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         }) {
             Ok(_) => panic!("a camera that is not attached cannot open"),
             Err(refusal) => refusal.to_string(),

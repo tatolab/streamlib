@@ -23,7 +23,7 @@ use super::{
     LoadedStreamAndTheOutputPortsItExposes, RuntimeShutdownEscalation, StreamEnvironment,
     StreamLocation,
 };
-use crate::core::context::GpuContext;
+use crate::core::context::{CaptureDeviceAccessPrompting, GpuContext};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::signals::ScopedShutdownSignalOwnership;
@@ -450,6 +450,9 @@ pub struct OptionsForLoadingOneStream {
     /// Where the stream's processor interpreters start; its project directory
     /// is the stream's project directory.
     pub stream_environment: Option<StreamEnvironment>,
+    /// Whether the stream's capture devices may ask the user for access nobody
+    /// has answered yet.
+    pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
 }
 
 impl OptionsForLoadingOneStream {
@@ -476,6 +479,18 @@ impl OptionsForLoadingOneStream {
             keyed_by: Some(WhatALoadedStreamIsKeyedBy::TheIdItsHostGave(
                 stream_id.into(),
             )),
+            ..self
+        }
+    }
+
+    /// These options, letting the stream's capture devices ask the user as
+    /// `capture_device_access_prompting` says.
+    pub fn with_capture_device_access_prompting(
+        self,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    ) -> Self {
+        Self {
+            capture_device_access_prompting,
             ..self
         }
     }
@@ -1341,6 +1356,7 @@ impl Runner {
             },
             project_directory,
             load_options.stream_environment,
+            load_options.capture_device_access_prompting,
             teardown_watchdog_budget,
             holding,
         )

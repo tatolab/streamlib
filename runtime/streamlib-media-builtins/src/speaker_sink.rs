@@ -22,8 +22,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioStreamFormat, DeviceStreamLivenessReport, RuntimeContextFullAccess,
-    probe_audio_device_backend,
+    AudioPlaybackStream, AudioStreamFormat, CaptureDeviceAccessPrompting,
+    DeviceStreamLivenessReport, RuntimeContextFullAccess, probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{AudioWindowContractMatchingADeviceStream, InputMailboxes};
@@ -147,6 +147,7 @@ impl ManualProcessor for SpeakerSink::Processor {
         let playback_stream = backend.open_playback_stream(&AudioDeviceStreamRequest {
             device_id: self.config.device_id.clone(),
             deviceless_pacing_clock: Arc::clone(ctx.audio_clock()),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })?;
         let stream_format = playback_stream.stream_format();
         let sizing = SpeakerSinkSizingFromTheDevicePeriod::of(playback_stream.as_ref());
@@ -559,6 +560,7 @@ mod tests {
             .open_playback_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(&clock) as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
             .expect("the null backend opens its default device on any machine");
         let stream_format = playback_stream.stream_format();
@@ -615,6 +617,7 @@ mod tests {
             .open_playback_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(&clock) as SharedAudioClock,
+                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
             })
             .expect("the null backend opens its default device on any machine");
         let stream_format = playback_stream.stream_format();

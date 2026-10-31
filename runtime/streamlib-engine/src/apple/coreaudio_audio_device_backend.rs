@@ -61,9 +61,9 @@ use crate::apple::permissions::{
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
-    DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
-    DeviceStreamLivenessReport,
+    AudioStreamFormat, CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff, DeviceBackendArmUnavailableReason, DeviceStreamFailureReason,
+    DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
 };
 use crate::core::logging::{
     ProjectLogRouteEntry, run_in_the_project_log_route_entry_when_there_is_one,
@@ -2376,6 +2376,7 @@ impl CoreAudioCaptureStream {
             stream_format,
             CoreAudioStreamDevicePolicy::of(request),
             microphone_authorization_authority,
+            request.capture_device_access_prompting,
         )
     }
 
@@ -2386,6 +2387,7 @@ impl CoreAudioCaptureStream {
         stream_format: AudioStreamFormat,
         device_policy: CoreAudioStreamDevicePolicy,
         microphone_authorization_authority: &dyn CaptureDeviceAuthorizationAuthority,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
     ) -> Result<Self> {
         let direction = CoreAudioStreamDirection::Capture;
         let device_own_format = stream_format_of(&device, direction)?;
@@ -2422,6 +2424,7 @@ impl CoreAudioCaptureStream {
         let answer_reaches = Arc::downgrade(&capture_control);
         match authorize_the_capture_device_without_waiting_for_the_user(
             microphone_authorization_authority,
+            capture_device_access_prompting,
             Box::new(move |granted| the_users_microphone_answer_arrived(&answer_reaches, granted)),
         )? {
             CaptureDeviceAuthorizationAtOpen::Granted => {
@@ -3599,6 +3602,7 @@ mod microphone_permission_flow_against_the_default_input {
             deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
                 48_000, 512,
             ))),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
     }
 
@@ -3785,6 +3789,7 @@ mod following_the_device_against_the_default_devices {
             deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
                 48_000, 512,
             ))),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         }
     }
 
@@ -4104,6 +4109,7 @@ mod following_the_device_against_the_default_devices {
             stream_format,
             CoreAudioStreamDevicePolicy::FollowsTheSystemDefault,
             &AvFoundationCaptureDeviceAuthorizationAuthority(PrivacyGatedCaptureDevice::Microphone),
+            CaptureDeviceAccessPrompting::MayAskTheUser,
         )
         .expect("a capture stream opens at a format its device does not carry");
         assert!(

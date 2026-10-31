@@ -21,7 +21,8 @@ use std::time::Duration;
 
 use streamlib_engine::core::context::{
     AudioBlockRequestedByDevice, AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioStreamFormat, SharedAudioClock, SoftwareAudioClock,
+    AudioPlaybackStream, AudioStreamFormat, CaptureDeviceAccessPrompting, SharedAudioClock,
+    SoftwareAudioClock,
 };
 
 /// Enough periods to see the device asking repeatedly rather than once.
@@ -47,6 +48,7 @@ fn open_playback_stream_on(
         .open_playback_stream(&AudioDeviceStreamRequest {
             device_id,
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("a device that answered the probe opens a playback stream")
 }

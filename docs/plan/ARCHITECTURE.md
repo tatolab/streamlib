@@ -2219,7 +2219,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Camera and microphone permission on Apple is requested, never merely
   queried, and never awaited on a path that stalls the graph — one privacy gate serves both
   devices. The graph starts under a pending prompt and frames or blocks begin once the user
-  allows it; a prompt still unanswered after ten seconds is warned about once. The engine is
+  allows it; a prompt still unanswered after ten seconds is warned about once. A prompt answers
+  something the user did: a stream someone loads or starts may ask, and a stream the runtime
+  re-loads on its own at its start never does — its node's `setup()` refuses a device nobody
+  has answered for, by name, saying to restart the stream or reload its project to be asked,
+  so logging in never puts a prompt up out of nowhere. Owner, 2026-10-31. The engine is
   not the permission subject — the application that launched it is, found by walking up the
   process tree — so a refusal names that responsible application and the Camera or Microphone
   setting to change, and never says "Python". A microphone's AUHAL unit is bound only after

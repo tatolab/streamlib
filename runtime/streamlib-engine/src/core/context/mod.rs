@@ -3,6 +3,7 @@
 
 mod audio_clock;
 mod audio_device_backend;
+mod capture_device_access_prompting;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod captured_video_frame_to_pooled_rgba_conversion_stage;
 mod device_backend_probe_chain;
@@ -47,6 +48,7 @@ pub use audio_device_backend::{
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     SharedAudioDeviceBackend, probe_audio_device_backend,
 };
+pub use capture_device_access_prompting::CaptureDeviceAccessPrompting;
 pub use device_backend_probe_chain::DeviceBackendArmUnavailableReason;
 pub use device_stream_liveness_report::{
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
