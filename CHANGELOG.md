@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.2](https://github.com/tatolab/streamlib/compare/v0.63.1...v0.63.2) (2026-10-31)
+
+
+### Features
+
+* **runtime:** a per-project stream-action queue — run_project queues a load and answers its action id, describe_stream_action follows it, and streams show preparing ([#2998](https://github.com/tatolab/streamlib/issues/2998)) ([a5c12a0](https://github.com/tatolab/streamlib/commit/a5c12a0e5a06e01b3f8fd50de03e35f56d8c0cd9))
+
 ## [0.63.1](https://github.com/tatolab/streamlib/compare/v0.63.0...v0.63.1) (2026-10-31)
 
 
