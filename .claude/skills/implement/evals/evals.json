@@ -12,7 +12,7 @@
         "Identifies §Networking — transport as OPEN and the transport choice as the owner's decision",
         "Emits a [NEEDS DECISION] marker naming the transport choice, with options and a recommendation",
         "Does not present a chosen transport as settled; any protocol it builds toward is labelled as an assumption the owner can reverse",
-        "Keeps making progress rather than ending the session with no work done"
+        "Builds whatever does not depend on the transport choice; when nothing independent exists and the choice is not small and easily reversed, ending with the decision request and no implementation is acceptable"
       ]
     },
     {

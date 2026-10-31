@@ -14,8 +14,9 @@ not skipping.
 1. **Check the removals:** `bash .claude/scripts/ship-change-removed-gate.sh
    docs/plan/changes/<name>.md`. Exit 0 means every `REMOVED` bullet is gone from the
    tree. `STILL PRESENT` lists what remains, referenced or on disk; that residue is
-   unfinished work — finish it (or file it in the same milestone) before archiving, so
-   the archive doesn't claim a removal that didn't happen. `MALFORMED BULLET` is a
+   unfinished work. Finish it first — as a follow-up ticket in the same milestone when it
+   is more than a quick fix — and keep the change in flight until it lands, then re-run
+   the check. Archiving with residue would claim a removal that didn't happen. `MALFORMED BULLET` is a
    wording problem in the change file, not residue — fix the bullet in place (grammar:
    `docs/plan/changes/README.md`).
 2. **Fold** each `ADDED`/`MODIFIED` section into `docs/plan/ARCHITECTURE.md`; flip the

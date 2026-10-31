@@ -112,9 +112,10 @@ is what prevents another half-broken old-module-system.
 The GitHub tracker is a projection of the plan, never a second source:
 
 - A **milestone** is a plan section or an active change — nothing else may be a milestone.
-- A **ticket** exists only as (a) output of `/derive-tickets` from an approved change, or
-  (b) a bug filed against SHIPPED behavior. A ticket that traces to neither is a
-  candidate for closure.
+- A **ticket** is (a) output of `/derive-tickets` from a change — normally one the owner
+  has approved — or (b) a bug filed against SHIPPED behavior. A ticket that traces to
+  neither is a candidate for closure; one derived from a change still awaiting approval
+  is flagged so the owner sees it.
 - Tickets are living documents: when a plan section changes, `/reconcile-tracker`
   revises or closes the affected tickets in one reviewed batch. Today's misaligned
   milestones and stale tickets go through the same skill as its first run.
@@ -164,11 +165,11 @@ agent carries the judgment.
 | `/align` | `batch-grilling` + `glossary` over one plan section → OPEN→DECIDED edits + diagram update. Nothing else moves. (high freedom) | the debate you want to have once |
 | `/propose-change` | Read-only recon by domain experts first (the measured fix for context-blind specs) → delta proposal with `[NEEDS DECISION]` blocks → presented for the owner's approval before tickets. (medium) | `draft-design` |
 | `/derive-tickets` | Approved change → tracer-bullet tickets (as few as honestly needed; count is guidance, not a cap): vertical slices, each demoable, each sized to one context window, blocking edges declared; wide refactors sequenced expand→migrate-in-batches→contract. Shows the owner the list — iterated with them when they're around, published on judgment when they're away. (medium) | `file-issue` for planned work (kept for bugs) |
-| `/implement` | Load ticket + its change + plan section → any needed decision not DECIDED is raised as `[NEEDS DECISION]` (or built as a stated assumption) → share the plan → build test-first at the named seams → fast local checks via `local-ci-runner` → review pass → PR (`Closes #N` per line). (normal freedom) | the external `amos-next` protocol, brought in-tree |
+| `/implement` | Load ticket + its change + plan section → any needed decision not DECIDED is raised as `[NEEDS DECISION]` (a small, easily reversed one may be built as a stated assumption instead) → share the plan → build test-first at the named seams → fast local checks via `local-ci-runner` → review pass → PR (`Closes #N` per line). (normal freedom) | the external `amos-next` protocol, brought in-tree |
 | `/ship-change` | Fold delta into plan, flip statuses, REMOVED-grep check, regenerate diagrams + Excalidraw export, archive. Script-backed. (low freedom — the removal check is the point) | nothing — the missing piece |
 | `/pivot` | Owner declares a direction change → plan edited FIRST → inventory of now-legacy code/docs/rules → a rip-out change with REMOVED sections → deletion tickets. (medium) | nothing — legitimizes the deletion agents currently resist |
 | `/research` | Background agent, primary sources only, memo with citations. Produces no tickets and no code. (low) | ad-hoc research |
-| `/diagnose` | Feedback-loop-first debugging: no hypothesis before a red-capable, fast, deterministic repro command exists and has been run once. 3–5 ranked hypotheses before testing any. Regression test before fix. Tagged debug logs (`[DEBUG-xxxx]`) for one-grep cleanup. (medium) | ad-hoc debugging; composes with the domain experts |
+| `/diagnose` | Feedback-loop-first debugging: a red-capable, fast, deterministic repro command, run once, before building theories — or, when one genuinely can't be built, the access or artifact it would need named and the best available evidence used. 3–5 ranked hypotheses before testing any. Regression test before fix. Tagged debug logs (`[DEBUG-xxxx]`) for one-grep cleanup. (medium) | ad-hoc debugging; composes with the domain experts |
 | `/hygiene` | The counter-model sniffer: doc statements contradicting DECIDED/SHIPPED plan entries, retired patterns still endorsed, references to deleted machinery, README rot, dead rule globs, stale memories. ONE table ordered by thrash risk, each finding routed to where it's best fixed. (low) | nothing — the missing smell test |
 | `/reconcile-tracker` | Audits every GitHub milestone and open ticket against the plan: a milestone must map to a plan section or an active change; a ticket must trace to a change or be a bug against SHIPPED behavior. Anything that doesn't trace gets a proposed action — close / retitle / re-milestone / rewrite — presented as ONE batch the owner can strike lines from, then executed via `gh`. (medium) | manual milestone/ticket cleanup |
 | `/propose-rule` | How a rule is born or dies. Evidence in (a recurring review finding, a repeated owner correction, a shipped defect) → drafted rule text + the evidence + which existing rule or skill it overlaps → owner agrees → lands in its own operating-model PR. Also proposes rule deletions when a skill or CI check supersedes prose. (low) | ad-hoc rule accretion |

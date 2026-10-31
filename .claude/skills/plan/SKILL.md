@@ -17,7 +17,9 @@ A rough pass that has worked well:
    likely needed.
 2. List `docs/plan/changes/*.md` (active deltas) and any `[NEEDS DECISION]` markers
    still inside them.
-3. Look at what is mid-flight — open PRs and branches (`gh pr list`) — and the tracker
+3. Look at what is mid-flight — open PRs (`gh pr list`), plus remote branches
+   (`git branch -r`) and local worktrees (`git worktree list`) that have no PR yet — and
+   the tracker
    (`gh issue list --state open --limit 100 --json number,title,milestone`).
 4. Report briefly: plan state, active changes, in-flight work, tracker shape, and the
    step you'd recommend.

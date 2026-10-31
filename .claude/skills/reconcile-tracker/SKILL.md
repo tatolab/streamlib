@@ -13,7 +13,9 @@ behaviour. That keeps a picker from building against a retired direction.
    `gh issue list --state open --limit 200 --json number,title,milestone,labels,body`.
 2. Map each milestone and each ticket to the plan. Classify: **KEEP** / **RETITLE** /
    **RE-MILESTONE** / **REWRITE** (body drifted from the plan) / **CLOSE** (traces to
-   nothing, or to a superseded direction — cite the plan entry that supersedes it).
+   nothing, or to a superseded direction — cite the plan entry that supersedes it). A
+   ticket derived from a change the owner hasn't approved yet stays, flagged in the
+   reason column so they see it.
 3. Present **one batch table**: item / action / one-line reason. One table is far easier
    for the owner to review than a drip of single changes, and they may strike lines.
    Closing other people's tickets is the visible part, so when the owner is around, let
