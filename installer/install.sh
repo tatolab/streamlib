@@ -228,7 +228,7 @@ install_tatolab() {
 	fi
 	say_where_the_executables_are
 	say "Tatolab $release_version is installed. Start a stream with:"
-	say "  tatolab new my-stream && cd my-stream && uv sync && tatolab run"
+	say "  tatolab new my-stream"
 }
 
 uninstall_tatolab() {

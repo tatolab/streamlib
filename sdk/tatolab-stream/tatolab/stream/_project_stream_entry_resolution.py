@@ -4,10 +4,9 @@
 """Where a `tatolab run` / `tatolab dev` target points: the entry file or module, and
 the stream function it names.
 
-A target ending `.py`, with or without `:<function>`, is a file resolved against
-the anchor directory; `<module>:<function>` is a module imported with the anchor
-leading the import path; no target means `stream.py` at the anchor, a project's
-entry.
+`<file>.py:<function>` is a file resolved against the anchor directory;
+`<module>:<function>` is a module imported with the anchor leading the import path; no
+target means `stream.py` at the anchor, a project's entry.
 """
 
 from __future__ import annotations

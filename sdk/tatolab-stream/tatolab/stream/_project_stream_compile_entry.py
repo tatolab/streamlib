@@ -27,8 +27,6 @@ With a TARGET naming one stream function, the object is one of:
   raised, with its traceback;
 - `{"project_directory", "stream_function", "not_defined_because"}` — the target named
   a function the entry does not define as a `@stream`;
-- `{"project_directory", "no_stream_defined_because"}` — the target's file defines no
-  `@stream`;
 - `{"project_directory", "import_failed_because"}`.
 
 `stream_function` is `<module>:<qualname>`. A refusal of the caller's own target prints
