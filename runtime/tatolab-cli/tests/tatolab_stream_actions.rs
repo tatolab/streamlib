@@ -223,6 +223,50 @@ fn stop_queues_the_streams_stop_and_says_so() {
 }
 
 #[test]
+fn cancel_prints_a_queued_actions_cancel_and_a_running_ones_cancelling() {
+    for (cancel_answer, printed_line) in [
+        (r#"{"action":"R-3","state":"cancelled"}"#, "R-3 cancelled\n"),
+        (
+            r#"{"action":"R-3","state":"in_progress"}"#,
+            "R-3 cancelling: it stops at the step it is on, then ends cancelled\n",
+        ),
+    ] {
+        let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+            "cancel_stream_action",
+            StubToolAnswer::tool_result(cancel_answer),
+        );
+
+        let printed = printed_by_a_successful(&isolated_machine_directories, &["cancel", "R-3"]);
+
+        assert_eq!(printed, printed_line);
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("cancel_stream_action"),
+            [json!({"action": "R-3"})]
+        );
+    }
+}
+
+#[test]
+fn a_refused_cancel_prints_the_runtimes_refusal_and_exits_one() {
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "cancel_stream_action",
+        StubToolAnswer::tool_failure(
+            "the stream action `R-1` is a running stop, which has begun unloading its streams \
+             and cannot be cut short; it ends done",
+        ),
+    );
+
+    let refused = isolated_machine_directories.run_tatolab(&["cancel", "R-1"]);
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        standard_error_text(&refused),
+        "error: cancel_stream_action failed: the stream action `R-1` is a running stop, which \
+         has begun unloading its streams and cannot be cut short; it ends done\n"
+    );
+}
+
+#[test]
 fn start_queues_the_streams_start_and_says_so() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "start_stream",

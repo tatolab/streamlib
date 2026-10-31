@@ -157,7 +157,10 @@ the traceback lands in the log `dev` prints, and the next save loads it again. C
 and leaves the streams running. Every stream the runtime loads is recorded: it runs until
 `tatolab stop` or `tatolab rm`, and the runtime loads it again each time it starts. `tatolab run`
 queues the load once, without watching for edits, prints the action's id and returns at once;
-`tatolab logs -f` follows the load and the streams' records.
+`tatolab logs -f` follows the load and the streams' records. `tatolab cancel <action>` takes an
+action back: a queued one is dropped, and a running load stops at the step it is on, its uv sync
+or compile killed, leaving the streams it had not reached as they were. A stop or `rm` that has
+begun unloading runs to the end.
 
 ## Writing a stream
 
@@ -329,6 +332,7 @@ tatolab streams
 tatolab stop [STREAM]
 tatolab start [STREAM]
 tatolab rm [--dir DIR]
+tatolab cancel ACTION
 tatolab rename [STREAM] DISPLAY_NAME
 tatolab expose [STREAM] NODE PORT [--public | --remove]
 
@@ -379,7 +383,14 @@ tatolab enable-virtual-camera [--print]
   of the project in `--dir`, or the working directory, and forgets them. Each queues its action on
   the project's queue and prints its id at once: `tatolab streams` shows the stream `stopping` or
   `preparing` until it has run, and a runtime that crashes first finishes it at its next start.
-  **`rename`** shows a stream under another display name — any text, never part of
+- **`cancel`** takes back the action whose id `run`, `dev`, `stop`, `start` or `rm` printed. A
+  queued action is dropped, its streams' records left as they were, and `cancel` prints
+  `<action> cancelled`. A running load or start stops at the step it is on: its uv sync or
+  compile is killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
+  and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
+  A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and
+  the action ends done.
+- **`rename`** shows a stream under another display name — any text, never part of
   its address. The stream's record holds it, across the runtime's restarts and the project's
   loads.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's

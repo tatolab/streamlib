@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `run`, `stop`, `start`,
-//! `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
+//! `rm`, `cancel`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
 //! lines or table each prints. A verb naming one stream resolves its stream argument to an id
 //! through `list_streams` first. `run` and `dev` share the project load request.
 
@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, RemoveProjectToolResult, RenameStreamToolResult, RunProjectToolResult,
-    StartStreamToolResult, StopStreamToolResult,
+    CancelStreamActionToolResult, ExposePortLevel, ExposePortToolResult, ListStreamsToolResult,
+    ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
+    RenameStreamToolResult, RunProjectToolResult, StartStreamToolResult, StopStreamToolResult,
+    StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -34,6 +35,8 @@ pub(crate) enum StreamActionTool {
     StartStream,
     /// Unloads every stream of a project and forgets every record of it.
     RemoveProject,
+    /// Drops a queued stream action, or stops a running one at its step.
+    CancelStreamAction,
     /// Shows a stream under another display name.
     RenameStream,
     /// Lists the streams the runtime holds.
@@ -50,6 +53,7 @@ impl StreamActionTool {
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
             StreamActionTool::RemoveProject => "remove_project",
+            StreamActionTool::CancelStreamAction => "cancel_stream_action",
             StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
@@ -291,6 +295,31 @@ pub(crate) fn remove_project(
             .display()
             .to_string(),
     ))
+}
+
+/// `tatolab cancel <ACTION>`: the action's state once the runtime took the cancel.
+pub(crate) fn cancel_stream_action(action: &str) -> Result<u8, TatolabCommandFailure> {
+    let mut cancel_stream_action_arguments = serde_json::Map::new();
+    cancel_stream_action_arguments.insert("action".to_owned(), action.into());
+    let cancel_stream_action_result: CancelStreamActionToolResult = call_one_stream_action_tool(
+        StreamActionTool::CancelStreamAction,
+        cancel_stream_action_arguments,
+    )?;
+    write_verb_standard_output(&rendered_cancelled_stream_action_line(
+        &cancel_stream_action_result,
+    ))
+}
+
+/// The line `cancel` prints: `<action> cancelled`, or for a running action
+/// `<action> cancelling`, with what happens next.
+fn rendered_cancelled_stream_action_line(cancelled: &CancelStreamActionToolResult) -> String {
+    match cancelled.state {
+        StreamActionStateOnTheWire::InProgress => format!(
+            "{} cancelling: it stops at the step it is on, then ends cancelled\n",
+            cancelled.action
+        ),
+        state => format!("{} {}\n", cancelled.action, state.wire_spelling()),
+    }
 }
 
 /// `<action> queued: <verb> of <what>`, the line a verb whose stream action is queued prints.

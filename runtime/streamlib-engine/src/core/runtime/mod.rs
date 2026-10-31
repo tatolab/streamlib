@@ -83,9 +83,10 @@ pub use project_stream_action_queue::{
     StreamActionWorkingOnAStream, StreamOfAStreamAction, StreamTheLastCompileOfTheProjectNamed,
     WhatTheLastCompileOfTheProjectGave,
 };
+pub(crate) use runtime::what_interrupted_a_load;
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
-    StreamLoadObservingMachineShutdownRequests, WhatALoadedStreamIsKeyedBy,
+    StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,

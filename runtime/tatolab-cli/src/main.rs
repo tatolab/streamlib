@@ -169,6 +169,20 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
+    /// Cancel a stream action: drop a queued one, or stop a running load at its step.
+    #[command(
+        long_about = "Cancel the stream action ACTION, the id `run`, `dev`, `stop`, `start` or \
+                      `rm` printed. A queued action is dropped and its streams' records stay as \
+                      they were; prints `<action> cancelled`. A running load or start stops at \
+                      the step it is on — a running uv sync or compile is killed and a half-made \
+                      .venv removed — and the streams it had not reached stay as recorded; \
+                      prints `<action> cancelling` and ends cancelled. A running stop or rm has \
+                      begun unloading and cannot be cut short: it is refused, and ends done."
+    )]
+    Cancel {
+        /// The stream action's id.
+        action: String,
+    },
     /// Show a stream under another display name; its id and address stay as they are.
     #[command(
         override_usage = "tatolab rename [STREAM] <DISPLAY_NAME>",
@@ -333,6 +347,7 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 )
             })
         }
+        TatolabVerb::Cancel { action } => stream_actions_on_the_runtime::cancel_stream_action(&action),
         TatolabVerb::Rename {
             stream_then_display_name,
         } => stream_actions_on_the_runtime::rename_stream(&stream_then_display_name),

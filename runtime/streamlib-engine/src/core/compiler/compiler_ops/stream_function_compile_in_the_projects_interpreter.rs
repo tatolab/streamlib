@@ -28,7 +28,7 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::error::{Error, Result};
-use crate::core::runtime::{StreamEnvironment, StreamLocation};
+use crate::core::runtime::{StreamEnvironment, StreamLocation, what_interrupted_a_load};
 use crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind;
 
 /// The module `tatolab.stream` compiles a project's stream function with.
@@ -250,18 +250,20 @@ pub(crate) fn refuse_a_project_directory_not_named_by_its_absolute_path(
 /// Refused for the caller's own target the entry refuses, and for a compile
 /// that never reached the project's answer.
 ///
-/// A machine shutdown requested while it runs kills the compile and refuses it.
+/// `is_interrupted_by_the_host` reporting true while it runs kills the compile
+/// and refuses it.
 pub(crate) fn compile_the_stream_function_in_the_projects_interpreter(
     project_directory: &Path,
     stream_function: Option<&str>,
     lend_directory: &Path,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<StreamFunctionCompileInTheProjectsInterpreterReport> {
     compile_the_stream_function_in_the_projects_interpreter_within(
         project_directory,
         stream_function,
         lend_directory,
         STREAM_FUNCTION_COMPILE_BOUND,
-        &crate::core::runtime::is_the_machines_shutdown_requested,
+        is_interrupted_by_the_host,
     )
 }
 
@@ -338,7 +340,8 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     let interpreter_shown = interpreter.display();
     if is_interrupted_by_the_host() {
         return Err(Error::Runtime(format!(
-            "the stream functions in {project} were not compiled: the runtime is shutting down"
+            "the stream functions in {project} were not compiled: {}",
+            what_interrupted_a_load()
         )));
     }
 
@@ -391,12 +394,18 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
                 compile_bound.as_secs_f64()
             )));
         }
-        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
-        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested => {
             return Err(Error::Runtime(format!(
-                "the stream functions in {project} were not compiled: the runtime began shutting \
-                 down while `{interpreter_shown}` compiled them, and it was killed. \
+                "the stream functions in {project} were not compiled: a machine shutdown was \
+                 requested while `{interpreter_shown}` compiled them, and it was killed. \
                  {quoted_standard_error}"
+            )));
+        }
+        StreamInterpreterExitAwaited::InterruptedByTheHost => {
+            return Err(Error::Runtime(format!(
+                "the stream functions in {project} were not compiled: {} while \
+                 `{interpreter_shown}` compiled them, and it was killed. {quoted_standard_error}",
+                what_interrupted_a_load()
             )));
         }
     }
@@ -1086,7 +1095,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_compile_the_host_interrupts_is_killed_and_refused_saying_the_runtime_is_shutting_down() {
+    fn a_compile_the_host_interrupts_is_killed_and_refused_saying_what_interrupted_it() {
         let project = ProjectWithAStubVenvInterpreter::running("sleep 30");
         let started = Instant::now();
         let interrupted_after = started + Duration::from_millis(200);
@@ -1102,7 +1111,7 @@ mod tests {
         .to_string();
 
         assert!(
-            refusal.contains("the runtime began shutting down while"),
+            refusal.contains("its stream action was cancelled while"),
             "{refusal}"
         );
         assert!(started.elapsed() < Duration::from_secs(10));

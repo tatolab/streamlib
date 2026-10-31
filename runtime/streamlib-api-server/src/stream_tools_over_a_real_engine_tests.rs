@@ -408,6 +408,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     ) -> Result<streamlib::sdk::runtime::StreamAction> {
         self.engine.describe_stream_action(action_id)
     }
+    fn cancel_stream_action(
+        &self,
+        action_id: &str,
+    ) -> Result<streamlib::sdk::runtime::StreamAction> {
+        self.engine.cancel_stream_action(action_id)
+    }
     fn list_project_streams(
         &self,
         project_directory: &std::path::Path,
@@ -1215,10 +1221,23 @@ async fn a_run_whose_entry_does_not_import_answers_the_project_failed_under_its_
     assert_eq!(stream["location"]["stream_function"], "");
 }
 
-/// `describe_stream_action`'s answer for `action` once its `state` is `done` or `failed`.
+/// `describe_stream_action`'s answer for `action` once its `state` is `done`, `failed` or
+/// `cancelled`.
 async fn the_stream_action_once_finished(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     action: &str,
+) -> Value {
+    the_stream_action_once(operations_on_the_loaded_streams, action, |described| {
+        ["done", "failed", "cancelled"].contains(&described["state"].as_str().unwrap_or_default())
+    })
+    .await
+}
+
+/// `describe_stream_action`'s answer for `action` once `reached` holds of it.
+async fn the_stream_action_once(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    action: &str,
+    reached: impl Fn(&Value) -> bool,
 ) -> Value {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -1231,12 +1250,12 @@ async fn the_stream_action_once_finished(
             .await,
         )
         .expect("the action is held");
-        if described["state"] == "done" || described["state"] == "failed" {
+        if reached(&described) {
             return described;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the action never finished: {described}"
+            "the action never got there: {described}"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -1309,6 +1328,76 @@ async fn run_project_queues_a_run_followed_by_describe_stream_action_and_list_pr
             "import_failed_because": "SyntaxError: invalid syntax",
         })
     );
+}
+
+/// A run cancelled while its compile runs answers `in_progress`, has the compile killed and
+/// ends `cancelled` with no stream taken in; a second cancel is refused, the action finished.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_stream_action_stops_a_running_compile_and_the_action_ends_cancelled() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project =
+        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    write_an_executable_script_from_a_child_process(
+        &project.interpreter(),
+        "#!/bin/sh\ncase \" $* \" in\n*' --every-stream '*) exec sleep 30 ;;\nesac\n",
+    );
+    std::fs::write(project.path().join("stream.py"), "").unwrap();
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "run_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a run of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
+        described["step"] == "compiling"
+    })
+    .await;
+    let asked_at = std::time::Instant::now();
+
+    let cancel = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "cancel_stream_action",
+            json!({ "action": action }),
+        )
+        .await,
+    )
+    .expect("a running load takes its cancel");
+    let finished = the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+
+    assert_eq!(cancel, json!({ "action": action, "state": "in_progress" }));
+    assert_eq!(
+        (
+            &finished["state"],
+            &finished["step"],
+            &finished["streams"],
+            &finished["failed_because"]
+        ),
+        (&json!("cancelled"), &Value::Null, &json!([]), &Value::Null),
+        "{finished}"
+    );
+    assert!(
+        asked_at.elapsed() < Duration::from_secs(10),
+        "the compile was waited for, not killed"
+    );
+    let again = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "cancel_stream_action",
+            json!({ "action": action }),
+        )
+        .await,
+    )
+    .unwrap_err();
+    assert!(again.contains("is already cancelled"), "{again}");
 }
 
 /// An action the runtime never queued, and a project it never ran, are refused saying so.

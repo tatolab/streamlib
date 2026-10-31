@@ -307,6 +307,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "describe_stream_action",
                 ))
             }
+            fn cancel_stream_action(
+                &self,
+                _action_id: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamAction> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "cancel_stream_action",
+                ))
+            }
             fn list_project_streams(
                 &self,
                 _project_directory: &::std::path::Path,

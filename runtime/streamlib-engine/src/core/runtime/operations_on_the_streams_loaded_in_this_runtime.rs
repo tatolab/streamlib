@@ -74,6 +74,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::describe_stream_action`].
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction>;
 
+    /// [`Runner::cancel_stream_action`].
+    fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction>;
+
     /// [`Runner::list_project_streams`].
     fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing>;
 
@@ -158,6 +161,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {
         Runner::describe_stream_action(self, action_id)
+    }
+
+    fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction> {
+        Runner::cancel_stream_action(self, action_id)
     }
 
     fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing> {

@@ -121,11 +121,12 @@ class LocalApiClient:
     def stream_action_once_ended(
         self, action: str, *, timeout: float = STREAM_ACTION_FOLLOW_DEADLINE_SECONDS
     ) -> "dict[str, Any]":
-        """MCP `describe_stream_action` of `action`, once its `state` is `done` or `failed`."""
+        """MCP `describe_stream_action` of `action`, once its `state` is `done`, `failed` or
+        `cancelled`."""
         deadline = time.monotonic() + timeout
         while True:
             described = self.call_tool("describe_stream_action", {"action": action})
-            if described["state"] in ("done", "failed"):
+            if described["state"] in ("done", "failed", "cancelled"):
                 return described
             assert time.monotonic() < deadline, (
                 f"the stream action {action} did not end within {timeout}s: {described}"
