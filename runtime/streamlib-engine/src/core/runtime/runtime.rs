@@ -530,13 +530,14 @@ impl OptionsForLoadingOneStream {
     }
 }
 
-/// How a load watched for a machine shutdown request ended.
-pub enum StreamLoadObservingMachineShutdownRequests {
-    /// The stream loaded and no machine shutdown was requested.
+/// How a load watched for an interrupt — a machine shutdown request, or the
+/// cancel of the stream action loading it — ended.
+pub enum StreamLoadObservingInterrupts {
+    /// The stream loaded and nothing interrupted it.
     Loaded(Arc<LoadedStreamInThisRuntime>),
-    /// A machine shutdown was requested before the load or while it ran; the
-    /// stream was never loaded.
-    AbandonedForAMachineShutdownRequest,
+    /// An interrupt came before the load or while it ran; the stream was never
+    /// loaded.
+    AbandonedForAnInterrupt,
 }
 
 /// What [`Runner::wait_until_every_stream_has_ended`] saw once every stream had
@@ -883,40 +884,40 @@ impl Runner {
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
-    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
-        self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
+    ) -> Result<StreamLoadObservingInterrupts> {
+        self.load_stream_held_as_unless_interrupted(
             graph,
             load_options,
             LoadedStreamHolding::LivesWithTheHostProcess,
+            &crate::core::runtime::is_the_machines_shutdown_requested,
         )
     }
 
     /// [`Self::load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested`],
-    /// the stream held as `holding` from the moment it enters the table.
-    pub(super) fn load_stream_held_as_unless_a_machine_shutdown_is_requested(
+    /// the stream held as `holding` from the moment it enters the table, the
+    /// load abandoned once `is_interrupted` reports true.
+    pub(super) fn load_stream_held_as_unless_interrupted(
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
-    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
+        is_interrupted: &dyn Fn() -> bool,
+    ) -> Result<StreamLoadObservingInterrupts> {
         use std::sync::mpsc::RecvTimeoutError;
 
-        use crate::core::runtime::{
-            RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
-        };
+        use crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL;
 
         let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
             Ok(stream) => stream,
-            // Read after the build, so a request landing during it abandons
+            // Read after the build, so an interrupt landing during it abandons
             // the load rather than refusing it.
-            Err(build_refusal) if is_the_machines_shutdown_requested() => {
+            Err(build_refusal) if is_interrupted() => {
                 tracing::info!(
-                    "a machine shutdown was requested before the stream loaded, so it was never \
-                     loaded; building it reported: {build_refusal}"
+                    "{} before the stream loaded, so it was never loaded; building it reported: \
+                     {build_refusal}",
+                    what_interrupted_a_load()
                 );
-                return Ok(
-                    StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest,
-                );
+                return Ok(StreamLoadObservingInterrupts::AbandonedForAnInterrupt);
             }
             Err(build_refusal) => return Err(build_refusal),
         };
@@ -932,7 +933,7 @@ impl Runner {
             loop {
                 // Repeated, because the load forgets an interrupt that lands
                 // before it begins.
-                if is_the_machines_shutdown_requested() {
+                if is_interrupted() {
                     walk_a_stream_being_loaded_to_the_machines_shutdown_level(&stream);
                 }
                 if let Err(RecvTimeoutError::Disconnected) = load_ended_receiver
@@ -946,27 +947,28 @@ impl Runner {
                 .unwrap_or_else(|load_panic| std::panic::resume_unwind(load_panic))
         });
 
-        if !is_the_machines_shutdown_requested() {
+        if !is_interrupted() {
             load_outcome?;
             return self
                 .insert_a_complete_stream(stream)
-                .map(StreamLoadObservingMachineShutdownRequests::Loaded);
+                .map(StreamLoadObservingInterrupts::Loaded);
         }
         match load_outcome {
             Ok(()) => {
                 tracing::info!(
-                    "a machine shutdown was requested while the stream `{}` loaded, so it was \
-                     never loaded or started",
+                    "{} while the stream `{}` loaded, so it was never loaded or started",
+                    what_interrupted_a_load(),
                     stream.stream_id()
                 );
                 tear_down_a_stream_that_never_entered_the_table(&stream);
             }
             Err(interrupted_load) => tracing::info!(
-                "a machine shutdown was requested while the stream loaded, so it was never \
-                 started; the interrupted load reported: {interrupted_load}"
+                "{} while the stream loaded, so it was never started; the interrupted load \
+                 reported: {interrupted_load}",
+                what_interrupted_a_load()
             ),
         }
-        Ok(StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest)
+        Ok(StreamLoadObservingInterrupts::AbandonedForAnInterrupt)
     }
 
     /// Load an empty stream a Rust host builds in code, published to the
@@ -1483,6 +1485,16 @@ pub(super) fn a_stream_id_already_loaded_refusal(
          {how_to_load_this_one}",
         first.stream_id()
     ))
+}
+
+/// What interrupted a load, as its log lines name it: a machine shutdown
+/// request, else the cancel of the stream action loading it.
+pub(crate) fn what_interrupted_a_load() -> &'static str {
+    if crate::core::runtime::is_the_machines_shutdown_requested() {
+        "a machine shutdown was requested"
+    } else {
+        "its stream action was cancelled"
+    }
 }
 
 /// Walk a stream a load is still building — in no table the machine's walk
@@ -3382,7 +3394,7 @@ mod tests {
 
         assert!(matches!(
             load_outcome,
-            StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest
+            StreamLoadObservingInterrupts::AbandonedForAnInterrupt
         ));
         assert!(runner.ids_of_the_loaded_streams().is_empty());
     }

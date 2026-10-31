@@ -187,7 +187,7 @@ mod tests {
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::runtime::{
         LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner,
-        StreamLoadObservingMachineShutdownRequests, TheMachinesShutdownEscalationClearedOnDrop,
+        StreamLoadObservingInterrupts, TheMachinesShutdownEscalationClearedOnDrop,
     };
     use serial_test::serial;
 
@@ -457,7 +457,7 @@ mod tests {
         );
         assert!(matches!(
             load_outcome,
-            StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest
+            StreamLoadObservingInterrupts::AbandonedForAnInterrupt
         ));
         assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
@@ -494,7 +494,7 @@ mod tests {
             interrupter.join().unwrap();
             assert!(matches!(
                 interrupted,
-                StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest
+                StreamLoadObservingInterrupts::AbandonedForAnInterrupt
             ));
         }
 

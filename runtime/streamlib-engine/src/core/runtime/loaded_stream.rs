@@ -223,6 +223,10 @@ impl LoadedStreamInThisRuntime {
             std::fs::canonicalize(&project_directory).unwrap_or_else(|_| project_directory.clone());
         let action_that_loads_it = the_project_log_route_entry_of_this_thread().filter(|entry| {
             entry.route().project_directory() == Some(resolved_project_directory.as_path())
+                && entry.runtime_id() == engine_resources_shared_by_every_stream.runtime_id.as_str()
+                && entry
+                    .stream_id()
+                    .is_none_or(|entered_for| entered_for == stream_id.as_str())
         });
         let log_route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
             &project_directory,

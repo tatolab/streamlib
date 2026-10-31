@@ -102,8 +102,9 @@ pub struct RuntimeLogEvent {
     /// they share a unit and are different quantities.
     pub host_ts: u64,
 
-    /// The `RuntimeUniqueId` of the runtime whose stream or stream action emitted the record,
-    /// verbatim; empty for a record no project emitted, which reaches only the pretty mirror.
+    /// The `RuntimeUniqueId` of the runtime that emitted the record, verbatim: one of its
+    /// streams or stream actions, into the project's log, or the runtime itself, into its own
+    /// log. Empty for a record no runtime emitted, which reaches only the pretty mirror.
     pub runtime_id: String,
 
     /// The id of the loaded stream that emitted the record. `None` for a

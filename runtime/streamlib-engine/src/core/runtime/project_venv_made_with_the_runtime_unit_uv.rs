@@ -23,6 +23,7 @@ use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects
     refuse_a_project_directory_not_named_by_its_absolute_path, the_projects_venv_interpreter,
 };
 use crate::core::error::Error;
+use crate::core::runtime::what_interrupted_a_load;
 
 /// How long `.venv/bin/python -I -c ""` may take to show that the venv's
 /// interpreter runs.
@@ -91,9 +92,10 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
             "the project directory {project} does not exist"
         ))));
     }
-    let a_shutdown_refusal = || {
+    let an_interrupt_refusal = || {
         ProjectVenvNotMade::Refused(Error::Runtime(format!(
-            "the .venv of {project} was not made: the runtime is shutting down"
+            "the .venv of {project} was not made: {}",
+            what_interrupted_a_load()
         )))
     };
     let interpreter = the_projects_venv_interpreter(project_directory);
@@ -103,7 +105,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
         is_interrupted_by_the_host,
     ) {
         VenvInterpreterProbe::Runs => return Ok(()),
-        VenvInterpreterProbe::CutShortByTheHost => return Err(a_shutdown_refusal()),
+        VenvInterpreterProbe::CutShortByTheHost => return Err(an_interrupt_refusal()),
         VenvInterpreterProbe::DoesNotRun { why } => why,
     };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
@@ -123,7 +125,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
         });
     }
     if is_interrupted_by_the_host() {
-        return Err(a_shutdown_refusal());
+        return Err(an_interrupt_refusal());
     }
     let venv = project_directory.join(".venv");
     tracing::info!(
@@ -163,7 +165,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
         ),
         HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
             remove_the_venv(&venv)?;
-            return Err(a_shutdown_refusal());
+            return Err(an_interrupt_refusal());
         }
     };
     remove_the_venv(&venv)?;
@@ -564,7 +566,7 @@ mod tests {
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
-        assert!(refusal.contains("shutting down"), "{refusal}");
+        assert!(refusal.contains("was not made: "), "{refusal}");
         assert!(!project.venv().exists(), "the half-made venv was left");
     }
 
@@ -581,7 +583,7 @@ mod tests {
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
-        assert!(refusal.contains("shutting down"), "{refusal}");
+        assert!(refusal.contains("was not made: "), "{refusal}");
         assert!(
             project.interpreter().is_file(),
             "an interrupted probe removed the venv"

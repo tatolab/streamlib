@@ -16,10 +16,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::project_stream_action_queue::{
-    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
-    StreamActionKind, StreamActionProgress, StreamActionQueueOfEachProject, StreamActionQueued,
-    StreamActionState, StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
+    ProjectStreamsListing, StreamAction, StreamActionCancelOutcome, StreamActionKind,
+    StreamActionProgress, StreamActionQueueOfEachProject, StreamActionQueued, StreamActionState,
+    StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
     StreamTheLastCompileOfTheProjectNamed, WhatTheLastCompileOfTheProjectGave,
+    a_stream_action_not_held,
 };
 use super::project_venv_made_with_the_runtime_unit_uv::{
     PROJECT_VENV_MAKING_BOUND, PROJECT_VENV_SYNC_BOUND, ProjectVenvNotMade,
@@ -27,12 +28,13 @@ use super::project_venv_made_with_the_runtime_unit_uv::{
 };
 use super::runtime::{
     a_stream_id_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
+    what_interrupted_a_load,
 };
 use super::{
     CrashOfThePreviousRuntimeRun, ENGINE_TEARDOWN_WATCHDOG_BUDGET, HowThePreviousRuntimeRunEnded,
     LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling,
     OwnerExposureRulingsSplitAroundTheLoad, PendingStreamActionKind, Runner, StreamEnvironment,
-    StreamLoadObservingMachineShutdownRequests, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamLoadObservingInterrupts, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordReadFailure, StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
     the_owners_exposure_rulings_split_around_the_load,
 };
@@ -321,11 +323,13 @@ struct OneStreamAStreamActionLoads<'load> {
     graph_json: &'load serde_json::Value,
     rulings: &'load [OwnerExposureRuling],
     stream_environment: StreamEnvironment,
+    /// Abandons the load once it reports true.
+    is_interrupted: &'load dyn Fn() -> bool,
 }
 
 impl<'load> OneStreamAStreamActionLoads<'load> {
     /// The stream `record` records with the graph `graph_json` it holds, its
-    /// rulings applied.
+    /// rulings applied, its load abandoned by a machine shutdown request.
     fn recorded_by(record: &'load StreamRecord, graph_json: &'load serde_json::Value) -> Self {
         Self {
             display_name: &record.display_name,
@@ -333,6 +337,15 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
             graph_json,
             rulings: &record.exposure_rulings,
             stream_environment: record.stream_environment(),
+            is_interrupted: &is_the_machines_shutdown_requested,
+        }
+    }
+
+    /// The same load, abandoned once `is_interrupted` reports true.
+    fn abandoned_once(self, is_interrupted: &'load dyn Fn() -> bool) -> Self {
+        Self {
+            is_interrupted,
+            ..self
         }
     }
 }
@@ -489,11 +502,22 @@ impl Runner {
                 progress.map(|progress| progress.action_id.as_str()),
             ),
             (Err(refusal), _) => {
-                if let Some(progress) = progress {
+                if let Some(progress) = progress
+                    && !progress.saw_its_cancel()
+                {
                     tracing::warn!("the stream action {} failed: {refusal}", progress.action_id);
                 }
             }
             (Ok(_), None) => {}
+        }
+        if let Some(progress) = progress
+            && progress.saw_its_cancel()
+        {
+            tracing::info!(
+                "the stream action {} was cancelled at the step it was on; the streams it had not \
+                 reached stay as recorded",
+                progress.action_id
+            );
         }
         run_outcome
     }
@@ -534,6 +558,12 @@ impl Runner {
                 progress.is_on(step);
             }
         };
+        let is_interrupted = || {
+            progress.map_or_else(
+                is_the_machines_shutdown_requested,
+                StreamActionProgress::is_interrupted,
+            )
+        };
         let RunStreamRequest {
             project_directory,
             stream_function,
@@ -564,7 +594,7 @@ impl Runner {
         report_the_step(StreamActionStep::MakingTheVenv);
         let venv_sync_bound = progress.is_none().then_some(PROJECT_VENV_SYNC_BOUND);
         if let Err(venv_not_made) =
-            self.make_the_projects_venv_within(&project_directory, venv_sync_bound)
+            self.make_the_projects_venv_within(&project_directory, venv_sync_bound, &is_interrupted)
         {
             let failed_because = match venv_not_made {
                 ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
@@ -597,6 +627,7 @@ impl Runner {
             &project_directory,
             stream_function.as_deref(),
             lend_directory,
+            &is_interrupted,
         )?;
         if stream_function.is_none() {
             self.remember_what_the_every_stream_compile_gave(
@@ -628,6 +659,13 @@ impl Runner {
                     graph_or_why_none,
                 } in streams
                 {
+                    if progress.is_some_and(StreamActionProgress::is_cancelled) {
+                        return Ok(StreamRunOutcome {
+                            project_directory,
+                            streams: streams_loaded_or_failed,
+                            compile_warnings,
+                        });
+                    }
                     streams_loaded_or_failed.push(self.record_and_load_one_stream_a_run_compiled(
                         stream_records,
                         StreamARunCompiled {
@@ -635,6 +673,7 @@ impl Runner {
                             display_name_the_run_gives: display_name_the_run_gives.clone(),
                             stream_environment: &stream_environment,
                             graph_or_why_none,
+                            is_interrupted: &is_interrupted,
                         },
                     )?);
                 }
@@ -669,6 +708,7 @@ impl Runner {
                     display_name_the_run_gives,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Ok(graph_json),
+                    is_interrupted: &is_interrupted,
                 },
             )?],
             WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised {
@@ -681,6 +721,7 @@ impl Runner {
                     display_name_the_run_gives,
                     stream_environment: &stream_environment,
                     graph_or_why_none: Err(failed_because),
+                    is_interrupted: &is_interrupted,
                 },
             )?],
             WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined {
@@ -1079,10 +1120,10 @@ impl Runner {
     /// How the running stream action `action_id` reports its progress, it
     /// marked in progress.
     fn progress_of_the_stream_action(&self, action_id: &str) -> StreamActionProgress<'_> {
-        let progress = StreamActionProgress {
-            queue_of_each_project: &self.stream_actions.stream_action_queue_of_each_project,
-            action_id: action_id.to_string(),
-        };
+        let progress = StreamActionProgress::of_the_stream_action(
+            &self.stream_actions.stream_action_queue_of_each_project,
+            action_id,
+        );
         progress.has_begun();
         progress
     }
@@ -1242,8 +1283,17 @@ impl Runner {
                     progress.map(|progress| progress.action_id.as_str()),
                 )
             });
+        let is_interrupted = || {
+            progress.map_or_else(
+                is_the_machines_shutdown_requested,
+                StreamActionProgress::is_interrupted,
+            )
+        };
         report_the_step(StreamActionStep::MakingTheVenv);
-        self.make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(stream_id)?;
+        self.make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(
+            stream_id,
+            &is_interrupted,
+        )?;
         report_the_step(StreamActionStep::Starting);
         let one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
@@ -1267,7 +1317,7 @@ impl Runner {
             drop(one_stream_action_at_a_time);
             report_the_step(StreamActionStep::Compiling);
             let compiled_again =
-                self.compile_and_run_a_recorded_stream_from_its_location(&record)?;
+                self.compile_and_run_a_recorded_stream_from_its_location(&record, progress)?;
             return match compiled_again.state {
                 StreamStateAfterItsRun::Running { node_count, .. } => Ok(StreamStartOutcome {
                     stream_id: compiled_again.stream_id,
@@ -1279,23 +1329,25 @@ impl Runner {
                 ))),
             };
         };
-        let stream = match self.load_a_recorded_stream_from_its_record(&record, graph_json) {
-            Ok(stream) => stream,
-            Err(retry_refusal)
-                if record.is_failed()
-                    && !matches!(
-                        retry_refusal,
-                        Error::EngineResourceRefusedAtAStreamsStart(_)
-                    ) =>
+        let stream =
+            match self.load_a_recorded_stream_from_its_record(&record, graph_json, &is_interrupted)
             {
-                self.record_a_refused_start_failed_resetting_its_crash_count(
-                    &mut record,
-                    format!("`start` retried it, and it did not load: {retry_refusal}"),
-                );
-                return Err(retry_refusal);
-            }
-            Err(start_refusal) => return Err(start_refusal),
-        };
+                Ok(stream) => stream,
+                Err(retry_refusal)
+                    if record.is_failed()
+                        && !matches!(
+                            retry_refusal,
+                            Error::EngineResourceRefusedAtAStreamsStart(_)
+                        ) =>
+                {
+                    self.record_a_refused_start_failed_resetting_its_crash_count(
+                        &mut record,
+                        format!("`start` retried it, and it did not load: {retry_refusal}"),
+                    );
+                    return Err(retry_refusal);
+                }
+                Err(start_refusal) => return Err(start_refusal),
+            };
         if record.mark_running_resetting_its_crash_count()
             && let Err(write_refusal) = self.change_the_record_of_the_stream(stream_id, |record| {
                 record.mark_running_resetting_its_crash_count();
@@ -1618,7 +1670,9 @@ impl Runner {
             .iter()
             .filter_map(|stream_id| stream_records.read(stream_id).transpose())
             .collect();
-        let reloads = self.reload_each_recorded_stream_listed(stream_records, listed);
+        let reloads = self.reload_each_recorded_stream_listed(stream_records, listed, &|| {
+            progress.is_interrupted()
+        });
         let states = reloads
             .iter()
             .filter_map(|reload| match reload {
@@ -1640,14 +1694,20 @@ impl Runner {
     /// that read: a stream stopped or removed since the listing stays
     /// unloaded, one loaded since is left as it is, and the owner's rulings
     /// recorded since hold from its load. A record holding no graph is
-    /// compiled from its location as `start_stream` compiles it.
+    /// compiled from its location as `start_stream` compiles it. Once
+    /// `is_interrupted`, the stream being re-loaded and every one after it
+    /// stay unloaded and are re-loaded at the runtime's next start.
     fn reload_each_recorded_stream_listed(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
         listed: Vec<std::result::Result<StreamRecordAsRead, StreamRecordReadFailure>>,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Vec<StreamReloadAtTheStart> {
         let mut reloads = Vec::new();
         for listed_record in listed {
+            if is_interrupted() {
+                break;
+            }
             let stream_id = match listed_record {
                 Ok(listed_record) => listed_record.stream_id().to_string(),
                 Err(unreadable) => {
@@ -1660,7 +1720,7 @@ impl Runner {
                 Ok(Some(StreamRecordAsRead::Current(record)))
                     if !record.is_failed() && !record.stopped && record.graph.is_some() =>
                 {
-                    Some(self.make_the_venv_of_a_recorded_stream(&record))
+                    Some(self.make_the_venv_of_a_recorded_stream(&record, is_interrupted))
                 }
                 _ => None,
             };
@@ -1725,8 +1785,10 @@ impl Runner {
                 continue;
             };
             let reloaded = venv_made_outside_the_lock
-                .unwrap_or_else(|| self.make_the_venv_of_a_recorded_stream(&record))
-                .and_then(|()| self.load_a_recorded_stream_from_its_record(&record, graph_json));
+                .unwrap_or_else(|| self.make_the_venv_of_a_recorded_stream(&record, is_interrupted))
+                .and_then(|()| {
+                    self.load_a_recorded_stream_from_its_record(&record, graph_json, is_interrupted)
+                });
             match reloaded {
                 Ok(stream) => {
                     tracing::info!(
@@ -1746,10 +1808,11 @@ impl Runner {
                         refusal: reload_refusal,
                     });
                 }
-                Err(reload_refusal) if is_the_machines_shutdown_requested() => {
+                Err(reload_refusal) if is_interrupted() => {
                     tracing::info!(
-                        "the stream `{stream_id}` was not re-loaded, because the machine is \
-                         shutting every stream down: {reload_refusal}"
+                        "the stream `{stream_id}` was not re-loaded, because {}: \
+                         {reload_refusal}",
+                        what_interrupted_a_load()
                     );
                     reloads.push(StreamReloadAtTheStart::NotReloaded {
                         stream_id,
@@ -1981,6 +2044,7 @@ impl Runner {
             display_name_the_run_gives,
             stream_environment,
             graph_or_why_none,
+            is_interrupted,
         } = compiled;
         let stream_id = stream_location.stream_id();
         let (previous_record, previously_loaded) =
@@ -2039,6 +2103,7 @@ impl Runner {
                 stream_records,
                 &mut stream_record,
                 a_new_stream_recorded_once_loaded,
+                is_interrupted,
             )?,
         };
         Ok(StreamLoadedOrFailedByARun::of_the_record(
@@ -2049,19 +2114,22 @@ impl Runner {
     }
 
     /// Load the graph `stream_record` holds — writing the record once it is
-    /// loaded when `record_it_once_loaded` — then start it. A refused load or
-    /// start records the stream failed with the reason; a record that cannot
-    /// be written unloads the stream and is refused.
+    /// loaded when `record_it_once_loaded`, and abandoning it once
+    /// `is_interrupted` reports true — then start it. A refused load or start
+    /// records the stream failed with the reason; a record that cannot be
+    /// written unloads the stream and is refused.
     fn load_and_start_a_recorded_stream_recording_it_failed_when_refused(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
         stream_record: &mut StreamRecord,
         record_it_once_loaded: bool,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<StreamStateAfterItsRun> {
         let rulings_the_load_applied = stream_record.exposure_rulings.clone();
         let loaded = match &stream_record.graph {
             Some(graph_json) => self.load_a_stream_with_the_owners_rulings(
-                OneStreamAStreamActionLoads::recorded_by(stream_record, graph_json),
+                OneStreamAStreamActionLoads::recorded_by(stream_record, graph_json)
+                    .abandoned_once(is_interrupted),
             ),
             None => Err(Error::Runtime(format!(
                 "the stream `{}` holds no graph to load",
@@ -2364,16 +2432,23 @@ impl Runner {
     fn make_the_projects_venv(
         &self,
         project_directory: &Path,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
-        self.make_the_projects_venv_within(project_directory, Some(PROJECT_VENV_SYNC_BOUND))
+        self.make_the_projects_venv_within(
+            project_directory,
+            Some(PROJECT_VENV_SYNC_BOUND),
+            is_interrupted,
+        )
     }
 
     /// [`Self::make_the_projects_venv`], its sync bounded by `sync_bound`, or
-    /// unbounded when it is `None`.
+    /// unbounded when it is `None`, and cut short once `is_interrupted`
+    /// reports true.
     fn make_the_projects_venv_within(
         &self,
         project_directory: &Path,
         sync_bound: Option<std::time::Duration>,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
         make_the_projects_venv_unless_its_interpreter_runs_within(
             project_directory,
@@ -2381,19 +2456,23 @@ impl Runner {
                 .runtime_unit_uv_executable
                 .get(),
             sync_bound,
-            &is_the_machines_shutdown_requested,
+            is_interrupted,
         )
     }
 
     /// Make the `.venv` that `record`'s interpreter is in, unless it runs,
-    /// refused for why when it cannot be made. An interpreter in no project's
-    /// `.venv` is left as it is.
-    fn make_the_venv_of_a_recorded_stream(&self, record: &StreamRecord) -> Result<()> {
+    /// refused for why when it cannot be made or `is_interrupted` cut it short.
+    /// An interpreter in no project's `.venv` is left as it is.
+    fn make_the_venv_of_a_recorded_stream(
+        &self,
+        record: &StreamRecord,
+        is_interrupted: &dyn Fn() -> bool,
+    ) -> Result<()> {
         let Some(project_directory) = the_project_directory_whose_venv_holds(&record.interpreter)
         else {
             return Ok(());
         };
-        Ok(self.make_the_projects_venv(&project_directory)?)
+        Ok(self.make_the_projects_venv(&project_directory, is_interrupted)?)
     }
 
     /// Before `start_stream` takes the one-action lock: make the `.venv` of the
@@ -2403,6 +2482,7 @@ impl Runner {
     fn make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(
         &self,
         stream_id: &str,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<()> {
         let Ok(Some(StreamRecordAsRead::Current(record))) = self.stream_record_of_the_id(stream_id)
         else {
@@ -2411,7 +2491,8 @@ impl Runner {
         if record.graph.is_none() {
             return Ok(());
         }
-        let Err(venv_not_made) = self.make_the_venv_of_a_recorded_stream(&record) else {
+        let Err(venv_not_made) = self.make_the_venv_of_a_recorded_stream(&record, is_interrupted)
+        else {
             return Ok(());
         };
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
@@ -2419,7 +2500,7 @@ impl Runner {
             && self
                 .loaded_stream_of_the_id_when_loaded(stream_id)
                 .is_none()
-            && !is_the_machines_shutdown_requested()
+            && !is_interrupted()
         {
             self.record_a_refused_start_failed_resetting_its_crash_count(
                 &mut record,
@@ -2457,10 +2538,12 @@ impl Runner {
     /// Compile `record`'s stream again from its location, as a run of it, and
     /// load it — the project's run, for the record of a project that gave no
     /// stream. That record names no entry, so one written for an entry
-    /// other than the project's own `stream.py` is refused, naming it.
+    /// other than the project's own `stream.py` is refused, naming it. Run for
+    /// the stream action `progress` reports when one asks it.
     fn compile_and_run_a_recorded_stream_from_its_location(
         &self,
         record: &StreamRecord,
+        progress: Option<&StreamActionProgress<'_>>,
     ) -> Result<StreamLoadedOrFailedByARun> {
         let project_directory = the_project_directory_whose_venv_holds(&record.interpreter)
             .ok_or_else(|| {
@@ -2482,11 +2565,14 @@ impl Runner {
                 project_directory.display()
             )));
         }
-        let run = self.run_stream(RunStreamRequest {
-            project_directory,
-            stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
-            display_name: None,
-        })?;
+        let run = self.run_the_project_reporting_to(
+            RunStreamRequest {
+                project_directory,
+                stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
+                display_name: None,
+            },
+            progress,
+        )?;
         let mut streams = run.streams.into_iter();
         let the_project_took_in_one_stream =
             record.location.is_a_project_that_gave_no_stream() && streams.len() == 1;
@@ -2507,7 +2593,7 @@ impl Runner {
         record: &StreamRecord,
     ) -> StreamReloadAtTheStart {
         let stream_id = record.stream_id.clone();
-        let refusal = match self.compile_and_run_a_recorded_stream_from_its_location(record) {
+        let refusal = match self.compile_and_run_a_recorded_stream_from_its_location(record, None) {
             Ok(StreamLoadedOrFailedByARun {
                 stream_id,
                 state: StreamStateAfterItsRun::Running { node_count, .. },
@@ -2534,13 +2620,18 @@ impl Runner {
     }
 
     /// Load and start a recorded stream from `record` and the graph
-    /// `graph_json` it holds.
+    /// `graph_json` it holds, the load abandoned once `is_interrupted` reports
+    /// true.
     fn load_a_recorded_stream_from_its_record(
         &self,
         record: &StreamRecord,
         graph_json: &serde_json::Value,
+        is_interrupted: &dyn Fn() -> bool,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(record, graph_json))
+        self.load_and_start_a_stream(
+            OneStreamAStreamActionLoads::recorded_by(record, graph_json)
+                .abandoned_once(is_interrupted),
+        )
     }
 
     /// [`Self::load_a_stream_with_the_owners_rulings`], then start it; a
@@ -2570,6 +2661,7 @@ impl Runner {
             graph_json,
             rulings,
             stream_environment,
+            is_interrupted,
         } = stream_to_load;
         let OwnerExposureRulingsSplitAroundTheLoad {
             graph_with_the_rulings_that_hold_before_the_load,
@@ -2577,17 +2669,23 @@ impl Runner {
         } = the_owners_exposure_rulings_split_around_the_load(graph_json, rulings);
         let graph =
             GraphSnapshot::from_graph_document(graph_with_the_rulings_that_hold_before_the_load)?;
-        let stream = match self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
+        let stream = match self.load_stream_held_as_unless_interrupted(
             &graph,
             OptionsForLoadingOneStream::in_stream_environment(stream_environment)
                 .with_display_name(display_name)
                 .at_stream_location(stream_location.clone()),
             LoadedStreamHolding::RecordedByTheRuntime,
+            is_interrupted,
         )? {
-            StreamLoadObservingMachineShutdownRequests::Loaded(stream) => stream,
-            StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest => {
+            StreamLoadObservingInterrupts::Loaded(stream) => stream,
+            StreamLoadObservingInterrupts::AbandonedForAnInterrupt => {
+                let why_it_was_abandoned = if is_the_machines_shutdown_requested() {
+                    "the machine is shutting every stream down"
+                } else {
+                    "its stream action was cancelled"
+                };
                 return Err(Error::Runtime(format!(
-                    "the stream `{}` was not loaded: the machine is shutting every stream down",
+                    "the stream `{}` was not loaded: {why_it_was_abandoned}",
                     stream_location.stream_id()
                 )));
             }
@@ -2660,13 +2758,48 @@ impl Runner {
         self.stream_actions
             .stream_action_queue_of_each_project
             .held_stream_action(action_id)
-            .ok_or_else(|| {
-                Error::Configuration(format!(
-                    "the stream action `{action_id}` is not held: this runtime never queued it, or it is \
-                     older than the last {FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT} finished \
-                     actions of its project; its records stay in the project's log"
-                ))
-            })
+            .ok_or_else(|| a_stream_action_not_held(action_id))
+    }
+
+    /// Cancel the stream action `action_id`. One still queued is dropped,
+    /// its pending marks taken off its streams' records, and finished
+    /// cancelled. A running load or start stops at the step it is on and
+    /// finishes cancelled once it sees the cancel: a stream it was loading is
+    /// recorded failed, and the streams it had not reached stay as recorded.
+    /// Refused for a running stop or removal, whose unload cannot be cut
+    /// short, and for an action already finished or not held.
+    pub fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction> {
+        let cancelled = self
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .cancel_the_stream_action(action_id, refuse_the_cancel_of_a_running_unload)?;
+        let action = match cancelled {
+            StreamActionCancelOutcome::DroppedFromItsQueue(action) => {
+                for stream in &action.streams {
+                    self.finish_the_pending_stream_action_on_the_record(
+                        &stream.stream_id,
+                        action_id,
+                    );
+                }
+                action
+            }
+            StreamActionCancelOutcome::AskedOfTheRunningAction(action) => action,
+        };
+        ProjectLogRouteEntry::for_the_project_in(
+            &action.project_directory,
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+            Some(action_id),
+        )
+        .run_entered(|| {
+            tracing::info!(
+                "the stream action {action_id} ({}) was asked to cancel while {}",
+                action.kind.as_str(),
+                action.state.as_str()
+            )
+        });
+        Ok(action)
     }
 
     /// The streams of the project in `project_directory` as its last
@@ -2701,13 +2834,10 @@ impl Runner {
     }
 
     /// Run the load the stream action `action_id` queued of the project in
-    /// `project_directory`, reporting its steps, and finish the action done or
-    /// failed.
+    /// `project_directory`, reporting its steps, and finish the action done,
+    /// failed, or cancelled once it saw its cancel.
     fn load_the_project_for_its_stream_action(&self, action_id: &str, project_directory: PathBuf) {
-        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
-        queue_of_each_project.change_the_held_stream_action(action_id, |action| {
-            action.state = StreamActionState::InProgress;
-        });
+        let progress = self.progress_of_the_stream_action(action_id);
         let run_outcome = match why_a_directory_is_no_project(&project_directory) {
             Some(why_it_is_no_project) => {
                 tracing::warn!("the stream action {action_id} failed: {why_it_is_no_project}");
@@ -2720,40 +2850,47 @@ impl Runner {
                         stream_function: None,
                         display_name: None,
                     },
-                    Some(&StreamActionProgress {
-                        queue_of_each_project,
-                        action_id: action_id.to_string(),
-                    }),
+                    Some(&progress),
                 )
                 .map_err(|refusal| refusal.to_string()),
         };
-        queue_of_each_project.change_the_held_stream_action(action_id, |action| {
-            action.step = None;
-            match run_outcome {
-                Ok(run_outcome) => {
-                    action.state = StreamActionState::Done;
-                    action.streams = run_outcome
-                        .streams
-                        .into_iter()
-                        .map(|stream| StreamOfAStreamAction {
-                            state: Some(match stream.state {
-                                StreamStateAfterItsRun::Running { .. } => {
-                                    StreamListingState::Running
-                                }
-                                StreamStateAfterItsRun::Failed { .. } => StreamListingState::Failed,
-                            }),
-                            stream_id: stream.stream_id,
-                            display_name: stream.display_name,
-                            stream_location: Some(stream.stream_location),
-                        })
-                        .collect();
+        let saw_its_cancel = progress.saw_its_cancel();
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .change_the_held_stream_action(action_id, |action| {
+                action.step = None;
+                match run_outcome {
+                    Ok(run_outcome) => {
+                        action.state = if saw_its_cancel {
+                            StreamActionState::Cancelled
+                        } else {
+                            StreamActionState::Done
+                        };
+                        action.streams = run_outcome
+                            .streams
+                            .into_iter()
+                            .map(|stream| StreamOfAStreamAction {
+                                state: Some(match stream.state {
+                                    StreamStateAfterItsRun::Running { .. } => {
+                                        StreamListingState::Running
+                                    }
+                                    StreamStateAfterItsRun::Failed { .. } => {
+                                        StreamListingState::Failed
+                                    }
+                                }),
+                                stream_id: stream.stream_id,
+                                display_name: stream.display_name,
+                                stream_location: Some(stream.stream_location),
+                            })
+                            .collect();
+                    }
+                    Err(_) if saw_its_cancel => action.state = StreamActionState::Cancelled,
+                    Err(failed_because) => {
+                        action.state = StreamActionState::Failed;
+                        action.failed_because = Some(failed_because);
+                    }
                 }
-                Err(failed_because) => {
-                    action.state = StreamActionState::Failed;
-                    action.failed_because = Some(failed_because);
-                }
-            }
-        });
+            });
     }
 
     /// Remember what the every-stream compile of the project in
@@ -2998,13 +3135,14 @@ fn refuse_an_id_another_location_holds(
     }
 }
 
-/// The stream function a run compiled, its location and display name, and the
-/// graph it compiled to or why its code gave none.
+/// The stream function a run compiled, its location and display name, the
+/// graph it compiled to or why its code gave none, and what interrupts its load.
 struct StreamARunCompiled<'run> {
     stream_location: StreamLocation,
     display_name_the_run_gives: Option<String>,
     stream_environment: &'run StreamEnvironment,
     graph_or_why_none: std::result::Result<serde_json::Value, String>,
+    is_interrupted: &'run dyn Fn() -> bool,
 }
 
 /// The project directory whose `.venv/bin/python` is `interpreter`; `None` when
@@ -3330,6 +3468,20 @@ fn refuse_a_node_the_recorded_graph_does_not_hold(record: &StreamRecord, node: &
     )))
 }
 
+/// Refuse the cancel of the running stream action `running` when it unloads
+/// its streams: a stop or removal that has begun cannot be cut short.
+fn refuse_the_cancel_of_a_running_unload(running: &StreamAction) -> Result<()> {
+    if running.kind.unloads_its_streams() {
+        return Err(Error::Configuration(format!(
+            "the stream action `{}` is a running {}, which has begun unloading its streams and \
+             cannot be cut short; it ends done",
+            running.action_id,
+            running.kind.as_str()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3378,7 +3530,11 @@ mod tests {
             let Some(stream_records) = self.stream_records() else {
                 return Vec::new();
             };
-            self.reload_each_recorded_stream_listed(stream_records, stream_records.read_every())
+            self.reload_each_recorded_stream_listed(
+                stream_records,
+                stream_records.read_every(),
+                &is_the_machines_shutdown_requested,
+            )
         }
     }
     use crate::core::test_support::{
@@ -5932,7 +6088,11 @@ mod tests {
         records.write(&stopped_since).unwrap();
         assert!(records.remove(&project.stream_id_of("b-removed")).unwrap());
 
-        let reloads = runner.reload_each_recorded_stream_listed(&records, listed);
+        let reloads = runner.reload_each_recorded_stream_listed(
+            &records,
+            listed,
+            &is_the_machines_shutdown_requested,
+        );
 
         assert!(reloads.is_empty(), "neither is reported: {reloads:?}");
         assert!(runner.ids_of_the_loaded_streams().is_empty());
@@ -5958,7 +6118,11 @@ mod tests {
             .unwrap();
         std::fs::write(&record_path_malformed_since_the_listing, b"{").unwrap();
 
-        let reloads = runner.reload_each_recorded_stream_listed(&records, listed);
+        let reloads = runner.reload_each_recorded_stream_listed(
+            &records,
+            listed,
+            &is_the_machines_shutdown_requested,
+        );
 
         let [StreamReloadAtTheStart::RecordUnreadable(unreadable)] = reloads.as_slice() else {
             panic!("the record is reported unreadable: {reloads:?}");
@@ -5983,8 +6147,11 @@ mod tests {
         let loaded_since =
             a_recorded_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
 
-        let reloads =
-            runner.reload_each_recorded_stream_listed(&records_in(state_directory.path()), listed);
+        let reloads = runner.reload_each_recorded_stream_listed(
+            &records_in(state_directory.path()),
+            listed,
+            &is_the_machines_shutdown_requested,
+        );
 
         assert!(reloads.is_empty(), "nothing is reported: {reloads:?}");
         assert_eq!(
@@ -6379,7 +6546,11 @@ mod tests {
         });
         records.write(&restricted_since).unwrap();
 
-        let reloads = runner.reload_each_recorded_stream_listed(&records, listed);
+        let reloads = runner.reload_each_recorded_stream_listed(
+            &records,
+            listed,
+            &is_the_machines_shutdown_requested,
+        );
 
         assert!(
             matches!(
@@ -7674,6 +7845,84 @@ mod tests {
         assert!(!record.stopped);
         assert!(record.pending_stream_actions.is_empty(), "{record:?}");
         assert_eq!(runner.ids_of_the_loaded_streams(), [camera]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_queued_stop_cancelled_takes_its_mark_off_and_a_load_cancelled_in_its_venv_leaves_none() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let camera = project.stream_id_of("camera");
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera", serde_json::json!([])),
+        );
+        let (stub_uv, _gate_never_released) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        let load = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
+        the_stream_action_once(&runner, &load.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+        let stop = runner.stop_stream(&camera).unwrap();
+
+        let stop_cancelled = runner.cancel_stream_action(&stop.action_id).unwrap();
+        let load_asked_to_cancel = runner.cancel_stream_action(&load.action_id).unwrap();
+        let load_cancelled = the_stream_action_once_finished(&runner, &load.action_id);
+
+        assert_eq!(stop_cancelled.state, StreamActionState::Cancelled);
+        assert!(the_pending_stream_actions_on(state_directory.path(), &camera).is_empty());
+        assert_eq!(load_asked_to_cancel.state, StreamActionState::InProgress);
+        assert_eq!(
+            load_cancelled.state,
+            StreamActionState::Cancelled,
+            "{load_cancelled:?}"
+        );
+        assert_eq!(load_cancelled.failed_because, None);
+        assert!(!project.path().join(".venv").exists());
+        assert_eq!(runner.ids_of_the_loaded_streams(), [camera.clone()]);
+        assert!(!the_record_of(state_directory.path(), &camera).stopped);
+        assert!(
+            refusal_of(runner.cancel_stream_action(&load.action_id))
+                .contains("is already cancelled")
+        );
+        assert!(refusal_of(runner.cancel_stream_action("R-never")).contains("is not held"));
+        let follow_on = runner.stop_stream(&camera).unwrap();
+        assert_eq!(
+            the_stream_action_once_finished(&runner, &follow_on.action_id).state,
+            StreamActionState::Done
+        );
+    }
+
+    #[test]
+    fn a_running_stop_or_removal_refuses_its_cancel_and_a_running_load_or_start_takes_it() {
+        let running_of = |kind: StreamActionKind| StreamAction {
+            action_id: "R-1".to_string(),
+            project_directory: PathBuf::from("/srv/desk"),
+            kind,
+            state: StreamActionState::InProgress,
+            step: None,
+            streams: Vec::new(),
+            failed_because: None,
+        };
+
+        for unload in [StreamActionKind::Stop, StreamActionKind::Remove] {
+            let refusal = refusal_of(refuse_the_cancel_of_a_running_unload(&running_of(unload)));
+            assert!(refusal.contains("cannot be cut short"), "{refusal}");
+        }
+        for load in [
+            StreamActionKind::Load,
+            StreamActionKind::Start,
+            StreamActionKind::ReloadAtStart,
+        ] {
+            assert!(refuse_the_cancel_of_a_running_unload(&running_of(load)).is_ok());
+        }
     }
 
     #[test]

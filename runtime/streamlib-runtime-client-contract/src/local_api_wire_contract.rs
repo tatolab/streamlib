@@ -256,6 +256,22 @@ pub enum StreamActionStateOnTheWire {
     Done,
     /// Ended without taking in the project, for `failed_because`.
     Failed,
+    /// Ended early by `cancel_stream_action`: dropped from its queue, or stopped at the step it
+    /// was on.
+    Cancelled,
+}
+
+impl StreamActionStateOnTheWire {
+    /// The state as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            StreamActionStateOnTheWire::Queued => "queued",
+            StreamActionStateOnTheWire::InProgress => "in_progress",
+            StreamActionStateOnTheWire::Done => "done",
+            StreamActionStateOnTheWire::Failed => "failed",
+            StreamActionStateOnTheWire::Cancelled => "cancelled",
+        }
+    }
 }
 
 /// The step a running stream action is on.
@@ -301,6 +317,16 @@ pub struct DescribeStreamActionToolResult {
     pub streams: Vec<DescribeStreamActionToolResultStream>,
     /// Why it failed; `null` unless it did.
     pub failed_because: Option<String>,
+}
+
+/// The `cancel_stream_action` tool's result: the action's state once the cancel was taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelStreamActionToolResult {
+    /// The action's id.
+    pub action: String,
+    /// `cancelled` for an action dropped from its queue; `in_progress` for a running one, which
+    /// ends `cancelled` once it stops at the step it is on.
+    pub state: StreamActionStateOnTheWire,
 }
 
 /// One stream of a [`DescribeStreamActionToolResult`].
@@ -732,6 +758,13 @@ mod tests {
                 failed_because: None,
             }),
             r#"{"action":"Rabc-3","project_directory":"/srv/desk","kind":"load","state":"in_progress","step":"starting","streams":[{"stream":"desk-main-0a1b2c","display_name":"main","state":null}],"failed_because":null}"#
+        );
+        assert_eq!(
+            wire_text(&CancelStreamActionToolResult {
+                action: "Rabc-3".to_owned(),
+                state: StreamActionStateOnTheWire::Cancelled,
+            }),
+            r#"{"action":"Rabc-3","state":"cancelled"}"#
         );
         assert_eq!(
             wire_text(&ListProjectStreamsToolResult {
