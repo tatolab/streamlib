@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Unified logging pathway: `tracing` → bounded lossy channel → drain
-//! worker → line-buffered pretty mirror + the batched JSONL file of the
-//! stream that emitted each record.
+//! worker → line-buffered pretty mirror + the batched JSONL log of the
+//! project whose stream or stream action emitted each record.
 //!
 //! See `docs/logging-schema.md` for the JSONL schema (the durable
 //! interface contract) and `CLAUDE.md` for the engine-model framing.
@@ -19,22 +19,19 @@ pub use init::{
     ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES, ProcessLoggingPathwayHold, StreamlibLoggingGuard,
     hold_the_process_logging_pathway, init_for_tests,
 };
-pub use loaded_stream_log_record_history::{
-    LOADED_STREAM_LOG_RECORDS_HELD_IN_MEMORY, LoadedStreamLogRecordsPage, NumberedLogRecord,
-};
-pub use loaded_stream_log_route::RUNTIME_OWN_LOG_INSTANCE_NAME;
-pub(crate) use loaded_stream_log_route::TheRuntimesOwnLogWhileItsEngineLives;
-pub use loaded_stream_log_route::{
-    LoadedStreamLogRoute, LoadedStreamLogRouteEnteredOnThisThread,
-    carrying_this_threads_loaded_stream_log_route,
-    run_in_the_loaded_stream_log_route_when_there_is_one,
-    the_loaded_stream_log_route_of_this_thread,
-};
-pub(crate) use loaded_stream_log_route::{
-    carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe,
-    polled_in_a_loaded_stream_log_route,
-};
 pub(crate) use polyglot_sink::push_polyglot_record;
+pub use project_log_route::RUNTIME_OWN_LOG_INSTANCE_NAME;
+pub(crate) use project_log_route::TheRuntimesOwnLogWhileItsEngineLives;
+pub use project_log_route::{
+    ProjectLogRoute, ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread,
+    carrying_this_threads_project_log_route_entry,
+    run_in_the_project_log_route_entry_when_there_is_one,
+    the_project_log_route_entry_of_this_thread,
+};
+pub(crate) use project_log_route::{
+    carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe,
+    polled_in_a_project_log_route_entry,
+};
 pub(crate) use record::LogRecord;
 
 mod config;
@@ -42,9 +39,8 @@ mod helper_process_engine_log_capture;
 pub(crate) mod iceoryx2_log_bridge;
 mod init;
 mod layer;
-mod loaded_stream_log_record_history;
-mod loaded_stream_log_route;
 mod polyglot_sink;
+mod project_log_route;
 mod record;
 #[cfg(unix)]
 mod stdio_interceptor;

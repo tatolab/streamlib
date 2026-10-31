@@ -17,7 +17,7 @@ use crate::core::graph::{
     ProcessorUniqueId, StateComponent, node_named_or_refused,
 };
 use crate::core::logging::{
-    carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
+    carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -70,7 +70,7 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
+    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
         compiler.commit(&runtime_ctx)
     }))
     .await
@@ -116,7 +116,7 @@ async fn add_processor_impl(
     if processor_interpreter_launch_record.a_live_add_must_describe(&spec.name) {
         let node_type = spec.name.clone();
         let launch_record = Arc::clone(&processor_interpreter_launch_record);
-        tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
+        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
             launch_record.describe_and_register_a_type_a_live_add_names(
                 &node_type,
                 lend_directory.as_deref(),
@@ -491,7 +491,7 @@ impl LoadedStreamInThisRuntime {
         &self,
         operation: impl std::future::Future<Output = Result<T>> + Send + 'operation,
     ) -> BoxFuture<'operation, Result<T>> {
-        Box::pin(polled_in_a_loaded_stream_log_route(
+        Box::pin(polled_in_a_project_log_route_entry(
             Arc::clone(self.log_route()),
             operation,
         ))

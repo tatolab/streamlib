@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! JSONL log directory resolution and the segment file names a loaded
-//! stream's log is written under, in its project, and read back by.
+//! JSONL log directory resolution and the segment file names a project's log and the
+//! runtime's own log are written under and read back by.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -20,37 +20,23 @@ pub fn log_dir() -> PathBuf {
     crate::streamlib_home::get_streamlib_data_dir().join("logs")
 }
 
-/// `<project_directory>/.streamlib/logs/`, where every stream loaded from that project writes
-/// its JSONL log.
-pub fn loaded_stream_log_directory(project_directory: &Path) -> PathBuf {
+/// `<project_directory>/.streamlib/logs/`, where a project's one log lives.
+pub fn project_log_directory(project_directory: &Path) -> PathBuf {
     project_directory.join(".streamlib").join("logs")
 }
 
-/// `<runtime_id>-<stream_id with every '.' written as '_'>`: the name a loaded stream's log
-/// segments carry where a runtime's carry its id, so
-/// [`parse_runtime_log_segment_file_name`] reads it back whole as the segment's `runtime_id`.
-pub fn loaded_stream_log_instance_name(runtime_id: &str, stream_id: &str) -> String {
-    format!("{runtime_id}-{}", stream_id.replace('.', "_"))
-}
+/// The file name of a project log's active segment; a rotated one is
+/// `project.<seq>.jsonl`.
+pub const PROJECT_LOG_ACTIVE_SEGMENT_FILE_NAME: &str = "project.jsonl";
 
-/// Path of the active JSONL segment of one loaded stream:
-/// `<project_directory>/.streamlib/logs/<runtime_id>-<stream_id>-<started_at_millis>.jsonl`,
-/// the stream id spelled as [`loaded_stream_log_instance_name`] spells it.
-pub fn loaded_stream_log_path(
-    project_directory: &Path,
-    runtime_id: &str,
-    stream_id: &str,
-    started_at_millis: u128,
-) -> PathBuf {
-    loaded_stream_log_directory(project_directory).join(active_runtime_log_segment_file_name(
-        &loaded_stream_log_instance_name(runtime_id, stream_id),
-        started_at_millis,
-    ))
+/// Path of the active JSONL segment of the project in `project_directory`:
+/// `<project_directory>/.streamlib/logs/project.jsonl`, appended to across the runtime's runs.
+pub fn project_log_path(project_directory: &Path) -> PathBuf {
+    project_log_directory(project_directory).join(PROJECT_LOG_ACTIVE_SEGMENT_FILE_NAME)
 }
 
 /// The active segment's file name for one log instance:
-/// `<instance>-<started_at_millis>.jsonl`; a stream log's instance is
-/// `<runtime_id>-<stream>`.
+/// `<instance>-<started_at_millis>.jsonl`.
 pub fn active_runtime_log_segment_file_name(
     runtime_id: &str,
     started_at_millis: impl std::fmt::Display,
@@ -311,99 +297,20 @@ mod tests {
     }
 
     #[test]
-    fn two_streams_or_two_runtimes_or_two_starts_never_share_a_log_path() {
-        let project_directory = Path::new("/projects/app");
-        let first = loaded_stream_log_path(project_directory, "RtestA", "main", 111);
-        let other_stream = loaded_stream_log_path(project_directory, "RtestA", "audio", 111);
-        let other_runtime = loaded_stream_log_path(project_directory, "RtestB", "main", 111);
-        let other_start = loaded_stream_log_path(project_directory, "RtestA", "main", 222);
-
-        assert_ne!(first, other_stream);
-        assert_ne!(first, other_runtime);
-        assert_ne!(first, other_start);
-        for path in [&first, &other_stream, &other_runtime, &other_start] {
-            assert!(path.starts_with(loaded_stream_log_directory(project_directory)));
-        }
-    }
-
-    #[test]
-    fn a_loaded_streams_log_lives_under_its_project_named_by_runtime_stream_and_start() {
-        let path = loaded_stream_log_path(
-            Path::new("/projects/camera-app"),
-            "Rabc123",
-            "main",
-            1_700_000_000_000,
-        );
+    fn a_projects_log_lives_under_it_and_rotates_beside_its_active_segment() {
+        let active_segment_path = project_log_path(Path::new("/projects/camera-app"));
 
         assert_eq!(
-            path,
-            Path::new("/projects/camera-app/.streamlib/logs/Rabc123-main-1700000000000.jsonl")
-        );
-    }
-
-    /// A stream named with a dot keeps the segment's own dot-separated rotation sequence
-    /// the only dot a reader splits on.
-    #[test]
-    fn every_dot_in_a_streams_name_is_written_as_an_underscore() {
-        assert_eq!(
-            loaded_stream_log_instance_name("Rabc", "camera.v2"),
-            "Rabc-camera_v2"
-        );
-    }
-
-    /// `tatolab logs` reads a stream's segments as one instance named
-    /// `<runtime_id>-<stream>`, active and rotated alike.
-    #[test]
-    fn every_segment_of_a_loaded_streams_log_parses_back_to_its_instance() {
-        let active_segment_path = loaded_stream_log_path(
-            Path::new("/projects/app"),
-            "R-with-dashes",
-            "camera.v2",
-            1_700_000_000_000,
-        );
-        let rotated_segment_path = rotated_runtime_log_segment_path(&active_segment_path, 4);
-
-        assert_eq!(
-            parse_runtime_log_segment_file_name(
-                active_segment_path.file_name().unwrap().to_str().unwrap()
-            ),
-            segment_file_name("R-with-dashes-camera_v2", "1700000000000", None)
+            active_segment_path,
+            Path::new("/projects/camera-app/.streamlib/logs/project.jsonl")
         );
         assert_eq!(
-            parse_runtime_log_segment_file_name(
-                rotated_segment_path.file_name().unwrap().to_str().unwrap()
-            ),
-            segment_file_name("R-with-dashes-camera_v2", "1700000000000", Some(4))
+            rotated_runtime_log_segment_path(&active_segment_path, 4),
+            Path::new("/projects/camera-app/.streamlib/logs/project.4.jsonl")
         );
-    }
-
-    #[test]
-    fn the_newest_instance_of_a_loaded_stream_is_found_by_its_instance_name() {
-        let project_directory = tempfile::tempdir().unwrap();
-        let log_directory = loaded_stream_log_directory(project_directory.path());
-        std::fs::create_dir_all(&log_directory).unwrap();
-        for started_at_millis in [1000, 2000] {
-            let segment_path =
-                loaded_stream_log_path(project_directory.path(), "Rabc", "main", started_at_millis);
-            std::fs::write(segment_path, b"x").unwrap();
-        }
-        let other_stream_path =
-            loaded_stream_log_path(project_directory.path(), "Rabc", "audio", 9000);
-        std::fs::write(other_stream_path, b"x").unwrap();
-
         assert_eq!(
-            newest_runtime_log_instance_in_directory(
-                &log_directory,
-                &loaded_stream_log_instance_name("Rabc", "main")
-            )
-            .unwrap()
-            .map(|instance| instance.active_segment_path),
-            Some(loaded_stream_log_path(
-                project_directory.path(),
-                "Rabc",
-                "main",
-                2000
-            ))
+            rotated_runtime_log_segment_sequence(&active_segment_path, "project.4.jsonl"),
+            Some(4)
         );
     }
 

@@ -33,7 +33,7 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
+use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, ProcessorEvent, RuntimeEvent, topics,
@@ -219,10 +219,15 @@ impl LoadedStreamInThisRuntime {
             stream_location,
         } = naming;
         let stream_tag = LoadedStreamTag::next_in_this_process()?;
-        let log_route = LoadedStreamLogRoute::open_in_project_directory(
+        let action_that_loads_it = the_project_log_route_entry_of_this_thread()
+            .filter(|entry| entry.route().project_directory() == Some(project_directory.as_path()));
+        let log_route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+            &project_directory,
             engine_resources_shared_by_every_stream.runtime_id.as_str(),
             &stream_id,
-            &project_directory,
+            action_that_loads_it
+                .as_ref()
+                .and_then(|entry| entry.action_id()),
         );
         let _entered_this_streams_log_route = log_route.enter_on_this_thread();
         let loaded_stream_identity = LoadedStreamIdentity {
@@ -339,20 +344,16 @@ impl LoadedStreamInThisRuntime {
         self.holding
     }
 
-    /// The stream's active JSONL log segment, `None` when it writes none.
+    /// The active JSONL segment of the stream's project log, `None` when it
+    /// writes none.
     pub fn jsonl_log_path(&self) -> Option<&Path> {
         self.log_route().jsonl_log_path()
     }
 
-    /// Where the records this stream's threads emit go.
-    pub fn log_route(&self) -> &Arc<LoadedStreamLogRoute> {
+    /// The entry the records this stream's threads emit go through into its
+    /// project's log.
+    pub fn log_route(&self) -> &Arc<ProjectLogRouteEntry> {
         &self.this_streams_identity_and_handles.log_route
-    }
-
-    /// This stream's log records numbered after `after`, at most `max_count`
-    /// of them, from the most recent its log route holds in memory.
-    pub fn log_records_after(&self, after: u64, max_count: usize) -> LoadedStreamLogRecordsPage {
-        self.log_route().log_records_after(after, max_count)
     }
 
     /// The runtime id, stream name and tag this stream publishes its events
@@ -724,13 +725,14 @@ impl LoadedStreamInThisRuntime {
         );
     }
 
-    /// Close this stream's JSONL log, let go of the stream, then mark it
-    /// ended — so a waiter that wakes finds the log on disk whole.
+    /// Write this stream's records to its project's log, let go of the
+    /// stream, then mark it ended — so a waiter that wakes finds them on disk
+    /// whole.
     fn let_go_of_this_stream_then_mark_it_ended(
         self: Arc<Self>,
         how_it_ended: HowALoadedStreamEnded,
     ) {
-        self.log_route().close_the_jsonl_log_file();
+        self.log_route().write_every_record_it_emitted_and_sync();
         let the_end_of_this_stream = Arc::clone(&self.the_end_of_this_stream);
         drop(self);
         the_end_of_this_stream.mark(how_it_ended);

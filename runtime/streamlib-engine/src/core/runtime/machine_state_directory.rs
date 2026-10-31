@@ -6,7 +6,9 @@
 //! exposure rulings each record carries, split around the stream's load.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
@@ -20,14 +22,19 @@ use crate::core::graph::{
 use crate::core::{Error, Result};
 
 /// The schema version of a stream record this runtime writes and reads.
-pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 3;
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 4;
+
+/// The earlier schema version this runtime still reads as current: a record of
+/// it carries no pending stream action.
+const STREAM_RECORD_SCHEMA_VERSION_READ_AS_CURRENT_WITHOUT_PENDING_ACTIONS: u32 = 3;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
 /// One stream, as its runtime re-loads it: its id and location, its display
 /// name, the graph compiled at its load, the interpreter its processors start
-/// in, whether it was stopped or has failed, and the owner's exposure rulings.
+/// in, whether it was stopped or has failed, the owner's exposure rulings,
+/// and the stream actions queued on it that have not finished.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
@@ -56,6 +63,46 @@ pub struct StreamRecord {
     /// The owner's exposure rulings, each overriding the level the stream
     /// function gave its port.
     pub exposure_rulings: Vec<OwnerExposureRuling>,
+    /// The stop, remove and start actions queued on the stream and not yet
+    /// finished, in queue order; the re-load at the runtime's start finishes
+    /// each one a crash left.
+    #[serde(default)]
+    pub pending_stream_actions: Vec<PendingStreamActionOnTheRecord>,
+}
+
+/// A stop, remove or start queued on a stream and not yet finished, written
+/// on its record when queued and cleared by that action alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingStreamActionOnTheRecord {
+    /// The queued action's id.
+    pub action_id: String,
+    /// What the action does to the stream.
+    pub kind: PendingStreamActionKind,
+}
+
+/// What a pending stream action does to its stream's record when it
+/// finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingStreamActionKind {
+    /// Record the stream stopped.
+    Stop,
+    /// Forget the record.
+    Remove,
+    /// Record the stream neither stopped nor failed, and load it.
+    Start,
+}
+
+impl PendingStreamActionKind {
+    /// The kind as a record spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Remove => "remove",
+            Self::Start => "start",
+        }
+    }
 }
 
 impl StreamRecord {
@@ -79,6 +126,7 @@ impl StreamRecord {
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             exposure_rulings: Vec::new(),
+            pending_stream_actions: Vec::new(),
         }
     }
 
@@ -416,6 +464,9 @@ impl From<StreamRecordReadFailure> for Error {
 #[derive(Debug, Clone)]
 pub struct StreamRecordsInTheStateDirectory {
     streams_directory: PathBuf,
+    /// Held across one record's read, edit and write, so concurrent writers
+    /// never lose each other's fields.
+    one_record_update_at_a_time: Arc<Mutex<()>>,
 }
 
 impl StreamRecordsInTheStateDirectory {
@@ -434,6 +485,7 @@ impl StreamRecordsInTheStateDirectory {
         })?;
         Ok(Self {
             streams_directory: streams_directory.to_path_buf(),
+            one_record_update_at_a_time: Arc::default(),
         })
     }
 
@@ -452,8 +504,50 @@ impl StreamRecordsInTheStateDirectory {
         })
     }
 
-    /// Write `record` whole or not at all, owner-only.
+    /// Read the current record of `stream_id`, apply `edit` to it and write
+    /// it back whole, under a lock held only for that, so a concurrent update
+    /// never loses this one's fields. `edit` returns whether to write: `false`
+    /// leaves the record as it was. `Ok(None)` when no current record holds
+    /// the id.
+    pub fn update(
+        &self,
+        stream_id: &str,
+        edit: impl FnOnce(&mut StreamRecord) -> bool,
+    ) -> Result<Option<StreamRecord>> {
+        let _one_record_update_at_a_time = self.one_record_update_at_a_time.lock();
+        let Some(StreamRecordAsRead::Current(mut record)) = self.read(stream_id)? else {
+            return Ok(None);
+        };
+        if edit(&mut record) {
+            self.write_whole(&record)?;
+        }
+        Ok(Some(record))
+    }
+
+    /// Write `record` whole or not at all, owner-only, replacing whatever the
+    /// record of its id holds — for a record a stream action makes anew.
     pub fn write(&self, record: &StreamRecord) -> Result<()> {
+        let _one_record_update_at_a_time = self.one_record_update_at_a_time.lock();
+        self.write_whole(record)
+    }
+
+    /// Write `record`, made anew by a load, keeping what the owner set on the
+    /// current record it replaces — its display name, exposure rulings and
+    /// pending marks — read and written under the update lock.
+    pub fn write_keeping_what_the_owner_set_on_the_record_it_replaces(
+        &self,
+        record: &mut StreamRecord,
+    ) -> Result<()> {
+        let _one_record_update_at_a_time = self.one_record_update_at_a_time.lock();
+        if let Ok(Some(StreamRecordAsRead::Current(replaced))) = self.read(&record.stream_id) {
+            record.display_name = replaced.display_name;
+            record.exposure_rulings = replaced.exposure_rulings;
+            record.pending_stream_actions = replaced.pending_stream_actions;
+        }
+        self.write_whole(record)
+    }
+
+    fn write_whole(&self, record: &StreamRecord) -> Result<()> {
         let refuse = |what_failed: String| {
             Error::Runtime(format!(
                 "the record of the stream `{}` was not written to {}: {what_failed}",
@@ -529,6 +623,7 @@ impl StreamRecordsInTheStateDirectory {
 
     /// Remove the record of `stream_id`; `false` when there was none.
     pub fn remove(&self, stream_id: &str) -> Result<bool> {
+        let _one_record_update_at_a_time = self.one_record_update_at_a_time.lock();
         let Some(record_path) = self.record_path_of(stream_id) else {
             return Ok(false);
         };
@@ -580,11 +675,13 @@ fn read_a_stream_record(
         .map(|file_stem| file_stem.to_string_lossy().into_owned())
         .unwrap_or_default();
     let current_version = u64::from(STREAM_RECORD_SCHEMA_VERSION);
+    let version_read_as_current =
+        u64::from(STREAM_RECORD_SCHEMA_VERSION_READ_AS_CURRENT_WITHOUT_PENDING_ACTIONS);
     match record_document
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
     {
-        Some(version) if version == current_version => {}
+        Some(version) if version == current_version || version == version_read_as_current => {}
         Some(earlier_version) if earlier_version < current_version => {
             return Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(
                 StreamRecordOfAnEarlierRuntime {
@@ -609,8 +706,9 @@ fn read_a_stream_record(
             ));
         }
     }
-    let record = StreamRecord::deserialize(&record_document)
+    let mut record = StreamRecord::deserialize(&record_document)
         .map_err(|not_a_record| failure(format!("it is not a stream record: {not_a_record}")))?;
+    record.schema_version = STREAM_RECORD_SCHEMA_VERSION;
     let recorded_stream_id = &record.stream_id;
     if *recorded_stream_id != record_file_stem {
         return Err(failure(format!(
@@ -740,7 +838,92 @@ mod tests {
 
         let read = records.read(&record.stream_id).unwrap();
 
-        assert_eq!(read, Some(current(record)));
+        assert_eq!(
+            read,
+            Some(current(record)),
+            "a schema-3 record reads with no mark"
+        );
+    }
+
+    #[test]
+    fn a_record_carries_its_pending_stream_actions_in_queue_order() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        records.write(&record).unwrap();
+
+        for (action_id, kind) in [
+            ("R-1", PendingStreamActionKind::Stop),
+            ("R-2", PendingStreamActionKind::Start),
+        ] {
+            records
+                .update(&record.stream_id, |record| {
+                    record
+                        .pending_stream_actions
+                        .push(PendingStreamActionOnTheRecord {
+                            action_id: action_id.to_string(),
+                            kind,
+                        });
+                    true
+                })
+                .unwrap();
+        }
+
+        let Some(StreamRecordAsRead::Current(read)) = records.read(&record.stream_id).unwrap()
+        else {
+            panic!("the record reads");
+        };
+        assert_eq!(
+            read.pending_stream_actions,
+            [
+                PendingStreamActionOnTheRecord {
+                    action_id: "R-1".to_string(),
+                    kind: PendingStreamActionKind::Stop,
+                },
+                PendingStreamActionOnTheRecord {
+                    action_id: "R-2".to_string(),
+                    kind: PendingStreamActionKind::Start,
+                },
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&read).unwrap()["pending_stream_actions"][0]["kind"],
+            "stop"
+        );
+    }
+
+    #[test]
+    fn concurrent_updates_of_one_record_keep_each_others_fields() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        records.write(&record).unwrap();
+
+        std::thread::scope(|scope| {
+            for writer in 0..8 {
+                let records = &records;
+                let stream_id = &record.stream_id;
+                scope.spawn(move || {
+                    records
+                        .update(stream_id, |record| {
+                            record
+                                .pending_stream_actions
+                                .push(PendingStreamActionOnTheRecord {
+                                    action_id: format!("R-{writer}"),
+                                    kind: PendingStreamActionKind::Stop,
+                                });
+                            true
+                        })
+                        .unwrap();
+                });
+            }
+        });
+
+        let Some(StreamRecordAsRead::Current(read)) = records.read(&record.stream_id).unwrap()
+        else {
+            panic!("the record reads");
+        };
+        assert_eq!(read.pending_stream_actions.len(), 8);
     }
 
     #[test]
@@ -782,12 +965,12 @@ mod tests {
     }
 
     #[test]
-    fn a_record_holds_its_id_location_and_display_name_under_schema_3() {
+    fn a_record_holds_its_id_location_and_display_name_under_schema_4() {
         let record = a_record_of("camera-app", "preview");
 
         let written = serde_json::to_value(&record).unwrap();
 
-        assert_eq!(written["schema_version"], 3);
+        assert_eq!(written["schema_version"], 4);
         assert_eq!(written["stream_id"], record.location.stream_id());
         assert_eq!(
             written["location"],
@@ -846,7 +1029,7 @@ mod tests {
         records.write(&camera).unwrap();
         std::fs::write(directory.join("b-malformed.json"), b"{ not json").unwrap();
         let mut later_schema = serde_json::to_value(a_record_of("c-later", "main")).unwrap();
-        later_schema["schema_version"] = serde_json::json!(4);
+        later_schema["schema_version"] = serde_json::json!(5);
         later_schema["crashed_at"] = serde_json::json!("2026-10-10T00:00:00Z");
         std::fs::write(
             directory.join("c-later.json"),
@@ -865,7 +1048,7 @@ mod tests {
         assert!(malformed.reason.contains("not JSON"), "{malformed}");
         let later = every_record[2].as_ref().unwrap_err();
         assert_eq!(later.path, directory.join("c-later.json"));
-        assert!(later.reason.contains("schema version 4"), "{later}");
+        assert!(later.reason.contains("schema version 5"), "{later}");
     }
 
     #[test]

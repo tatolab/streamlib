@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use crate::core::compiler::Compiler;
 use crate::core::context::RuntimeContext;
 use crate::core::error::Result;
-use crate::core::logging::polled_in_a_loaded_stream_log_route;
+use crate::core::logging::polled_in_a_project_log_route_entry;
 use crate::core::pubsub::{Event, EventListener, RuntimeEvent};
 
 use super::RuntimeStatus;
@@ -64,7 +64,7 @@ impl EventListener for GraphChangeListener {
             let compiler = Arc::clone(&self.compiler);
             let ctx_for_closure = Arc::clone(&ctx);
             ctx.tokio_handle()
-                .spawn(polled_in_a_loaded_stream_log_route(
+                .spawn(polled_in_a_project_log_route_entry(
                     Arc::clone(ctx.this_streams_log_route()),
                     async move {
                         if let Err(e) = compiler.commit(&ctx_for_closure) {

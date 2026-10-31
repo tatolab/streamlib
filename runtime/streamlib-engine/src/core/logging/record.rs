@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 
-use crate::core::logging::loaded_stream_log_route::LoadedStreamLogRoute;
+use crate::core::logging::project_log_route::ProjectLogRouteEntry;
 
 /// Record pushed onto the drain channel. Owned strings.
 #[derive(Debug, Clone)]
@@ -41,7 +41,8 @@ pub(crate) struct LogRecord {
     /// Subprocess-monotonic sequence number. Escape hatch for recovering
     /// per-source order. `None` for local tracing records.
     pub source_seq: Option<u64>,
-    /// The route of the stream that emitted the record, read from the
-    /// emitting thread; `None` sends it to the pretty mirror only.
-    pub loaded_stream_log_route: Option<Arc<LoadedStreamLogRoute>>,
+    /// The route entry of the stream or stream action that emitted the
+    /// record, read from the emitting thread; `None` sends it to the runtime's
+    /// own log and the pretty mirror only.
+    pub project_log_route_entry: Option<Arc<ProjectLogRouteEntry>>,
 }

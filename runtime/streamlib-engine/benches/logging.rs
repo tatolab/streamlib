@@ -33,7 +33,7 @@ use tempfile::TempDir;
 use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
 use streamlib_engine::logging::{
-    LoadedStreamLogRoute, LoadedStreamLogRouteEnteredOnThisThread, LoggingTunables,
+    LoggingTunables, ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread,
     StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests,
 };
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent};
@@ -42,8 +42,8 @@ use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogE
 /// one stream log under `tmp`; the fields drop in order, the route left
 /// before the pathway shuts down.
 type BenchPathwayWritingOneStreamLog = (
-    LoadedStreamLogRouteEnteredOnThisThread,
-    Arc<LoadedStreamLogRoute>,
+    ProjectLogRouteEntryEnteredOnThisThread,
+    Arc<ProjectLogRouteEntry>,
     StreamlibLoggingGuard,
 );
 
@@ -55,7 +55,7 @@ fn install_pathway_writing_one_stream_log(
     runtime_id: &str,
 ) -> BenchPathwayWritingOneStreamLog {
     let guard = init_for_tests(config).expect("install logging pathway");
-    let route = LoadedStreamLogRoute::open_in_project_directory(runtime_id, "bench", tmp.path());
+    let route = ProjectLogRouteEntry::open_in_project_directory(runtime_id, "bench", tmp.path());
     (route.enter_on_this_thread(), route, guard)
 }
 

@@ -294,7 +294,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         let join_handle = std::thread::Builder::new()
             .name(format!("v4l2-capture-{}", self.opened_device.id))
             .spawn(
-                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                     capture_thread_loop(
                         stream,
                         is_capturing_in_the_thread,

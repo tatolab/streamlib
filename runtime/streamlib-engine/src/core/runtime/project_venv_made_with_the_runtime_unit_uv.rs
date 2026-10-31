@@ -28,13 +28,9 @@ use crate::core::error::Error;
 /// interpreter runs.
 pub(crate) const PROJECT_VENV_INTERPRETER_PROBE_BOUND: Duration = Duration::from_secs(10);
 
-/// How long one `uv sync` may run before its process group is killed: long
-/// enough to fetch a Python and a project's dependencies.
-pub(crate) const PROJECT_VENV_SYNC_BOUND: Duration = Duration::from_secs(240);
-
-/// The longest making one project's venv takes: the probe, then the sync.
-pub(crate) const PROJECT_VENV_MAKING_BOUND: Duration =
-    PROJECT_VENV_INTERPRETER_PROBE_BOUND.saturating_add(PROJECT_VENV_SYNC_BOUND);
+/// How long one `uv sync` may run: without end, since one large wheel can
+/// outlast any bound; uv's own network timeouts end a stalled download.
+const PROJECT_VENV_SYNC_RUNS_UNTIL_IT_EXITS: Duration = Duration::MAX;
 
 /// Why a venv is not made by a runtime given no uv.
 pub(crate) const THE_RUNTIME_UNIT_CARRIES_NO_UV: &str =
@@ -74,27 +70,24 @@ impl From<ProjectVenvNotMade> for Error {
 }
 
 /// Make the `.venv` of the project in `project_directory` with
-/// `runtime_unit_uv` unless its `.venv/bin/python` runs. A machine shutdown
-/// requested meanwhile cuts it short.
+/// `runtime_unit_uv` unless its `.venv/bin/python` runs. A machine shutdown,
+/// or a cancel of the stream action making it on this thread, cuts it short.
 pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
 ) -> Result<(), ProjectVenvNotMade> {
-    make_the_projects_venv_unless_its_interpreter_runs_within(
+    make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
         project_directory,
         runtime_unit_uv,
-        PROJECT_VENV_SYNC_BOUND,
-        &crate::core::runtime::is_the_machines_shutdown_requested,
+        &crate::core::runtime::is_this_threads_stream_work_interrupted,
     )
 }
 
-/// [`make_the_projects_venv_unless_its_interpreter_runs`], its sync bounded by
-/// `sync_bound` and cut short whenever `is_interrupted_by_the_host` reports
-/// true.
-pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
+/// [`make_the_projects_venv_unless_its_interpreter_runs`], cut short whenever
+/// `is_interrupted_by_the_host` reports true.
+pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
-    sync_bound: Duration,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
@@ -107,7 +100,8 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     }
     let a_shutdown_refusal = || {
         ProjectVenvNotMade::Refused(Error::Runtime(format!(
-            "the .venv of {project} was not made: the runtime is shutting down"
+            "the .venv of {project} was not made: the runtime is shutting down, or the stream \
+             action making it was cancelled"
         )))
     };
     let interpreter = the_projects_venv_interpreter(project_directory);
@@ -150,7 +144,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     let sync = run_a_child_process_to_its_exit_within(
         &mut project_venv_sync_command(runtime_unit_uv, project_directory),
         PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
-        sync_bound,
+        PROJECT_VENV_SYNC_RUNS_UNTIL_IT_EXITS,
         is_interrupted_by_the_host,
     )
     .map_err(|spawn_failure| ProjectVenvNotMade::Failed {
@@ -165,16 +159,13 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     }
     let quoted_standard_error = sync.standard_error_as_a_refusal_quotes_it();
     let failed_because = match sync.ended {
-        HowABoundedChildProcessRunEnded::Exited => format!(
-            "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
-            venv.display(),
-            sync.exit_status_rendered()
-        ),
-        HowABoundedChildProcessRunEnded::BoundElapsed => format!(
-            "`uv sync` did not make {} within {}s, and was killed. {quoted_standard_error}",
-            venv.display(),
-            sync_bound.as_secs_f64()
-        ),
+        HowABoundedChildProcessRunEnded::Exited | HowABoundedChildProcessRunEnded::BoundElapsed => {
+            format!(
+                "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
+                venv.display(),
+                sync.exit_status_rendered()
+            )
+        }
         HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
             remove_the_venv(&venv)?;
             return Err(a_shutdown_refusal());
@@ -344,14 +335,9 @@ mod tests {
         }
 
         fn make_the_venv(&self) -> Result<(), ProjectVenvNotMade> {
-            self.make_the_venv_within(PROJECT_VENV_SYNC_BOUND)
-        }
-
-        fn make_the_venv_within(&self, sync_bound: Duration) -> Result<(), ProjectVenvNotMade> {
-            make_the_projects_venv_unless_its_interpreter_runs_within(
+            make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
                 &self.project_directory,
                 Some(&self.stub_uv),
-                sync_bound,
                 &|| false,
             )
         }
@@ -516,28 +502,17 @@ mod tests {
     }
 
     #[test]
-    fn a_sync_past_its_bound_is_killed_failing_naming_the_bound() {
-        let project = ProjectAndAStubUv::whose_uv_runs("mkdir -p .venv/bin\nsleep 30");
-
-        let failed_because =
-            the_reason_it_failed(project.make_the_venv_within(Duration::from_millis(500)));
-
-        assert!(failed_because.contains("within 0.5s"), "{failed_because}");
-        assert!(!project.venv().exists(), "the half-made venv was left");
-    }
-
-    #[test]
     fn a_runtime_given_no_uv_fails_saying_the_unit_carries_none_and_leaves_the_venv() {
         let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
         project.given_a_venv_interpreter_running("exit 3");
 
-        let failed_because =
-            the_reason_it_failed(make_the_projects_venv_unless_its_interpreter_runs_within(
+        let failed_because = the_reason_it_failed(
+            make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
                 &project.project_directory,
                 None,
-                PROJECT_VENV_SYNC_BOUND,
                 &|| false,
-            ));
+            ),
+        );
 
         assert!(
             failed_because.contains(THE_RUNTIME_UNIT_CARRIES_NO_UV),
@@ -556,12 +531,13 @@ mod tests {
             PathBuf::from("relative/project"),
             project.project_directory.join("missing"),
         ] {
-            the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
-                &project_directory,
-                Some(&project.stub_uv),
-                PROJECT_VENV_SYNC_BOUND,
-                &|| false,
-            ));
+            the_refusal(
+                make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
+                    &project_directory,
+                    Some(&project.stub_uv),
+                    &|| false,
+                ),
+            );
         }
         assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
     }
@@ -571,12 +547,13 @@ mod tests {
         let project = ProjectAndAStubUv::whose_uv_runs("mkdir -p .venv/bin\nsleep 30");
         let interrupted_after = std::time::Instant::now() + Duration::from_millis(300);
 
-        let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
-            &project.project_directory,
-            Some(&project.stub_uv),
-            PROJECT_VENV_SYNC_BOUND,
-            &|| std::time::Instant::now() >= interrupted_after,
-        ));
+        let refusal = the_refusal(
+            make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
+                &project.project_directory,
+                Some(&project.stub_uv),
+                &|| std::time::Instant::now() >= interrupted_after,
+            ),
+        );
 
         assert!(refusal.contains("shutting down"), "{refusal}");
         assert!(!project.venv().exists(), "the half-made venv was left");
@@ -588,12 +565,13 @@ mod tests {
         project.given_a_venv_interpreter_running("sleep 30");
         let interrupted_after = std::time::Instant::now() + Duration::from_millis(300);
 
-        let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
-            &project.project_directory,
-            None,
-            PROJECT_VENV_SYNC_BOUND,
-            &|| std::time::Instant::now() >= interrupted_after,
-        ));
+        let refusal = the_refusal(
+            make_the_projects_venv_unless_its_interpreter_runs_interrupted_by(
+                &project.project_directory,
+                None,
+                &|| std::time::Instant::now() >= interrupted_after,
+            ),
+        );
 
         assert!(refusal.contains("shutting down"), "{refusal}");
         assert!(

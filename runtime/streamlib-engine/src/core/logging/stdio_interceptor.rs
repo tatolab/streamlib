@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use tracing::Dispatch;
 
-use crate::core::logging::loaded_stream_log_route::carrying_this_threads_loaded_stream_log_route;
+use crate::core::logging::project_log_route::carrying_this_threads_project_log_route_entry;
 
 /// How long dropping the interceptor waits for its reader threads to see end of
 /// file.
@@ -163,7 +163,7 @@ fn join_intercept_readers_within(
 fn spawn_reader(pipe_read: OwnedFd, channel: &'static str, dispatch: Dispatch) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("streamlib-logging-intercept-{channel}"))
-        .spawn(carrying_this_threads_loaded_stream_log_route(move || {
+        .spawn(carrying_this_threads_project_log_route_entry(move || {
             let _scope = tracing::dispatcher::set_default(&dispatch);
             let file = owned_fd_to_file(pipe_read);
             let mut reader = BufReader::new(file);

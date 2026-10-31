@@ -70,10 +70,11 @@ mod tests {
 
     fn a_rust_info_record_of_runtime_rabc(target: &str, message: &str) -> RuntimeLogEvent {
         RuntimeLogEvent {
-            schema_version: 1,
+            schema_version: 2,
             host_ts: 1_786_136_667_573_387_556,
             runtime_id: "Rabc".to_string(),
             stream: None,
+            action: None,
             source: Source::Rust,
             level: LogLevel::Info,
             message: message.to_string(),

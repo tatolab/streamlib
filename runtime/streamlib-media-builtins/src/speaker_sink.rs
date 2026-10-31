@@ -27,7 +27,7 @@ use streamlib::sdk::context::{
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{AudioWindowContractMatchingADeviceStream, InputMailboxes};
-use streamlib::sdk::logging::carrying_this_threads_loaded_stream_log_route;
+use streamlib::sdk::logging::carrying_this_threads_project_log_route_entry;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
@@ -211,7 +211,7 @@ impl ManualProcessor for SpeakerSink::Processor {
         let is_draining = Arc::new(AtomicBool::new(true));
         let handle = std::thread::Builder::new()
             .name("audio-playback-drain".to_string())
-            .spawn(carrying_this_threads_loaded_stream_log_route({
+            .spawn(carrying_this_threads_project_log_route_entry({
                 let inputs: InputMailboxes = self.inputs.clone();
                 let samples_awaiting_playback = Arc::clone(&samples_awaiting_playback);
                 let is_draining = Arc::clone(&is_draining);

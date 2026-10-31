@@ -1,38 +1,27 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::path::Path;
 use std::sync::Arc;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 
 use super::operations::RuntimeOperations;
 use super::{
-    LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
-    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
-    StreamRenameOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    LoadedStreamAndTheOutputPortsItExposes, MachineName, OutputPortExposureOutcome,
+    ProjectStreamsAsLastCompiled, Runner, StreamActionCancelOutcome, StreamActionDescription,
+    StreamActionQueued, StreamListing, StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
 use crate::core::graph::OutputPortExposureLevel;
-use crate::core::logging::LoadedStreamLogRecordsPage;
-
-/// One page of a loaded stream's log records, and the tag of the load that
-/// numbered them: a re-load under the same name numbers its records from 1
-/// again under another tag.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogRecordsPageOfOneLoadedStream {
-    /// The tag of the load whose records the page holds.
-    pub stream_tag: LoadedStreamTag,
-    /// The records, numbered by that load.
-    pub records_page: LoadedStreamLogRecordsPage,
-}
 
 /// What the local API reaches a runtime through: the runtime's description, the
-/// stream a call names, a stream's node catalog and log records, and the stream
-/// actions.
+/// stream a call names, a stream's node catalog, the stream actions a call
+/// queues, and the attributes and reads that answer at once.
 ///
-/// Every stream action blocks — a load runs a compile and describes — so the
-/// local API calls each from a blocking task.
+/// A queue answers at once; reading a record or the stream table may block on
+/// the disk, so the local API calls each from a blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
@@ -74,28 +63,30 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
 
-    /// The log records of the loaded stream `stream_id` names, numbered
-    /// after `after`, at most `max_count` of them, with the tag of the load
-    /// that numbered them; refused naming the loaded streams when it is not
-    /// loaded.
-    fn log_records_of_the_stream_a_call_names(
-        &self,
-        stream_id: &str,
-        after: u64,
-        max_count: usize,
-    ) -> Result<LogRecordsPageOfOneLoadedStream>;
+    /// [`Runner::run_project`].
+    fn run_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
-    /// [`Runner::run_stream`].
-    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
+    /// [`Runner::create_project`].
+    fn create_project(&self, project_directory: Option<&Path>) -> Result<StreamActionQueued>;
 
     /// [`Runner::stop_stream`].
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome>;
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
 
     /// [`Runner::start_stream`].
-    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome>;
+    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
 
-    /// [`Runner::remove_stream`].
-    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome>;
+    /// [`Runner::remove_project`].
+    fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+
+    /// [`Runner::describe_stream_action`].
+    fn describe_stream_action(&self, action_id: &str) -> Result<StreamActionDescription>;
+
+    /// [`Runner::cancel_stream_action`].
+    fn cancel_stream_action(&self, action_id: &str) -> Result<StreamActionCancelOutcome>;
+
+    /// [`Runner::list_project_streams`].
+    fn list_project_streams(&self, project_directory: &Path)
+    -> Result<ProjectStreamsAsLastCompiled>;
 
     /// [`Runner::rename_stream`].
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
@@ -159,33 +150,39 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
     }
 
-    fn log_records_of_the_stream_a_call_names(
-        &self,
-        stream_id: &str,
-        after: u64,
-        max_count: usize,
-    ) -> Result<LogRecordsPageOfOneLoadedStream> {
-        self.loaded_stream_of_the_id(stream_id)
-            .map(|stream| LogRecordsPageOfOneLoadedStream {
-                stream_tag: stream.stream_tag(),
-                records_page: stream.log_records_after(after, max_count),
-            })
+    fn run_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::run_project(self, project_directory)
     }
 
-    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
-        Runner::run_stream(self, request)
+    fn create_project(&self, project_directory: Option<&Path>) -> Result<StreamActionQueued> {
+        Runner::create_project(self, project_directory)
     }
 
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome> {
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
         Runner::stop_stream(self, stream_id)
     }
 
-    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
+    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
         Runner::start_stream(self, stream_id)
     }
 
-    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome> {
-        Runner::remove_stream(self, stream_id)
+    fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::remove_project(self, project_directory)
+    }
+
+    fn describe_stream_action(&self, action_id: &str) -> Result<StreamActionDescription> {
+        Runner::describe_stream_action(self, action_id)
+    }
+
+    fn cancel_stream_action(&self, action_id: &str) -> Result<StreamActionCancelOutcome> {
+        Runner::cancel_stream_action(self, action_id)
+    }
+
+    fn list_project_streams(
+        &self,
+        project_directory: &Path,
+    ) -> Result<ProjectStreamsAsLastCompiled> {
+        Runner::list_project_streams(self, project_directory)
     }
 
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {

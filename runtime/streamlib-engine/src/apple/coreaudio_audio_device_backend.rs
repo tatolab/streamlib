@@ -66,8 +66,8 @@ use crate::core::context::{
     DeviceStreamLivenessReport,
 };
 use crate::core::logging::{
-    LoadedStreamLogRoute, run_in_the_loaded_stream_log_route_when_there_is_one,
-    the_loaded_stream_log_route_of_this_thread,
+    ProjectLogRouteEntry, run_in_the_project_log_route_entry_when_there_is_one,
+    the_project_log_route_entry_of_this_thread,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
@@ -1051,12 +1051,12 @@ impl CoreAudioStreamDevicePropertyListener {
         handle_the_change: CoreAudioStreamDeviceChangeHandler,
         device: &CoreAudioDevice,
     ) -> Option<Self> {
-        let loaded_stream_log_route_of_the_listening_thread =
-            the_loaded_stream_log_route_of_this_thread();
+        let project_log_route_entry_of_the_listening_thread =
+            the_project_log_route_entry_of_this_thread();
         let listener_block: CoreAudioStreamDevicePropertyListenerBlock =
             block2::RcBlock::new(move |_address_count: u32, _addresses| {
-                run_in_the_loaded_stream_log_route_when_there_is_one(
-                    loaded_stream_log_route_of_the_listening_thread.as_ref(),
+                run_in_the_project_log_route_entry_when_there_is_one(
+                    project_log_route_entry_of_the_listening_thread.as_ref(),
                     || handle_the_change(change),
                 )
             });
@@ -1417,7 +1417,7 @@ struct CoreAudioCallbackContext<Delivery> {
     delivery: Mutex<Delivery>,
     /// The route of the thread that bound the unit, which an ended stream's
     /// record is emitted in.
-    loaded_stream_log_route_of_the_binding_thread: Option<Arc<LoadedStreamLogRoute>>,
+    project_log_route_entry_of_the_binding_thread: Option<Arc<ProjectLogRouteEntry>>,
 }
 
 // SAFETY: the AudioUnit handle is only rendered through on the device's I/O
@@ -1435,8 +1435,8 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioCallbackContext<Delive
         reason: String,
     ) {
         *installed_hand_off = None;
-        run_in_the_loaded_stream_log_route_when_there_is_one(
-            self.loaded_stream_log_route_of_the_binding_thread.as_ref(),
+        run_in_the_project_log_route_entry_when_there_is_one(
+            self.project_log_route_entry_of_the_binding_thread.as_ref(),
             || {
                 tracing::error!(
                     %reason,
@@ -1492,8 +1492,8 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             audio_unit: hal_output_unit.audio_unit,
             failure_recorder,
             delivery: Mutex::new(delivery),
-            loaded_stream_log_route_of_the_binding_thread:
-                the_loaded_stream_log_route_of_this_thread(),
+            project_log_route_entry_of_the_binding_thread:
+                the_project_log_route_entry_of_this_thread(),
         });
         let callback_context_pointer = (callback_context.as_ref()
             as *const CoreAudioCallbackContext<Delivery>)

@@ -120,7 +120,7 @@ pub(crate) fn start_reserved_slot_forwarder<Forwarding: ReservedSlotBagForwardin
     let forwarder_thread = std::thread::Builder::new()
         .name("streamlib-reserved-slot".into())
         .spawn(
-            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+            crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 reader.run(ready_tx)
             }),
         )

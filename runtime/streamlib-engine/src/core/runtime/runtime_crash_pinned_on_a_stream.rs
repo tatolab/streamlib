@@ -702,7 +702,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::core::logging::LoadedStreamLogRoute;
+    use crate::core::logging::ProjectLogRouteEntry;
     use crate::core::test_support::{
         a_temporary_directory_at_owner_only_mode, rerun_this_test_in_a_child_process,
     };
@@ -718,8 +718,8 @@ mod tests {
     fn the_log_route_of_the_stream(
         stream_id: &str,
         project_directory: &Path,
-    ) -> Arc<LoadedStreamLogRoute> {
-        LoadedStreamLogRoute::open_in_project_directory("R-test", stream_id, project_directory)
+    ) -> Arc<ProjectLogRouteEntry> {
+        ProjectLogRouteEntry::for_a_stream_of_the_project_in(project_directory, "R-test", stream_id, None)
     }
 
     /// Re-run `test_path` in a child process holding a fresh directory for its

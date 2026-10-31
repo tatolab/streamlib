@@ -12,11 +12,14 @@ mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
 mod machine_name;
 mod machine_state_directory;
+mod new_project_name_drawing;
+mod new_project_scaffold;
 mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
+mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 mod reserved_slot_forwarder;
@@ -60,8 +63,9 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    OwnerExposureRuling, STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead,
-    StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
+    OwnerExposureRuling, PendingStreamActionKind, PendingStreamActionOnTheRecord,
+    STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
@@ -74,8 +78,11 @@ pub(crate) use open_descriptor_soft_limit::{
     the_open_descriptor_limit,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use operations_on_the_streams_loaded_in_this_runtime::{
-    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use project_stream_action_queue::{
+    FINISHED_STREAM_ACTIONS_KEPT_PER_PROJECT, StreamAStreamActionTouched,
+    StreamActionCancelOutcome, StreamActionDescription, StreamActionKind, StreamActionQueued,
+    StreamActionState, StreamActionStep, is_this_threads_stream_work_interrupted,
 };
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
@@ -102,10 +109,11 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    LoadedStreamHolding, OutputPortExposureOutcome, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
-    RunStreamRequest, StreamListing, StreamListingState, StreamLoadedOrFailedByARun,
-    StreamReloadAtTheStart, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStateAfterItsRun, StreamStopOutcome,
+    LoadedStreamHolding, OutputPortExposureOutcome, ProjectLoadOutcome, ProjectRemoveOutcome,
+    ProjectStreamsAsLastCompiled, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
+    StreamListingState, StreamLoadedOrFailedByARun, StreamOfTheProjectAsLastCompiled,
+    StreamReloadAtTheStart, StreamRenameOutcome, StreamStartOutcome, StreamStateAfterItsRun,
+    StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
 pub use stream_location_and_id::StreamLocation;

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Top-level schema version. Bumped on any breaking change.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Origin of a log record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,14 +103,20 @@ pub struct RuntimeLogEvent {
     /// they share a unit and are different quantities.
     pub host_ts: u64,
 
-    /// The `RuntimeUniqueId` of the runtime whose stream emitted the record, verbatim; empty
-    /// for a record no stream emitted, which reaches only the pretty mirror.
+    /// The `RuntimeUniqueId` of the runtime whose stream or stream action emitted the record,
+    /// verbatim; empty for a record no project emitted, which reaches only the pretty mirror.
     pub runtime_id: String,
 
     /// The id of the loaded stream that emitted the record. `None` for a
     /// record no stream emitted.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub stream: Option<String>,
+
+    /// The id of the stream action the record belongs to — a running stream's records carry
+    /// the action that loaded it. Present on every project-log record; `None` in the runtime's
+    /// own log, for a stream its host loaded, and in a schema-1 record.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub action: Option<String>,
 
     /// Language / origin of the record.
     pub source: Source,
@@ -179,6 +185,7 @@ mod tests {
             host_ts: 1_700_000_000_000_000_000,
             runtime_id: "Rabc".into(),
             stream: Some("main".into()),
+            action: Some("Rabc-1".into()),
             source: Source::Rust,
             level: LogLevel::Info,
             message: "hi".into(),
@@ -197,6 +204,7 @@ mod tests {
         assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert_eq!(back.runtime_id, "Rabc");
         assert_eq!(back.stream.as_deref(), Some("main"));
+        assert_eq!(back.action.as_deref(), Some("Rabc-1"));
         assert_eq!(back.source, Source::Rust);
         assert_eq!(back.message, "hi");
     }
@@ -253,11 +261,12 @@ mod tests {
     /// implementation have drifted — fix one or the other.
     #[test]
     fn docs_example_line_parses() {
-        let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
+        let line = r#"{"schema_version":2,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","action":"Rabc123-4","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
         let ev: RuntimeLogEvent = serde_json::from_str(line).expect("docs example must parse");
         assert_eq!(ev.schema_version, SCHEMA_VERSION);
         assert_eq!(ev.runtime_id, "Rabc123");
         assert_eq!(ev.stream.as_deref(), Some("main"));
+        assert_eq!(ev.action.as_deref(), Some("Rabc123-4"));
         assert_eq!(ev.source, Source::Rust);
         assert_eq!(ev.level, LogLevel::Info);
         assert_eq!(ev.pipeline_id.as_deref(), Some("pl-42"));
@@ -278,6 +287,7 @@ mod tests {
         let ev: RuntimeLogEvent =
             serde_json::from_str(line).expect("a record without a stream parses");
         assert_eq!(ev.stream, None);
+        assert_eq!(ev.action, None, "a schema-1 record carries no action");
         assert!(
             !serde_json::to_string(&ev).unwrap().contains("\"stream\""),
             "a record no stream emitted carries no stream key"

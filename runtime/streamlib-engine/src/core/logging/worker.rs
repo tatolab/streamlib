@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Drain worker. Pops [`LogRecord`]s from a bounded MPMC queue, stamps each
-//! with the `runtime_id` and `stream` its route names and its `source`, and
-//! fans it out to an optional line-buffered pretty mirror on a standard
-//! stream and to the JSONL file of the stream that emitted it — for a record
-//! no stream emitted, the runtime's own log while a runtime keeps one.
+//! with the `runtime_id`, `stream` and `action` its route entry names and its
+//! `source`, and fans it out to an optional line-buffered pretty mirror on a
+//! standard stream and to the JSONL log of the project whose stream or stream
+//! action emitted it — for a record no project emitted, the runtime's own log
+//! while a runtime keeps one.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use streamlib_runtime_client_contract::runtime_log_event::{
 use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
 
 use crate::core::logging::config::ResolvedTunables;
-use crate::core::logging::loaded_stream_log_route::LoadedStreamLogRoute;
+use crate::core::logging::project_log_route::{ProjectLogRoute, ProjectLogRouteEntry};
 use crate::core::logging::record::LogRecord;
 
 /// Signals sent to the drain worker over the doorbell channel.
@@ -32,7 +33,7 @@ pub(crate) enum WorkerSignal {
     Record,
     /// Best-effort flush (panic hook, external caller).
     Flush,
-    /// Write every record queued before this signal, flush the stream files
+    /// Write every record queued before this signal, flush the project logs
     /// holding them, then answer on the sender.
     WriteEveryQueuedRecordThenAnswer(Sender<()>),
     /// Final shutdown — drain, flush, fsync (if clean), exit.
@@ -45,14 +46,14 @@ pub(crate) enum WorkerSignal {
 pub(crate) struct DrainWorkerRecordQueue {
     pub queue: Arc<ArrayQueue<LogRecord>>,
     pub doorbell: Sender<WorkerSignal>,
-    /// Records no stream emitted that a full queue dropped.
+    /// Records no project emitted that a full queue dropped.
     pub dropped: Arc<AtomicU64>,
-    /// The streams a full queue dropped records of since the worker last
+    /// The emitters a full queue dropped records of since the worker last
     /// reported it; each counts its own.
-    pub streams_whose_records_were_dropped: Arc<Mutex<Vec<Arc<LoadedStreamLogRoute>>>>,
-    /// The runtime's own log, written each record no stream emitted while a
+    pub emitters_whose_records_were_dropped: Arc<Mutex<Vec<Arc<ProjectLogRouteEntry>>>>,
+    /// The runtime's own log, written each record no project emitted while a
     /// runtime keeps one.
-    pub runtime_own_log_route: Arc<Mutex<Option<Arc<LoadedStreamLogRoute>>>>,
+    pub runtime_own_log_entry: Arc<Mutex<Option<Arc<ProjectLogRouteEntry>>>>,
 }
 
 impl DrainWorkerRecordQueue {
@@ -62,20 +63,20 @@ impl DrainWorkerRecordQueue {
             queue: Arc::new(ArrayQueue::new(capacity)),
             doorbell,
             dropped: Arc::new(AtomicU64::new(0)),
-            streams_whose_records_were_dropped: Arc::default(),
-            runtime_own_log_route: Arc::default(),
+            emitters_whose_records_were_dropped: Arc::default(),
+            runtime_own_log_entry: Arc::default(),
         }
     }
 
     /// Queue `record`, dropping the oldest when the queue is full.
     pub fn enqueue(&self, record: LogRecord) {
         // `force_push` returns the evicted record (if any); that is one drop,
-        // counted against the stream that emitted it.
+        // counted against the emitter that emitted it.
         if let Some(evicted) = self.queue.force_push(record) {
-            match evicted.loaded_stream_log_route {
-                Some(route) => {
-                    if route.note_a_record_dropped_from_a_full_queue() {
-                        self.streams_whose_records_were_dropped.lock().push(route);
+            match evicted.project_log_route_entry {
+                Some(entry) => {
+                    if entry.note_a_record_dropped_from_a_full_queue() {
+                        self.emitters_whose_records_were_dropped.lock().push(entry);
                     }
                 }
                 None => {
@@ -117,7 +118,7 @@ pub(crate) struct WorkerHandle {
 
 impl WorkerHandle {
     /// Send the final shutdown signal and join the worker thread. On
-    /// return, every queued record is written and every stream file it
+    /// return, every queued record is written and every project log it
     /// wrote to is `fdatasync`'d.
     pub fn shutdown_and_join(&mut self) {
         let _ = self.record_queue.doorbell.send(WorkerSignal::Shutdown);
@@ -170,12 +171,12 @@ pub(crate) fn spawn(config: WorkerConfig) -> WorkerHandle {
     }
 }
 
-/// The stream files written to since their last flush.
+/// The project logs written to since their last flush.
 #[derive(Default)]
-struct LoadedStreamLogFilesWrittenSinceTheirLastFlush(Vec<Arc<LoadedStreamLogRoute>>);
+struct ProjectLogFilesWrittenSinceTheirLastFlush(Vec<Arc<ProjectLogRoute>>);
 
-impl LoadedStreamLogFilesWrittenSinceTheirLastFlush {
-    fn note(&mut self, route: &Arc<LoadedStreamLogRoute>) {
+impl ProjectLogFilesWrittenSinceTheirLastFlush {
+    fn note(&mut self, route: &Arc<ProjectLogRoute>) {
         if !self.0.iter().any(|noted| Arc::ptr_eq(noted, route)) {
             self.0.push(Arc::clone(route));
         }
@@ -198,11 +199,11 @@ impl LoadedStreamLogFilesWrittenSinceTheirLastFlush {
 struct DrainWorkerOutputs<'worker> {
     worker_source: Source,
     pretty_log_mirror_sink: &'worker mut Option<Box<dyn std::io::Write + Send>>,
-    stream_log_files_written: LoadedStreamLogFilesWrittenSinceTheirLastFlush,
+    project_log_files_written: ProjectLogFilesWrittenSinceTheirLastFlush,
     serialize_buf: Vec<u8>,
     pretty_buf: String,
     /// The runtime's own log as the queue named it when this drain began.
-    runtime_own_log_route: Option<Arc<LoadedStreamLogRoute>>,
+    runtime_own_log_entry: Option<Arc<ProjectLogRouteEntry>>,
 }
 
 fn run_worker(
@@ -220,10 +221,10 @@ fn run_worker(
     let mut outputs = DrainWorkerOutputs {
         worker_source: source,
         pretty_log_mirror_sink,
-        stream_log_files_written: LoadedStreamLogFilesWrittenSinceTheirLastFlush::default(),
+        project_log_files_written: ProjectLogFilesWrittenSinceTheirLastFlush::default(),
         serialize_buf: Vec::with_capacity(1024),
         pretty_buf: String::with_capacity(256),
-        runtime_own_log_route: None,
+        runtime_own_log_entry: None,
     };
 
     loop {
@@ -237,16 +238,16 @@ fn run_worker(
         let signal = doorbell.recv_timeout(timeout);
 
         outputs
-            .runtime_own_log_route
-            .clone_from(&record_queue.runtime_own_log_route.lock());
+            .runtime_own_log_entry
+            .clone_from(&record_queue.runtime_own_log_entry.lock());
         // Drain everything currently available.
         drain_queue(queue, &mut outputs);
 
         // Emit a synthetic `dropped=N` record if new drops have
         // accumulated since the last emission, rate-limited to once per
         // second or per 1000 drops (whichever fires first): one for the
-        // records no stream emitted, mirrored only, and one into each
-        // stream's own log for its own.
+        // records no project emitted, mirrored only, and one into each
+        // emitter's project log for its own.
         let current_dropped = record_queue.dropped.load(Ordering::Relaxed);
         let new_drops = current_dropped - last_dropped_seen;
         let since_last_emit = last_dropped_emit.elapsed();
@@ -259,16 +260,16 @@ fn run_worker(
             last_dropped_emit = Instant::now();
         }
         if since_last_emit >= Duration::from_secs(1) {
-            let streams_whose_records_were_dropped =
-                std::mem::take(&mut *record_queue.streams_whose_records_were_dropped.lock());
-            for route in streams_whose_records_were_dropped {
-                let dropped_of_this_stream = route.take_the_count_of_records_dropped();
-                if dropped_of_this_stream > 0 {
+            let emitters_whose_records_were_dropped =
+                std::mem::take(&mut *record_queue.emitters_whose_records_were_dropped.lock());
+            for entry in emitters_whose_records_were_dropped {
+                let dropped_of_this_emitter = entry.take_the_count_of_records_dropped();
+                if dropped_of_this_emitter > 0 {
                     write_one(
                         &a_record_saying_records_were_dropped(
-                            dropped_of_this_stream,
+                            dropped_of_this_emitter,
                             source,
-                            Some(route),
+                            Some(entry),
                         ),
                         &mut outputs,
                     );
@@ -279,40 +280,40 @@ fn run_worker(
 
         // Periodic flush.
         if last_flush.elapsed() >= tunables.batch_interval {
-            outputs.stream_log_files_written.flush_each();
+            outputs.project_log_files_written.flush_each();
             last_flush = Instant::now();
         }
 
         match signal {
             Ok(WorkerSignal::Record) | Err(RecvTimeoutError::Timeout) => {}
             Ok(WorkerSignal::Flush) => {
-                outputs.stream_log_files_written.flush_each();
+                outputs.project_log_files_written.flush_each();
                 last_flush = Instant::now();
             }
             Ok(WorkerSignal::WriteEveryQueuedRecordThenAnswer(answer)) => {
                 // Pushed before the signal was sent, so the drain above took
                 // every record the asker queued; this takes any since.
                 drain_queue(queue, &mut outputs);
-                outputs.stream_log_files_written.flush_each();
+                outputs.project_log_files_written.flush_each();
                 last_flush = Instant::now();
                 let _ = answer.send(());
             }
             Ok(WorkerSignal::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
                 // Drain any remaining records that raced the shutdown.
                 drain_queue(queue, &mut outputs);
-                outputs.stream_log_files_written.flush_and_fsync_each();
+                outputs.project_log_files_written.flush_and_fsync_each();
                 break;
             }
         }
     }
 }
 
-/// The warning that `dropped_record_count` records of `route`'s stream — or
-/// of no stream — were dropped to a full queue.
+/// The warning that `dropped_record_count` records of `entry`'s emitter — or
+/// of no project — were dropped to a full queue.
 fn a_record_saying_records_were_dropped(
     dropped_record_count: u64,
     source: Source,
-    route: Option<Arc<LoadedStreamLogRoute>>,
+    entry: Option<Arc<ProjectLogRouteEntry>>,
 ) -> LogRecord {
     LogRecord {
         host_ts: now_ns(),
@@ -337,7 +338,7 @@ fn a_record_saying_records_were_dropped(
         source: None,
         source_ts: None,
         source_seq: None,
-        loaded_stream_log_route: route,
+        project_log_route_entry: entry,
     }
 }
 
@@ -352,18 +353,23 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
     // worker's runtime (polyglot subprocess records). Tracing-sourced
     // records leave it `None` and inherit the worker's configured source.
     let source = record.source.unwrap_or(outputs.worker_source);
-    let stream_route = record.loaded_stream_log_route.as_ref();
-    let route = stream_route.or(outputs.runtime_own_log_route.as_ref());
+    let entry = record
+        .project_log_route_entry
+        .as_ref()
+        .or(outputs.runtime_own_log_entry.as_ref());
 
     // Build a full JSONL event and serialize once.
     let event = RuntimeLogEvent {
         schema_version: SCHEMA_VERSION,
         host_ts: record.host_ts,
-        runtime_id: route
-            .map(|route| route.runtime_id().to_string())
+        runtime_id: entry
+            .map(|entry| entry.runtime_id().to_string())
             .unwrap_or_default(),
-        stream: stream_route
-            .and_then(|stream_route| stream_route.stream_id())
+        stream: entry
+            .and_then(|entry| entry.stream_id())
+            .map(str::to_string),
+        action: entry
+            .and_then(|entry| entry.action_id())
             .map(str::to_string),
         source,
         level: record.level,
@@ -379,12 +385,14 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
         attrs: record.attrs.clone(),
     };
 
-    if let Some(route) = route {
+    if let Some(entry) = entry {
         outputs.serialize_buf.clear();
         if serde_json::to_writer(&mut outputs.serialize_buf, &event).is_ok()
-            && route.append_serialized_record(&outputs.serialize_buf)
+            && entry
+                .route()
+                .append_serialized_record(&outputs.serialize_buf)
         {
-            outputs.stream_log_files_written.note(route);
+            outputs.project_log_files_written.note(entry.route());
         }
     }
 
