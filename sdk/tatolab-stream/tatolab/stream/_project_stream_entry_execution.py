@@ -17,7 +17,6 @@ from typing import Any, Optional
 
 from ._project_stream_entry_resolution import (
     STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE,
-    ProjectStreamCompileRefusalError,
     ResolvedStreamEntry,
     ResolvedStreamEntryFile,
     ResolvedStreamEntryModule,
@@ -27,7 +26,6 @@ from ._project_stream_entry_resolution import (
 from ._stream_graph_builder import is_stream_function
 
 __all__ = [
-    "StreamEntryDefinesNoStreamError",
     "execute_app_entry_file",
     "import_stream_entry_module",
     "named_stream_function_location",
@@ -44,11 +42,6 @@ _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
 # The module name CPython gives the file it was launched with, which an entry file
 # runs as.
 _ENTRY_FILE_RUN_MODULE_NAME = "__main__"
-
-
-class StreamEntryDefinesNoStreamError(Exception):
-    """An entry that imported and defines no `@stream` function: a failed project, never a
-    refusal of the caller."""
 
 
 def execute_app_entry_file(entry_file: Path) -> dict[str, Any]:
@@ -145,21 +138,13 @@ def select_stream_function(
     entry_namespace: dict[str, Any],
     stream_functions: list[Callable[..., Any]],
 ) -> Callable[..., Any]:
-    """The stream the target named, else the entry's sole `@stream` function."""
+    """The `@stream` function the target named."""
     entry_described = resolved_stream_entry.described_for_the_user()
     entry_as_typed = _entry_as_typed_for_a_target(resolved_stream_entry, anchor_directory)
     tatolab_command = tatolab_command_as_typed(verb, anchor_directory_as_typed)
     stream_function_name = resolved_stream_entry.stream_function_name
     if stream_function_name is None:
-        if len(stream_functions) == 1:
-            return stream_functions[0]
-        if not stream_functions:
-            raise StreamEntryDefinesNoStreamError(no_stream_defined_because(entry_described))
-        raise ProjectStreamCompileRefusalError(
-            f"{entry_described} defines {len(stream_functions)} @stream functions:\n"
-            f"{_stream_function_listing(stream_functions)}\n"
-            f"Name the one to launch: `{tatolab_command} {entry_as_typed}:<function>`."
-        )
+        raise ValueError("a target that names no function selects no stream")
 
     named_value = entry_namespace.get(stream_function_name)
     if is_stream_function(named_value):

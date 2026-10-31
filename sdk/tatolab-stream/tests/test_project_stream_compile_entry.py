@@ -285,14 +285,14 @@ def test_the_anchor_is_the_working_directory_and_dir_only_spells_it(
 
 
 # ---------------------------------------------------------------------------
-# The positional target — `<file>.py[:<function>]` or `<module>:<function>`
+# The positional target — `<file>.py:<function>` or `<module>:<function>`
 # ---------------------------------------------------------------------------
 
 
 def test_a_file_target_resolves_against_the_anchor(anchor_directory: Path):
     write_app(anchor_directory, "rigs/front.py", MINIMAL_STREAM_SOURCE)
 
-    document = compiled_document(run_compile_entry(anchor_directory, "rigs/front.py"))
+    document = compiled_document(run_compile_entry(anchor_directory, "rigs/front.py:main"))
 
     assert document["stream_graph"]["stream"] == "main"
 
@@ -324,7 +324,8 @@ def test_a_missing_file_target_names_the_path_it_tried(anchor_directory: Path):
 
 
 @pytest.mark.parametrize(
-    "malformed_target", ["main", "front.py:", ":main", "rigs/front:main", "rigs.front:"]
+    "malformed_target",
+    ["main", "front.py", "front.py:", ":main", "rigs/front:main", "rigs.front:"],
 )
 def test_a_target_in_no_known_form_is_refused_naming_the_forms(
     anchor_directory: Path, malformed_target: str
@@ -367,7 +368,7 @@ def test_a_file_entry_in_a_subdirectory_cannot_import_from_the_anchor(anchor_dir
         "import helpers\n" + MINIMAL_STREAM_SOURCE,
     )
 
-    import_failure = import_failure_of(run_compile_entry(anchor_directory, "rigs/desk.py"))
+    import_failure = import_failure_of(run_compile_entry(anchor_directory, "rigs/desk.py:main"))
 
     assert "ModuleNotFoundError: No module named 'helpers'" in import_failure
 
@@ -460,15 +461,6 @@ def test_a_file_target_with_a_function_compiles_that_stream(anchor_directory: Pa
     assert document["stream_graph"] == BACK_STREAM_GRAPH
 
 
-def test_a_file_target_without_a_function_takes_its_sole_stream(anchor_directory: Path):
-    write_app(anchor_directory, "stream.py", TWO_STREAM_SOURCE)
-    write_app(anchor_directory, "solo.py", MINIMAL_STREAM_SOURCE)
-
-    document = compiled_document(run_compile_entry(anchor_directory, "solo.py"))
-
-    assert document["stream_graph"]["stream"] == "main"
-
-
 def test_a_module_target_compiles_with_the_anchor_as_the_project(anchor_directory: Path):
     """The module imports with the anchor leading `sys.path`, and the anchor is the
     project directory its processor interpreters start in."""
@@ -509,11 +501,10 @@ def test_a_file_target_in_a_subdirectory_compiles_with_that_subdirectory_as_the_
     ("arguments", "stream_function"),
     [
         ((), "stream:main"),
-        (("stream.py",), "stream:main"),
         (("stream.py:main",), "stream:main"),
         (("stream:main",), "stream:main"),
         (("rig.py:back",), "rig:back"),
-        (("solo.py",), "solo:main"),
+        (("solo.py:main",), "solo:main"),
         (("located_rigs.desk:front",), "located_rigs.desk:front"),
     ],
 )
@@ -536,7 +527,7 @@ def test_an_entry_file_in_a_subdirectory_reports_its_module_relative_to_its_own_
 ):
     write_app(anchor_directory, "rigs/desk.py", MINIMAL_STREAM_SOURCE)
 
-    document = compiled_document(run_compile_entry(anchor_directory, "rigs/desk.py"))
+    document = compiled_document(run_compile_entry(anchor_directory, "rigs/desk.py:main"))
 
     assert document["project_directory"] == str(anchor_directory / "rigs")
     assert document["stream_function"] == "desk:main"
@@ -785,8 +776,8 @@ def not_defined_because_of(finished: "subprocess.CompletedProcess[str]") -> str:
 
 @pytest.mark.parametrize(
     ("target_arguments", "message_of"),
-    [(["my rig.py"], refusal_of), (["my rig.py:side"], not_defined_because_of)],
-    ids=["several-streams", "a-function-the-file-lacks"],
+    [(["my rig.py:side"], not_defined_because_of)],
+    ids=["a-function-the-file-lacks"],
 )
 def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
     anchor_directory: Path,
@@ -835,15 +826,6 @@ def test_an_entry_that_defines_no_stream_is_a_project_with_no_stream_and_a_sampl
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
     assert "stream_builder.add(CameraSource)" in message
     assert "-f <file>" not in message
-
-
-def test_a_file_target_that_defines_no_stream_answers_the_same_document(anchor_directory: Path):
-    write_app(anchor_directory, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
-
-    message = no_stream_defined_because_of(run_compile_entry(anchor_directory, "app.py"))
-
-    assert f"`{anchor_directory / 'app.py'}` defines no @stream function\n" in message
-    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
 
 
 def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_its_streams(
