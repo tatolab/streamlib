@@ -743,7 +743,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List the project's `@stream` functions as the last compile of its `stream.py` named them, in definition order, running none of its code: each by `stream_function`, its docstring as `description`, and its `stream` id and `state` when the runtime holds a stream of it. `import_failed_because` holds the traceback when `stream.py` did not import. While a `run_project` action is queued or under way, `action` and `step` name it, and `streams` is empty until its compile ends. Refused for a project the runtime has neither compiled nor queued: `run_project` runs it."
+        description = "List the project's `@stream` functions as the last compile of its `stream.py` named them, in definition order, running none of its code: each by `stream_function`, its docstring as `description`, and its `stream` id and `state` when the runtime holds a stream of it. `import_failed_because` holds the traceback when `stream.py` did not import. While a `run_project` action is queued or under way, `action` and `step` name it, and `streams` stays what the compile before it named until its own compile ends. Refused for a project the runtime has neither compiled nor queued: `run_project` runs it."
     )]
     async fn list_project_streams(
         &self,

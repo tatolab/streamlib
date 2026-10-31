@@ -531,6 +531,7 @@ impl Runner {
         }
     }
 
+    /// Run `request` inside the project's log its caller entered, reporting each step to `progress`.
     fn run_the_project_in_its_log(
         &self,
         request: RunStreamRequest,
@@ -2065,7 +2066,7 @@ impl Runner {
             streams: Vec::new(),
             failed_because: None,
         };
-        Ok(queue_of_each_project.queue(
+        Ok(queue_of_each_project.queue_the_stream_action(
             action,
             Box::new(move |runner: &Runner| {
                 runner.load_the_project_for_its_stream_action(&action_id, project_directory);
@@ -2080,7 +2081,7 @@ impl Runner {
     pub fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {
         self.stream_actions
             .stream_action_queue_of_each_project
-            .action(action_id)
+            .held_stream_action(action_id)
             .ok_or_else(|| {
                 Error::Configuration(format!(
                     "the stream action `{action_id}` is not held: this runtime never queued it, or it is \
@@ -2126,7 +2127,7 @@ impl Runner {
     /// failed.
     fn load_the_project_for_its_stream_action(&self, action_id: &str, project_directory: PathBuf) {
         let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
-        queue_of_each_project.change(action_id, |action| {
+        queue_of_each_project.change_the_held_stream_action(action_id, |action| {
             action.state = StreamActionState::InProgress;
         });
         let run_outcome = match why_a_directory_is_no_project(&project_directory) {
@@ -2148,7 +2149,7 @@ impl Runner {
                 )
                 .map_err(|refusal| refusal.to_string()),
         };
-        queue_of_each_project.change(action_id, |action| {
+        queue_of_each_project.change_the_held_stream_action(action_id, |action| {
             action.step = None;
             match run_outcome {
                 Ok(run_outcome) => {
@@ -2251,11 +2252,19 @@ impl Runner {
     /// recorded ones, else the project itself under
     /// [`StreamLocation::of_a_project_that_gave_no_stream`].
     fn show_the_streams_actions_under_way_prepare(&self, listings: &mut Vec<StreamListing>) {
+        let mut projects_an_earlier_action_works_on: Vec<PathBuf> = Vec::new();
         for action in self
             .stream_actions
             .stream_action_queue_of_each_project
             .actions_under_way()
         {
+            if projects_an_earlier_action_works_on
+                .iter()
+                .any(|project| the_same_directory(project, &action.project_directory))
+            {
+                continue;
+            }
+            projects_an_earlier_action_works_on.push(action.project_directory.clone());
             let working_on_it = StreamActionWorkingOnAStream {
                 action_id: action.action_id.clone(),
                 step: action.step,
@@ -6589,6 +6598,50 @@ mod tests {
 
     #[test]
     #[serial]
+    fn an_action_whose_body_panics_is_recorded_failed_and_its_projects_next_action_runs() {
+        let runner = a_runner_recording_its_streams_in(None);
+        let project = tempfile::tempdir().unwrap();
+        let queue_of_each_project = &runner.stream_actions.stream_action_queue_of_each_project;
+        let an_action_of_the_project = |action_id: &str| StreamAction {
+            action_id: action_id.to_string(),
+            project_directory: project.path().to_path_buf(),
+            kind: StreamActionKind::Load,
+            state: StreamActionState::Queued,
+            step: None,
+            streams: Vec::new(),
+            failed_because: None,
+        };
+        let panicking = queue_of_each_project.queue_the_stream_action(
+            an_action_of_the_project("test-1"),
+            Box::new(|_: &Runner| panic!("a body panicking on purpose")),
+            &runner.tokio_handle(),
+        );
+        let after_it = queue_of_each_project.queue_the_stream_action(
+            an_action_of_the_project("test-2"),
+            Box::new(|runner: &Runner| {
+                runner
+                    .stream_actions
+                    .stream_action_queue_of_each_project
+                    .change_the_held_stream_action("test-2", |action| {
+                        action.state = StreamActionState::Done
+                    });
+            }),
+            &runner.tokio_handle(),
+        );
+
+        let after_it_finished = the_stream_action_once_finished(&runner, &after_it.action_id);
+        let panicked = runner.describe_stream_action(&panicking.action_id).unwrap();
+
+        assert_eq!(after_it_finished.state, StreamActionState::Done);
+        assert_eq!(panicked.state, StreamActionState::Failed, "{panicked:?}");
+        assert_eq!(
+            panicked.failed_because.as_deref(),
+            Some("the action panicked")
+        );
+    }
+
+    #[test]
+    #[serial]
     fn one_projects_actions_run_in_order_while_another_projects_run_beside_them() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -6638,6 +6691,20 @@ mod tests {
             "a project's second action waits for its first"
         );
         assert_ne!(first.action_id, second.action_id);
+        let preparing_while_the_first_makes_the_venv: Vec<_> = runner
+            .list_streams()
+            .into_iter()
+            .filter(|listing| listing.state == StreamListingState::Preparing)
+            .map(|listing| listing.stream_action_under_way)
+            .collect();
+        assert_eq!(
+            preparing_while_the_first_makes_the_venv,
+            [Some(StreamActionWorkingOnAStream {
+                action_id: first.action_id.clone(),
+                step: Some(StreamActionStep::MakingTheVenv),
+            })],
+            "the project shows the action running on it, never the one queued behind it"
+        );
 
         std::fs::write(&gate, "").unwrap();
         let second_done = the_stream_action_once_finished(&runner, &second.action_id);

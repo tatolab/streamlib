@@ -10,7 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{OnceLock, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 use parking_lot::Mutex;
 
@@ -178,11 +178,17 @@ pub struct ProjectStreamsListing {
 /// have finished.
 type QueuedStreamActionBody = Box<dyn FnOnce(&Runner) + Send + 'static>;
 
-/// One project's actions waiting their turn, and whether its worker runs.
+/// An action's id and the body its project's worker runs for it.
+struct QueuedStreamActionAndItsBody {
+    action_id: String,
+    body: QueuedStreamActionBody,
+}
+
+/// One project's actions waiting their turn; a project holds one only while
+/// its worker runs.
 #[derive(Default)]
 struct ProjectStreamActionQueue {
-    bodies_waiting: VecDeque<QueuedStreamActionBody>,
-    its_worker_runs: bool,
+    actions_waiting: VecDeque<QueuedStreamActionAndItsBody>,
 }
 
 /// The actions the engine holds by id, and each project's finished ones
@@ -222,7 +228,7 @@ impl StreamActionQueueOfEachProject {
     /// Hold `action` as queued, and run `body` once the actions of its
     /// project queued before it have finished; the project's worker is
     /// spawned on `tokio_handle` when none runs.
-    pub(crate) fn queue(
+    pub(crate) fn queue_the_stream_action(
         &self,
         action: StreamAction,
         body: QueuedStreamActionBody,
@@ -238,9 +244,16 @@ impl StreamActionQueueOfEachProject {
             .insert(action.action_id.clone(), action);
         let a_worker_is_to_be_spawned = {
             let mut queues = self.stream_action_queue_of_each_project.lock();
-            let queue = queues.entry(queued.project_directory.clone()).or_default();
-            queue.bodies_waiting.push_back(body);
-            !std::mem::replace(&mut queue.its_worker_runs, true)
+            let no_worker_runs = !queues.contains_key(&queued.project_directory);
+            queues
+                .entry(queued.project_directory.clone())
+                .or_default()
+                .actions_waiting
+                .push_back(QueuedStreamActionAndItsBody {
+                    action_id: queued.action_id.clone(),
+                    body,
+                });
+            no_worker_runs
         };
         if a_worker_is_to_be_spawned {
             self.spawn_the_worker_of(queued.project_directory.clone(), tokio_handle);
@@ -249,8 +262,9 @@ impl StreamActionQueueOfEachProject {
     }
 
     /// Spawn the worker that runs `project_directory`'s queued actions one at
-    /// a time until its queue is empty. The runner is held only while an
-    /// action's body runs, so the engine is never let go on the async worker.
+    /// a time until its queue is empty, then lets the queue go. The runner is
+    /// held only while an action's body runs, so the engine is never let go on
+    /// the async worker. An action whose body panics is recorded failed.
     fn spawn_the_worker_of(
         &self,
         project_directory: PathBuf,
@@ -259,10 +273,18 @@ impl StreamActionQueueOfEachProject {
         let Some(runner_the_workers_run_actions_on) =
             self.runner_the_workers_run_actions_on.get().cloned()
         else {
-            tracing::error!(
-                "the stream actions of {} were queued on a runtime that runs none",
-                project_directory.display()
-            );
+            let never_run = self
+                .stream_action_queue_of_each_project
+                .lock()
+                .remove(&project_directory)
+                .map(|queue| queue.actions_waiting)
+                .unwrap_or_default();
+            for queued in never_run {
+                self.record_failed(
+                    &queued.action_id,
+                    "it was queued on a runtime that runs no stream action".to_string(),
+                );
+            }
             return;
         };
         tokio_handle.spawn(async move {
@@ -276,28 +298,33 @@ impl StreamActionQueueOfEachProject {
                     let mut queues = queue_of_each_project
                         .stream_action_queue_of_each_project
                         .lock();
-                    let queue = queues.entry(project_directory.clone()).or_default();
-                    match queue.bodies_waiting.pop_front() {
-                        Some(body) => Some(body),
-                        None => {
-                            queue.its_worker_runs = false;
-                            None
-                        }
+                    let next_body = queues
+                        .get_mut(&project_directory)
+                        .and_then(|queue| queue.actions_waiting.pop_front());
+                    if next_body.is_none() {
+                        queues.remove(&project_directory);
                     }
+                    next_body
                 };
-                let Some(body) = next_body else {
+                let Some(QueuedStreamActionAndItsBody { action_id, body }) = next_body else {
                     tokio::task::spawn_blocking(move || drop(runner));
                     return;
                 };
-                if tokio::task::spawn_blocking(move || body(&runner))
+                let runner_of_the_body = Arc::clone(&runner);
+                if tokio::task::spawn_blocking(move || body(&runner_of_the_body))
                     .await
                     .is_err()
                 {
                     tracing::error!(
-                        "a stream action of {} panicked; the project's next action runs",
+                        "the stream action {action_id} of {} panicked; the project's next action runs",
                         project_directory.display()
                     );
+                    runner
+                        .stream_actions
+                        .stream_action_queue_of_each_project
+                        .record_failed(&action_id, "the action panicked".to_string());
                 }
+                tokio::task::spawn_blocking(move || drop(runner));
             }
         });
     }
@@ -305,7 +332,11 @@ impl StreamActionQueueOfEachProject {
     /// Change the held action `action_id` with `change`; an action that
     /// finishes takes its place among its project's finished ones, the oldest
     /// past [`FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT`] let go.
-    pub(crate) fn change(&self, action_id: &str, change: impl FnOnce(&mut StreamAction)) {
+    pub(crate) fn change_the_held_stream_action(
+        &self,
+        action_id: &str,
+        change: impl FnOnce(&mut StreamAction),
+    ) {
         let mut held = self.stream_actions_held.lock();
         let StreamActionsHeld {
             by_action_id,
@@ -330,9 +361,18 @@ impl StreamActionQueueOfEachProject {
         }
     }
 
+    /// Record the held action `action_id` failed for `failed_because`.
+    fn record_failed(&self, action_id: &str, failed_because: String) {
+        self.change_the_held_stream_action(action_id, |action| {
+            action.state = StreamActionState::Failed;
+            action.step = None;
+            action.failed_because = Some(failed_because);
+        });
+    }
+
     /// The held action `action_id`, `None` when the engine never held it or
     /// let it go.
-    pub(crate) fn action(&self, action_id: &str) -> Option<StreamAction> {
+    pub(crate) fn held_stream_action(&self, action_id: &str) -> Option<StreamAction> {
         self.stream_actions_held
             .lock()
             .by_action_id
@@ -399,7 +439,7 @@ impl StreamActionProgress<'_> {
     /// The action is on `step`.
     pub(crate) fn is_on(&self, step: StreamActionStep) {
         self.queue_of_each_project
-            .change(&self.action_id, |action| {
+            .change_the_held_stream_action(&self.action_id, |action| {
                 action.step = Some(step);
             });
     }
@@ -407,7 +447,7 @@ impl StreamActionProgress<'_> {
     /// The action's compile named `streams`, which it takes in next.
     pub(crate) fn works_on(&self, streams: Vec<StreamOfAStreamAction>) {
         self.queue_of_each_project
-            .change(&self.action_id, |action| {
+            .change_the_held_stream_action(&self.action_id, |action| {
                 action.streams = streams;
             });
     }
@@ -441,16 +481,19 @@ mod tests {
         drop(held);
 
         for action_number in 1..=FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT + 1 {
-            queue_of_each_project.change(&format!("R-{action_number}"), |action| {
-                action.state = StreamActionState::Done;
-            });
+            queue_of_each_project.change_the_held_stream_action(
+                &format!("R-{action_number}"),
+                |action| {
+                    action.state = StreamActionState::Done;
+                },
+            );
         }
 
-        assert_eq!(queue_of_each_project.action("R-1"), None);
-        assert!(queue_of_each_project.action("R-2").is_some());
+        assert_eq!(queue_of_each_project.held_stream_action("R-1"), None);
+        assert!(queue_of_each_project.held_stream_action("R-2").is_some());
         assert!(
             queue_of_each_project
-                .action(&format!(
+                .held_stream_action(&format!(
                     "R-{}",
                     FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT + 2
                 ))
