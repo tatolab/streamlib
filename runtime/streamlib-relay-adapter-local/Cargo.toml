@@ -12,7 +12,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.4" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.5" }
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
 # The admission request and grant `moq-relay` speaks over `--auth-url`.
 moq-auth = { version = "=0.2.1", default-features = false }
