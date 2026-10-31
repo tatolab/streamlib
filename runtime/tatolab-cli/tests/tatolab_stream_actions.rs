@@ -19,8 +19,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, run_project_tool_result_text,
-    stop_stream_tool_result_text,
+    StubToolCallTransport, run_project_tool_result_text, stop_stream_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -196,7 +195,8 @@ fn run_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
     let (isolated_machine_directories, stub_local_api_server) =
         a_runtime_answering("run_project", StubToolAnswer::tool_failure("unreached"));
 
-    let refused = isolated_machine_directories.run_tatolab(&["run", "--dir", "/nonexistent-project"]);
+    let refused =
+        isolated_machine_directories.run_tatolab(&["run", "--dir", "/nonexistent-project"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(

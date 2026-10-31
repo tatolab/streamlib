@@ -108,9 +108,7 @@ impl ProjectLoadRequest {
     }
 
     /// `run_project`'s arguments for this request.
-    pub(crate) fn run_project_tool_arguments(
-        &self,
-    ) -> serde_json::Map<String, serde_json::Value> {
+    pub(crate) fn run_project_tool_arguments(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut run_project_arguments = serde_json::Map::new();
         run_project_arguments.insert(
             "project_directory".to_owned(),
@@ -296,7 +294,11 @@ pub(crate) fn remove_project(
 }
 
 /// `<action> queued: <verb> of <what>`, the line a verb whose stream action is queued prints.
-pub(crate) fn rendered_queued_stream_action_line(action: &str, verb: &str, what_it_acts_on: &str) -> String {
+pub(crate) fn rendered_queued_stream_action_line(
+    action: &str,
+    verb: &str,
+    what_it_acts_on: &str,
+) -> String {
     format!("{action} queued: {verb} of {what_it_acts_on}\n")
 }
 

@@ -357,7 +357,6 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         refusal_line_prefix: str,
         verb: str,
         working_directory: Path,
-        display_name: "str | None",
         tatolab_commands: "TatolabCommandsOfThisTest",
     ) -> None:
         super().__init__(
@@ -367,7 +366,6 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         )
         self.verb = verb
         self.working_directory = working_directory
-        self._display_name = display_name
         self._tatolab_commands = tatolab_commands
         self._ended_actions: "dict[str, dict[str, Any]]" = {}
 
@@ -436,19 +434,18 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         )
         [loaded_stream] = ended_action["streams"]
         stream_id = loaded_stream["stream"]
+        listed_streams = self._local_api().list_streams()
         listed_stream = next(
-            listed for listed in self._local_api().list_streams() if listed["stream"] == stream_id
+            (listed for listed in listed_streams if listed["stream"] == stream_id), None
+        )
+        assert listed_stream is not None, (
+            f"the load {ended_action['action']} took in {stream_id}, which the runtime does not "
+            f"list: {listed_streams}"
         )
         assert loaded_stream["state"] == "running", (
             f"the load {ended_action['action']} recorded {stream_id} failed: "
             f"{listed_stream['failed_because']}"
         )
-        if self._display_name is not None and listed_stream["display_name"] != self._display_name:
-            renamed = self._tatolab_commands.start_tatolab(
-                "rename", stream_id, self._display_name, working_directory=self.working_directory
-            )
-            assert renamed.await_exit(timeout=timeout) == 0, renamed.recent_stderr()
-            listed_stream = {**listed_stream, "display_name": self._display_name}
         return {
             "stream_id": stream_id,
             "display_name": listed_stream["display_name"],
@@ -634,15 +631,13 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         self,
         stream_or_graph: StreamOrGraph,
         *,
-        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
         verb: str = "run",
     ) -> TatolabRunOrDevOnTheRuntime:
         """Start `tatolab run --dir` (or `verb`, such as `dev`) on the project of
-        `stream_or_graph`; return it started. `display_name` is set with `tatolab rename` once
-        `await_loaded()` has the stream loaded.
+        `stream_or_graph`; return it started.
 
         `extra_environment` reaches the `tatolab` process alone: a stream's
         processor interpreters inherit `tatolabd`'s environment, never the CLI's.
@@ -662,7 +657,6 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
                 TatolabRunOrDevOnTheRuntime,
                 verb=verb,
                 working_directory=tatolab_run.working_directory,
-                display_name=display_name,
                 tatolab_commands=self._tatolab_commands,
             ),
         )
@@ -746,7 +740,7 @@ def start_tatolabd_running_stream(
 ) -> "Callable[..., TatolabdUnderTest]":
     """Start this test's `tatolabd`, then run `stream_or_graph` on it with `tatolab run`.
 
-    `start_tatolabd_running_stream(stream_or_graph, *, display_name=None,
+    `start_tatolabd_running_stream(stream_or_graph, *,
     project_directory=None, processor_interpreter=None, extra_environment=None,
     working_directory=None) -> TatolabdUnderTest`. `extra_environment` and
     `working_directory` are `tatolabd`'s, so the stream's processor interpreters
@@ -759,7 +753,6 @@ def start_tatolabd_running_stream(
     def start(
         stream_or_graph: StreamOrGraph,
         *,
-        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
@@ -770,7 +763,6 @@ def start_tatolabd_running_stream(
         )
         started_tatolabd.run_stream(
             stream_or_graph,
-            display_name=display_name,
             project_directory=project_directory,
             processor_interpreter=processor_interpreter,
         )
@@ -814,8 +806,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     """Run a stream on a `tatolabd` that reaches no Vulkan driver, to the end of the run.
 
     `run_stream_on_tatolabd_with_no_vulkan_driver(stream_or_graph, *,
-    display_name=None, project_directory=None, processor_interpreter=None,
-    extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`, its load
+    project_directory=None, processor_interpreter=None, extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`, its load
     followed to its end. Needs no device: a graph the compile or the load
     refuses ends the load with its stream failed and the reason; one it loads
     fails at its start, at the GPU, before any device opens. The runtime
@@ -846,7 +837,6 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     def run(
         stream_or_graph: StreamOrGraph,
         *,
-        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
@@ -860,10 +850,11 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             processor_interpreter=processor_interpreter,
         )
         tatolabd_stderr_mark = tatolabd.stderr_line_count()
-        stream_run = tatolabd.run_stream(tatolab_run, display_name=display_name)
+        stream_run = tatolabd.run_stream(tatolab_run)
         exit_status = stream_run.await_exit(timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS)
         local_api = tatolabd.local_api_client()
         failed_or_refused_because: "str | None" = None
+        ids_of_the_streams_the_run_took_in: "set[str]" = set()
         if exit_status != 0:
             failed_or_refused_because = stream_run.refusal()
         else:
@@ -871,6 +862,9 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
                 timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS
             )
             failed_stream = stream_run.failed_stream()
+            ids_of_the_streams_the_run_took_in = {
+                stream["stream"] for stream in ended_action["streams"]
+            }
             if ended_action["state"] == "failed":
                 failed_or_refused_because = ended_action["failed_because"]
             elif failed_stream is not None:
@@ -878,9 +872,10 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             elif not ended_action["streams"]:
                 failed_or_refused_because = f"the load took in no stream: {ended_action}"
         listed_streams = local_api.list_streams()
-        assert all(listed["state"] == "failed" for listed in listed_streams), (
-            f"`{stream_run.command_description}` left the runtime holding {listed_streams}"
-        )
+        assert all(
+            listed["state"] == "failed" and listed["stream"] in ids_of_the_streams_the_run_took_in
+            for listed in listed_streams
+        ), f"`{stream_run.command_description}` left the runtime holding {listed_streams}"
         for project_directory_of_a_failed_stream in sorted(
             {listed["location"]["project_directory"] for listed in listed_streams if listed["location"]}
         ):

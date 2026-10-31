@@ -12,10 +12,10 @@ the machine runtime lock, the state directory and the runtime directory under
 `tatolabd` would take this machine's real lock. It is found at
 `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else `<repository root>/target/tatolab-runtime`.
 
-The suite directory is the project every `@stream` function of the suite is
-run from — `tatolab run <module>:<function>` with the suite directory as the
-working directory — so its `.venv` is the interpreter that compiles each stream
-and that every processor interpreter starts from: a venv holding
+Every `@stream` function of the suite is run as a one-stream project whose
+`.venv` and modules link to the suite directory's, so the suite's `.venv` is the
+interpreter that compiles each stream and that every processor interpreter
+starts from: a venv holding
 `tatolab-stream`, the fixture streams' own dependencies and the test tooling,
 and no `tatolab.runtime` — a processor interpreter borrows that from the lend.
 """

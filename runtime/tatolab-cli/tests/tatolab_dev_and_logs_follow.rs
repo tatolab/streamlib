@@ -315,7 +315,9 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
             queued_answer("Rabc-2", &scratch_project.canonical_path()),
             queued_answer("Rabc-3", &scratch_project.canonical_path()),
         ],
-        vec![a_log_record(json!({"message": "written by the refused load"}))],
+        vec![a_log_record(
+            json!({"message": "written by the refused load"}),
+        )],
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
     running_tatolab.wait_for_standard_error_line_containing(&format!(
@@ -392,9 +394,8 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
             ..StubLocalApiScript::default()
         });
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.wait_for_standard_error_line_containing(
-        "save again to queue another load and follow it",
-    );
+    running_tatolab
+        .wait_for_standard_error_line_containing("save again to queue another load and follow it");
     // Ten of `dev`'s runtime polls: a page it cannot read must not drive a load loop.
     std::thread::sleep(Duration::from_millis(2500));
 
@@ -484,6 +485,50 @@ fn dev_survives_a_dropped_runtime_and_follows_the_log_on_without_queuing_a_load(
     );
 }
 
+/// A load the runtime went away before answering stays owed: once a runtime answers again, `dev`
+/// queues it there rather than following a log no load of its own writes to.
+#[test]
+fn a_load_the_runtime_went_away_before_answering_is_queued_again_once_it_answers() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tools_that_never_answer: ["run_project".to_owned()].into_iter().collect(),
+            stream_log_records: Some(StubStreamLogRecords {
+                records: Vec::new(),
+                page_size: 1,
+                first_written_by_a_run: true,
+            }),
+            ..StubLocalApiScript::default()
+        });
+    let running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
+    wait_until("dev's first load reaches the runtime", || {
+        calls_to(&stub_local_api_server, "run_project") == 1
+    });
+
+    stub_local_api_server.close_every_mcp_stdio_connection();
+    wait_until("dev queues the load again once the runtime answers", || {
+        calls_to(&stub_local_api_server, "run_project") == 2
+    });
+    let (exit_status, standard_error_lines) =
+        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
+
+    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+    assert!(
+        standard_error_lines
+            .iter()
+            .any(|line| line.starts_with("tatolab dev: the runtime went away")),
+        "{standard_error_lines:?}"
+    );
+    assert_eq!(
+        stub_local_api_server
+            .recorded_mcp_stdio_request_heads()
+            .len(),
+        2,
+        "the load is asked again over a new connection"
+    );
+}
+
 /// A restarted runtime is followed from the cursor the session read up to: the project's log is
 /// on disk, so a record written before the crash is never printed twice.
 #[test]
@@ -517,7 +562,10 @@ fn dev_follows_a_restarted_runtimes_project_log_from_where_it_read_up_to() {
         running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
         dev_rendered_line(&scratch_project, "after the re-load")
     );
-    assert_eq!(tool_calls_besides_logs(&restarted_runtime), Vec::<String>::new());
+    assert_eq!(
+        tool_calls_besides_logs(&restarted_runtime),
+        Vec::<String>::new()
+    );
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");

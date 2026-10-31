@@ -353,7 +353,8 @@ tatolab enable-virtual-camera [--print]
   syncs the project's `.venv`, compiles every `@stream` function of `stream.py` in it, and loads
   and records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went.
   A stream whose code fails is not refused: the runtime records it failed, with its traceback in
-  the project's log. `run` exits 1 only when the runtime refuses to queue the load. The runtime
+  the project's log. `run` exits 1 only when the load is not queued: the runtime refuses it or
+  cannot be reached, or `--dir` names no directory. The runtime
   loads each stream again at each of its own starts until `stop` or `rm`, and loading the same
   project again replaces its streams under the same ids — failed ones included.
 - **`dev`** is `run`, then the project's log followed from where it ended, with another load

@@ -134,7 +134,7 @@ enum TatolabVerb {
     /// Queue a load of this project, follow its log, and queue another on every saved edit.
     #[command(
         long_about = "`run`, then the project's log followed — each record under the project's \
-                      folder name — plus a watch on the project's .py files: each settled save \
+                      folder name — plus a watch on the project's .py files and pyproject.toml: each settled save \
                       queues another load, which replaces each stream. A save whose code fails \
                       records its stream failed, with the traceback in the log, until a save \
                       that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \

@@ -13,9 +13,7 @@ use streamlib_runtime_client_contract::machine_runtime_lock::{
 use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::{
-    ONE_SHOT_VERB_TOOL_CALL_TIMEOUT, call_one_local_api_tool,
-};
+use crate::local_api_mcp_tool_client::{ONE_SHOT_VERB_TOOL_CALL_TIMEOUT, call_one_local_api_tool};
 use crate::machine_runtime_local_api_socket::{
     holder_serving_another_user, local_api_socket_of_the_running_runtime,
 };

@@ -1316,7 +1316,11 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     assert not stream_record_path(tatolabd.machine_directories, bravo_stream_id).exists()
 
     # Run again by the agent, then the agent quits: the stream runs on, recorded.
-    assert run_project(agent, bravo_project)["state"] == "running"
+    assert run_project(agent, bravo_project) == {
+        "stream": bravo_stream_id,
+        "display_name": BRAVO_STREAM_FUNCTION,
+        "state": "running",
+    }
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert listed_through(agent)[bravo_stream_id] == bravo_running
     assert agent.close_standard_input() == 0, agent.standard_error_text
@@ -1329,7 +1333,11 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     # Run again over a connection whose host then crashes: the run replaces the
     # recorded stream, and the killed verb leaves it running.
     crashing_agent = start_mcp_session_over_the_verb()
-    assert run_project(crashing_agent, bravo_project)["state"] == "running"
+    assert run_project(crashing_agent, bravo_project) == {
+        "stream": bravo_stream_id,
+        "display_name": BRAVO_STREAM_FUNCTION,
+        "state": "running",
+    }, "the run replaces the recorded stream under its id"
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert crashing_agent.kill() == -signal.SIGKILL
     local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)

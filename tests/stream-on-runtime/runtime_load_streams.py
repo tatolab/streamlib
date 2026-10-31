@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_stream_graph_load_on_tatolabd.py` runs, each
-compiled in the suite project's own interpreter by `tatolab run <module>:<function>`."""
+"""The `@stream` functions `test_stream_graph_load_on_tatolabd.py` runs,
+each run as a one-stream project whose `stream.py` delegates to it."""
 
 from typing import Any
 
