@@ -1011,10 +1011,12 @@ jobs:
               graph = json.load(open("/tmp/scaffold-graph.json"))
           except ValueError:
               raise SystemExit(0)
-          for node in graph.get("nodes", []):
-              if node.get("name") == "h264encoder":
-                  metrics = node.get("components", {}).get("metrics", {})
-                  print(sum(metrics.get("dropped_bags_by_link", {}).values()))
+          streams = graph.get("streams", [])
+          for stream_graph in streams.values() if isinstance(streams, dict) else streams:
+              for node in stream_graph.get("nodes", []):
+                  if node.get("name") == "h264encoder":
+                      metrics = node.get("components", {}).get("metrics", {})
+                      print(sum(metrics.get("dropped_bags_by_link", {}).values()))
           ')"
           echo "H264Encoder.video dropped ${frames_dropped_into_the_encoder:-an unknown number of} frames, by the stream's graph"
 
