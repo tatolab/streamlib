@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.5](https://github.com/tatolab/streamlib/compare/v0.68.4...v0.68.5) (2026-10-31)
+
+
+### Features
+
+* **engine:** list each camera or microphone a re-loaded stream waits on, so a client can offer to allow it ([#3031](https://github.com/tatolab/streamlib/issues/3031)) ([6887339](https://github.com/tatolab/streamlib/commit/6887339497d02f177c818bc372562d8be5639be0))
+
 ## [0.68.4](https://github.com/tatolab/streamlib/compare/v0.68.3...v0.68.4) (2026-10-31)
 
 
