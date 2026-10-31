@@ -331,12 +331,12 @@ async fn tool_call_over_the_connection(
 
 /// The action the runtime [`AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt`]
 /// answers every run with.
-const THE_RUN_OF_AN_EMPTY_STREAM: &str = "R-empty-1";
+const ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS: &str = "R-empty-1";
 
 /// A runtime whose `run_project` loads an empty stream under the project
 /// folder's name, standing in for an id, without compiling or starting it — a
 /// GPU-free stand-in for the engine's own run — answering
-/// [`THE_RUN_OF_AN_EMPTY_STREAM`], and hands every other call to the engine.
+/// [`ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS`], and hands every other call to the engine.
 struct AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
     engine: Arc<Runner>,
     project_directory: tempfile::TempDir,
@@ -404,7 +404,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
                 .with_stream_id(&stream_id),
         )?;
         Ok(StreamActionQueued {
-            action_id: THE_RUN_OF_AN_EMPTY_STREAM.to_string(),
+            action_id: ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS.to_string(),
             project_directory: request.project_directory,
         })
     }
@@ -502,7 +502,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running
     assert_eq!(
         run,
         json!({
-            "action": THE_RUN_OF_AN_EMPTY_STREAM,
+            "action": ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS,
             "project_directory": "/home/someone/projects/camera",
         })
     );
@@ -1114,12 +1114,13 @@ async fn a_run_whose_entry_does_not_import_records_the_project_failed_under_its_
     let project_location =
         StreamLocation::of_a_project_that_gave_no_stream(project.path().to_path_buf());
 
-    the_run_of_the_project_once_finished(
+    let run = the_run_of_the_project_once_finished(
         &engine.operations_on_the_loaded_streams(),
         project.path(),
     )
     .await;
 
+    assert_eq!(run["state"], "done", "{run}");
     let stream = the_listing_of(
         &engine.operations_on_the_loaded_streams(),
         &project_location.stream_id(),

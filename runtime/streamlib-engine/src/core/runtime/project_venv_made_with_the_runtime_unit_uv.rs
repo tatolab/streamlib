@@ -144,15 +144,13 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
     }
     let quoted_standard_error = sync.standard_error_as_a_refusal_quotes_it();
     let failed_because = match sync.ended {
-        HowABoundedChildProcessRunEnded::Exited => format!(
-            "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
-            venv.display(),
-            sync.exit_status_rendered()
-        ),
-        HowABoundedChildProcessRunEnded::BoundElapsed => format!(
-            "`uv sync` did not make {}, and was killed. {quoted_standard_error}",
-            venv.display()
-        ),
+        HowABoundedChildProcessRunEnded::Exited | HowABoundedChildProcessRunEnded::BoundElapsed => {
+            format!(
+                "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
+                venv.display(),
+                sync.exit_status_rendered()
+            )
+        }
         HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
             remove_the_venv(&venv)?;
             return Err(an_interrupt_refusal());

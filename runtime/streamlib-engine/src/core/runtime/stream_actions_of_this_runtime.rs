@@ -380,12 +380,11 @@ impl Runner {
     /// that gives a stream forgets it.
     ///
     /// A load of a location already recorded replaces it under the same id,
-    /// keeping its display name unless the request gives one, and the owner's
-    /// rulings: the running stream is unloaded once the new record is written,
-    /// and never put back. Refused, with nothing changed, for what the caller
-    /// gets wrong — a project the compile refuses, a named function no record
-    /// holds, an id held by another location — and before the compile on a
-    /// runtime given no state directory.
+    /// keeping its display name and the owner's rulings: the running stream is
+    /// unloaded once the new record is written, and never put back. Refused,
+    /// with nothing changed, for a project the compile refuses, a named
+    /// function no record holds, an id held by another location, and — before
+    /// the compile — on a runtime given no state directory.
     ///
     /// Run for the stream action `progress` reports when one runs it: the
     /// project's log entered with the action's id, each step reported, and a
@@ -1588,7 +1587,9 @@ impl Runner {
     /// recorded since hold from its load. A record holding no graph is
     /// compiled from its location as `start_stream` compiles it. Once
     /// `is_interrupted`, the stream being re-loaded and every one after it
-    /// stay unloaded and are re-loaded at the runtime's next start.
+    /// stay unloaded and are re-loaded at the runtime's next start. A venv is
+    /// never made under the lock: a record that gained a graph between the two
+    /// reads is read again once its venv is made.
     fn reload_each_recorded_stream_listed(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
@@ -1596,7 +1597,8 @@ impl Runner {
         is_interrupted: &dyn Fn() -> bool,
     ) -> Vec<StreamReloadAtTheStart> {
         let mut reloads = Vec::new();
-        for listed_record in listed {
+        let mut listed = std::collections::VecDeque::from(listed);
+        while let Some(listed_record) = listed.pop_front() {
             if is_interrupted() {
                 break;
             }
@@ -1680,11 +1682,14 @@ impl Runner {
                 );
                 continue;
             };
-            let reloaded = venv_made_outside_the_lock
-                .unwrap_or_else(|| self.make_the_venv_of_a_recorded_stream(&record, is_interrupted))
-                .and_then(|()| {
-                    self.load_a_recorded_stream_from_its_record(&record, graph_json, is_interrupted)
-                });
+            let Some(venv_made_outside_the_lock) = venv_made_outside_the_lock else {
+                drop(one_stream_action_at_a_time);
+                listed.push_front(Ok(StreamRecordAsRead::Current(record)));
+                continue;
+            };
+            let reloaded = venv_made_outside_the_lock.and_then(|()| {
+                self.load_a_recorded_stream_from_its_record(&record, graph_json, is_interrupted)
+            });
             match reloaded {
                 Ok(stream) => {
                     tracing::info!(
@@ -2581,7 +2586,7 @@ impl Runner {
     /// Queue a load of every `@stream` in the `stream.py` of the project in
     /// `request`'s directory on the project's stream action queue, answering
     /// the action's id at once; [`Runner::describe_stream_action`] follows it.
-    /// The load makes the project's `.venv` with no bound of its own, compiles
+    /// The load makes the project's `.venv`, unbounded, compiles
     /// and loads or fails each stream under the id its location computes to, and
     /// refuses nothing: a directory that does not exist or is no project, and
     /// an id another location holds, fail the action. Refused only for a

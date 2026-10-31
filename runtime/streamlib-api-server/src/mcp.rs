@@ -818,7 +818,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Show a stream under another display name. Its stream id, address and broadcast stay as they are, so no reader of its ports is cut off. A recorded stream's record is rewritten first, so a rename survives a runtime restart and a re-load that gives no `name`; a rename whose record cannot be written is refused with the stream shown as it was. Answers the stream id as `stream` and the `display_name` it is shown under now."
+        description = "Show a stream under another display name. Its stream id, address and broadcast stay as they are, so no reader of its ports is cut off. A recorded stream's record is rewritten first, so a rename survives a runtime restart and every re-load; a rename whose record cannot be written is refused with the stream shown as it was. Answers the stream id as `stream` and the `display_name` it is shown under now."
     )]
     async fn rename_stream(
         &self,
