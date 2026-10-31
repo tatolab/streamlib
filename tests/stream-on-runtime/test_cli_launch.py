@@ -232,6 +232,8 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
         "state": "running",
         "node_count": 1,
         "failed_because": None,
+        "action": None,
+        "step": None,
     }
     assert listed_streams == [listed_running]
     assert running_graph["stream"] == stream_id

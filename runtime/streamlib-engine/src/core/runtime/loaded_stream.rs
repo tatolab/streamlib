@@ -33,7 +33,7 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::logging::ProjectLogRouteEntry;
+use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, ProcessorEvent, RuntimeEvent, topics,
@@ -219,10 +219,18 @@ impl LoadedStreamInThisRuntime {
             stream_location,
         } = naming;
         let stream_tag = LoadedStreamTag::next_in_this_process()?;
+        let resolved_project_directory =
+            std::fs::canonicalize(&project_directory).unwrap_or_else(|_| project_directory.clone());
+        let action_that_loads_it = the_project_log_route_entry_of_this_thread().filter(|entry| {
+            entry.route().project_directory() == Some(resolved_project_directory.as_path())
+        });
         let log_route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
             &project_directory,
             engine_resources_shared_by_every_stream.runtime_id.as_str(),
             &stream_id,
+            action_that_loads_it
+                .as_ref()
+                .and_then(|entry| entry.action_id()),
         );
         let _entered_this_streams_log_route = log_route.enter_on_this_thread();
         let loaded_stream_identity = LoadedStreamIdentity {

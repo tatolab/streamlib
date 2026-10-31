@@ -74,27 +74,13 @@ impl From<ProjectVenvNotMade> for Error {
 }
 
 /// Make the `.venv` of the project in `project_directory` with
-/// `runtime_unit_uv` unless its `.venv/bin/python` runs. A machine shutdown
-/// requested meanwhile cuts it short.
-pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
-    project_directory: &Path,
-    runtime_unit_uv: Option<&Path>,
-) -> Result<(), ProjectVenvNotMade> {
-    make_the_projects_venv_unless_its_interpreter_runs_within(
-        project_directory,
-        runtime_unit_uv,
-        PROJECT_VENV_SYNC_BOUND,
-        &crate::core::runtime::is_the_machines_shutdown_requested,
-    )
-}
-
-/// [`make_the_projects_venv_unless_its_interpreter_runs`], its sync bounded by
-/// `sync_bound` and cut short whenever `is_interrupted_by_the_host` reports
-/// true.
+/// `runtime_unit_uv` unless its `.venv/bin/python` runs, its sync bounded by
+/// `sync_bound` — unbounded, ended by uv's own network timeouts, when it is
+/// `None` — and cut short whenever `is_interrupted_by_the_host` reports true.
 pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
-    sync_bound: Duration,
+    sync_bound: Option<Duration>,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
@@ -150,7 +136,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
     let sync = run_a_child_process_to_its_exit_within(
         &mut project_venv_sync_command(runtime_unit_uv, project_directory),
         PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
-        sync_bound,
+        sync_bound.unwrap_or(Duration::MAX),
         is_interrupted_by_the_host,
     )
     .map_err(|spawn_failure| ProjectVenvNotMade::Failed {
@@ -173,7 +159,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs_within(
         HowABoundedChildProcessRunEnded::BoundElapsed => format!(
             "`uv sync` did not make {} within {}s, and was killed. {quoted_standard_error}",
             venv.display(),
-            sync_bound.as_secs_f64()
+            sync_bound.unwrap_or(Duration::MAX).as_secs_f64()
         ),
         HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
             remove_the_venv(&venv)?;
@@ -351,7 +337,7 @@ mod tests {
             make_the_projects_venv_unless_its_interpreter_runs_within(
                 &self.project_directory,
                 Some(&self.stub_uv),
-                sync_bound,
+                Some(sync_bound),
                 &|| false,
             )
         }
@@ -535,7 +521,7 @@ mod tests {
             the_reason_it_failed(make_the_projects_venv_unless_its_interpreter_runs_within(
                 &project.project_directory,
                 None,
-                PROJECT_VENV_SYNC_BOUND,
+                Some(PROJECT_VENV_SYNC_BOUND),
                 &|| false,
             ));
 
@@ -559,7 +545,7 @@ mod tests {
             the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
                 &project_directory,
                 Some(&project.stub_uv),
-                PROJECT_VENV_SYNC_BOUND,
+                Some(PROJECT_VENV_SYNC_BOUND),
                 &|| false,
             ));
         }
@@ -574,7 +560,7 @@ mod tests {
         let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
             &project.project_directory,
             Some(&project.stub_uv),
-            PROJECT_VENV_SYNC_BOUND,
+            Some(PROJECT_VENV_SYNC_BOUND),
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
@@ -591,7 +577,7 @@ mod tests {
         let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs_within(
             &project.project_directory,
             None,
-            PROJECT_VENV_SYNC_BOUND,
+            Some(PROJECT_VENV_SYNC_BOUND),
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 

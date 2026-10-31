@@ -407,6 +407,7 @@ mod tests {
             project_directory.path(),
             "RtestAudioClock",
             "ticking",
+            None,
         );
         let stream_of_the_first_tick: Arc<Mutex<Option<Option<String>>>> =
             Arc::new(Mutex::new(None));

@@ -666,7 +666,7 @@ impl Runner {
         )?;
         tracing::info!("[new] iceoryx2 Node created");
 
-        Ok(Arc::new(Self {
+        let runner = Arc::new(Self {
             _tokio_runtime_the_runner_owns,
             engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
                 runtime_id,
@@ -705,7 +705,12 @@ impl Runner {
                 process_logging_pathway_hold,
             }),
             stream_actions: StreamActionsOfTheEngine::default(),
-        }))
+        });
+        runner
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .run_every_action_on(Arc::downgrade(&runner));
+        Ok(runner)
     }
 
     /// Register a one-shot hook to run with the engine's GPU context when the

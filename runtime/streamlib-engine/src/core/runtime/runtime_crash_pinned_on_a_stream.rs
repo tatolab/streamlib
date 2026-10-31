@@ -719,7 +719,12 @@ mod tests {
         stream_id: &str,
         project_directory: &Path,
     ) -> Arc<ProjectLogRouteEntry> {
-        ProjectLogRouteEntry::for_a_stream_of_the_project_in(project_directory, "R-test", stream_id)
+        ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+            project_directory,
+            "R-test",
+            stream_id,
+            None,
+        )
     }
 
     /// Re-run `test_path` in a child process holding a fresh directory for its

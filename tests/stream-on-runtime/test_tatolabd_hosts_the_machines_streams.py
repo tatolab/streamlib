@@ -187,6 +187,8 @@ def listing_of(
         "state": state,
         "node_count": node_count,
         "failed_because": None,
+        "action": None,
+        "step": None,
     }
 
 

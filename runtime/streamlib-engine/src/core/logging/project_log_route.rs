@@ -3,7 +3,8 @@
 
 //! Where the records a project's streams and stream actions emit go: the
 //! project's one JSONL log, `<project>/.streamlib/logs/project.jsonl`, each
-//! record stamped with its runtime's id and the stream that emitted it.
+//! record stamped with its runtime's id, the stream that emitted it and the
+//! stream action it belongs to.
 //!
 //! A thread carries an entry of a route from the moment it is entered until
 //! the entry drops; the logging layer reads the entry of the thread an event
@@ -301,12 +302,14 @@ impl Drop for ProjectLogRoute {
     }
 }
 
-/// One emitter's way into a [`ProjectLogRoute`]: the runtime's id and the
-/// stream that emits, stamped on each record a thread carrying the entry emits.
+/// One emitter's way into a [`ProjectLogRoute`]: the runtime's id, the stream
+/// that emits and the stream action it emits for, stamped on each record a
+/// thread carrying the entry emits.
 pub struct ProjectLogRouteEntry {
     route: Arc<ProjectLogRoute>,
     runtime_id: String,
     emitting_stream_id: Option<String>,
+    emitting_action_id: Option<String>,
     /// The stream a thread carrying this entry works for, so a crash on it is
     /// pinned on the stream.
     stream_a_thread_carrying_it_works_for: StreamThisThreadWorksFor,
@@ -323,32 +326,42 @@ impl std::fmt::Debug for ProjectLogRouteEntry {
             .field("route", &self.route)
             .field("runtime_id", &self.runtime_id)
             .field("emitting_stream_id", &self.emitting_stream_id)
+            .field("emitting_action_id", &self.emitting_action_id)
             .finish()
     }
 }
 
 impl ProjectLogRouteEntry {
     /// The entry the stream `stream_id` of the runtime `runtime_id` emits
-    /// through into its project's log.
+    /// through into its project's log, for the stream action `action_id`
+    /// that loaded it, when one did.
     pub fn for_a_stream_of_the_project_in(
         project_directory: &Path,
         runtime_id: &str,
         stream_id: &str,
+        action_id: Option<&str>,
     ) -> Arc<Self> {
         Self::through(
             ProjectLogRoute::of_the_project_in(project_directory),
             runtime_id,
             Some(stream_id),
+            action_id,
         )
     }
 
     /// The entry the runtime `runtime_id` emits through into the project's
-    /// log under no stream while it loads the project.
-    pub fn for_the_project_in(project_directory: &Path, runtime_id: &str) -> Arc<Self> {
+    /// log under no stream while it loads the project, for the stream action
+    /// `action_id` when one loads it.
+    pub fn for_the_project_in(
+        project_directory: &Path,
+        runtime_id: &str,
+        action_id: Option<&str>,
+    ) -> Arc<Self> {
         Self::through(
             ProjectLogRoute::of_the_project_in(project_directory),
             runtime_id,
             None,
+            action_id,
         )
     }
 
@@ -357,13 +370,14 @@ impl ProjectLogRouteEntry {
         route: Arc<ProjectLogRoute>,
         runtime_id: &str,
     ) -> Arc<Self> {
-        Self::through(route, runtime_id, None)
+        Self::through(route, runtime_id, None, None)
     }
 
     fn through(
         route: Arc<ProjectLogRoute>,
         runtime_id: &str,
         emitting_stream_id: Option<&str>,
+        emitting_action_id: Option<&str>,
     ) -> Arc<Self> {
         Arc::new(Self {
             route,
@@ -373,6 +387,7 @@ impl ProjectLogRouteEntry {
                 None => StreamThisThreadWorksFor::NONE,
             },
             emitting_stream_id: emitting_stream_id.map(str::to_string),
+            emitting_action_id: emitting_action_id.map(str::to_string),
             records_dropped_from_a_full_queue: AtomicU64::new(0),
             helper_pipe_readers_still_reading: Mutex::new(0),
             a_helper_pipe_reader_finished: Condvar::new(),
@@ -393,6 +408,12 @@ impl ProjectLogRouteEntry {
     /// runtime's own log.
     pub fn stream_id(&self) -> Option<&str> {
         self.emitting_stream_id.as_deref()
+    }
+
+    /// The id of the stream action the emitter's records belong to; `None`
+    /// for a stream no action loaded and the runtime's own log.
+    pub fn action_id(&self) -> Option<&str> {
+        self.emitting_action_id.as_deref()
     }
 
     /// The project log's active JSONL segment, `None` when it writes none.
@@ -667,8 +688,13 @@ mod tests {
             first_project.path(),
             "R-test",
             "camera",
+            Some("R-test-1"),
         );
-        let the_load = ProjectLogRouteEntry::for_the_project_in(first_project.path(), "R-test");
+        let the_load = ProjectLogRouteEntry::for_the_project_in(
+            first_project.path(),
+            "R-test",
+            Some("R-test-1"),
+        );
         let the_same_project_spelled_through_a_symlink =
             first_project.path().with_extension("link");
         std::os::unix::fs::symlink(
@@ -680,14 +706,17 @@ mod tests {
             &the_same_project_spelled_through_a_symlink,
             "R-test",
             "preview",
+            None,
         );
         let elsewhere = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
             second_project.path(),
             "R-test",
             "camera",
+            None,
         );
 
         assert_eq!(camera.stream_id(), Some("camera"));
+        assert_eq!(camera.action_id(), Some("R-test-1"));
         assert_eq!(the_load.stream_id(), None);
         assert_eq!(
             spelled_otherwise.route().project_directory(),

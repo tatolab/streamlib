@@ -179,6 +179,8 @@ mod tests {
             state,
             node_count: None,
             failed_because: None,
+            action: None,
+            step: None,
         }
     }
 

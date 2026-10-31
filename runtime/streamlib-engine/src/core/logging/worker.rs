@@ -368,6 +368,9 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
         stream: entry
             .and_then(|entry| entry.stream_id())
             .map(str::to_string),
+        action: entry
+            .and_then(|entry| entry.action_id())
+            .map(str::to_string),
         source,
         level: record.level,
         message: record.message.clone(),

@@ -181,6 +181,12 @@ pub struct ListStreamsToolResultStream {
     pub node_count: Option<usize>,
     /// Why it is failed; `null` when it is not.
     pub failed_because: Option<String>,
+    /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
+    /// is `preparing`.
+    pub action: Option<String>,
+    /// The step that action is on; `null` while it waits in its project's queue, and unless the
+    /// stream is `preparing`.
+    pub step: Option<StreamActionStepOnTheWire>,
 }
 
 /// The state of one stream `list_streams` lists.
@@ -194,6 +200,8 @@ pub enum ListedStreamState {
     Stopped,
     /// Skipped at the runtime's start until `start_stream` retries it.
     Failed,
+    /// A stream action of its project is queued or under way on it.
+    Preparing,
 }
 
 impl ListedStreamState {
@@ -203,6 +211,7 @@ impl ListedStreamState {
             ListedStreamState::Running => "running",
             ListedStreamState::Stopped => "stopped",
             ListedStreamState::Failed => "failed",
+            ListedStreamState::Preparing => "preparing",
         }
     }
 }
@@ -211,6 +220,120 @@ impl std::fmt::Display for ListedStreamState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.wire_spelling())
     }
+}
+
+/// The `run_project` tool's result: the stream action it queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunProjectToolResult {
+    /// The queued action's id, which `describe_stream_action` and `logs` take.
+    pub action: String,
+    /// The project whose queue holds it, symlinks resolved.
+    pub project_directory: PathBuf,
+}
+
+/// What a stream action does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionKindOnTheWire {
+    /// Loads every `@stream` of a project.
+    Load,
+}
+
+/// Where a stream action is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionStateOnTheWire {
+    /// Waiting behind its project's earlier actions.
+    Queued,
+    /// Running one of its steps.
+    InProgress,
+    /// Finished; each stream it took in is running or failed.
+    Done,
+    /// Ended without taking in the project, for `failed_because`.
+    Failed,
+}
+
+/// The step a running stream action is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionStepOnTheWire {
+    /// Making the project's `.venv` with the runtime's uv.
+    MakingTheVenv,
+    /// Compiling the project's `@stream` functions.
+    Compiling,
+    /// Loading and starting the streams the compile gave.
+    Starting,
+}
+
+impl StreamActionStepOnTheWire {
+    /// The step as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            StreamActionStepOnTheWire::MakingTheVenv => "making_the_venv",
+            StreamActionStepOnTheWire::Compiling => "compiling",
+            StreamActionStepOnTheWire::Starting => "starting",
+        }
+    }
+}
+
+/// The `describe_stream_action` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeStreamActionToolResult {
+    /// The action's id.
+    pub action: String,
+    /// The project it works on.
+    pub project_directory: PathBuf,
+    /// What it does.
+    pub kind: StreamActionKindOnTheWire,
+    /// Where it is in its life.
+    pub state: StreamActionStateOnTheWire,
+    /// The step it is on while `in_progress`; `null` otherwise.
+    pub step: Option<StreamActionStepOnTheWire>,
+    /// The streams it works on, once its compile named them.
+    pub streams: Vec<DescribeStreamActionToolResultStream>,
+    /// Why it failed; `null` unless it did.
+    pub failed_because: Option<String>,
+}
+
+/// One stream of a [`DescribeStreamActionToolResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeStreamActionToolResultStream {
+    /// The stream's id.
+    pub stream: String,
+    /// The label the stream is shown under.
+    pub display_name: String,
+    /// `running` or `failed` once the action took it in; `null` before.
+    pub state: Option<ListedStreamState>,
+}
+
+/// The `list_project_streams` tool's result: the project's streams as its last compile named
+/// them, run from no project code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListProjectStreamsToolResult {
+    /// The project, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The stream action queued or under way on the project; `null` when none is.
+    pub action: Option<String>,
+    /// The step that action is on; `null` while it waits, and when there is none.
+    pub step: Option<StreamActionStepOnTheWire>,
+    /// Every `@stream` its `stream.py` defined at its last compile, in definition order; empty
+    /// before a first compile, and when the entry did not import.
+    pub streams: Vec<ListProjectStreamsToolResultStream>,
+    /// Why its `stream.py` did not import, with the traceback; `null` when it did.
+    pub import_failed_because: Option<String>,
+}
+
+/// One stream of a [`ListProjectStreamsToolResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListProjectStreamsToolResultStream {
+    /// The stream function as `module:qualname`.
+    pub stream_function: String,
+    /// The function's docstring; `null` when it has none.
+    pub description: Option<String>,
+    /// The stream's id; `null` when the runtime holds no stream of it.
+    pub stream: Option<String>,
+    /// The stream's state; `null` when the runtime holds no stream of it.
+    pub state: Option<ListedStreamState>,
 }
 
 /// An output port's exposure level as the `expose_port` tool takes and answers it.
@@ -543,6 +666,8 @@ mod tests {
                         state: ListedStreamState::Running,
                         node_count: Some(4),
                         failed_because: None,
+                        action: None,
+                        step: None,
                     },
                     ListStreamsToolResultStream {
                         stream: "main".to_owned(),
@@ -551,10 +676,63 @@ mod tests {
                         state: ListedStreamState::Failed,
                         node_count: None,
                         failed_because: Some("an earlier runtime recorded it".to_owned()),
+                        action: None,
+                        step: None,
+                    },
+                    ListStreamsToolResultStream {
+                        stream: "desk-0a1b2c".to_owned(),
+                        display_name: "desk".to_owned(),
+                        location: Some(StreamLocationOnTheWire {
+                            project_directory: PathBuf::from("/srv/desk"),
+                            stream_function: "stream".to_owned(),
+                        }),
+                        state: ListedStreamState::Preparing,
+                        node_count: None,
+                        failed_because: None,
+                        action: Some("Rabc-3".to_owned()),
+                        step: Some(StreamActionStepOnTheWire::MakingTheVenv),
                     },
                 ],
             }),
-            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it"}]}"#
+            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null,"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","stream_function":"stream"},"state":"preparing","node_count":null,"failed_because":null,"action":"Rabc-3","step":"making_the_venv"}]}"#
+        );
+        assert_eq!(
+            wire_text(&RunProjectToolResult {
+                action: "Rabc-3".to_owned(),
+                project_directory: PathBuf::from("/srv/desk"),
+            }),
+            r#"{"action":"Rabc-3","project_directory":"/srv/desk"}"#
+        );
+        assert_eq!(
+            wire_text(&DescribeStreamActionToolResult {
+                action: "Rabc-3".to_owned(),
+                project_directory: PathBuf::from("/srv/desk"),
+                kind: StreamActionKindOnTheWire::Load,
+                state: StreamActionStateOnTheWire::InProgress,
+                step: Some(StreamActionStepOnTheWire::Starting),
+                streams: vec![DescribeStreamActionToolResultStream {
+                    stream: "desk-main-0a1b2c".to_owned(),
+                    display_name: "main".to_owned(),
+                    state: None,
+                }],
+                failed_because: None,
+            }),
+            r#"{"action":"Rabc-3","project_directory":"/srv/desk","kind":"load","state":"in_progress","step":"starting","streams":[{"stream":"desk-main-0a1b2c","display_name":"main","state":null}],"failed_because":null}"#
+        );
+        assert_eq!(
+            wire_text(&ListProjectStreamsToolResult {
+                project_directory: PathBuf::from("/srv/desk"),
+                action: None,
+                step: None,
+                streams: vec![ListProjectStreamsToolResultStream {
+                    stream_function: "stream:main".to_owned(),
+                    description: Some("The desk camera.".to_owned()),
+                    stream: Some("desk-main-0a1b2c".to_owned()),
+                    state: Some(ListedStreamState::Running),
+                }],
+                import_failed_because: None,
+            }),
+            r#"{"project_directory":"/srv/desk","action":null,"step":null,"streams":[{"stream_function":"stream:main","description":"The desk camera.","stream":"desk-main-0a1b2c","state":"running"}],"import_failed_because":null}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {

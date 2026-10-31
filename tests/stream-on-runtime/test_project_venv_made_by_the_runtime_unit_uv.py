@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -124,3 +125,67 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
 
     assert RAISED_ON_PURPOSE in refusal, refusal
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
+
+
+#: How long a `run_project` action is followed: a first sync fetches the project's dependencies.
+STREAM_ACTION_FOLLOW_DEADLINE_SECONDS = 480.0
+STREAM_ACTION_FOLLOW_POLL_SECONDS = 0.1
+#: What the lines `uv sync` writes are logged under, as `processor_id`.
+PROJECT_VENV_UV_SYNC_LOG_LABEL = "project-venv-uv-sync"
+
+
+def test_a_run_project_answers_at_once_and_its_action_makes_the_venv_compiles_and_logs_by_action(
+    runtime_unit: RuntimeUnitUnderTest,
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+    tmp_path: Path,
+):
+    project_directory = a_project_with_no_venv(tmp_path / "project")
+    tatolabd = start_tatolabd(extra_environment={"PATH": path_without_any_uv()})
+    local_api = tatolabd.local_api_client()
+
+    queued = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
+    action = queued["action"]
+    listed_while_it_runs = local_api.call_tool("list_streams", {})
+
+    assert queued["project_directory"] == str(project_directory.resolve()), queued
+    [preparing] = listed_while_it_runs["streams"]
+    assert preparing["state"] == "preparing", listed_while_it_runs
+    assert preparing["action"] == action, listed_while_it_runs
+
+    deadline = time.monotonic() + STREAM_ACTION_FOLLOW_DEADLINE_SECONDS
+    while True:
+        described = local_api.call_tool("describe_stream_action", {"action": action})
+        if described["state"] in ("done", "failed"):
+            break
+        assert time.monotonic() < deadline, described
+        time.sleep(STREAM_ACTION_FOLLOW_POLL_SECONDS)
+
+    assert described["state"] == "done", described
+    [failed_stream] = described["streams"]
+    assert failed_stream["state"] == "failed", described
+    assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
+    [listed] = local_api.call_tool("list_streams", {})["streams"]
+    assert listed["state"] == "failed" and RAISED_ON_PURPOSE in listed["failed_because"], listed
+    assert listed["action"] is None and listed["step"] is None, listed
+    project_streams = local_api.call_tool(
+        "list_project_streams", {"project_directory": str(project_directory)}
+    )
+    assert [stream["stream_function"] for stream in project_streams["streams"]] == [
+        "stream:main"
+    ], project_streams
+
+    records_of_the_action = local_api.call_tool(
+        "logs", {"project_directory": str(project_directory), "action": action, "count": 4096}
+    )["records"]
+    assert records_of_the_action, "the action wrote no record"
+    assert all(record["action"] == action for record in records_of_the_action), (
+        records_of_the_action
+    )
+    assert any(
+        record.get("processor_id") == PROJECT_VENV_UV_SYNC_LOG_LABEL
+        for record in records_of_the_action
+    ), records_of_the_action
+    assert any(
+        record.get("stream") == failed_stream["stream"] and RAISED_ON_PURPOSE in record["message"]
+        for record in records_of_the_action
+    ), records_of_the_action

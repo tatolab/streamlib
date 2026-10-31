@@ -14,9 +14,10 @@ use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult, RunStreamToolResultStream,
-    RunStreamToolResultStreamState, STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
-    STREAM_LOAD_TOOL_CALL_TIMEOUT, StartStreamToolResult, StopStreamToolResult,
+    ListedStreamState, RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult,
+    RunStreamToolResultStream, RunStreamToolResultStreamState,
+    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
+    StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
@@ -89,6 +90,9 @@ const NO_STREAMS_IN_THIS_RUNTIME_LINE: &str = "No streams in this runtime.\n";
 
 /// What `streams` prints in place of a node count for a stream that is not loaded.
 const NOT_LOADED_NODE_COUNT_CELL: &str = "-";
+
+/// What `streams` prints in place of a step for a preparing stream whose action waits its turn.
+const STREAM_ACTION_STILL_QUEUED_CELL: &str = "queued";
 
 /// The `PROJECT` and `FUNCTION` cells of a stream with no location: one a library host loaded,
 /// or a record an earlier runtime wrote.
@@ -465,7 +469,8 @@ pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
 }
 
 /// The `ID  NAME  STATE  NODES  PROJECT  FUNCTION` table, each column as wide as its widest cell,
-/// then a line per failed stream saying why it failed; one line when there is no stream.
+/// then an `<id> <step>` line per preparing stream and a line per failed stream saying why it
+/// failed; one line when there is no stream.
 fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> String {
     if listed_streams.is_empty() {
         return NO_STREAMS_IN_THIS_RUNTIME_LINE.to_owned();
@@ -500,11 +505,20 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
     });
     let table_rows: Vec<[String; 6]> = std::iter::once(header_row).chain(stream_rows).collect();
     let mut rendered_table = rendered_padded_table(&table_rows);
-    if listed_streams
-        .iter()
-        .any(|listed_stream| listed_stream.failed_because.is_some())
-    {
+    if listed_streams.iter().any(|listed_stream| {
+        listed_stream.failed_because.is_some()
+            || listed_stream.state == ListedStreamState::Preparing
+    }) {
         rendered_table.push('\n');
+    }
+    for listed_stream in listed_streams
+        .iter()
+        .filter(|listed_stream| listed_stream.state == ListedStreamState::Preparing)
+    {
+        let step_cell = listed_stream
+            .step
+            .map_or(STREAM_ACTION_STILL_QUEUED_CELL, |step| step.wire_spelling());
+        rendered_table.push_str(&format!("{} {step_cell}\n", listed_stream.stream));
     }
     for listed_stream in listed_streams {
         let Some(failed_because) = &listed_stream.failed_because else {
@@ -932,6 +946,31 @@ mod tests {
              main             main  failed   -      -         -\n\
              \n\
              main failed: an earlier runtime recorded it.\n"
+        );
+    }
+
+    #[test]
+    fn the_streams_table_says_under_it_the_step_each_preparing_stream_is_on() {
+        let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
+            "streams": [
+                {"stream": "desk-0a1b2c", "display_name": "desk", "state": "preparing",
+                 "location": {"project_directory": "/srv/desk", "stream_function": "stream"},
+                 "node_count": null, "action": "Rabc-1", "step": "making_the_venv"},
+                {"stream": "hall-3d4e5f", "display_name": "hall", "state": "preparing",
+                 "location": {"project_directory": "/srv/hall", "stream_function": "stream"},
+                 "node_count": null, "action": "Rabc-2", "step": null},
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            rendered_streams_table(&list_streams_result.streams),
+            "ID           NAME  STATE      NODES  PROJECT    FUNCTION\n\
+             desk-0a1b2c  desk  preparing  -      /srv/desk  stream\n\
+             hall-3d4e5f  hall  preparing  -      /srv/hall  stream\n\
+             \n\
+             desk-0a1b2c making_the_venv\n\
+             hall-3d4e5f queued\n"
         );
     }
 

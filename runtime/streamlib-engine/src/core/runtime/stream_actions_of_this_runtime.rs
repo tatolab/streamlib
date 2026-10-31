@@ -15,9 +15,15 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
 };
 
+use super::project_stream_action_queue::{
+    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
+    StreamActionKind, StreamActionProgress, StreamActionQueueOfEachProject, StreamActionQueued,
+    StreamActionState, StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
+    StreamTheLastCompileOfTheProjectNamed, WhatTheLastCompileOfTheProjectGave,
+};
 use super::project_venv_made_with_the_runtime_unit_uv::{
-    PROJECT_VENV_MAKING_BOUND, ProjectVenvNotMade,
-    make_the_projects_venv_unless_its_interpreter_runs,
+    PROJECT_VENV_MAKING_BOUND, PROJECT_VENV_SYNC_BOUND, ProjectVenvNotMade,
+    make_the_projects_venv_unless_its_interpreter_runs_within,
 };
 use super::runtime::{
     a_stream_id_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
@@ -65,6 +71,14 @@ impl std::fmt::Display for LoadedStreamHolding {
             Self::LivesWithTheHostProcess => "living with its host process",
         })
     }
+}
+
+/// The project [`Runner::run_project`] queues a load of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunProjectRequest {
+    /// The project whose every `@stream` in `stream.py` is loaded, by absolute
+    /// path.
+    pub project_directory: PathBuf,
 }
 
 /// What [`Runner::run_stream`] compiles and loads.
@@ -197,6 +211,8 @@ pub enum StreamListingState {
     /// skipped at the start until `start_stream` retries it; or it was
     /// recorded by an earlier runtime, and is never loaded.
     Failed,
+    /// A stream action queued or running works on it.
+    Preparing,
 }
 
 impl StreamListingState {
@@ -206,6 +222,7 @@ impl StreamListingState {
             Self::Running => "running",
             Self::Stopped => "stopped",
             Self::Failed => "failed",
+            Self::Preparing => "preparing",
         }
     }
 }
@@ -232,6 +249,8 @@ pub struct StreamListing {
     pub node_count: Option<usize>,
     /// Why it is failed; `None` when it is not.
     pub failed_because: Option<String>,
+    /// The stream action working on it while one is queued or running.
+    pub stream_action_under_way: Option<StreamActionWorkingOnAStream>,
 }
 
 /// An output port's exposure [`Runner::expose_port`] set.
@@ -297,6 +316,8 @@ pub(crate) struct StreamActionsOfTheEngine {
     /// at the runtime's start of one record, its venv made included — never
     /// across a load's venv or compile.
     one_stream_action_at_a_time: Mutex<()>,
+    /// Each project's serial queue of stream actions, and the actions held.
+    pub(super) stream_action_queue_of_each_project: StreamActionQueueOfEachProject,
 }
 
 /// One stream a stream action loads, recorded by the runtime under the id its
@@ -453,6 +474,73 @@ impl Runner {
     /// holds, an id held by another location — and before the compile on a
     /// runtime given no state directory.
     pub fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
+        self.run_the_project_reporting_to(request, None)
+    }
+
+    /// [`Runner::run_stream`], for the stream action `progress` reports when
+    /// one runs it: the project's log entered with the action's id, each step
+    /// reported, the venv's sync unbounded, and a refusal written to the
+    /// project's log.
+    fn run_the_project_reporting_to(
+        &self,
+        request: RunStreamRequest,
+        progress: Option<&StreamActionProgress<'_>>,
+    ) -> Result<StreamRunOutcome> {
+        let _in_the_projects_log = self.enter_the_log_of_the_project_a_load_takes_in(
+            &request.project_directory,
+            progress.map(|progress| progress.action_id.as_str()),
+        );
+        let run_outcome = self.run_the_project_in_its_log(request, progress);
+        match (&run_outcome, &_in_the_projects_log) {
+            (Ok(run_outcome), Some(_)) => self.log_each_stream_a_run_failed_in_its_projects_log(
+                run_outcome,
+                progress.map(|progress| progress.action_id.as_str()),
+            ),
+            (Err(refusal), _) => {
+                if let Some(progress) = progress {
+                    tracing::warn!("the stream action {} failed: {refusal}", progress.action_id);
+                }
+            }
+            (Ok(_), None) => {}
+        }
+        run_outcome
+    }
+
+    /// Write why each stream `run_outcome` failed to its project's log, stamped
+    /// with the stream and the action that ran it.
+    fn log_each_stream_a_run_failed_in_its_projects_log(
+        &self,
+        run_outcome: &StreamRunOutcome,
+        action_id: Option<&str>,
+    ) {
+        for stream in &run_outcome.streams {
+            let StreamStateAfterItsRun::Failed { failed_because } = &stream.state else {
+                continue;
+            };
+            ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+                &stream.stream_location.project_directory,
+                self.engine_resources_shared_by_every_stream
+                    .runtime_id
+                    .as_str(),
+                &stream.stream_id,
+                action_id,
+            )
+            .run_entered(|| {
+                tracing::error!("the stream `{}` failed: {failed_because}", stream.stream_id)
+            });
+        }
+    }
+
+    fn run_the_project_in_its_log(
+        &self,
+        request: RunStreamRequest,
+        progress: Option<&StreamActionProgress<'_>>,
+    ) -> Result<StreamRunOutcome> {
+        let report_the_step = |step: StreamActionStep| {
+            if let Some(progress) = progress {
+                progress.is_on(step);
+            }
+        };
         let RunStreamRequest {
             project_directory,
             stream_function,
@@ -480,9 +568,11 @@ impl Runner {
                     project_directory.display()
                 ))
             })?;
-        let _in_the_projects_log =
-            self.enter_the_log_of_the_project_a_load_takes_in(&project_directory);
-        if let Err(venv_not_made) = self.make_the_projects_venv(&project_directory) {
+        report_the_step(StreamActionStep::MakingTheVenv);
+        let venv_sync_bound = progress.is_none().then_some(PROJECT_VENV_SYNC_BOUND);
+        if let Err(venv_not_made) =
+            self.make_the_projects_venv_within(&project_directory, venv_sync_bound)
+        {
             let failed_because = match venv_not_made {
                 ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
                 ProjectVenvNotMade::Failed { failed_because } => failed_because,
@@ -505,6 +595,7 @@ impl Runner {
                 compile_warnings: Vec::new(),
             });
         }
+        report_the_step(StreamActionStep::Compiling);
         let StreamFunctionCompileInTheProjectsInterpreterReport {
             what_the_projects_code_gave,
             stream_environment,
@@ -514,7 +605,15 @@ impl Runner {
             stream_function.as_deref(),
             lend_directory,
         )?;
+        if stream_function.is_none() {
+            self.remember_what_the_every_stream_compile_gave(
+                &stream_environment.project_directory,
+                &what_the_projects_code_gave,
+                progress,
+            );
+        }
 
+        report_the_step(StreamActionStep::Starting);
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let streams = match what_the_projects_code_gave {
             WhatTheProjectsCodeGaveTheCompile::EveryStreamOfTheProject { streams }
@@ -724,6 +823,7 @@ impl Runner {
             .and_then(|record| {
                 self.enter_the_log_of_the_project_a_load_takes_in(
                     &record.location.project_directory,
+                    None,
                 )
             });
         self.make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(stream_id)?;
@@ -868,6 +968,7 @@ impl Runner {
                 state: StreamListingState::Running,
                 node_count: Some(stream.node_count()),
                 failed_because: None,
+                stream_action_under_way: None,
             })
             .collect();
         if let Some(stream_records) = self.stream_records() {
@@ -880,6 +981,7 @@ impl Runner {
                         stream_location: Some(record.location),
                         node_count: None,
                         failed_because: record.failed_because,
+                        stream_action_under_way: None,
                     },
                     Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(earlier)) => StreamListing {
                         state: StreamListingState::Failed,
@@ -888,6 +990,7 @@ impl Runner {
                         stream_id: earlier.stream_id,
                         stream_location: None,
                         node_count: None,
+                        stream_action_under_way: None,
                     },
                     Err(unreadable) => {
                         tracing::warn!("{unreadable}; it is left out of the stream listing");
@@ -903,6 +1006,7 @@ impl Runner {
                 listings.push(listing);
             }
         }
+        self.show_the_streams_actions_under_way_prepare(&mut listings);
         listings.sort_by(|first, second| first.stream_id.cmp(&second.stream_id));
         listings
     }
@@ -1657,14 +1761,15 @@ impl Runner {
     /// Enter, on this thread, the log of the project in `project_directory`
     /// for a load of it, so its venv making and compile land there under no
     /// stream; `None` for a directory that is not a project — one that does not
-    /// resolve or holds no `pyproject.toml` — whose load logs to the runtime's
-    /// own log.
+    /// resolve or holds neither `stream.py` nor `pyproject.toml` — whose load
+    /// logs to the runtime's own log.
     fn enter_the_log_of_the_project_a_load_takes_in(
         &self,
         project_directory: &Path,
+        action_id: Option<&str>,
     ) -> Option<TheProjectsLogEnteredForOneLoad> {
         let project_directory = std::fs::canonicalize(project_directory).ok()?;
-        if !project_directory.join("pyproject.toml").is_file() {
+        if why_a_directory_is_no_project(&project_directory).is_some() {
             return None;
         }
         let entry = ProjectLogRouteEntry::for_the_project_in(
@@ -1672,6 +1777,7 @@ impl Runner {
             self.engine_resources_shared_by_every_stream
                 .runtime_id
                 .as_str(),
+            action_id,
         );
         Some(TheProjectsLogEnteredForOneLoad {
             _entered_on_this_thread: entry.enter_on_this_thread(),
@@ -1685,11 +1791,23 @@ impl Runner {
         &self,
         project_directory: &Path,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
-        make_the_projects_venv_unless_its_interpreter_runs(
+        self.make_the_projects_venv_within(project_directory, Some(PROJECT_VENV_SYNC_BOUND))
+    }
+
+    /// [`Self::make_the_projects_venv`], its sync bounded by `sync_bound`, or
+    /// unbounded when it is `None`.
+    fn make_the_projects_venv_within(
+        &self,
+        project_directory: &Path,
+        sync_bound: Option<std::time::Duration>,
+    ) -> std::result::Result<(), ProjectVenvNotMade> {
+        make_the_projects_venv_unless_its_interpreter_runs_within(
             project_directory,
             self.engine_resources_shared_by_every_stream
                 .runtime_unit_uv_executable
                 .get(),
+            sync_bound,
+            &is_the_machines_shutdown_requested,
         )
     }
 
@@ -1913,6 +2031,319 @@ impl Runner {
     }
 }
 
+impl Runner {
+    /// Queue a load of every `@stream` in the `stream.py` of the project in
+    /// `request`'s directory on the project's stream action queue, answering
+    /// the action's id at once; [`Runner::describe_stream_action`] follows it.
+    /// The load makes the project's `.venv` with no bound of its own, compiles
+    /// and loads or fails each stream as [`Runner::run_stream`] does, and
+    /// refuses nothing: a directory that does not exist or is no project, and
+    /// an id another location holds, fail the action. Refused only for a
+    /// directory not named by its absolute path.
+    pub fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
+        let RunProjectRequest { project_directory } = request;
+        if !project_directory.is_absolute() {
+            return Err(Error::Configuration(format!(
+                "`project_directory` must be an absolute path; got `{}`",
+                project_directory.display()
+            )));
+        }
+        let project_directory =
+            std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        let action_id = queue_of_each_project.next_action_id(
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+        );
+        let action = StreamAction {
+            action_id: action_id.clone(),
+            project_directory: project_directory.clone(),
+            kind: StreamActionKind::Load,
+            state: StreamActionState::Queued,
+            step: None,
+            streams: Vec::new(),
+            failed_because: None,
+        };
+        Ok(queue_of_each_project.queue(
+            action,
+            Box::new(move |runner: &Runner| {
+                runner.load_the_project_for_its_stream_action(&action_id, project_directory);
+            }),
+            &self.tokio_handle(),
+        ))
+    }
+
+    /// The stream action `action_id`, refused when the engine never held it or
+    /// let it go among its project's older finished actions; its records stay
+    /// in the project's log.
+    pub fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .action(action_id)
+            .ok_or_else(|| {
+                Error::Configuration(format!(
+                    "the stream action `{action_id}` is not held: this runtime never queued it, or it is \
+                     older than the last {FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT} finished \
+                     actions of its project; its records stay in the project's log"
+                ))
+            })
+    }
+
+    /// The streams of the project in `project_directory` as its last
+    /// every-stream compile gave them, and the action preparing it when one is
+    /// queued or running; refused for a project with neither. Runs no project
+    /// code.
+    pub fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing> {
+        let project_directory = std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf());
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        let stream_action_under_way = queue_of_each_project
+            .actions_under_way()
+            .into_iter()
+            .find(|action| action.project_directory == project_directory)
+            .map(|action| StreamActionWorkingOnAStream {
+                action_id: action.action_id,
+                step: action.step,
+            });
+        let what_the_last_compile_gave =
+            queue_of_each_project.the_last_compile_of(&project_directory);
+        if stream_action_under_way.is_none() && what_the_last_compile_gave.is_none() {
+            return Err(Error::Configuration(format!(
+                "the project in {} is not loaded: `run_project` loads it",
+                project_directory.display()
+            )));
+        }
+        Ok(ProjectStreamsListing {
+            project_directory,
+            stream_action_under_way,
+            what_the_last_compile_gave,
+        })
+    }
+
+    /// Run the load the stream action `action_id` queued of the project in
+    /// `project_directory`, reporting its steps, and finish the action done or
+    /// failed.
+    fn load_the_project_for_its_stream_action(&self, action_id: &str, project_directory: PathBuf) {
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        queue_of_each_project.change(action_id, |action| {
+            action.state = StreamActionState::InProgress;
+        });
+        let run_outcome = match why_a_directory_is_no_project(&project_directory) {
+            Some(why_it_is_no_project) => {
+                tracing::warn!("the stream action {action_id} failed: {why_it_is_no_project}");
+                Err(why_it_is_no_project)
+            }
+            None => self
+                .run_the_project_reporting_to(
+                    RunStreamRequest {
+                        project_directory,
+                        stream_function: None,
+                        display_name: None,
+                    },
+                    Some(&StreamActionProgress {
+                        queue_of_each_project,
+                        action_id: action_id.to_string(),
+                    }),
+                )
+                .map_err(|refusal| refusal.to_string()),
+        };
+        queue_of_each_project.change(action_id, |action| {
+            action.step = None;
+            match run_outcome {
+                Ok(run_outcome) => {
+                    action.state = StreamActionState::Done;
+                    action.streams = run_outcome
+                        .streams
+                        .into_iter()
+                        .map(|stream| StreamOfAStreamAction {
+                            state: Some(match stream.state {
+                                StreamStateAfterItsRun::Running { .. } => {
+                                    StreamListingState::Running
+                                }
+                                StreamStateAfterItsRun::Failed { .. } => StreamListingState::Failed,
+                            }),
+                            stream_id: stream.stream_id,
+                            display_name: stream.display_name,
+                            stream_location: stream.stream_location,
+                        })
+                        .collect();
+                }
+                Err(failed_because) => {
+                    action.state = StreamActionState::Failed;
+                    action.failed_because = Some(failed_because);
+                }
+            }
+        });
+    }
+
+    /// Remember what the every-stream compile of the project in
+    /// `project_directory` gave, and hand the streams it named to the action
+    /// `progress` reports for, so a listing shows them preparing.
+    fn remember_what_the_every_stream_compile_gave(
+        &self,
+        project_directory: &Path,
+        what_the_projects_code_gave: &WhatTheProjectsCodeGaveTheCompile,
+        progress: Option<&StreamActionProgress<'_>>,
+    ) {
+        let what_it_gave = match what_the_projects_code_gave {
+            WhatTheProjectsCodeGaveTheCompile::EveryStreamOfTheProject { streams }
+                if !streams.is_empty() =>
+            {
+                WhatTheLastCompileOfTheProjectGave::Streams(
+                    streams
+                        .iter()
+                        .map(|stream| StreamTheLastCompileOfTheProjectNamed {
+                            stream_location: stream.stream_location.clone(),
+                            description: stream.description.clone(),
+                        })
+                        .collect(),
+                )
+            }
+            WhatTheProjectsCodeGaveTheCompile::EveryStreamOfTheProject { .. } => {
+                WhatTheLastCompileOfTheProjectGave::EntryDefinesNoStream(
+                    "its stream.py defines no @stream".to_string(),
+                )
+            }
+            WhatTheProjectsCodeGaveTheCompile::StreamEntryDidNotImport {
+                import_failed_because,
+            } => {
+                WhatTheLastCompileOfTheProjectGave::EntryDidNotImport(import_failed_because.clone())
+            }
+            WhatTheProjectsCodeGaveTheCompile::StreamEntryDefinesNoStream {
+                no_stream_defined_because,
+            } => WhatTheLastCompileOfTheProjectGave::EntryDefinesNoStream(
+                no_stream_defined_because.clone(),
+            ),
+            WhatTheProjectsCodeGaveTheCompile::Compiled { .. }
+            | WhatTheProjectsCodeGaveTheCompile::StreamFunctionRaised { .. }
+            | WhatTheProjectsCodeGaveTheCompile::StreamFunctionNotDefined { .. } => return,
+        };
+        if let (Some(progress), WhatTheLastCompileOfTheProjectGave::Streams(streams)) =
+            (progress, &what_it_gave)
+        {
+            progress.works_on(
+                streams
+                    .iter()
+                    .map(|stream| StreamOfAStreamAction {
+                        stream_id: stream.stream_location.stream_id(),
+                        display_name: self
+                            .current_stream_record_of_the_id(&stream.stream_location.stream_id())
+                            .ok()
+                            .flatten()
+                            .map_or_else(
+                                || stream.stream_location.stream_function_name(),
+                                |record| record.display_name,
+                            ),
+                        stream_location: stream.stream_location.clone(),
+                        state: None,
+                    })
+                    .collect(),
+            );
+        }
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .remember_the_last_compile_of(project_directory, what_it_gave);
+    }
+
+    /// Show each stream an action under way works on `preparing`, with the
+    /// action and its step: the streams its compile named, else the project's
+    /// recorded ones, else the project itself under
+    /// [`StreamLocation::of_a_project_that_gave_no_stream`].
+    fn show_the_streams_actions_under_way_prepare(&self, listings: &mut Vec<StreamListing>) {
+        for action in self
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .actions_under_way()
+        {
+            let working_on_it = StreamActionWorkingOnAStream {
+                action_id: action.action_id.clone(),
+                step: action.step,
+            };
+            let streams_it_works_on: Vec<(String, String, StreamLocation)> = if action
+                .streams
+                .is_empty()
+            {
+                let recorded_of_the_project: Vec<(String, String, StreamLocation)> = listings
+                    .iter()
+                    .filter_map(|listing| {
+                        let location = listing.stream_location.as_ref()?;
+                        the_same_directory(&location.project_directory, &action.project_directory)
+                            .then(|| {
+                                (
+                                    listing.stream_id.clone(),
+                                    listing.display_name.clone(),
+                                    location.clone(),
+                                )
+                            })
+                    })
+                    .collect();
+                if recorded_of_the_project.is_empty() {
+                    let project = StreamLocation::of_a_project_that_gave_no_stream(
+                        action.project_directory.clone(),
+                    );
+                    vec![(project.stream_id(), project.project_folder_name(), project)]
+                } else {
+                    recorded_of_the_project
+                }
+            } else {
+                action
+                    .streams
+                    .iter()
+                    .map(|stream| {
+                        (
+                            stream.stream_id.clone(),
+                            stream.display_name.clone(),
+                            stream.stream_location.clone(),
+                        )
+                    })
+                    .collect()
+            };
+            for (stream_id, display_name, stream_location) in streams_it_works_on {
+                match listings
+                    .iter_mut()
+                    .find(|listing| listing.stream_id == stream_id)
+                {
+                    Some(listing) => {
+                        listing.state = StreamListingState::Preparing;
+                        listing.stream_action_under_way = Some(working_on_it.clone());
+                    }
+                    None => listings.push(StreamListing {
+                        stream_id,
+                        display_name,
+                        stream_location: Some(stream_location),
+                        state: StreamListingState::Preparing,
+                        node_count: None,
+                        failed_because: None,
+                        stream_action_under_way: Some(working_on_it.clone()),
+                    }),
+                }
+            }
+        }
+    }
+}
+
+/// Why `project_directory` is no project a load takes in — it does not
+/// exist, or holds neither `stream.py` nor `pyproject.toml` — or `None` when it
+/// is one.
+fn why_a_directory_is_no_project(project_directory: &Path) -> Option<String> {
+    if !project_directory.is_dir() {
+        return Some(format!(
+            "the project directory {} does not exist",
+            project_directory.display()
+        ));
+    }
+    if !project_directory.join("stream.py").is_file()
+        && !project_directory.join("pyproject.toml").is_file()
+    {
+        return Some(format!(
+            "{} is not a project: it holds neither stream.py nor pyproject.toml",
+            project_directory.display()
+        ));
+    }
+    None
+}
+
 /// How a run refused for an id a stream another caller loaded holds is told to
 /// go on.
 const STOP_IT_FIRST_TO_LOAD_THIS_ONE: &str = "stop it first to load this one";
@@ -2099,7 +2530,7 @@ fn the_state_a_refusal_names_a_record_by(record: &StreamRecord) -> &'static str 
     match record.listing_state() {
         StreamListingState::Failed => " failed",
         StreamListingState::Stopped => " stopped",
-        StreamListingState::Running => "",
+        StreamListingState::Running | StreamListingState::Preparing => "",
     }
 }
 
@@ -2187,6 +2618,7 @@ mod tests {
     };
     use serial_test::serial;
     use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
 
     use crate::core::runtime::STREAM_RECORD_SCHEMA_VERSION;
     use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
@@ -3591,6 +4023,7 @@ mod tests {
                 state: StreamListingState::Stopped,
                 node_count: None,
                 failed_because: None,
+                stream_action_under_way: None,
             }]
         );
         assert!(the_record_of(state_directory.path(), &camera).stopped);
@@ -4335,6 +4768,7 @@ mod tests {
             state,
             node_count,
             failed_because: None,
+            stream_action_under_way: None,
         };
         let mut expected = [
             StreamListing {
@@ -4954,6 +5388,7 @@ mod tests {
                 state: StreamListingState::Running,
                 node_count: Some(1),
                 failed_because: None,
+                stream_action_under_way: None,
             },
             StreamListing {
                 stream_id: preview.clone(),
@@ -4962,6 +5397,7 @@ mod tests {
                 state: StreamListingState::Running,
                 node_count: Some(1),
                 failed_because: None,
+                stream_action_under_way: None,
             },
         ];
         expected_listing.sort_by(|first, second| first.stream_id.cmp(&second.stream_id));
@@ -5989,5 +6425,333 @@ mod tests {
             refusal_of(runner.set_runtime_unit_uv_executable(PathBuf::from("/elsewhere/uv")));
 
         assert!(refusal.contains("/opt/tatolab/bin/uv"), "{refusal}");
+    }
+
+    /// A uv whose sync waits for its gate file before it puts back `project`'s
+    /// `.venv`, moved aside here, and the gate that releases it.
+    fn a_uv_making_the_venv_once_released(
+        project: &ProjectWithAStubCompile,
+    ) -> (StubRuntimeUnitUv, PathBuf) {
+        let stub_uv = StubRuntimeUnitUv::running("");
+        let venv_uv_makes = stub_uv.directory.path().join("venv-uv-makes");
+        let gate = stub_uv.directory.path().join("released");
+        std::fs::rename(project.path().join(".venv"), &venv_uv_makes)
+            .expect("the venv is moved aside");
+        write_an_executable_script_from_a_child_process(
+            &stub_uv.uv,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\nwhile [ ! -e '{}' ]; do sleep 0.02; done\ncp -R \
+                 '{}' .venv\n",
+                stub_uv.uv_runs.display(),
+                gate.display(),
+                venv_uv_makes.display()
+            ),
+        );
+        (stub_uv, gate)
+    }
+
+    /// How long a test waits for a stream action to reach what it asserts.
+    const STREAM_ACTION_TEST_DEADLINE: Duration = Duration::from_secs(30);
+
+    /// The stream action `action_id` once `reached` holds of it.
+    fn the_stream_action_once(
+        runner: &Runner,
+        action_id: &str,
+        reached: impl Fn(&StreamAction) -> bool,
+    ) -> StreamAction {
+        let deadline = Instant::now() + STREAM_ACTION_TEST_DEADLINE;
+        loop {
+            let action = runner
+                .describe_stream_action(action_id)
+                .expect("the action is held");
+            if reached(&action) {
+                return action;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the action never got there: {action:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The stream action `action_id` once it has finished.
+    fn the_stream_action_once_finished(runner: &Runner, action_id: &str) -> StreamAction {
+        the_stream_action_once(runner, action_id, |action| action.state.is_finished())
+    }
+
+    fn run_project_request_of(project_directory: &Path) -> RunProjectRequest {
+        RunProjectRequest {
+            project_directory: project_directory.to_path_buf(),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_project_answers_its_action_at_once_and_the_action_walks_to_done_with_its_streams() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        project.compile_every_stream_to(&["camera", "preview"], &[]);
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        let project_directory = std::fs::canonicalize(project.path()).unwrap();
+
+        let queued = runner
+            .run_project(run_project_request_of(project.path()))
+            .expect("a run of a project is queued");
+
+        assert_eq!(queued.project_directory, project_directory);
+        let making_the_venv = the_stream_action_once(&runner, &queued.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+        assert_eq!(making_the_venv.state, StreamActionState::InProgress);
+        assert_eq!(making_the_venv.kind, StreamActionKind::Load);
+        let the_project_preparing = runner
+            .list_streams()
+            .into_iter()
+            .find(|listing| listing.state == StreamListingState::Preparing)
+            .expect("the project is listed preparing while its venv is made");
+        assert_eq!(
+            the_project_preparing.stream_id,
+            StreamLocation::of_a_project_that_gave_no_stream(project_directory.clone()).stream_id()
+        );
+        assert_eq!(
+            the_project_preparing.stream_action_under_way,
+            Some(StreamActionWorkingOnAStream {
+                action_id: queued.action_id.clone(),
+                step: Some(StreamActionStep::MakingTheVenv),
+            })
+        );
+        let preparing_before_its_compile = runner
+            .list_project_streams(project.path())
+            .expect("a project with an action under way is listed");
+        assert_eq!(
+            preparing_before_its_compile
+                .stream_action_under_way
+                .map(|it| it.action_id),
+            Some(queued.action_id.clone())
+        );
+        assert_eq!(
+            preparing_before_its_compile.what_the_last_compile_gave,
+            None
+        );
+
+        std::fs::write(&gate, "").unwrap();
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        assert_eq!(done.step, None);
+        assert_eq!(
+            done.streams
+                .iter()
+                .map(|stream| (stream.stream_id.clone(), stream.state))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    project.stream_id_of("camera"),
+                    Some(StreamListingState::Running)
+                ),
+                (
+                    project.stream_id_of("preview"),
+                    Some(StreamListingState::Running)
+                ),
+            ]
+        );
+        assert!(
+            runner
+                .list_streams()
+                .iter()
+                .all(|listing| listing.state == StreamListingState::Running
+                    && listing.stream_action_under_way.is_none()),
+            "{:?}",
+            runner.list_streams()
+        );
+        let listed_once_compiled = runner.list_project_streams(project.path()).unwrap();
+        assert_eq!(listed_once_compiled.stream_action_under_way, None);
+        let Some(WhatTheLastCompileOfTheProjectGave::Streams(streams_compiled)) =
+            listed_once_compiled.what_the_last_compile_gave
+        else {
+            panic!("the compile named the project's streams");
+        };
+        assert_eq!(
+            streams_compiled
+                .iter()
+                .map(|stream| stream.stream_location.stream_function.as_str())
+                .collect::<Vec<_>>(),
+            ["stream:camera", "stream:preview"]
+        );
+        assert_eq!(stub_uv.runs().len(), 1, "{:?}", stub_uv.runs());
+    }
+
+    #[test]
+    #[serial]
+    fn one_projects_actions_run_in_order_while_another_projects_run_beside_them() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let waiting_on_its_venv = ProjectWithAStubCompile::compiling(
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+        );
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&waiting_on_its_venv);
+        stub_uv.handed_to(&runner);
+        let beside_it = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "preview",
+            serde_json::json!([]),
+        ));
+
+        let first = runner
+            .run_project(run_project_request_of(waiting_on_its_venv.path()))
+            .unwrap();
+        let second = runner
+            .run_project(run_project_request_of(waiting_on_its_venv.path()))
+            .unwrap();
+        the_stream_action_once(&runner, &first.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+        let other_project = runner
+            .run_project(run_project_request_of(beside_it.path()))
+            .unwrap();
+        let other_project_done = the_stream_action_once_finished(&runner, &other_project.action_id);
+
+        assert_eq!(
+            other_project_done.state,
+            StreamActionState::Done,
+            "{other_project_done:?}"
+        );
+        assert_eq!(
+            runner
+                .describe_stream_action(&first.action_id)
+                .unwrap()
+                .state,
+            StreamActionState::InProgress,
+            "another project's queue never waits on this one's venv"
+        );
+        assert_eq!(
+            runner
+                .describe_stream_action(&second.action_id)
+                .unwrap()
+                .state,
+            StreamActionState::Queued,
+            "a project's second action waits for its first"
+        );
+        assert_ne!(first.action_id, second.action_id);
+
+        std::fs::write(&gate, "").unwrap();
+        let second_done = the_stream_action_once_finished(&runner, &second.action_id);
+
+        assert_eq!(
+            second_done.state,
+            StreamActionState::Done,
+            "{second_done:?}"
+        );
+        assert_eq!(
+            runner
+                .describe_stream_action(&first.action_id)
+                .unwrap()
+                .state,
+            StreamActionState::Done
+        );
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            [
+                waiting_on_its_venv.stream_id_of("camera"),
+                beside_it.stream_id_of("preview")
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_project_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
+        let runner = a_runner_recording_its_streams_in(None);
+        let no_project = a_temporary_directory_at_owner_only_mode().unwrap();
+
+        for (project_directory, why) in [
+            (no_project.path().join("missing"), "does not exist"),
+            (
+                no_project.path().to_path_buf(),
+                "is not a project: it holds neither stream.py nor pyproject.toml",
+            ),
+        ] {
+            let queued = runner
+                .run_project(run_project_request_of(&project_directory))
+                .expect("a load refuses nothing at the call");
+            let failed = the_stream_action_once_finished(&runner, &queued.action_id);
+
+            assert_eq!(failed.state, StreamActionState::Failed, "{failed:?}");
+            let failed_because = failed.failed_because.unwrap_or_default();
+            assert!(failed_because.contains(why), "{failed_because}");
+        }
+        assert!(
+            refusal_of(runner.run_project(run_project_request_of(Path::new("relative/desk"))))
+                .contains("`project_directory` must be an absolute path"),
+        );
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_queued_run_of_a_stream_py_defining_no_stream_records_the_project_failed() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let no_stream_defined = "`stream.py` defines no @stream function";
+        project.define_no_stream_printing(no_stream_defined);
+
+        let queued = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        let project_stream_id = project.location_of_the_project().stream_id();
+        assert_eq!(
+            done.streams
+                .iter()
+                .map(|stream| (stream.stream_id.as_str(), stream.state))
+                .collect::<Vec<_>>(),
+            [(project_stream_id.as_str(), Some(StreamListingState::Failed))]
+        );
+        assert_eq!(
+            the_record_of(state_directory.path(), &project_stream_id)
+                .failed_because
+                .as_deref(),
+            Some(no_stream_defined)
+        );
+        assert_eq!(
+            runner
+                .list_project_streams(project.path())
+                .unwrap()
+                .what_the_last_compile_gave,
+            Some(WhatTheLastCompileOfTheProjectGave::EntryDefinesNoStream(
+                no_stream_defined.to_string()
+            ))
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn an_action_never_held_and_a_project_never_run_are_refused_naming_what_to_do() {
+        let runner = a_runner_recording_its_streams_in(None);
+        let project = ProjectWithAStubCompile::with_no_venv();
+
+        assert!(
+            refusal_of(runner.describe_stream_action("Rgone-7"))
+                .contains("the stream action `Rgone-7` is not held")
+        );
+        assert!(
+            refusal_of(runner.list_project_streams(project.path()))
+                .contains("is not loaded: `run_project` loads it")
+        );
     }
 }

@@ -17,6 +17,7 @@ mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
+mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 mod reserved_slot_forwarder;
@@ -75,6 +76,12 @@ pub(crate) use open_descriptor_soft_limit::{
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use project_stream_action_queue::{
+    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
+    StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,
+    StreamActionWorkingOnAStream, StreamOfAStreamAction, StreamTheLastCompileOfTheProjectNamed,
+    WhatTheLastCompileOfTheProjectGave,
+};
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests, WhatALoadedStreamIsKeyedBy,
@@ -101,9 +108,9 @@ pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
     LoadedStreamHolding, OutputPortExposureOutcome, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
-    RunStreamRequest, StreamListing, StreamListingState, StreamLoadedOrFailedByARun,
-    StreamReloadAtTheStart, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStateAfterItsRun, StreamStopOutcome,
+    RunProjectRequest, RunStreamRequest, StreamListing, StreamListingState,
+    StreamLoadedOrFailedByARun, StreamReloadAtTheStart, StreamRemoveOutcome, StreamRenameOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStateAfterItsRun, StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
 pub use stream_location_and_id::StreamLocation;

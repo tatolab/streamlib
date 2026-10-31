@@ -14,7 +14,7 @@ renaming or removing an existing field, or changing its type, requires
 bumping `schema_version` and coordinating updates across every
 downstream consumer.
 
-Current schema version: **1**.
+Current schema version: **2**. A reader takes schema-1 records too: they carry no `action`.
 
 ## One line, one event
 
@@ -33,7 +33,8 @@ record once the stream is removed or the runtime restarts.
 
 - Every stream loaded from a project, and every load of it, shares the project's
   one route. A thread carries an entry of that route: the route plus the runtime's
-  id, and the emitting stream's id when a stream emits.
+  id, the emitting stream's id when a stream emits, and the stream action's id
+  when one is entered. A stream an action loads carries that action's id.
 - A thread a stream owns — its processor threads, a helper process's stdout /
   stderr readers and bridge threads (which receive the helper's `{op:"log"}`
   records), its describe readers, its shutdown thread, and the threads and
@@ -49,10 +50,10 @@ record once the stream is removed or the runtime restarts.
   stream, before its venv step and its compile, so the lines `uv sync` and the
   compile write to their standard error (labels `project-venv-uv-sync` and
   `stream-function-compile`) land in the project's log with no `stream`. A
-  directory that holds no `pyproject.toml` is no project, and its run's records
-  go to the runtime's own log.
-- The writer stamps each record from the entry it was emitted in: `runtime_id`
-  and `stream`. A project's records land in that project's log and
+  directory that holds neither `stream.py` nor `pyproject.toml` is no project, and
+  its run's records go to the runtime's own log.
+- The writer stamps each record from the entry it was emitted in: `runtime_id`,
+  `stream` and `action`. A project's records land in that project's log and
   nowhere else, so one project's records never land in another's file.
 - A record no project emitted — the runtime's own, the runtime process's own
   captured stdout / stderr, iceoryx2's — carries no `stream`. When its runtime
@@ -112,7 +113,7 @@ To read a project's log in order: its rotated segments by ascending `seq`, then
 the active segment. `project_log_records_after` in the
 `streamlib-runtime-client-contract` crate does this, and is what the `logs` tool
 answers with: at most `count` records after an opaque cursor, narrowed to one
-`stream` when it is given, and the cursor after the last. A cursor survives a
+`stream` and one `action` when they are given, and the cursor after the last. A cursor survives a
 restart. Where a cursor no longer holds, the page says so
 (`records_no_longer_held`) and resumes:
 
@@ -131,6 +132,7 @@ written, or one that is no JSON record, is not answered.
 | `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
 | `runtime_id` | string | no | The id ([`RuntimeUniqueId`][rs_id]) of the runtime whose project emitted the record. Every record in a project's log and in the runtime's own log carries it; it is empty only on a record no project emitted while its runtime keeps no own log. |
 | `stream` | string | yes (absent) | The id of the loaded stream that emitted the record. Absent on a record of a project's run or start that no stream emitted — its venv step's and its compile's lines — and on a record no project emitted. |
+| `action` | string | yes (absent) | The id of the stream action the record belongs to: the action a run queued, and a stream's records the id of the action that loaded it. Absent on the runtime's own log, on a stream no action loaded, and on a schema-1 record. |
 | `source` | enum | no | `"rust"` \| `"python"`, the [`Source`][rs] enum. Rust events come from the `tracing` pipeline — the runtime process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
 | `message` | string | no | Primary human-readable message. May be empty for events that carry only structured fields. |
@@ -246,7 +248,7 @@ type.
 ## Example
 
 ```json
-{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}
+{"schema_version":2,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","action":"Rabc123-4","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}
 ```
 
 Parses cleanly via:

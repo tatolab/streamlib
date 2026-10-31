@@ -396,6 +396,24 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .every_loaded_stream_and_the_output_ports_it_exposes()
     }
+    fn run_project(
+        &self,
+        request: streamlib::sdk::runtime::RunProjectRequest,
+    ) -> Result<streamlib::sdk::runtime::StreamActionQueued> {
+        self.engine.run_project(request)
+    }
+    fn describe_stream_action(
+        &self,
+        action_id: &str,
+    ) -> Result<streamlib::sdk::runtime::StreamAction> {
+        self.engine.describe_stream_action(action_id)
+    }
+    fn list_project_streams(
+        &self,
+        project_directory: &std::path::Path,
+    ) -> Result<streamlib::sdk::runtime::ProjectStreamsListing> {
+        self.engine.list_project_streams(project_directory)
+    }
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
         let stream_id = request
             .display_name
@@ -709,9 +727,9 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
         })
     };
     let mut expected_streams = vec![
-        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "failed_because": null }),
-        json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "failed_because": null }),
-        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "running", "node_count": null, "failed_because": null }),
+        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "failed_because": null, "action": null, "step": null }),
+        json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "failed_because": null, "action": null, "step": null }),
+        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "running", "node_count": null, "failed_because": null, "action": null, "step": null }),
     ];
     expected_streams.sort_by_key(|listed| listed["stream"].as_str().unwrap().to_string());
     assert_eq!(listed, json!({ "streams": expected_streams }));
@@ -1160,6 +1178,151 @@ async fn a_run_whose_entry_does_not_import_answers_the_project_failed_under_its_
     assert_eq!(stream["state"], "failed");
     assert_eq!(stream["failed_because"], "SyntaxError: invalid syntax");
     assert_eq!(stream["location"]["stream_function"], "");
+}
+
+/// `describe_stream_action`'s answer for `action` once its `state` is `done` or `failed`.
+async fn the_stream_action_once_finished(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    action: &str,
+) -> Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let described = tool_answer(
+            &tool_call_result(
+                Arc::clone(operations_on_the_loaded_streams),
+                "describe_stream_action",
+                json!({ "action": action }),
+            )
+            .await,
+        )
+        .expect("the action is held");
+        if described["state"] == "done" || described["state"] == "failed" {
+            return described;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the action never finished: {described}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// `run_project` answers its action at once; the action is followed to `done` with the
+/// project failed under its folder, and `list_project_streams` says why its entry did not
+/// import.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_project_queues_a_run_followed_by_describe_stream_action_and_list_project_streams() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project =
+        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    project.fail_to_import_printing("SyntaxError: invalid syntax");
+    std::fs::write(project.path().join("stream.py"), "").unwrap();
+    let project_directory = std::fs::canonicalize(project.path()).unwrap();
+    let project_stream_id =
+        StreamLocation::of_a_project_that_gave_no_stream(project_directory.clone()).stream_id();
+
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "run_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a run of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    assert_eq!(queued["project_directory"], json!(project_directory));
+
+    let finished = the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+
+    assert_eq!(
+        finished,
+        json!({
+            "action": action,
+            "project_directory": project_directory,
+            "kind": "load",
+            "state": "done",
+            "step": null,
+            "streams": [{
+                "stream": project_stream_id,
+                "display_name": project_directory.file_name().unwrap().to_string_lossy(),
+                "state": "failed",
+            }],
+            "failed_because": null,
+        })
+    );
+    let project_streams = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_project_streams",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a project run once is listed");
+    assert_eq!(
+        project_streams,
+        json!({
+            "project_directory": project_directory,
+            "action": null,
+            "step": null,
+            "streams": [],
+            "import_failed_because": "SyntaxError: invalid syntax",
+        })
+    );
+}
+
+/// An action the runtime never queued, and a project it never ran, are refused saying so.
+#[tokio::test(flavor = "multi_thread")]
+async fn describe_stream_action_and_list_project_streams_refuse_what_the_runtime_never_held() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project =
+        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+
+    let never_queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "describe_stream_action",
+            json!({ "action": "Rgone-7" }),
+        )
+        .await,
+    )
+    .unwrap_err();
+    assert!(
+        never_queued.contains("the stream action `Rgone-7` is not held"),
+        "{never_queued}"
+    );
+    let never_run = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_project_streams",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .unwrap_err();
+    assert!(
+        never_run.contains("is not loaded: `run_project` loads it"),
+        "{never_run}"
+    );
+    let relative = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "run_project",
+            json!({ "project_directory": "desk" }),
+        )
+        .await,
+    )
+    .unwrap_err();
+    assert!(
+        relative.contains("`project_directory` must be an absolute path"),
+        "{relative}"
+    );
 }
 
 // ============================================================================
