@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.62.0](https://github.com/tatolab/streamlib/compare/v0.61.0...v0.62.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** one log per project — every record its streams and runs write goes to the project's log, and logs takes the project ([#2997](https://github.com/tatolab/streamlib/issues/2997))
+
+### Features
+
+* **runtime:** one log per project — every record its streams and runs write goes to the project's log, and logs takes the project ([#2997](https://github.com/tatolab/streamlib/issues/2997)) ([e5b5d96](https://github.com/tatolab/streamlib/commit/e5b5d96669be52fc2fe1b4f06d8330ce4446d12b))
+
 ## [0.61.0](https://github.com/tatolab/streamlib/compare/v0.60.0...v0.61.0) (2026-10-31)
 
 
