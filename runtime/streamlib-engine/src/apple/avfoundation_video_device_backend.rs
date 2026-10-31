@@ -58,9 +58,9 @@ use crate::core::context::{
     refusal_for_a_named_camera_that_is_not_attached,
 };
 use crate::core::logging::{
-    LoadedStreamLogRoute, carrying_this_threads_loaded_stream_log_route,
-    run_in_the_loaded_stream_log_route_when_there_is_one,
-    the_loaded_stream_log_route_of_this_thread,
+    ProjectLogRouteEntry, carrying_this_threads_project_log_route_entry,
+    run_in_the_project_log_route_entry_when_there_is_one,
+    the_project_log_route_entry_of_this_thread,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
@@ -564,8 +564,8 @@ impl AvFoundationCaptureSessionControl {
             processor_id_of_the_capturing_node: self.processor_id_of_the_capturing_node.clone(),
             capture_instant_resolver: Arc::clone(&self.capture_instant_resolver),
             capture_progress: Mutex::new(AvFoundationCaptureProgress::default()),
-            loaded_stream_log_route_of_the_starting_thread:
-                the_loaded_stream_log_route_of_this_thread(),
+            project_log_route_entry_of_the_starting_thread:
+                the_project_log_route_entry_of_this_thread(),
         });
         let sample_buffer_queue = DispatchQueue::new(
             &format!(
@@ -587,7 +587,7 @@ impl AvFoundationCaptureSessionControl {
         };
         let configured_session_slot = Arc::clone(&configured_session);
         self.session_control_queue
-            .exec_async(carrying_this_threads_loaded_stream_log_route(
+            .exec_async(carrying_this_threads_project_log_route_entry(
                 move || match session_request.configure_and_start() {
                     Ok(configured) => *configured_session_slot.lock() = configured,
                     Err(start_error) => {
@@ -791,8 +791,8 @@ fn observe_the_ways_a_session_ends(
     let observe = |name: &NSNotificationName, object: &AnyObject, what_happened: &'static str| {
         let failure_recorder = failure_recorder.clone();
         let camera_name = camera_name.to_owned();
-        let loaded_stream_log_route_of_the_observing_thread =
-            the_loaded_stream_log_route_of_this_thread();
+        let project_log_route_entry_of_the_observing_thread =
+            the_project_log_route_entry_of_this_thread();
         let on_notification = block2::RcBlock::new(move |notification: NonNull<NSNotification>| {
             // SAFETY: NSNotificationCenter hands the block a live notification.
             let notification = unsafe { notification.as_ref() };
@@ -800,8 +800,8 @@ fn observe_the_ways_a_session_ends(
                 .userInfo()
                 .map(|user_info| user_info.description().to_string())
                 .unwrap_or_default();
-            run_in_the_loaded_stream_log_route_when_there_is_one(
-                loaded_stream_log_route_of_the_observing_thread.as_ref(),
+            run_in_the_project_log_route_entry_when_there_is_one(
+                project_log_route_entry_of_the_observing_thread.as_ref(),
                 || {
                     tracing::error!(
                         camera = %camera_name,
@@ -942,15 +942,15 @@ struct AvFoundationFrameDelivery {
     capture_progress: Mutex<AvFoundationCaptureProgress>,
     /// The route of the thread that started the delivery, which each frame's
     /// delivery runs in.
-    loaded_stream_log_route_of_the_starting_thread: Option<Arc<LoadedStreamLogRoute>>,
+    project_log_route_entry_of_the_starting_thread: Option<Arc<ProjectLogRouteEntry>>,
 }
 
 impl AvFoundationFrameDelivery {
     /// Land one sample buffer in a pooled pixel buffer and hand it off. Runs
     /// on the session's serial sample-buffer queue.
     fn deliver(&self, sample_buffer: &CMSampleBuffer) {
-        run_in_the_loaded_stream_log_route_when_there_is_one(
-            self.loaded_stream_log_route_of_the_starting_thread.as_ref(),
+        run_in_the_project_log_route_entry_when_there_is_one(
+            self.project_log_route_entry_of_the_starting_thread.as_ref(),
             || self.deliver_in_the_starting_threads_log_route(sample_buffer),
         );
     }

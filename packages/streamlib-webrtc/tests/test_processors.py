@@ -136,7 +136,7 @@ TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
 COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_entry")
 
 #: The line `tatolabd` logs as it begins starting a loaded stream.
-STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_name>[^`]+)`")
+STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
 
 #: The line `tatolabd` logs as a stream's unload removes the processors its load added.
 STREAM_UNLOAD_REMOVED_PROCESSORS_LINE = re.compile(
@@ -336,17 +336,41 @@ def write_a_project_whose_compile_prints(
 ) -> None:
     """A project whose `.venv/bin/python` hands the runtime `graph` as its compiled stream.
 
-    The compile entry's invocation prints `graph` in the compile document,
+    The compile entry's invocation prints `graph` in the compile document — as
+    the one stream of an every-stream compile when one is asked for —
     naming this tests directory as the project its Python nodes are described
     and run from; every other invocation execs this test's interpreter, which
     holds the extension.
     """
     compile_document_file = project_directory / "compile-document.json"
+    every_stream_compile_document_file = project_directory / "every-stream-compile-document.json"
     venv_interpreter = project_directory / ".venv" / "bin" / "python"
     venv_interpreter.parent.mkdir(parents=True)
+    described_project_directory = str(Path(__file__).resolve().parent)
+    stream_function = f"stream:{graph.get('stream', 'main')}"
     compile_document_file.write_text(
         json.dumps(
-            {"stream_graph": graph, "project_directory": str(Path(__file__).resolve().parent)}
+            {
+                "stream_graph": graph,
+                "project_directory": described_project_directory,
+                "stream_function": stream_function,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    every_stream_compile_document_file.write_text(
+        json.dumps(
+            {
+                "project_directory": described_project_directory,
+                "streams": [
+                    {
+                        "stream_function": stream_function,
+                        "description": None,
+                        "stream_graph": graph,
+                    }
+                ],
+            }
         )
         + "\n",
         encoding="utf-8",
@@ -355,7 +379,10 @@ def write_a_project_whose_compile_prints(
     venv_interpreter.write_text(
         "#!/bin/sh\n"
         f'if [ "$1" = {first} ] && [ "$2" = {second} ] && [ "$3" = {third} ]; then\n'
-        f"    exec cat {shlex.quote(str(compile_document_file))}\n"
+        '    case " $* " in\n'
+        f"    *' --every-stream '*) exec cat {shlex.quote(str(every_stream_compile_document_file))} ;;\n"
+        f"    *) exec cat {shlex.quote(str(compile_document_file))} ;;\n"
+        "    esac\n"
         "fi\n"
         f'exec {shlex.quote(sys.executable)} "$@"\n',
         encoding="utf-8",
@@ -400,7 +427,8 @@ def node_names_loaded_by_tatolabd(
 
     def what_the_run_and_the_runtime_said() -> str:
         return (
-            f"`tatolab run` exited {tatolab_run.returncode}:\n{tatolab_run.stderr[-4000:]}\n"
+            f"`tatolab run` exited {tatolab_run.returncode}:\n{tatolab_run.stdout[-4000:]}"
+            f"{tatolab_run.stderr[-4000:]}\n"
             f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
         )
 
@@ -419,8 +447,8 @@ def node_names_loaded_by_tatolabd(
 
     if start_began is None:
         pytest.fail("tatolabd did not load the stream:\n" + what_the_run_and_the_runtime_said())
-    assert start_began.group("stream_name") == stream_name, what_the_run_and_the_runtime_said()
-    assert tatolab_run.returncode == 1 and NO_VULKAN_DRIVER_REFUSAL in tatolab_run.stderr, (
+    assert f"-{stream_name}-" in start_began.group("stream_id"), what_the_run_and_the_runtime_said()
+    assert tatolab_run.returncode == 1 and NO_VULKAN_DRIVER_REFUSAL in tatolab_run.stdout, (
         "the loaded stream was to be refused at its start for the missing Vulkan driver; "
         + what_the_run_and_the_runtime_said()
     )

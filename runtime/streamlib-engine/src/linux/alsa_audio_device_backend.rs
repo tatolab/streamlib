@@ -1164,7 +1164,7 @@ fn spawn_playback_writer_thread(inputs: PlaybackWriterThreadInputs) -> Result<Jo
     std::thread::Builder::new()
         .name(format!("streamlib-alsa-playback-{}", inputs.device_name))
         .spawn(
-            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+            crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 run_playback_writer_thread(inputs)
             }),
         )
@@ -1522,7 +1522,7 @@ fn spawn_capture_reader_thread(inputs: CaptureReaderThreadInputs) -> Result<Join
     std::thread::Builder::new()
         .name(format!("streamlib-alsa-capture-{}", inputs.device_name))
         .spawn(
-            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+            crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 run_capture_reader_thread(inputs)
             }),
         )

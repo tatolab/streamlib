@@ -16,7 +16,7 @@
 #![allow(clippy::disallowed_macros)]
 
 use streamlib_engine::logging::{
-    LoadedStreamLogRoute, LoggingTunables, StreamlibLoggingConfig, init_for_tests,
+    LoggingTunables, ProjectLogRouteEntry, StreamlibLoggingConfig, init_for_tests,
 };
 
 fn raw_write_stdout(bytes: &[u8]) {
@@ -69,7 +69,8 @@ fn main() {
     };
     let guard = init_for_tests(config).expect("install logging pathway");
     // The burst lands in a stream's log, as a processor's records do.
-    let route = LoadedStreamLogRoute::open_in_project_directory("RstraceEmit", "main", &jsonl_path);
+    let route =
+        ProjectLogRouteEntry::for_a_stream_of_the_project_in(&jsonl_path, "RstraceEmit", "main");
     let entered = route.enter_on_this_thread();
 
     // Unbuffered sentinels straddle the 1000-event burst. Between these

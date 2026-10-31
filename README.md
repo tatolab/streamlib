@@ -341,9 +341,9 @@ tatolab relay set RELAY_ID [KEY=VALUE ...] [--secret FIELD (--from-file PATH | -
 tatolab relay rm RELAY_ID
 
 tatolab graph [--stream STREAM]
-tatolab logs [--stream STREAM | RUNTIME_ID-STREAM] [-f | --follow] [--processor ID] [--pipeline ID]
-             [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
-tatolab logs --list
+tatolab logs [--dir DIR] [--stream STREAM] [--action ID] [-f | --follow] [--processor ID]
+             [--pipeline ID] [--rhi] [--level trace|debug|info|warn|error] [--source rust|python]
+             [--intercepted-only]
 tatolab mcp
 
 tatolab enable-virtual-camera [--print]
@@ -359,7 +359,7 @@ tatolab enable-virtual-camera [--print]
   and running the same project and function again replaces it under the same id — a failed one
   included. `TARGET` is `<file>.py[:<function>]` or
   `<module>:<function>`. The id it prints is the one the other verbs take.
-- **`dev`** is `run`, then the stream's records followed, run again on every saved edit to a `.py`
+- **`dev`** is `run`, then the project's log followed from where it ended, run again on every saved edit to a `.py`
   file or `pyproject.toml` in the project; the runtime replaces the running stream, and an edit
   whose code fails unloads it and records it failed, its traceback printed, until the next save. Ctrl-C ends `dev` and leaves the stream running. When the runtime goes away, `dev`
   says so, waits for it to load the stream again from its record, and follows it again.
@@ -393,13 +393,14 @@ tatolab enable-virtual-camera [--print]
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
   trailing mDNS `.local`, cast to lowercase URL-safe.
-- **`logs`** reads a loaded stream's records from the runtime — `--stream`'s, or the one loaded
-  from the working directory — rendered the way the runtime prints them; `--follow` keeps reading
-  as records land until Ctrl-C, which leaves the stream running, and ends with exit 1 naming the
-  runtime's log when the runtime goes away. `--list` and `RUNTIME_ID-STREAM` read a stream's JSONL log on disk instead. Run
-  them in the stream's project directory, where the runtime writes each stream's log: `--list`
-  shows the stream logs there, each named `<runtime_id>-<stream>`, and `RUNTIME_ID-STREAM` renders
-  one. The other flags filter what either shows.
+- **`logs`** reads a project's log — `--dir`'s, or the working directory's — through the runtime,
+  oldest record first, rendered the way the runtime prints them: every record its streams, their
+  venv step and their compile wrote, kept in `<project>/.streamlib/logs/project.jsonl` across
+  restarts. `--stream` narrows it to one stream, by its id or a display name only it holds, and a
+  removed stream's id still reads its records; `--action` narrows it to one stream action.
+  `--follow` keeps reading as records land until Ctrl-C, which leaves every stream running, and
+  ends with exit 1 naming the runtime's log when the runtime goes away. The other flags filter
+  what it shows.
 - **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
 - **`enable-virtual-camera`** installs, once, the permission a `VirtualCameraSink` needs for its
   loopback camera: the `v4l2loopback` module loaded with no devices, and its control node handed to
@@ -706,9 +707,8 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
 - **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,
   and frames begin once you allow it. macOS asks on behalf of the application that started the
   runtime — your terminal — so a refusal names that application and the Camera setting to change.
-- **`tatolab logs --list` shows nothing** — the runtime writes each stream's log under that stream's
-  project directory; run `tatolab logs` there, or read a loaded stream's records with
-  `tatolab logs --stream`.
+- **`tatolab logs` shows nothing** — the runtime writes a project's log under that project's
+  directory; run `tatolab logs` there, or name it with `--dir`.
 - **A `VirtualCameraSink` cannot create its loopback camera** — run `tatolab enable-virtual-camera`
   once. It needs the `v4l2loopback` module for your kernel (`v4l2loopback-dkms` on Debian and
   Ubuntu). Until then the sink's default door registers a PipeWire camera instead.

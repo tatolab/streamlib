@@ -13,8 +13,8 @@ use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDire
 use crate::local_api_mcp_tool_client::{
     LocalApiMcpToolClientFailure, LocalApiMcpToolClientFailureKind,
 };
+use crate::project_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
 use crate::stream_actions_on_the_runtime::tool_result_from;
-use crate::stream_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
 
 /// The runtime's own log folder, as the runtime described it while it answered.
 #[derive(Debug, Clone, PartialEq, Eq)]

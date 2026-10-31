@@ -1057,3 +1057,85 @@ def test_a_stream_py_defining_no_stream_is_a_failed_project_until_a_run_defines_
     [listed] = tatolabd.local_api_client().list_streams()
     assert listed["stream"] == stream_id_of_the_project(app_directory), listed
     assert listed["state"] == "running", listed
+
+
+STREAM_PY_WITH_TWO_STREAMS = (
+    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def camera(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def preview(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
+)
+
+
+def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by_project(
+    tmp_path: Path,
+    make_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """`logs` reads a project's one log by its directory: a sync uv refuses lands
+    there with no `stream`, and two streams of one project write one
+    `project.jsonl`, each record its stream's, read by stream after `rm` too."""
+    tatolabd = start_tatolabd()
+    client = tatolabd.local_api_client()
+
+    unsyncable_directory = tmp_path / "unsyncable"
+    unsyncable_directory.mkdir()
+    (unsyncable_directory / "pyproject.toml").write_text("this is [not toml\n", encoding="utf-8")
+    (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE, encoding="utf-8")
+    [unsynced] = client.call_tool(
+        "run_stream", {"project_directory": str(unsyncable_directory.resolve())}
+    )["streams"]
+    assert unsynced["state"] == "failed", unsynced
+    unsyncable_page = client.call_tool(
+        "logs", {"project_directory": str(unsyncable_directory.resolve())}
+    )
+    uvs_lines = [
+        record
+        for record in unsyncable_page["records"]
+        if "pyproject.toml" in record["message"] and "stream" not in record
+    ]
+    assert uvs_lines, unsyncable_page
+    assert all(record["runtime_id"] for record in uvs_lines), uvs_lines
+
+    app_directory = make_tatolab_project(
+        {
+            "pyproject.toml": '[project]\nname = "two-streams"\nversion = "0.1.0"\n',
+            "stream.py": STREAM_PY_WITH_TWO_STREAMS,
+        }
+    )
+    project_directory = str(app_directory.resolve())
+    running_ids = set()
+    for stream_function in ("stream:camera", "stream:preview"):
+        [loaded] = client.call_tool(
+            "run_stream",
+            {"project_directory": project_directory, "stream_function": stream_function},
+        )["streams"]
+        assert loaded["state"] == "running", loaded
+        running_ids.add(loaded["stream"])
+    assert (app_directory / ".streamlib" / "logs" / "project.jsonl").is_file()
+
+    every_record = client.call_tool("logs", {"project_directory": project_directory})["records"]
+    assert {record.get("stream") for record in every_record} >= running_ids, every_record
+
+    camera_id = stream_id_of_the_location(app_directory.resolve(), "stream:camera")
+    camera_records_while_loaded = client.call_tool(
+        "logs", {"project_directory": project_directory, "stream": camera_id}
+    )["records"]
+    assert camera_records_while_loaded, every_record
+    assert all(record["stream"] == camera_id for record in camera_records_while_loaded)
+
+    client.call_tool("remove_stream", {"stream": camera_id})
+    camera_records_after_rm = client.call_tool(
+        "logs",
+        {"project_directory": project_directory, "stream": camera_id, "count": 4096},
+    )["records"]
+    assert camera_records_after_rm[: len(camera_records_while_loaded)] == (
+        camera_records_while_loaded
+    )

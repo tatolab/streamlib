@@ -1,23 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab logs` run as a user runs it: its flags, the log directory it reads under
-//! `STREAMLIB_HOME`, what it prints on stdout and on stderr, how Ctrl-C ends a follow, and how it
-//! exits. Each reading scenario is the in-crate tests'. `--stream` reads a stub local API served
-//! at an isolated machine's fixed socket, which a build without the test feature can isolate on
-//! Linux alone.
+//! `tatolab logs` run as a user runs it: its flags, the project log it reads through a stub local
+//! API served at an isolated machine's fixed socket, what it prints on stdout and on stderr, how
+//! Ctrl-C ends a follow, and how it exits. A build without the test feature can isolate the
+//! machine on Linux alone.
 
 mod common;
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use common::runtime_log_line_fixtures::{
-    a_log_line_with_message, a_log_line_with_message_at_level, append_to_log_file,
-};
 use common::tatolab_binary_run::{
     run_tatolab_reading_no_runtime_directory, standard_error_text, standard_output_text,
 };
@@ -25,64 +20,22 @@ use common::tatolab_binary_run::{
 /// How long a follow assertion waits before failing rather than hanging.
 const FOLLOW_LINE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A `STREAMLIB_HOME` of a test's own, and the log directory a runtime writes under it.
-struct IsolatedStreamlibHome {
-    streamlib_home: tempfile::TempDir,
-}
-
-impl IsolatedStreamlibHome {
-    fn new() -> Self {
-        Self {
-            streamlib_home: tempfile::tempdir().unwrap(),
-        }
-    }
-
-    fn runtime_log_directory(&self) -> PathBuf {
-        self.streamlib_home.path().join(".streamlib").join("logs")
-    }
-
-    fn write_log_file(&self, file_name: &str, log_lines: &str) -> PathBuf {
-        let runtime_log_directory = self.runtime_log_directory();
-        std::fs::create_dir_all(&runtime_log_directory).unwrap();
-        let log_file_path = runtime_log_directory.join(file_name);
-        std::fs::write(&log_file_path, log_lines).unwrap();
-        log_file_path
-    }
-
-    fn tatolab_command(&self, tatolab_arguments: &[&str]) -> Command {
-        let mut tatolab_command = Command::new(env!("CARGO_BIN_EXE_tatolab"));
-        tatolab_command
-            .args(tatolab_arguments)
-            .env("STREAMLIB_HOME", self.streamlib_home.path())
-            .stdin(Stdio::null());
-        tatolab_command
-    }
-
-    fn run_tatolab(&self, tatolab_arguments: &[&str]) -> Output {
-        self.tatolab_command(tatolab_arguments).output().unwrap()
-    }
-}
-
 /// A `tatolab logs --follow` running in the background, its output read line by line.
 struct FollowingTatolab {
     tatolab_process: Child,
     standard_output_lines: Receiver<String>,
-    standard_error_lines: Receiver<String>,
 }
 
 impl FollowingTatolab {
     fn spawn(mut tatolab_command: Command) -> Self {
         let mut tatolab_process = tatolab_command
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
         Self {
             standard_output_lines: lines_read_in_the_background(
                 tatolab_process.stdout.take().unwrap(),
-            ),
-            standard_error_lines: lines_read_in_the_background(
-                tatolab_process.stderr.take().unwrap(),
             ),
             tatolab_process,
         }
@@ -93,14 +46,6 @@ impl FollowingTatolab {
             .recv_timeout(FOLLOW_LINE_TIMEOUT)
             .unwrap_or_else(|_| {
                 panic!("expected {awaited} on stdout within {FOLLOW_LINE_TIMEOUT:?}")
-            })
-    }
-
-    fn next_standard_error_line(&self, awaited: &str) -> String {
-        self.standard_error_lines
-            .recv_timeout(FOLLOW_LINE_TIMEOUT)
-            .unwrap_or_else(|_| {
-                panic!("expected {awaited} on stderr within {FOLLOW_LINE_TIMEOUT:?}")
             })
     }
 
@@ -144,22 +89,19 @@ fn rendered_line(message: &str, level_column: &str) -> String {
 }
 
 #[test]
-fn the_logs_help_names_both_modes_and_every_flag() {
+fn the_logs_help_names_the_project_and_every_flag() {
     let help_text = standard_output_text(&run_tatolab_reading_no_runtime_directory(&[
         "logs", "--help",
     ]));
 
     for named in [
-        "[RUNTIME_ID-STREAM]",
-        "exactly as the runtime mirrored it",
-        "as the runtime holds them",
-        "Omit it to read a loaded stream's records from the runtime",
-        "the one loaded from the working directory",
-        "--list",
+        "--dir <DIR>",
+        "default: CWD",
         "--stream <STREAM>",
+        "every record of the project",
+        "--action <ID>",
         "-f, --follow",
         "like `tail -F`",
-        "by sequence number",
         "--processor <ID>",
         "--pipeline <ID>",
         "--rhi",
@@ -171,8 +113,10 @@ fn the_logs_help_names_both_modes_and_every_flag() {
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
     }
+    for removed in ["RUNTIME_ID-STREAM", "--list"] {
+        assert!(!help_text.contains(removed), "{removed}:\n{help_text}");
+    }
     assert!(!help_text.contains("StreamLib"), "{help_text}");
-    assert!(!help_text.contains("node's"), "{help_text}");
 }
 
 /// Control is reachable only through a runtime's local API socket, so `logs` dials no address.
@@ -191,7 +135,7 @@ fn logs_takes_no_network_address_for_the_control_plane() {
 
 #[test]
 fn an_unknown_level_is_a_usage_error_naming_the_levels() {
-    let refused = run_tatolab_reading_no_runtime_directory(&["logs", "Rabc", "--level", "fatal"]);
+    let refused = run_tatolab_reading_no_runtime_directory(&["logs", "--level", "fatal"]);
 
     assert_eq!(refused.status.code(), Some(2));
     assert!(
@@ -202,172 +146,12 @@ fn an_unknown_level_is_a_usage_error_naming_the_levels() {
 }
 
 #[test]
-fn a_runtime_with_no_log_file_is_refused_naming_list() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
+fn a_file_name_or_list_is_a_usage_error() {
+    for removed in [&["Rabc-camera"][..], &["--list"]] {
+        let refused = run_tatolab_reading_no_runtime_directory(&[&["logs"][..], removed].concat());
 
-    let refused = isolated_streamlib_home.run_tatolab(&["logs", "Rnone"]);
-
-    assert_eq!(refused.status.code(), Some(1));
-    assert_eq!(
-        standard_error_text(&refused),
-        format!(
-            "error: no stream log `Rnone` in {}.\nA runtime logs per loaded stream, as \
-             `<runtime_id>-<stream>`; `tatolab logs --list` names each one.\n",
-            isolated_streamlib_home.runtime_log_directory().display()
-        )
-    );
-    assert_eq!(standard_output_text(&refused), "");
-}
-
-#[test]
-fn list_prints_every_runtime_newest_started_first_summing_its_segments() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    isolated_streamlib_home.write_log_file("Rolder-1700000000000.jsonl", &"x".repeat(512));
-    isolated_streamlib_home.write_log_file("camera-2-1786136667573.jsonl", &"x".repeat(1024));
-    isolated_streamlib_home.write_log_file("camera-2-1786136667573.1.jsonl", &"x".repeat(1024));
-
-    let listed = isolated_streamlib_home.run_tatolab(&["logs", "--list"]);
-
-    assert!(listed.status.success(), "{}", standard_error_text(&listed));
-    assert_eq!(
-        standard_output_text(&listed),
-        [
-            "RUNTIME_ID-STREAM         STARTED_AT                SIZE\n",
-            "camera-2                  2026-08-07T21:04:27Z      2.0 KiB\n",
-            "Rolder                    2023-11-14T22:13:20Z      512 B\n",
-        ]
-        .concat()
-    );
-}
-
-#[test]
-fn reading_a_runtime_renders_its_records_as_the_runtime_mirrored_them() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    isolated_streamlib_home.write_log_file(
-        "Rabc-1000.jsonl",
-        &[
-            a_log_line_with_message("started"),
-            a_log_line_with_message_at_level("slow frame", "warn"),
-        ]
-        .concat(),
-    );
-    isolated_streamlib_home.write_log_file(
-        "Rabc-1000.1.jsonl",
-        &a_log_line_with_message_at_level("rotated", "debug"),
-    );
-
-    let everything_read = isolated_streamlib_home.run_tatolab(&["logs", "Rabc"]);
-    let warnings_read = isolated_streamlib_home.run_tatolab(&["logs", "Rabc", "--level", "warn"]);
-
-    assert!(
-        everything_read.status.success(),
-        "{}",
-        standard_error_text(&everything_read)
-    );
-    assert_eq!(
-        standard_output_text(&everything_read),
-        format!(
-            "{}\n{}\n{}\n",
-            rendered_line("rotated", "DEBUG"),
-            rendered_line("started", " INFO"),
-            rendered_line("slow frame", " WARN")
-        )
-    );
-    assert_eq!(standard_error_text(&everything_read), "");
-    assert_eq!(
-        standard_output_text(&warnings_read),
-        format!("{}\n", rendered_line("slow frame", " WARN"))
-    );
-}
-
-#[test]
-fn a_malformed_line_is_warned_about_on_stderr_and_the_read_carries_on() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    isolated_streamlib_home.write_log_file(
-        "Rabc-1000.jsonl",
-        &[
-            a_log_line_with_message("before"),
-            "{ truncated\n".to_owned(),
-            a_log_line_with_message("after"),
-        ]
-        .concat(),
-    );
-
-    let read = isolated_streamlib_home.run_tatolab(&["logs", "Rabc"]);
-
-    assert!(read.status.success(), "{}", standard_error_text(&read));
-    assert_eq!(
-        standard_output_text(&read),
-        format!(
-            "{}\n{}\n",
-            rendered_line("before", " INFO"),
-            rendered_line("after", " INFO")
-        )
-    );
-    assert!(
-        standard_error_text(&read).starts_with("warning: skipping malformed JSONL line: "),
-        "{}",
-        standard_error_text(&read)
-    );
-}
-
-/// Ctrl-C out of `--follow` is how it ends, not a failure: exit 0, not 130.
-#[test]
-fn follow_reads_appended_and_rotated_records_until_ctrl_c_ends_it_with_exit_zero() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    let active_segment_path = isolated_streamlib_home
-        .write_log_file("Rabc-1000.jsonl", &a_log_line_with_message("first"));
-    let following_tatolab = FollowingTatolab::spawn(
-        isolated_streamlib_home.tatolab_command(&["logs", "Rabc", "--follow"]),
-    );
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the drained record"),
-        rendered_line("first", " INFO")
-    );
-
-    append_to_log_file(&active_segment_path, &a_log_line_with_message("second"));
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the appended record"),
-        rendered_line("second", " INFO")
-    );
-
-    std::fs::rename(
-        &active_segment_path,
-        isolated_streamlib_home
-            .runtime_log_directory()
-            .join("Rabc-1000.1.jsonl"),
-    )
-    .unwrap();
-    std::fs::write(&active_segment_path, a_log_line_with_message("third")).unwrap();
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the record after the rotation"),
-        rendered_line("third", " INFO")
-    );
-
-    assert_eq!(following_tatolab.interrupt_and_wait().code(), Some(0));
-}
-
-#[test]
-fn follow_before_the_log_file_exists_waits_with_its_note_and_ctrl_c_ends_the_wait() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    let following_tatolab =
-        FollowingTatolab::spawn(isolated_streamlib_home.tatolab_command(&["logs", "Rlater", "-f"]));
-    assert_eq!(
-        following_tatolab.next_standard_error_line("the waiting note"),
-        "note: no stream log 'Rlater' yet, waiting in --follow mode..."
-    );
-
-    isolated_streamlib_home.write_log_file("Rlater-1000.jsonl", &a_log_line_with_message("booted"));
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the first record of the new file"),
-        rendered_line("booted", " INFO")
-    );
-    assert_eq!(following_tatolab.interrupt_and_wait().code(), Some(0));
-
-    let still_waiting =
-        FollowingTatolab::spawn(isolated_streamlib_home.tatolab_command(&["logs", "Rnever", "-f"]));
-    still_waiting.next_standard_error_line("the waiting note");
-    assert_eq!(still_waiting.interrupt_and_wait().code(), Some(0));
+        assert_eq!(refused.status.code(), Some(2), "{removed:?}");
+    }
 }
 
 #[cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
@@ -382,7 +166,7 @@ mod against_an_isolated_machine {
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
     use super::{FollowingTatolab, rendered_line};
 
-    /// The id of the one stream the stub runtime lists, shown as `camera`.
+    /// The id of the stream the stub runtime lists as `camera`.
     const DESK_CAMERA_STREAM_ID: &str = "desk-camera-0a1b2c";
 
     fn records_saying(messages: &[&str]) -> Vec<serde_json::Value> {
@@ -392,8 +176,8 @@ mod against_an_isolated_machine {
             .collect()
     }
 
-    /// A runtime holding one stream, shown as `camera` and loaded from `project_directory`,
-    /// whose `logs` pages `records` two at a time.
+    /// A runtime listing `camera` from `project_directory`, whose `logs` pages `records` of the
+    /// project log two at a time.
     fn a_runtime_holding_the_desk_camera_paging(
         records: Vec<serde_json::Value>,
         project_directory: &std::path::Path,
@@ -402,6 +186,7 @@ mod against_an_isolated_machine {
             stream_log_records: Some(StubStreamLogRecords {
                 records,
                 page_size: 2,
+                first_written_by_a_run: false,
             }),
             tool_answers_by_name: std::collections::HashMap::from([(
                 "list_streams".to_owned(),
@@ -420,16 +205,22 @@ mod against_an_isolated_machine {
     }
 
     #[test]
-    fn logs_of_a_stream_reads_its_records_from_the_runtime_page_by_page_to_the_newest() {
+    fn logs_reads_the_working_directorys_project_page_by_page_to_the_newest() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let canonical_project_directory = project_directory.path().canonicalize().unwrap();
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
             a_runtime_holding_the_desk_camera_paging(
                 records_saying(&["started", "running", "slowing"]),
-                std::path::Path::new("/srv/desk"),
+                &canonical_project_directory,
             ),
         );
 
-        let read = isolated_machine_directories.run_tatolab(&["logs", "--stream", "camera"]);
+        let read = isolated_machine_directories
+            .tatolab_command(&["logs"])
+            .current_dir(project_directory.path())
+            .output()
+            .unwrap();
 
         assert!(read.status.success(), "{}", standard_error_text(&read));
         assert_eq!(
@@ -445,16 +236,20 @@ mod against_an_isolated_machine {
         assert_eq!(
             stub_local_api_server.recorded_arguments_of("logs"),
             [
-                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 0}),
-                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 2}),
-                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 3}),
-            ],
-            "the display name resolves to the id, which is all the tool sees"
+                json!({"project_directory": canonical_project_directory}),
+                json!({"project_directory": canonical_project_directory, "after": "1:2"}),
+                json!({"project_directory": canonical_project_directory, "after": "1:3"}),
+            ]
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("list_streams"),
+            Vec::<serde_json::Value>::new(),
+            "every record of the project names no stream to resolve"
         );
     }
 
     #[test]
-    fn logs_with_no_stream_and_no_file_reads_the_stream_loaded_from_the_working_directory() {
+    fn logs_of_a_stream_by_display_name_asks_the_project_for_its_id_and_the_action() {
         let project_directory = tempfile::tempdir().unwrap();
         let canonical_project_directory = project_directory.path().canonicalize().unwrap();
         let isolated_machine_directories = IsolatedMachineDirectories::new();
@@ -465,58 +260,71 @@ mod against_an_isolated_machine {
             ),
         );
 
-        let read = isolated_machine_directories
-            .tatolab_command(&["logs"])
-            .current_dir(project_directory.path())
-            .output()
-            .unwrap();
+        let read = isolated_machine_directories.run_tatolab(&[
+            "logs",
+            "--dir",
+            project_directory.path().to_str().unwrap(),
+            "--stream",
+            "camera",
+            "--action",
+            "a7",
+        ]);
 
         assert!(read.status.success(), "{}", standard_error_text(&read));
         assert_eq!(
-            standard_output_text(&read),
-            format!("{}\n", rendered_line("started", " INFO"))
-        );
-        assert_eq!(
             stub_local_api_server.recorded_arguments_of("logs")[0],
-            json!({"stream": DESK_CAMERA_STREAM_ID, "after": 0})
+            json!({
+                "project_directory": canonical_project_directory,
+                "stream": DESK_CAMERA_STREAM_ID,
+                "action": "a7",
+            }),
+            "the display name resolves to the id, which is all the tool sees"
         );
     }
 
+    /// A stream removed, or recorded by no runtime since a restart, still has its records in the
+    /// project's log, read by the id it had.
     #[test]
-    fn logs_with_no_stream_outside_every_streams_project_is_refused_listing_the_streams() {
-        let elsewhere = tempfile::tempdir().unwrap();
+    fn logs_of_a_stream_the_runtime_no_longer_lists_reads_it_by_its_id() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
             a_runtime_holding_the_desk_camera_paging(
-                records_saying(&["started"]),
+                records_saying(&["before the rm"]),
                 std::path::Path::new("/srv/desk"),
             ),
         );
 
-        let refused = isolated_machine_directories
-            .tatolab_command(&["logs"])
-            .current_dir(elsewhere.path())
-            .output()
-            .unwrap();
+        let read =
+            isolated_machine_directories.run_tatolab(&["logs", "--stream", "desk-gone-9a8b"]);
+
+        assert!(read.status.success(), "{}", standard_error_text(&read));
+        assert_eq!(
+            standard_output_text(&read),
+            format!("{}\n", rendered_line("before the rm", " INFO"))
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("logs")[0]["stream"],
+            "desk-gone-9a8b"
+        );
+    }
+
+    #[test]
+    fn logs_of_a_directory_that_is_not_one_is_refused_before_asking_the_runtime() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+
+        let refused =
+            isolated_machine_directories.run_tatolab(&["logs", "--dir", "/nonexistent-project"]);
 
         assert_eq!(refused.status.code(), Some(1));
         assert_eq!(
             standard_error_text(&refused),
-            format!(
-                "error: no stream in this runtime was loaded from {}; name one by its id or its \
-                 display name:\n  {DESK_CAMERA_STREAM_ID}  \"camera\"\n",
-                elsewhere.path().canonicalize().unwrap().display()
-            )
-        );
-        assert_eq!(
-            stub_local_api_server.recorded_arguments_of("logs"),
-            Vec::<serde_json::Value>::new()
+            "error: --dir /nonexistent-project is not a directory\n"
         );
     }
 
     /// Ctrl-C out of `--follow` is how it ends, not a failure: exit 0, not 130.
     #[test]
-    fn logs_of_a_stream_followed_reads_on_across_pages_by_sequence_number_until_ctrl_c() {
+    fn logs_followed_reads_on_across_pages_by_cursor_until_ctrl_c() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
             a_runtime_holding_the_desk_camera_paging(
@@ -543,31 +351,13 @@ mod against_an_isolated_machine {
         }
 
         assert_eq!(following_tatolab.interrupt_and_wait().code(), Some(0));
-        let afters_asked_for: Vec<u64> = stub_local_api_server
+        let afters_asked_for: Vec<serde_json::Value> = stub_local_api_server
             .recorded_arguments_of("logs")
             .iter()
-            .map(|logs_arguments| logs_arguments["after"].as_u64().unwrap())
+            .map(|logs_arguments| logs_arguments.get("after").cloned().unwrap_or_default())
             .collect();
-        assert_eq!(afters_asked_for[..2], [0, 2]);
-        assert!(
-            afters_asked_for.windows(2).all(|pair| pair[0] <= pair[1]),
-            "a follow never reads back: {afters_asked_for:?}"
-        );
-        assert!(afters_asked_for.contains(&3) && afters_asked_for.contains(&5));
-    }
-
-    #[test]
-    fn logs_of_a_stream_refuses_a_file_name_or_list_beside_it() {
-        let isolated_machine_directories = IsolatedMachineDirectories::new();
-
-        let refused =
-            isolated_machine_directories.run_tatolab(&["logs", "Rabc", "--stream", "camera"]);
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(
-            standard_error_text(&refused),
-            "error: `--stream` reads a loaded stream's records from the runtime, which takes no \
-             RUNTIME_ID-STREAM. Drop `--stream` to read an on-disk log file instead.\n"
-        );
+        assert_eq!(afters_asked_for[..2], [json!(null), json!("1:2")]);
+        assert!(afters_asked_for.contains(&json!("1:3")));
+        assert!(afters_asked_for.contains(&json!("1:5")));
     }
 }

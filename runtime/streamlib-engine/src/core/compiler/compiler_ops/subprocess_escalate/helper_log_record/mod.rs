@@ -65,7 +65,7 @@ pub(super) fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
         source: Some(source),
         source_ts: Some(log.source_ts),
         source_seq,
-        loaded_stream_log_route: None,
+        project_log_route_entry: None,
     }
 }
 

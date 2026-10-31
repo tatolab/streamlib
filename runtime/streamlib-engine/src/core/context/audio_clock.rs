@@ -185,7 +185,7 @@ impl AudioClock for SoftwareAudioClock {
         let handle = thread::Builder::new()
             .name("audio-clock".to_string())
             .spawn(
-                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                     tracing::info!(
                         "[SoftwareAudioClock] Started: {}Hz, {} samples/tick, {:?} interval",
                         config.sample_rate,
@@ -403,10 +403,10 @@ mod tests {
     fn the_stream_an_audio_clocks_first_tick_runs_in(clock: &dyn AudioClock) -> Option<String> {
         let project_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-        let route = crate::core::logging::LoadedStreamLogRoute::open_in_project_directory(
+        let route = crate::core::logging::ProjectLogRouteEntry::for_a_stream_of_the_project_in(
+            project_directory.path(),
             "RtestAudioClock",
             "ticking",
-            project_directory.path(),
         );
         let stream_of_the_first_tick: Arc<Mutex<Option<Option<String>>>> =
             Arc::new(Mutex::new(None));
@@ -415,7 +415,7 @@ mod tests {
             let mut recorded = recorder.lock();
             if recorded.is_none() {
                 *recorded = Some(
-                    crate::core::logging::the_loaded_stream_log_route_of_this_thread()
+                    crate::core::logging::the_project_log_route_entry_of_this_thread()
                         .and_then(|route| route.stream_id().map(str::to_string)),
                 );
             }

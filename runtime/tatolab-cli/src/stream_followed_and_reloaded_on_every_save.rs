@@ -1,14 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab dev`: the stream loaded into the machine's runtime over a `/mcp/stdio` connection of
-//! this process's own, its records followed by sequence number — from the first again whenever a
-//! page names another load of it — and run again on every settled save, which the runtime answers
-//! by replacing the running stream, or by recording it failed with the traceback `dev` prints
-//! when the save's code fails.
-//! Ctrl-C ends the following and leaves the stream loaded. When the runtime goes away, `dev` waits
-//! for it, waits for the restarted runtime to re-load the stream from its record, and follows it
-//! again; it never loads the stream again for a crash.
+//! `tatolab dev`: the project's streams loaded into the machine's runtime over a `/mcp/stdio`
+//! connection of this process's own, the project's log followed by cursor from where it ended
+//! when `dev` started — across every re-load and restart, since the log is the project's — and
+//! run again on every settled save, which the runtime answers by replacing each running stream,
+//! or by recording it failed with the traceback `dev` prints when the save's code fails.
+//! Ctrl-C ends the following and leaves the streams loaded. When the runtime goes away, `dev`
+//! waits for it, waits for the restarted runtime to re-load the stream from its record, and
+//! follows the log again; it never loads the stream again for a crash.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -29,19 +29,18 @@ use crate::machine_runtime_local_api_socket::{
     local_api_socket_of_the_running_runtime, something_answers_at,
 };
 use crate::process_signal_handling::block_the_stop_signals_and_listen;
+use crate::project_log_records_from_the_runtime::{
+    DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, PROJECT_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
+    ProjectLogRecordsAsked, project_log_records_page_from, render_project_log_records_page,
+};
 use crate::project_source_change_watcher::watch_project_sources;
 use crate::runtime_gone_while_following_a_stream::{
     RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
 };
-use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
+use crate::runtime_log_record_decoding_and_filters::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
     StreamActionTool, StreamLoadArguments, StreamLoadRequest, rendered_compile_warning_lines,
     the_stream_a_run_took_in_described, tool_result_from,
-};
-use crate::stream_log_records_from_the_runtime::{
-    DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, LoadedStreamInstanceBeingFollowed,
-    STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
-    render_stream_log_records_page, stream_loaded_again_note, stream_log_records_page_from,
 };
 use crate::verb_standard_output::{
     standard_output_closed_or_failed, write_and_flush_verb_standard_output,
@@ -74,25 +73,21 @@ enum FinishedUnlessStopped<CallOutcome> {
     StopSignalDelivered,
 }
 
-/// The stream `dev` follows: its id, the load of it whose records it reads, the record it has
-/// read up to, and whether a refused reload left it to confirm the stream still runs.
+/// The stream `dev` follows the project's log for, by its id, and whether a refused reload left
+/// it to confirm the stream still runs.
 #[derive(Debug, Clone)]
 struct FollowedStreamPosition {
     stream: String,
-    stream_instance: LoadedStreamInstanceBeingFollowed,
-    after: u64,
-    /// A reload was refused, and the next `logs` page says whether the runtime still holds the
+    /// A reload was refused, and the next `logs` page confirms the runtime still answers for the
     /// stream the reload was to replace.
     a_refused_reload_left_it_to_confirm: bool,
 }
 
 impl FollowedStreamPosition {
-    /// The first record of whichever load of `stream` the runtime holds.
-    fn from_the_first_record_of(stream: String) -> Self {
+    /// `stream`, followed in the project's log from where the session read up to.
+    fn following(stream: String) -> Self {
         Self {
             stream,
-            stream_instance: LoadedStreamInstanceBeingFollowed::default(),
-            after: 0,
             a_refused_reload_left_it_to_confirm: false,
         }
     }
@@ -153,6 +148,7 @@ pub(crate) fn follow_the_stream_and_reload_it_on_every_save(
             dev_session_events_open: true,
             project_sources_changed_during_a_call: false,
             runtime_log_directory: RuntimeLogDirectoryAsDescribed::NotDescribed,
+            project_log_after: None,
         }
         .run_until_it_ends(),
     );
@@ -170,6 +166,8 @@ struct DevSession {
     project_sources_changed_during_a_call: bool,
     /// Where the runtime said its own log is, named when it goes away.
     runtime_log_directory: RuntimeLogDirectoryAsDescribed,
+    /// The cursor the project's log is read on from; `None` until the session read to its end.
+    project_log_after: Option<String>,
 }
 
 impl DevSession {
@@ -312,6 +310,27 @@ impl DevSession {
         followed_stream_the_run_replaces: Option<FollowedStreamPosition>,
     ) -> DevSessionStep {
         self.project_sources_changed_during_a_call = false;
+        if self.project_log_after.is_none() {
+            match self.read_the_project_log_to_its_end(connected_client).await {
+                FinishedUnlessStopped::Finished(Ok(end_of_the_project_log)) => {
+                    self.project_log_after = Some(end_of_the_project_log);
+                }
+                FinishedUnlessStopped::Finished(Err(logs_failure)) => {
+                    if let Some(after_the_runtime_went_away) = self.after_the_runtime_went_away(
+                        &logs_failure,
+                        followed_stream_the_run_replaces
+                            .as_ref()
+                            .map(|followed| followed.stream.as_str()),
+                    ) {
+                        return after_the_runtime_went_away;
+                    }
+                    self.note(&format!(
+                        "the project's log could not be read to its end: {logs_failure}"
+                    ));
+                }
+                FinishedUnlessStopped::StopSignalDelivered => return DevSessionStep::Exit(Ok(0)),
+            }
+        }
         let run_stream_arguments = self.stream_load_request.run_stream_tool_arguments();
         let run_outcome = match self
             .finish_unless_stopped(connected_client.call_tool_bounded_by(
@@ -352,13 +371,9 @@ impl DevSession {
             RunStreamToolResultStream {
                 stream,
                 state: RunStreamToolResultStreamState::Running,
-                stream_instance: Some(stream_instance),
                 ..
             } => {
-                let loaded = FollowedStreamPosition {
-                    stream_instance: LoadedStreamInstanceBeingFollowed::the_load(stream_instance),
-                    ..FollowedStreamPosition::from_the_first_record_of(stream)
-                };
+                let loaded = FollowedStreamPosition::following(stream);
                 if self.project_sources_changed_during_a_call {
                     return self.run_again_after_a_save(loaded);
                 }
@@ -422,31 +437,80 @@ impl DevSession {
         }
     }
 
-    /// Follow `followed`'s records page by page; a page naming another load of the stream than
-    /// the one followed is set aside, and that load is read from its first record.
+    /// The project's log, by its directory: every record of each of its streams and their loads.
+    fn project_log_records_asked(&self) -> ProjectLogRecordsAsked<'_> {
+        ProjectLogRecordsAsked {
+            project_directory: Path::new(&self.stream_load_request.project_directory),
+            stream: None,
+            action: None,
+        }
+    }
+
+    /// Page the project's log to its newest record, answering the cursor after it, so a session
+    /// shows what its own runs write and none of what came before.
+    async fn read_the_project_log_to_its_end(
+        &mut self,
+        connected_client: &LocalApiMcpToolClient,
+    ) -> FinishedUnlessStopped<Result<String, LocalApiMcpToolClientFailure>> {
+        let mut after: Option<String> = None;
+        loop {
+            let logs_arguments = self
+                .project_log_records_asked()
+                .logs_tool_arguments_after(after.as_deref());
+            let logs_outcome = match self
+                .finish_unless_stopped(connected_client.call_tool(LOGS_TOOL_NAME, logs_arguments))
+                .await
+            {
+                FinishedUnlessStopped::Finished(logs_outcome) => logs_outcome,
+                FinishedUnlessStopped::StopSignalDelivered => {
+                    return FinishedUnlessStopped::StopSignalDelivered;
+                }
+            };
+            let project_log_records_page = match logs_outcome.and_then(|logs_tool_result_text| {
+                project_log_records_page_from(&logs_tool_result_text)
+                    .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
+            }) {
+                Ok(project_log_records_page) => project_log_records_page,
+                Err(logs_failure) => return FinishedUnlessStopped::Finished(Err(logs_failure)),
+            };
+            if project_log_records_page.records.is_empty() {
+                return FinishedUnlessStopped::Finished(Ok(project_log_records_page.next_after));
+            }
+            after = Some(project_log_records_page.next_after);
+        }
+    }
+
+    /// Follow the project's log page by page from the session's cursor while `followed` runs.
     async fn follow(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
         mut followed: FollowedStreamPosition,
     ) -> DevSessionStep {
+        if self.project_log_after.is_none() {
+            self.note(&format!(
+                "{} keeps running, unfollowed, since where the project's log ends is unknown — \
+                 save again to load it",
+                followed.stream
+            ));
+            return DevSessionStep::WaitForTheNextSave;
+        }
         loop {
             let stream = followed.stream.clone();
-            let after = followed.after;
+            let logs_arguments = self
+                .project_log_records_asked()
+                .logs_tool_arguments_after(self.project_log_after.as_deref());
             let logs_outcome = match self
-                .finish_unless_stopped(
-                    connected_client
-                        .call_tool(LOGS_TOOL_NAME, logs_tool_arguments_after(&stream, after)),
-                )
+                .finish_unless_stopped(connected_client.call_tool(LOGS_TOOL_NAME, logs_arguments))
                 .await
             {
                 FinishedUnlessStopped::Finished(logs_outcome) => logs_outcome,
                 FinishedUnlessStopped::StopSignalDelivered => return self.stop_following(&stream),
             };
-            let stream_log_records_page = match logs_outcome.and_then(|logs_tool_result_text| {
-                stream_log_records_page_from(&logs_tool_result_text)
+            let project_log_records_page = match logs_outcome.and_then(|logs_tool_result_text| {
+                project_log_records_page_from(&logs_tool_result_text)
                     .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
             }) {
-                Ok(stream_log_records_page) => stream_log_records_page,
+                Ok(project_log_records_page) => project_log_records_page,
                 Err(logs_failure) => {
                     return self.after_a_failed_follow(
                         &stream,
@@ -455,18 +519,10 @@ impl DevSession {
                     );
                 }
             };
-            if followed
-                .stream_instance
-                .page_names_another_load(&stream_log_records_page.stream_instance)
-            {
-                self.note(&stream_loaded_again_note(&stream));
-                followed.after = 0;
-                continue;
-            }
-            let rendered_records = render_stream_log_records_page(
-                &stream,
-                &stream_log_records_page,
+            let rendered_records = render_project_log_records_page(
+                &project_log_records_page,
                 &RuntimeLogRecordFilters::default(),
+                true,
                 &mut std::io::stderr(),
             );
             if let Err(write_failure) = write_and_flush_verb_standard_output(&rendered_records) {
@@ -477,8 +533,8 @@ impl DevSession {
                     "{stream} keeps running the last save that loaded — fix it and save again"
                 ));
             }
-            let page_brought_nothing = stream_log_records_page.next_after == after;
-            followed.after = stream_log_records_page.next_after;
+            let page_brought_nothing = project_log_records_page.records.is_empty();
+            self.project_log_after = Some(project_log_records_page.next_after);
             if self.project_sources_changed_during_a_call {
                 return self.run_again_after_a_save(followed);
             }
@@ -486,7 +542,7 @@ impl DevSession {
                 continue;
             }
             match self
-                .finish_unless_stopped(tokio::time::sleep(STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL))
+                .finish_unless_stopped(tokio::time::sleep(PROJECT_LOG_RECORDS_FOLLOW_POLL_INTERVAL))
                 .await
             {
                 FinishedUnlessStopped::Finished(()) => {}
@@ -577,8 +633,8 @@ impl DevSession {
         }
     }
 
-    /// Ask the runtime until it has re-loaded `stream` from its record, then follow it from the
-    /// first record of that load. A stream the runtime holds stopped, failed or not at all waits
+    /// Ask the runtime until it has re-loaded `stream` from its record, then follow the project's
+    /// log on from where the session read up to. A stream the runtime holds stopped, failed or not at all waits
     /// for a save, which runs it again.
     async fn wait_for_the_re_load_of(
         &mut self,
@@ -627,11 +683,9 @@ impl DevSession {
             {
                 Some((ListedStreamState::Running, true)) => {
                     self.note(&format!(
-                        "{stream} is loaded again — following it from its first record"
+                        "{stream} is loaded again — following the project's log on"
                     ));
-                    return DevSessionStep::Follow(
-                        FollowedStreamPosition::from_the_first_record_of(stream),
-                    );
+                    return DevSessionStep::Follow(FollowedStreamPosition::following(stream));
                 }
                 Some((ListedStreamState::Running, false)) => {}
                 Some((not_running, _)) => {
@@ -649,9 +703,7 @@ impl DevSession {
                 }
             }
             if self.project_sources_changed_during_a_call {
-                return self.run_again_after_a_save(
-                    FollowedStreamPosition::from_the_first_record_of(stream),
-                );
+                return self.run_again_after_a_save(FollowedStreamPosition::following(stream));
             }
             match self
                 .finish_unless_stopped(tokio::time::sleep(RUNTIME_SOCKET_AND_RE_LOAD_POLL_INTERVAL))

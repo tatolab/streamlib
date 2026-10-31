@@ -130,7 +130,7 @@ fn run_loads_the_stream_prints_its_id_and_how_to_follow_it_and_returns() {
     assert_eq!(
         printed,
         format!(
-            "cam running as \"main\" (project {}, stream:main)\n  follow it: tatolab logs -f\n",
+            "cam running as \"main\" (project {0}, stream:main)\n  follow it: tatolab logs -f --dir {0}\n",
             canonical_project_directory.display()
         )
     );
@@ -216,7 +216,7 @@ fn run_prints_each_line_the_compile_wrote_on_its_standard_error() {
     assert_eq!(
         standard_output_text(&finished),
         format!(
-            "cam running as \"main\" (project {}, stream:main)\n  follow it: tatolab logs -f\n",
+            "cam running as \"main\" (project {0}, stream:main)\n  follow it: tatolab logs -f --dir {0}\n",
             canonical_project_directory.display()
         )
     );

@@ -35,7 +35,7 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             "unexpected argument '--node'",
         ),
         (
-            &["logs", "Rabc", "--count", "4"][..],
+            &["logs", "--count", "4"][..],
             "unexpected argument '--count'",
         ),
     ] {

@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::{Error, PortDirection, Result};
-use crate::core::logging::carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe;
+use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
 use crate::core::processors::{
     LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessFarSideLinkDelivery,
     OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
@@ -611,7 +611,7 @@ fn spawn_the_reader_and_the_escalate_worker(
     let escalate_worker_thread = thread::Builder::new()
         .name(bridge_escalate_worker_thread_name(&processor_id))
         .spawn(
-            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+            carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 escalate_worker_loop(escalate_requests_rx, &worker_parent_side, &worker_dispatch);
             }),
         )
@@ -624,7 +624,7 @@ fn spawn_the_reader_and_the_escalate_worker(
     let frame_demultiplexing_reader_thread = thread::Builder::new()
         .name(bridge_reader_thread_name(&processor_id))
         .spawn(
-            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+            carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 reader_loop(
                     reader,
                     &parent_side,
@@ -859,7 +859,7 @@ where
     thread::Builder::new()
         .name(name)
         .spawn(
-            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+            carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 use std::io::BufRead;
                 tracing::dispatcher::with_default(&dispatch, || {
                     let reader = BufReader::new(reader);

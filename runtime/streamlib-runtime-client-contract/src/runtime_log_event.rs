@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! JSONL event schema — the durable interface contract for the unified
-//! logging pathway. Every record written under
-//! [`log_dir`](crate::runtime_log_file_paths::log_dir) is one [`RuntimeLogEvent`]
-//! per line.
+//! logging pathway. Every line of a project's log and of the runtime's own log
+//! is one [`RuntimeLogEvent`].
 //!
 //! Adding fields is backwards-compatible. Renaming, removing, or changing
 //! types of existing fields requires bumping [`SCHEMA_VERSION`] and a

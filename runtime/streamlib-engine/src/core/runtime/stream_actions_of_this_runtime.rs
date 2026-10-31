@@ -43,6 +43,7 @@ use crate::core::graph::{
     node_names_listed_for_a_refusal,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::logging::{ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread};
 use crate::core::{Error, Result};
 
 /// How a loaded stream is held: recorded by the runtime, or living as long as
@@ -479,6 +480,8 @@ impl Runner {
                     project_directory.display()
                 ))
             })?;
+        let _in_the_projects_log =
+            self.enter_the_log_of_the_project_a_load_takes_in(&project_directory);
         if let Err(venv_not_made) = self.make_the_projects_venv(&project_directory) {
             let failed_because = match venv_not_made {
                 ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
@@ -664,6 +667,15 @@ impl Runner {
     /// as it was, when the refusal was the engine's own; one whose retry
     /// crashes the runtime stays failed as it was.
     pub fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
+        let _in_the_projects_log = self
+            .current_stream_record_of_the_id(stream_id)
+            .ok()
+            .flatten()
+            .and_then(|record| {
+                self.enter_the_log_of_the_project_a_load_takes_in(
+                    &record.location.project_directory,
+                )
+            });
         self.make_the_venv_of_a_recorded_stream_holding_a_graph_before_its_start(stream_id)?;
         let one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
@@ -1545,6 +1557,31 @@ impl Runner {
         }
     }
 
+    /// Enter, on this thread, the log of the project in `project_directory`
+    /// for a load of it, so its venv making and compile land there under no
+    /// stream; `None` for a directory that is not a project — one that does not
+    /// resolve or holds no `pyproject.toml` — whose load logs to the runtime's
+    /// own log.
+    fn enter_the_log_of_the_project_a_load_takes_in(
+        &self,
+        project_directory: &Path,
+    ) -> Option<TheProjectsLogEnteredForOneLoad> {
+        let project_directory = std::fs::canonicalize(project_directory).ok()?;
+        if !project_directory.join("pyproject.toml").is_file() {
+            return None;
+        }
+        let entry = ProjectLogRouteEntry::for_the_project_in(
+            &project_directory,
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+        );
+        Some(TheProjectsLogEnteredForOneLoad {
+            _entered_on_this_thread: entry.enter_on_this_thread(),
+            entry,
+        })
+    }
+
     /// Make the `.venv` of the project in `project_directory` with the uv this
     /// runtime was handed, unless its interpreter runs.
     fn make_the_projects_venv(
@@ -1855,6 +1892,20 @@ fn the_project_directory_whose_venv_holds(interpreter: &Path) -> Option<PathBuf>
         return None;
     }
     venv.parent().map(Path::to_path_buf)
+}
+
+/// A project's log entered on the thread of one load of the project; on drop,
+/// every record the load wrote is written to the log and synced, so a reader
+/// right after the load finds them.
+struct TheProjectsLogEnteredForOneLoad {
+    entry: Arc<ProjectLogRouteEntry>,
+    _entered_on_this_thread: ProjectLogRouteEntryEnteredOnThisThread,
+}
+
+impl Drop for TheProjectsLogEnteredForOneLoad {
+    fn drop(&mut self) {
+        self.entry.write_every_record_it_emitted_and_sync();
+    }
 }
 
 /// Whether `first` and `second` name one directory, symlinks resolved; spelled
@@ -5432,6 +5483,45 @@ mod tests {
         assert_eq!(
             the_record_of(state_directory.path(), &stream.stream_id).failed_because,
             Some(failed_because.to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_whose_venv_uv_cannot_make_writes_uvs_lines_to_the_projects_log_under_no_stream() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        runner.run_stream(project.run_request()).unwrap();
+
+        let page =
+            streamlib_runtime_client_contract::project_log_records::project_log_records_after(
+                &std::fs::canonicalize(project.path()).unwrap(),
+                None,
+                None,
+                None,
+                4096,
+            )
+            .expect("the project's log reads");
+        let uv_line = page
+            .records
+            .iter()
+            .find(|record| {
+                record["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(UV_RESOLUTION_FAILURE))
+            })
+            .unwrap_or_else(|| panic!("the project's log lacks uv's line: {:#?}", page.records));
+        assert!(
+            uv_line.get("stream").is_none_or(serde_json::Value::is_null),
+            "{uv_line}"
+        );
+        assert_eq!(
+            uv_line["runtime_id"].as_str(),
+            Some(runner.runtime_id().to_string().as_str())
         );
     }
 

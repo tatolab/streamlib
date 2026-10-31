@@ -17,17 +17,17 @@ mod local_api_mcp_tool_client;
 mod local_api_unix_socket_http_client;
 mod machine_runtime_local_api_socket;
 mod process_signal_handling;
+mod project_log_records_from_the_runtime;
 mod project_source_change_watcher;
 mod relay_verbs_on_the_runtime;
 mod runtime_gone_while_following_a_stream;
-mod runtime_log_files_reader;
+mod runtime_log_record_decoding_and_filters;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_argument_resolution_through_the_listing;
 mod stream_followed_and_reloaded_on_every_save;
-mod stream_log_records_from_the_runtime;
 mod verb_output_table;
 mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
@@ -222,13 +222,13 @@ enum TatolabVerb {
         #[arg(long = "stream", value_name = "STREAM")]
         requested_stream: Option<String>,
     },
-    /// Read a loaded stream's records from the runtime, or its JSONL log file.
+    /// Read a project's log: every record its streams and their loads wrote.
     #[command(
-        long_about = "Reads a loaded stream's records as the runtime holds them, by sequence \
-                      number — the stream --stream names, by its id or a display name only it \
-                      holds, or the one loaded from the working directory; -f keeps following. \
-                      With RUNTIME_ID-STREAM, renders that stream's on-disk JSONL log exactly as \
-                      the runtime mirrored it; --list names each one."
+        long_about = "Reads a project's log as the runtime reads it from the project's folder, \
+                      oldest record first, by an opaque cursor — every record its streams and \
+                      their loads wrote, or, with --stream or --action, those of one stream or \
+                      one stream action. The project is --dir, else the working directory; -f \
+                      keeps following."
     )]
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
     /// Connect an MCP host to the runtime over this command's stdin and stdout.

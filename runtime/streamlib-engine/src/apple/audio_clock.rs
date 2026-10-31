@@ -10,8 +10,8 @@
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
 use crate::core::logging::{
-    LoadedStreamLogRoute, run_in_the_loaded_stream_log_route_when_there_is_one,
-    the_loaded_stream_log_route_of_this_thread,
+    ProjectLogRouteEntry, run_in_the_project_log_route_entry_when_there_is_one,
+    the_project_log_route_entry_of_this_thread,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
@@ -98,7 +98,7 @@ struct CoreAudioClockState {
     callbacks: Mutex<Vec<AudioTickCallback>>,
     tick_count: AtomicU64,
     /// The route of the thread that started the clock, which the ticks run in.
-    loaded_stream_log_route_of_the_starting_thread: Mutex<Option<Arc<LoadedStreamLogRoute>>>,
+    project_log_route_entry_of_the_starting_thread: Mutex<Option<Arc<ProjectLogRouteEntry>>>,
 }
 
 /// macOS/iOS audio clock using GCD dispatch timers.
@@ -134,7 +134,7 @@ impl CoreAudioClock {
                 config,
                 callbacks: Mutex::new(Vec::new()),
                 tick_count: AtomicU64::new(0),
-                loaded_stream_log_route_of_the_starting_thread: Mutex::new(None),
+                project_log_route_entry_of_the_starting_thread: Mutex::new(None),
             }),
             timer_source: Mutex::new(None),
             queue,
@@ -166,12 +166,12 @@ extern "C" fn timer_callback(context: *mut c_void) {
         tick_number: tick_num,
     };
 
-    let loaded_stream_log_route_of_the_starting_thread = state
-        .loaded_stream_log_route_of_the_starting_thread
+    let project_log_route_entry_of_the_starting_thread = state
+        .project_log_route_entry_of_the_starting_thread
         .lock()
         .clone();
-    run_in_the_loaded_stream_log_route_when_there_is_one(
-        loaded_stream_log_route_of_the_starting_thread.as_ref(),
+    run_in_the_project_log_route_entry_when_there_is_one(
+        project_log_route_entry_of_the_starting_thread.as_ref(),
         || {
             let callbacks = state.callbacks.lock();
             for callback in callbacks.iter() {
@@ -202,8 +202,8 @@ impl AudioClock for CoreAudioClock {
         self.state.tick_count.store(0, Ordering::SeqCst);
         *self
             .state
-            .loaded_stream_log_route_of_the_starting_thread
-            .lock() = the_loaded_stream_log_route_of_this_thread();
+            .project_log_route_entry_of_the_starting_thread
+            .lock() = the_project_log_route_entry_of_this_thread();
 
         let interval_ns = self.state.config.tick_duration_nanos();
 

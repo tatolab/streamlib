@@ -16,6 +16,7 @@ pub mod machine_directories_test_root;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod machine_runtime_lock;
 pub mod owner_only_file_written_whole;
+pub mod project_log_records;
 pub mod runtime_log_event;
 pub mod runtime_log_event_pretty_rendering;
 pub mod runtime_log_file_paths;

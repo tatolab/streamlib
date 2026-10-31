@@ -74,9 +74,7 @@ pub(crate) use open_descriptor_soft_limit::{
     the_open_descriptor_limit,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use operations_on_the_streams_loaded_in_this_runtime::{
-    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
-};
+pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests, WhatALoadedStreamIsKeyedBy,

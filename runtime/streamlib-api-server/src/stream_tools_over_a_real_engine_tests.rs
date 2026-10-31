@@ -28,21 +28,16 @@ use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
-    OptionsForLoadingOneStream, OutputPortExposureOutcome, RunStreamRequest, Runner,
-    RuntimeOperations, StreamEnvironment, StreamListing, StreamLoadedOrFailedByARun,
-    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
-    StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome, StreamStartOutcome,
-    StreamStateAfterItsRun, StreamStopOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
+    OutputPortExposureOutcome, RunStreamRequest, Runner, RuntimeOperations, StreamEnvironment,
+    StreamListing, StreamLoadedOrFailedByARun, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamRecordsInTheStateDirectory, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStateAfterItsRun, StreamStopOutcome,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
 use crate::mcp::tests::{first_text_block_json, tool_call_result};
 use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
-
-/// How long a test waits for what an engine does on another thread — a record
-/// reaching a stream's log.
-const WHAT_THE_ENGINE_DOES_ON_ANOTHER_THREAD_LANDS_WITHIN: Duration = Duration::from_secs(10);
 
 /// A native source with one output port, `video`, and nothing to do.
 #[streamlib::sdk::processor(execution = manual, output("video"))]
@@ -381,15 +376,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .every_loaded_stream_and_the_output_ports_it_exposes()
     }
-    fn log_records_of_the_stream_a_call_names(
-        &self,
-        stream_id: &str,
-        after: u64,
-        max_count: usize,
-    ) -> Result<LogRecordsPageOfOneLoadedStream> {
-        self.engine
-            .log_records_of_the_stream_a_call_names(stream_id, after, max_count)
-    }
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
         let stream_id = request
             .display_name
@@ -537,29 +523,23 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
 // logs
 // ============================================================================
 
-/// The instance a `run_stream` result and a `logs` page name is the load's:
-/// the same for every page of one load, and another once the name is loaded
-/// again, whose records are numbered from 1 again.
+/// The instance a `run_stream` result names is the load's, and another once
+/// the stream is loaded again.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_another() {
+async fn a_run_names_the_loads_instance_and_a_re_load_names_another() {
     let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
     let engine = Arc::clone(&runtime.engine);
     let served = LocalApiServedOnAFreshSocket::over(runtime);
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
-    let run_camera_and_read_its_logs = || async {
-        let run = tool_answer(
+    let run_camera = || async {
+        tool_answer(
             &tool_call_over_the_connection(&client, "run_stream", a_run_request_naming("camera"))
                 .await,
         )
-        .expect("the run is answered");
-        let page = tool_answer(
-            &tool_call_over_the_connection(&client, "logs", json!({ "stream": "camera" })).await,
-        )
-        .expect("logs answers");
-        (run, page)
+        .expect("the run is answered")
     };
 
-    let (first_run, first_page) = run_camera_and_read_its_logs().await;
+    let first_run = run_camera().await;
     let first_instance = the_one_stream_of(&first_run)["stream_instance"]
         .as_str()
         .unwrap_or_else(|| panic!("the run names its instance: {first_run}"))
@@ -572,131 +552,110 @@ async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_an
             .stream_tag()
             .to_string()
     );
-    assert_eq!(first_page["stream_instance"], first_instance.as_str());
     tool_answer(
         &tool_call_over_the_connection(&client, "stop_stream", json!({ "stream": "camera" })).await,
     )
     .expect("the stream stops");
 
-    let (re_run, re_loaded_page) = run_camera_and_read_its_logs().await;
+    let re_run = run_camera().await;
 
-    let re_run_instance = &the_one_stream_of(&re_run)["stream_instance"];
-    assert_ne!(*re_run_instance, first_instance.as_str());
-    assert_eq!(re_loaded_page["stream_instance"], *re_run_instance);
+    assert_ne!(
+        the_one_stream_of(&re_run)["stream_instance"],
+        first_instance.as_str()
+    );
 }
 
-/// `logs` reads a stream's records by sequence number: `after` skips what was
-/// read, `count` bounds the page, and `next_after` is where to read on from.
+/// `logs` reads a project's log from disk: `stream` narrows it to one of the
+/// project's streams, `count` bounds a page, `next_after` reads on, and the
+/// records stay readable once the stream is unloaded.
 #[tokio::test(flavor = "multi_thread")]
-async fn logs_pages_a_streams_records_by_sequence_number() {
+async fn logs_reads_a_projects_records_by_stream_paged_by_its_cursor() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let engine = Runner::new().expect("the engine builds");
-    let stream = engine
-        .load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                .with_stream_id("paged"),
-        )
-        .expect("the stream loads");
-    stream.log_route().run_entered(|| {
-        for token_index in 0..3 {
-            tracing::info!("logs-paging-token-{token_index}");
-        }
-    });
+    for stream_id in ["paged", "other"] {
+        let stream = engine
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .with_stream_id(stream_id),
+            )
+            .expect("the stream loads");
+        stream.log_route().run_entered(|| {
+            for token_index in 0..3 {
+                tracing::info!("logs-paging-token-{stream_id}-{token_index}");
+            }
+        });
+        stream.log_route().write_every_record_it_emitted_and_sync();
+    }
     let operations_on_the_loaded_streams =
         Arc::clone(&engine) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>;
-    let token_sequences = |page: &Value| -> Vec<u64> {
+    let project = project_directory.path().to_str().unwrap().to_owned();
+    let tokens = |page: &Value| -> Vec<String> {
         page["records"]
             .as_array()
             .expect("a records array")
             .iter()
-            .filter(|numbered| {
-                numbered["record"]["message"]
-                    .as_str()
-                    .is_some_and(|message| message.starts_with("logs-paging-token-"))
-            })
-            .map(|numbered| numbered["sequence"].as_u64().expect("a sequence number"))
+            .filter_map(|record| record["message"].as_str())
+            .filter(|message| message.starts_with("logs-paging-token-"))
+            .map(str::to_owned)
             .collect()
     };
-
-    let deadline =
-        tokio::time::Instant::now() + WHAT_THE_ENGINE_DOES_ON_ANOTHER_THREAD_LANDS_WITHIN;
-    let every_record = loop {
-        let every_record = tool_answer(
-            &tool_call_result(
-                Arc::clone(&operations_on_the_loaded_streams),
-                "logs",
-                json!({ "stream": "paged" }),
-            )
-            .await,
-        )
-        .expect("logs answers");
-        if token_sequences(&every_record).len() == 3 {
-            break every_record;
+    let read = |arguments: Value| {
+        let operations = Arc::clone(&operations_on_the_loaded_streams);
+        async move {
+            tool_answer(&tool_call_result(operations, "logs", arguments).await)
+                .expect("logs answers")
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the three tokens never reached the stream's log: {every_record}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
     };
-    assert_eq!(every_record["stream"], "paged");
-    assert_eq!(every_record["records_no_longer_held"], 0);
-    let first_token = token_sequences(&every_record)[0];
 
-    let one_after_the_first_token = tool_answer(
-        &tool_call_result(
-            Arc::clone(&operations_on_the_loaded_streams),
-            "logs",
-            json!({ "stream": "paged", "after": first_token, "count": 1 }),
-        )
-        .await,
-    )
-    .expect("logs answers");
-    let records = one_after_the_first_token["records"].as_array().unwrap();
-    assert_eq!(records.len(), 1, "{one_after_the_first_token}");
-    assert_eq!(records[0]["sequence"], first_token + 1);
-    assert_eq!(one_after_the_first_token["next_after"], first_token + 1);
-
-    let read_on = tool_answer(
-        &tool_call_result(
-            Arc::clone(&operations_on_the_loaded_streams),
-            "logs",
-            json!({ "stream": "paged", "after": one_after_the_first_token["next_after"] }),
-        )
-        .await,
-    )
-    .expect("logs answers");
+    let of_paged = read(json!({ "project_directory": project, "stream": "paged" })).await;
     assert_eq!(
-        read_on["records"][0]["sequence"],
-        first_token + 2,
-        "reading on from `next_after` starts at the next record: {read_on}"
+        tokens(&of_paged),
+        [
+            "logs-paging-token-paged-0",
+            "logs-paging-token-paged-1",
+            "logs-paging-token-paged-2"
+        ]
     );
+    assert_eq!(of_paged["project_directory"], project.as_str());
+    assert_eq!(of_paged["records_no_longer_held"], false);
+    let every_record = read(json!({ "project_directory": project })).await;
+    assert_eq!(tokens(&every_record).len(), 6, "{every_record}");
 
-    let past_every_record = tool_answer(
-        &tool_call_result(
-            Arc::clone(&operations_on_the_loaded_streams),
-            "logs",
-            json!({ "stream": "paged", "after": u64::MAX }),
-        )
-        .await,
-    )
-    .expect("logs answers");
-    assert_eq!(past_every_record["records"], json!([]));
+    let mut cursor = Value::Null;
+    let mut read_one_by_one = Vec::new();
+    loop {
+        let page = read(json!({
+            "project_directory": project,
+            "stream": "paged",
+            "after": cursor,
+            "count": 1,
+        }))
+        .await;
+        let records = page["records"].as_array().unwrap();
+        if records.is_empty() {
+            break;
+        }
+        assert_eq!(records.len(), 1, "{page}");
+        read_one_by_one.extend(tokens(&page));
+        cursor = page["next_after"].clone();
+    }
+    assert_eq!(read_one_by_one, tokens(&of_paged));
+
+    engine.unload_stream("paged").expect("the stream unloads");
+    engine.unload_stream("other").expect("the stream unloads");
+    let after_the_unload = read(json!({ "project_directory": project, "stream": "paged" })).await;
+    assert_eq!(tokens(&after_the_unload), tokens(&of_paged));
 
     let refusal = tool_answer(
         &tool_call_result(
             operations_on_the_loaded_streams,
             "logs",
-            json!({ "stream": "unloaded" }),
+            json!({ "project_directory": "relative/project" }),
         )
         .await,
     )
-    .expect_err("a stream not loaded is refused");
-    assert!(
-        refusal.contains("unloaded") && refusal.contains("paged"),
-        "{refusal}"
-    );
-    engine.unload_stream("paged").expect("the stream unloads");
+    .expect_err("a relative project directory is refused");
+    assert!(refusal.contains("absolute path"), "{refusal}");
 }
 
 // ============================================================================
