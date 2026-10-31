@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.3](https://github.com/tatolab/streamlib/compare/v0.68.2...v0.68.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* **engine:** a stream the runtime re-loads at its start never puts a camera or microphone prompt up ([#3027](https://github.com/tatolab/streamlib/issues/3027)) ([1eb73ca](https://github.com/tatolab/streamlib/commit/1eb73cada05b35510b82fe9ba7fb1c08898ffdc9))
+
 ## [0.68.2](https://github.com/tatolab/streamlib/compare/v0.68.1...v0.68.2) (2026-10-31)
 
 
