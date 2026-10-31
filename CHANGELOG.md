@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.2](https://github.com/tatolab/streamlib/compare/v0.68.1...v0.68.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **tatolabd:** keep relay secrets where macOS never prompts, chosen at first use ([#3025](https://github.com/tatolab/streamlib/issues/3025)) ([c59cf09](https://github.com/tatolab/streamlib/commit/c59cf09048ce86676d263cd941821e00f0e13147))
+
 ## [0.68.1](https://github.com/tatolab/streamlib/compare/v0.68.0...v0.68.1) (2026-10-31)
 
 
