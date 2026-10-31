@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.68.0](https://github.com/tatolab/streamlib/compare/v0.67.0...v0.68.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** a compile target always names its function, so the several-streams refusal goes ([#3015](https://github.com/tatolab/streamlib/issues/3015))
+
+### Bug Fixes
+
+* **sdk:** a compile target always names its function, so the several-streams refusal goes ([#3015](https://github.com/tatolab/streamlib/issues/3015)) ([b49dd3b](https://github.com/tatolab/streamlib/commit/b49dd3bd3f0dffecbb205fa740c96daf2bd3248c))
+
 ## [0.67.0](https://github.com/tatolab/streamlib/compare/v0.66.0...v0.67.0) (2026-10-31)
 
 
