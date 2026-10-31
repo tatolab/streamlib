@@ -92,6 +92,8 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
             "state": "running",
             "node_count": 1,
             "failed_because": null,
+            "action": null,
+            "step": null,
         }])
     );
     assert!(
