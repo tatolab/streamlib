@@ -33,7 +33,8 @@ pub struct StreamLocation {
 
 impl StreamLocation {
     /// Where the project at `project_directory` is recorded while it gives no
-    /// stream — its `.venv` cannot be made, or its entry does not import: the
+    /// stream — its `.venv` cannot be made, or its entry does not import or
+    /// defines no `@stream`: the
     /// project directory with no stream function, so its stream id is
     /// `<folder>-<hash>`.
     pub fn of_a_project_that_gave_no_stream(project_directory: PathBuf) -> Self {

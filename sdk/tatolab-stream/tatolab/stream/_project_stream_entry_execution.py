@@ -31,7 +31,6 @@ __all__ = [
     "execute_app_entry_file",
     "import_stream_entry_module",
     "named_stream_function_location",
-    "no_stream_defined_because",
     "project_directory_the_stream_entry_imports_from",
     "select_stream_function",
     "stream_function_location",
@@ -153,7 +152,7 @@ def select_stream_function(
         if len(stream_functions) == 1:
             return stream_functions[0]
         if not stream_functions:
-            raise StreamEntryDefinesNoStreamError(no_stream_defined_because(entry_described))
+            raise StreamEntryDefinesNoStreamError(_no_stream_defined_because(entry_described))
         raise ProjectStreamCompileRefusalError(
             f"{entry_described} defines {len(stream_functions)} @stream functions:\n"
             f"{_stream_function_listing(stream_functions)}\n"
@@ -185,9 +184,12 @@ def select_stream_function(
     )
 
 
-def no_stream_defined_because(entry_described: str) -> str:
+def _no_stream_defined_because(entry_described: str) -> str:
     """Why an entry that imported gives no stream, with a sample of one."""
-    return f"{entry_described} defines no @stream function\n{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
+    return (
+        f"{entry_described} defines no @stream function\n"
+        f"{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
+    )
 
 
 def project_directory_the_stream_entry_imports_from(

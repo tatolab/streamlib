@@ -438,10 +438,11 @@ impl Runner {
     /// that raised while it compiled is recorded failed with its traceback and
     /// no graph; a load or start that is refused leaves the stream recorded
     /// failed with the reason; a named function the entry no longer defines
-    /// fails its record. An entry that does not import fails every record of
-    /// the project, or with none records the project itself failed, under
+    /// fails its record. An entry that does not import or defines no
+    /// `@stream` fails every record of the project, or with none records the
+    /// project itself failed, under
     /// [`StreamLocation::of_a_project_that_gave_no_stream`], until a load
-    /// that imports forgets it.
+    /// that gives a stream forgets it.
     ///
     /// A load of a location already recorded replaces it under the same id,
     /// keeping its display name unless the request gives one, and the owner's
@@ -656,8 +657,8 @@ impl Runner {
     /// failed, its crash count reset. A `.venv` that cannot be made records it
     /// failed for why, and refuses the start. A record holding no graph — its compile
     /// failed — is compiled from its location as [`Self::run_stream`] compiles
-    /// it, and the project's record of an entry that did not import is a run of
-    /// the project. Refused for a stream already loaded, an id no record holds,
+    /// it, and the project's own `<folder>-<hash>` record is a run of the
+    /// project. Refused for a stream already loaded, an id no record holds,
     /// and a record an earlier runtime wrote. A failed stream whose retry is
     /// refused stays failed for the retry's reason, its crash count reset — or
     /// as it was, when the refusal was the engine's own; one whose retry
@@ -1456,7 +1457,7 @@ impl Runner {
 
     /// Record failed, with `failed_because`, every stream recorded from the
     /// project that gave no stream — its `.venv` was not made, or its entry did
-    /// not import — unloading each one loaded; with none, record the project
+    /// not import or defines no `@stream` — unloading each one loaded; with none, record the project
     /// itself failed under
     /// [`StreamLocation::of_a_project_that_gave_no_stream`], shown under
     /// its folder's name unless the run gives one.
@@ -1643,7 +1644,7 @@ impl Runner {
             && !the_same_directory(&project_directory, &record.location.project_directory)
         {
             return Err(Error::Configuration(format!(
-                "the stream `{}` records an entry in {} that did not import, and names no file \
+                "the stream `{}` records an entry in {} that gave no stream, and names no file \
                  to compile again; run that entry again with `tatolab run` in {}",
                 record.stream_id,
                 record.location.project_directory.display(),
@@ -2302,7 +2303,7 @@ mod tests {
             );
         }
 
-        /// Where this project is recorded while its entry does not import.
+        /// Where this project is recorded while it gives no stream.
         fn location_of_the_project(&self) -> StreamLocation {
             StreamLocation::of_a_project_that_gave_no_stream(self.path().to_path_buf())
         }
