@@ -22,5 +22,5 @@ The round-based variant of `grilling` for sessions with many open decisions.
    that exploration wait for it.
 5. Recompute the frontier from the answers and repeat.
 
-Done when the frontier is empty: restate every decision taken, numbered, and get one
-final yes.
+Done when the frontier is empty: restate every decision taken, numbered, and check the
+owner agrees.

@@ -5,8 +5,8 @@ description: Interview the owner relentlessly, one question at a time, to reach 
 
 # Grilling
 
-Interview until understanding is genuinely shared — then stop. Never act on the subject
-while grilling.
+Interview until understanding is genuinely shared — then stop. Acting on the subject
+mid-interview tends to anchor on a half-formed answer, so the work comes after.
 
 - **Situate before the first question.** Read how the subject slots into the plan AND
   the code: is it net-new, a refactor of an existing system, or a lesson learned from
@@ -24,4 +24,4 @@ while grilling.
   changing, run the `glossary` skill.
 
 Done when the owner confirms shared understanding: restate the decisions taken in your
-own words and get an explicit yes before anything else happens.
+own words and check they agree.

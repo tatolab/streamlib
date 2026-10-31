@@ -19,12 +19,12 @@ Read the chosen form's YAML and fill **its** sections — don't invent a structu
 - **research**: Question · Why now · Deliverable shape.
 
 ## 2. Infer kind / zone / milestone
-Infer the form (kind), the zones touched, and the milestone from the intent and the current code. **Milestone assignment is required** — every issue belongs to one. When confidence is low on any of these, **ask the owner inline** (`AskUserQuestion`) rather than guessing — a wrong milestone or a mis-scoped issue costs more than one question. Milestone scoping is the owner's call.
+Infer the form (kind), the zones touched, and the milestone from the intent and the current code. **Milestone assignment is required** — every issue belongs to one. When confidence is low on any of these, asking the owner is usually cheaper than a wrong milestone or a mis-scoped issue — or file on your best guess and say which part you guessed, so they can move it. Milestone scoping is ultimately the owner's call.
 
 Labels are display output only; the router will classify the issue fresh at pickup, so don't over-label to steer it.
 
 ## 3. Never file an umbrella issue
-An issue that says "do all of X" and lists sub-tasks is the failure mode this skill prevents. Decompose into **self-contained issues**, each with its own Done-means and validation shape, connected by **native GitHub dependency edges** — not text like "depends on #N."
+An issue that says "do all of X" and lists sub-tasks is the failure mode this skill is shaped to avoid. Decompose into **self-contained issues**, each with its own Done-means and validation shape, connected by **native GitHub dependency edges** — not text like "depends on #N."
 
 Set the edges through whichever `gh` surface this repo actually exposes — **verify which exists before using it**: the GraphQL issue-relationship mutations (add-blocked-by) or the sub-issue relationship API. Check with a probe (e.g. inspect `gh api graphql` for the relationship mutation, or `gh` sub-issue support) and use the one that works; the `Related` section of a body is for free-text context only, never for dependency edges.
 

@@ -1,25 +1,33 @@
 ---
 name: plan
-description: Where are we and what's next — reads the plan statuses, open changes, active tickets, and the tracker, then routes to the right skill.
-disable-model-invocation: true
+description: Where are we and what's next — reads the plan statuses, open changes, open PRs and the tracker, then suggests which skill or step fits next.
 ---
 
 # Plan (the router)
 
-Read-only. Report, then route. Never edit anything from this skill.
+A quick orientation pass. It exists because the catalog of skills is large and the
+plan's state is spread over several files; reading them once and naming a next step
+saves every session from re-deriving it. It suggests, it does not decide — pick
+whatever next step the situation actually calls for.
 
-1. Read `docs/plan/ARCHITECTURE.md` — count sections by status (SHIPPED / IN-FLIGHT /
-   DECIDED / OPEN). Name the OPEN sections.
+A rough pass that has worked well:
+
+1. Read `docs/plan/ARCHITECTURE.md` and count sections by status (SHIPPED / IN-FLIGHT /
+   DECIDED / OPEN). Name the OPEN ones — they are where the owner's input is most
+   likely needed.
 2. List `docs/plan/changes/*.md` (active deltas) and any `[NEEDS DECISION]` markers
    still inside them.
-3. Check `.claude/state/active-ticket.json` (work mid-flight?) and
-   `gh issue list --state open --limit 100 --json number,title,milestone`.
-4. Report in at most five lines: plan state, active changes, in-flight ticket, tracker
-   shape, and the single recommended next step.
-5. Route by the first rule that matches:
-   - §Product (the MVP sentence) still OPEN → `/align` on §Product.
-   - A change with every ticket merged → `/ship-change`.
-   - An approved change without tickets → `/derive-tickets`.
-   - A ready ticket exists → `/implement`.
-   - Tracker items that trace to no plan entry → `/reconcile-tracker`.
-   - The owner declared a direction change → `/pivot`.
+3. Look at what is mid-flight — open PRs and branches (`gh pr list`) — and the tracker
+   (`gh issue list --state open --limit 100 --json number,title,milestone`).
+4. Report briefly: plan state, active changes, in-flight work, tracker shape, and the
+   step you'd recommend.
+
+Common next steps, as a starting point rather than a decision table:
+
+- §Product (the MVP sentence) still OPEN → `/align` on §Product is usually the most
+  valuable thing to settle.
+- A change with every ticket merged → `/ship-change` folds it in.
+- An approved change without tickets → `/derive-tickets`.
+- A ready ticket → `/implement`.
+- Tracker items that trace to no plan entry → `/reconcile-tracker`.
+- The owner has described a direction change → `/pivot`.

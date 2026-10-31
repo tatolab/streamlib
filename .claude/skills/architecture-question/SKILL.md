@@ -1,12 +1,12 @@
 ---
 name: architecture-question
 description: Ask how something in the system works and get Claude's current understanding back, with evidence, labeled by source. Use when the owner asks "how does X work", "why is Y shaped this way", "what happens when Z" — any question about the system's behavior or structure rather than a request to change it.
-disable-model-invocation: true
 ---
 
 # Architecture question
 
-The deliverable is shared understanding, not just an answer. No edits from this skill.
+The deliverable is shared understanding, not just an answer, so it is usually a
+read-only pass.
 
 1. **Verify before asserting.** Read the actual code paths before answering — an
    architecture answer from memory alone is how wrong beliefs calcify. Route domain

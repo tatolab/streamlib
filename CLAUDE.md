@@ -23,29 +23,25 @@ listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explici
 StreamLib is a BUSL-1.1-licensed real-time streaming processing runtime like Nvidia holoscan.It is built like a game engine:
 ONE core system per concern — extend the existing system, never build a parallel one. Search first.
 
-## The router — how work happens
+## How work usually flows
 
-- All work enters through `/plan` — it reads the plan statuses and the tracker and says
-  which skill is next.
-- Source edits (`runtime/ sdk/ adapters/ xtask/`) belong inside `/implement` with an
-  owner-confirmed ticket. Nothing prompts on one — like a doc edit, the distinction is the
-  session's to apply.
-- Plan *decisions* belong inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
-  Plan and doc *records* do not — see §Recording facts vs deciding. Nothing prompts on a
-  doc edit; the distinction is the session's to apply, because a path guard can't see it.
-- **Guardrails prompt; they never wall off.** Every path guard routes to the owner rather
-  than refusing, so a scope written months ago can't strand work that has to land. The
-  doctrine still decides what is *right* — a prompt is not permission to bend a rule.
-  Guards cover only what is genuinely hard to reverse — the licence files. They are not a
-  review queue for prose. The `rig-brake` hook is advisory: it notes a rig-consuming command
-  to the model and to the owner, and it prompts only where the owner set a rule or a glob to
-  `ask` in `.claude/rig-brake.json` or its local / user-level siblings
-  (`.claude/scripts/rig-brake` edits them).
-- Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
-  tracer bullets as the change honestly needs) →
-  `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction
-  changes, `/diagnose` for bugs, `/research` for questions, `/reconcile-tracker` keeps
-  GitHub a projection of the plan, `/propose-rule` is the only way rules change.
+The skills under `.claude/skills/` write down how the owner likes to reason about and
+decompose work. They are descriptive, not gates: each says why its steps exist, and any
+of them can be invoked, adapted, or skipped as the situation calls for. Nothing in this
+repo blocks a tool call or stops a session — no hook refuses or prompts on a workflow
+step. The one permission prompt left is an edit to the licence files (§Licensing).
+
+- `/plan` is a quick orientation — it reads the plan statuses, open PRs and the tracker
+  and suggests a next step.
+- The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets`
+  (as few tracer bullets as the change honestly needs) → `/implement` (build) →
+  `/ship-change` (fold + prove removals). `/pivot` for direction changes, `/diagnose` for
+  bugs, `/research` for questions, `/reconcile-tracker` keeps GitHub a projection of the
+  plan, `/propose-rule` for changing rules.
+- Source work (`runtime/ sdk/ adapters/ xtask/`) usually traces to a ticket, so the PR
+  can say what it closes. Plan *decisions* usually travel through `/align`,
+  `/propose-change`, `/ship-change` or `/pivot`, because they change what was agreed;
+  plan and doc *records* are ordinary work — see §Recording facts vs deciding.
 - Shared understanding: `/explore-idea` (what-ifs before any commitment),
   `/snapshot-architecture` (the living code-derived picture), `/architecture-question`
   (how does X work, with evidence), `/reconcile-understanding` (corrections that stick).
@@ -62,15 +58,16 @@ skills exist to sharpen decisions, not to license prose.
   anchor, a stale reference, a doc describing code that no longer exists — is part of
   finishing the work. Write it in the same PR as the change it describes. Leaving the
   record wrong to avoid ceremony is the worse outcome, always.
-- **A decision goes through the lifecycle.** Adding, retracting or reversing a `DECIDED` /
-  `OPEN` entry, changing what we agreed to build, or settling a question the plan leaves
-  open belongs in `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
-- **A review comment is never a decision source.** A finding on a PR — bot or human — that
-  would change what we build is answered `Owner decision needed: <the gap>` and routed to
-  `/align`; only a record is fixed in the PR (`.claude/rules/owner-decisions.md`).
+- **A decision is the owner's.** Adding, retracting or reversing a `DECIDED` / `OPEN`
+  entry, changing what we agreed to build, or settling a question the plan leaves open
+  is best brought to the owner — usually through `/align`, `/propose-change`,
+  `/ship-change`, or `/pivot`.
+- **A review comment is not a decision source.** A finding on a PR — bot or human — that
+  would change what we build is answered `Owner decision needed: <the gap>` and brought to
+  the owner; a record is fixed in the PR (`.claude/rules/owner-decisions.md`).
 - The test: **could a careful reader derive it from the diff and the tree?** Then it is a
   fact — write it, and say in the PR body that you did. Does it commit us to something we
-  have not agreed? Then it is a decision — bring it.
+  have not agreed? Then it is a decision — bring it, while you keep going on the rest.
 - Doc hygiene inside work you are already doing — fixing a claim your own change falsified —
   is never a separate ticket and never a question.
 
@@ -86,8 +83,8 @@ attention, and attention spent on settled things is unavailable for real forks.
   signed off, to check that work is going well, or in place of reading the tree. If the
   answer is discoverable, discover it.
 - **Prefer a stated assumption to a blocking question.** Do the work, say plainly what you
-  assumed and where it would bite, and let the owner correct it. Reserve blocking for cases
-  where proceeding either way is unsafe or would waste the work.
+  assumed and where it would bite, and let the owner correct it. Wait only where
+  proceeding either way is unsafe or would waste the work.
 - **Batch** what genuinely must be asked into one round at the point of decision — never a
   drip of one-question stops.
 - A finding is not a question. Non-blocking findings go in the PR description, then move on.
@@ -97,7 +94,8 @@ attention, and attention spent on settled things is unavailable for real forks.
 The runtime is the product; consumers lag behind it by design (the Holoscan / Next.js model:
 framework repo first, holohub/examples follow releases). Architecture lives in ONE place —
 `docs/plan/ARCHITECTURE.md` plus `docs/plan/architecture.excalidraw` — agreed with the owner
-before implementation. Sessions implement the plan; they never make architecture.
+before implementation. Sessions implement the plan; when work needs architecture the plan
+doesn't state, the owner wants to make that call (§Asking the owner).
 
 - `examples/` and the consumer entries in `packages/` (everything except `test-fixtures`) are
   downstream consumers, **not contract sources** — converted or not. Never read one to infer what
@@ -163,7 +161,8 @@ built-in publishes on means you skipped it.
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
   migration's scope; a broken *converted* consumer gets backlog filed, a held pre-pivot one
   just lags.
-- Architecture is decided in `docs/plan/`, never per-ticket. A missing decision stops work and
-  goes to the owner; it is never inferred from existing code.
+- Architecture is decided in `docs/plan/`, not per-ticket. A missing decision goes to the
+  owner — as a question or a stated assumption — rather than being inferred from existing
+  code.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 

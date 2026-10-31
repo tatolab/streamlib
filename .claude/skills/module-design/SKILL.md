@@ -22,8 +22,8 @@ Procedure:
    trade-offs.
 3. **Compare** on depth, locality, and seam placement. Give ONE opinionated
    recommendation — never a menu.
-4. The chosen shape goes into the change proposal via `/propose-change` — it is never
-   implemented straight from chat.
+4. The chosen shape usually goes into a change proposal via `/propose-change`, so the
+   owner sees a new interface before code commits to it.
 
 Testing stance: **the interface is the test surface.** Wanting to test past it means the
 module is the wrong shape. One adapter is a hypothetical seam; two adapters is a real one.

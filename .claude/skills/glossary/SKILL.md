@@ -17,5 +17,5 @@ The glossary is the shared-language layer. Reading it is not this skill; changin
 - **Zero implementation details.** The glossary is not a spec, a scratch pad, or a
   decision record. It is a glossary and nothing else.
 
-Glossary edits are plan edits: they happen only inside a plan-editing skill (`/align`,
-`/propose-change`, `/pivot`). Nothing enforces this — it is the session's to apply.
+Glossary edits are plan edits, so they usually travel with a plan-editing pass
+(`/align`, `/propose-change`, `/pivot`) and go through the owner's PR review with it.
