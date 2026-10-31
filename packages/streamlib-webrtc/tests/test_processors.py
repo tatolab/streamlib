@@ -136,7 +136,7 @@ TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
 COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_entry")
 
 #: The line `tatolabd` logs as it begins starting a loaded stream.
-STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_name>[^`]+)`")
+STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
 
 #: The line `tatolabd` logs as a stream's unload removes the processors its load added.
 STREAM_UNLOAD_REMOVED_PROCESSORS_LINE = re.compile(
@@ -446,7 +446,7 @@ def node_names_loaded_by_tatolabd(
 
     if start_began is None:
         pytest.fail("tatolabd did not load the stream:\n" + what_the_run_and_the_runtime_said())
-    assert start_began.group("stream_name") == stream_name, what_the_run_and_the_runtime_said()
+    assert f"-{stream_name}-" in start_began.group("stream_id"), what_the_run_and_the_runtime_said()
     assert tatolab_run.returncode == 1 and NO_VULKAN_DRIVER_REFUSAL in tatolab_run.stderr, (
         "the loaded stream was to be refused at its start for the missing Vulkan driver; "
         + what_the_run_and_the_runtime_said()
