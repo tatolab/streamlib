@@ -336,17 +336,41 @@ def write_a_project_whose_compile_prints(
 ) -> None:
     """A project whose `.venv/bin/python` hands the runtime `graph` as its compiled stream.
 
-    The compile entry's invocation prints `graph` in the compile document,
+    The compile entry's invocation prints `graph` in the compile document — as
+    the one stream of an every-stream compile when one is asked for —
     naming this tests directory as the project its Python nodes are described
     and run from; every other invocation execs this test's interpreter, which
     holds the extension.
     """
     compile_document_file = project_directory / "compile-document.json"
+    every_stream_compile_document_file = project_directory / "every-stream-compile-document.json"
     venv_interpreter = project_directory / ".venv" / "bin" / "python"
     venv_interpreter.parent.mkdir(parents=True)
+    described_project_directory = str(Path(__file__).resolve().parent)
+    stream_function = f"stream:{graph.get('stream', 'main')}"
     compile_document_file.write_text(
         json.dumps(
-            {"stream_graph": graph, "project_directory": str(Path(__file__).resolve().parent)}
+            {
+                "stream_graph": graph,
+                "project_directory": described_project_directory,
+                "stream_function": stream_function,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    every_stream_compile_document_file.write_text(
+        json.dumps(
+            {
+                "project_directory": described_project_directory,
+                "streams": [
+                    {
+                        "stream_function": stream_function,
+                        "description": None,
+                        "stream_graph": graph,
+                    }
+                ],
+            }
         )
         + "\n",
         encoding="utf-8",
@@ -355,7 +379,10 @@ def write_a_project_whose_compile_prints(
     venv_interpreter.write_text(
         "#!/bin/sh\n"
         f'if [ "$1" = {first} ] && [ "$2" = {second} ] && [ "$3" = {third} ]; then\n'
-        f"    exec cat {shlex.quote(str(compile_document_file))}\n"
+        '    case " $* " in\n'
+        f"    *' --every-stream '*) exec cat {shlex.quote(str(every_stream_compile_document_file))} ;;\n"
+        f"    *) exec cat {shlex.quote(str(compile_document_file))} ;;\n"
+        "    esac\n"
         "fi\n"
         f'exec {shlex.quote(sys.executable)} "$@"\n',
         encoding="utf-8",
