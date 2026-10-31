@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.4](https://github.com/tatolab/streamlib/compare/v0.68.3...v0.68.4) (2026-10-31)
+
+
+### Bug Fixes
+
+* **installer:** wait for launchd to let go of the booted-out runtime before starting the new one (macOS) ([#3026](https://github.com/tatolab/streamlib/issues/3026)) ([6569d54](https://github.com/tatolab/streamlib/commit/6569d5478f7bd8554f1706fa7cbf54ac742751f7))
+
 ## [0.68.3](https://github.com/tatolab/streamlib/compare/v0.68.2...v0.68.3) (2026-10-31)
 
 
