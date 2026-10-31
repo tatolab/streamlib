@@ -1094,9 +1094,10 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     unsyncable_directory.mkdir()
     (unsyncable_directory / "pyproject.toml").write_text("this is [not toml\n", encoding="utf-8")
     (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE, encoding="utf-8")
-    [unsynced] = client.call_tool(
-        "run_stream", {"project_directory": str(unsyncable_directory.resolve())}
-    )["streams"]
+    unsynced_run = client.call_tool(
+        "run_project", {"project_directory": str(unsyncable_directory.resolve())}
+    )
+    [unsynced] = client.stream_action_once_ended(unsynced_run["action"])["streams"]
     assert unsynced["state"] == "failed", unsynced
     unsyncable_page = client.call_tool(
         "logs", {"project_directory": str(unsyncable_directory.resolve())}
@@ -1116,14 +1117,10 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
         }
     )
     project_directory = str(app_directory.resolve())
-    running_ids = set()
-    for stream_function in ("stream:camera", "stream:preview"):
-        [loaded] = client.call_tool(
-            "run_stream",
-            {"project_directory": project_directory, "stream_function": stream_function},
-        )["streams"]
-        assert loaded["state"] == "running", loaded
-        running_ids.add(loaded["stream"])
+    run = client.call_tool("run_project", {"project_directory": project_directory})
+    loaded_streams = client.stream_action_once_ended(run["action"])["streams"]
+    assert [loaded["state"] for loaded in loaded_streams] == ["running", "running"], loaded_streams
+    running_ids = {loaded["stream"] for loaded in loaded_streams}
     assert (app_directory / ".streamlib" / "logs" / "project.jsonl").is_file()
 
     every_record = client.call_tool("logs", {"project_directory": project_directory})["records"]

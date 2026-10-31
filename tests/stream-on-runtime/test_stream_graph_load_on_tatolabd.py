@@ -3,7 +3,7 @@
 
 """What the runtime loads from a stream's graph, and what its load refuses by name.
 
-A graph reaches `tatolabd` through `run_stream`, as `tatolab run` makes it: the
+A graph reaches `tatolabd` through `run_project`, as `tatolab run` makes it: the
 runtime compiles the project's stream in the project's own interpreter and
 loads the graph that compile printed. A graph written here by hand goes
 through a project whose interpreter prints it as the compile document, so the
@@ -315,7 +315,7 @@ def test_a_project_directory_whose_name_is_not_utf8_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     tmp_path: Path,
 ):
-    """`run_stream` names its project directory in JSON, which carries UTF-8
+    """`run_project` names its project directory in JSON, which carries UTF-8
     only, so `tatolab run` refuses a project it cannot name before the runtime
     is asked."""
     project_directory_not_utf8 = bytes(tmp_path) + b"/caf\xe9"

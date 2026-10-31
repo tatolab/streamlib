@@ -44,7 +44,6 @@ CONTROL_TOOL_NAMES = {
     "remove_node",
     "connect",
     "disconnect",
-    "run_stream",
     "run_project",
     "describe_stream_action",
     "cancel_stream_action",

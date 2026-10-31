@@ -54,8 +54,8 @@ const COMPILE_STANDARD_ERROR_LOG_LABEL: &str = "stream-function-compile";
 const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
 
 /// A compile of a project's stream functions in the project's own
-/// interpreter: what the project's code gave it, the environment its
-/// processor interpreters start in, and what it wrote to its standard error.
+/// interpreter: what the project's code gave it, and the environment its
+/// processor interpreters start in.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StreamFunctionCompileInTheProjectsInterpreterReport {
     /// The graphs, or why the project's code gave none.
@@ -63,10 +63,6 @@ pub(crate) struct StreamFunctionCompileInTheProjectsInterpreterReport {
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
     pub(crate) stream_environment: StreamEnvironment,
-    /// What the compile wrote to its standard error, line by line — the
-    /// cross-floor check's warnings among it — for the caller to show its
-    /// user; the runtime's log carries the same lines.
-    pub(crate) compile_warnings: Vec<String>,
 }
 
 /// One `@stream` of a project's `stream.py`, as a compile of every one of them
@@ -497,12 +493,6 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             project_directory: compiled_project_directory,
             interpreter,
         },
-        compile_warnings: standard_error_text
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
     })
 }
 
@@ -783,42 +773,6 @@ mod tests {
         assert!(refusal.contains("older than this runtime"), "{refusal}");
         assert!(refusal.contains("`stream_function`"), "{refusal}");
         assert!(refusal.contains("uv sync"), "{refusal}");
-    }
-
-    #[test]
-    #[serial]
-    fn a_compile_returns_every_line_it_wrote_to_its_standard_error_as_its_warnings() {
-        let project = ProjectWithAStubVenvInterpreter::running(&format!(
-            "echo '' >&2\n\
-             echo 'tatolab: the cross-floor check found 1 thing binding this app to one floor.' >&2\n\
-             echo '  processors/effect.py:4: imports `cupy`' >&2\n\
-             echo '' >&2\n{}",
-            print_the_compile_document("$PWD")
-        ));
-
-        let compiled = project
-            .compile(Some("stream.py:main"))
-            .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
-
-        assert_eq!(
-            compiled.compile_warnings,
-            [
-                "tatolab: the cross-floor check found 1 thing binding this app to one floor.",
-                "  processors/effect.py:4: imports `cupy`",
-            ]
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn a_compile_that_writes_nothing_to_its_standard_error_returns_no_warnings() {
-        let project = ProjectWithAStubVenvInterpreter::running(&print_the_compile_document("$PWD"));
-
-        let compiled = project
-            .compile(Some("stream.py:main"))
-            .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
-
-        assert_eq!(compiled.compile_warnings, Vec::<String>::new());
     }
 
     #[test]

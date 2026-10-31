@@ -10,7 +10,7 @@
 //! `rmcp`'s alone: concurrency, `notifications/cancelled`, the in-flight
 //! answers a closing stream still owes, and `subscriptions/listen`.
 //!
-//! A stream `run_stream` loads over a connection is recorded and outlives it.
+//! A stream a run loads over a connection is recorded and outlives it.
 //!
 //! `tatolab mcp` and `tatolab dev` are the clients: each sends the upgrade.
 

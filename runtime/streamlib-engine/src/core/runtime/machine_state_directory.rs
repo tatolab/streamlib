@@ -222,12 +222,10 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the display name unless `keep_this_display_name`, the owner's
-    /// rulings and the pending actions, none of which a load changes.
-    pub fn keep_the_attributes_of(&mut self, current: &StreamRecord, keep_this_display_name: bool) {
-        if !keep_this_display_name {
-            self.display_name = current.display_name.clone();
-        }
+    /// disk: the display name, the owner's rulings and the pending actions,
+    /// none of which a load changes.
+    pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
+        self.display_name = current.display_name.clone();
         self.exposure_rulings = current.exposure_rulings.clone();
         self.pending_stream_actions = current.pending_stream_actions.clone();
     }
@@ -593,17 +591,13 @@ impl StreamRecordsInTheStateDirectory {
     }
 
     /// Write `record` whole as a load recorded it, its attributes — display
-    /// name unless `keep_this_display_name`, rulings and pending actions —
-    /// kept from the record on disk, and answer it as written.
-    pub fn write_the_record_a_load_made(
-        &self,
-        mut record: StreamRecord,
-        keep_this_display_name: bool,
-    ) -> Result<StreamRecord> {
+    /// name, rulings and pending actions — kept from the record on disk, and
+    /// answer it as written.
+    pub fn write_the_record_a_load_made(&self, mut record: StreamRecord) -> Result<StreamRecord> {
         let stream_id = record.stream_id.clone();
         self.update(&stream_id, |current| {
             if let Some(current) = current.as_ref() {
-                record.keep_the_attributes_of(current, keep_this_display_name);
+                record.keep_the_attributes_of(current);
             }
             *current = Some(record.clone());
             record
@@ -1122,7 +1116,7 @@ mod tests {
         what_the_load_made.failed_because = Some("it raised".to_string());
 
         let written = records
-            .write_the_record_a_load_made(what_the_load_made, false)
+            .write_the_record_a_load_made(what_the_load_made)
             .unwrap();
 
         assert_eq!(written.display_name, "Desk");
