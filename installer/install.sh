@@ -255,8 +255,31 @@ write_the_service_definition() {
 stop_the_service() {
 	case "$operating_system" in
 	Linux) systemctl --user stop "$TATOLAB_SYSTEMD_USER_UNIT_NAME" 2>/dev/null || true ;;
-	Darwin) launchctl bootout "$(launch_agent_domain)/$TATOLAB_LAUNCH_AGENT_LABEL" 2>/dev/null || true ;;
+	Darwin) boot_out_the_launch_agent_and_wait_until_launchd_lets_it_go ;;
 	esac
+}
+
+# launchctl bootout returns while the job's process is still exiting, and
+# launchd refuses a bootstrap under the same label until that process has
+# exited, which is when it removes the job. caffeinate -w waits on the
+# process's exit itself.
+boot_out_the_launch_agent_and_wait_until_launchd_lets_it_go() {
+	launch_agent_job="$(launch_agent_domain)/$TATOLAB_LAUNCH_AGENT_LABEL"
+	exiting_runtime_pid="$(launchctl print "$launch_agent_job" 2>/dev/null |
+		sed -n 's/^	pid = \([0-9][0-9]*\)$/\1/p')"
+	launchctl bootout "$launch_agent_job" 2>/dev/null || true
+	if [ -n "$exiting_runtime_pid" ]; then
+		caffeinate -w "$exiting_runtime_pid" 2>/dev/null || true
+	fi
+	if launchctl print "$launch_agent_job" >/dev/null 2>&1; then
+		refuse "launchd still holds $launch_agent_job after booting it out. See $(how_to_see_the_service)."
+	else
+		launchctl_print_status="$?"
+	fi
+	# 113 is launchctl's answer for a domain holding no job under the label.
+	[ "$launchctl_print_status" = 113 ] ||
+		refuse "launchctl could not say whether launchd let go of $launch_agent_job" \
+			"(launchctl print exited $launchctl_print_status). See $(how_to_see_the_service)."
 }
 
 # Each step chained, because a function called where its status is tested
