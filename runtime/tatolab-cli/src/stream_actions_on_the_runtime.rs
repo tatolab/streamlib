@@ -433,8 +433,9 @@ pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
 }
 
 /// The `ID  NAME  STATE  NODES  PROJECT  FUNCTION` table, each column as wide as its widest cell,
-/// then an `<id> <step>` line per preparing stream and a line per failed stream saying why it
-/// failed; one line when there is no stream.
+/// then an `<id> <step>` line per preparing stream, a line per failed stream saying why it
+/// failed and a line per stream waiting for capture-device access nobody has asked for; one line
+/// when there is no stream.
 fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> String {
     if listed_streams.is_empty() {
         return NO_STREAMS_IN_THIS_RUNTIME_LINE.to_owned();
@@ -472,6 +473,9 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
     if listed_streams.iter().any(|listed_stream| {
         listed_stream.failed_because.is_some()
             || listed_stream.state == ListedStreamState::Preparing
+            || !listed_stream
+                .capture_devices_whose_access_was_never_asked_for
+                .is_empty()
     }) {
         rendered_table.push('\n');
     }
@@ -498,6 +502,25 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
             None => format!("{stream_id} failed: {failed_because}.\n"),
         };
         rendered_table.push_str(&failed_line);
+    }
+    for listed_stream in listed_streams {
+        if listed_stream
+            .capture_devices_whose_access_was_never_asked_for
+            .is_empty()
+        {
+            continue;
+        }
+        let capture_devices = listed_stream
+            .capture_devices_whose_access_was_never_asked_for
+            .iter()
+            .map(|capture_device| capture_device.wire_spelling())
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let stream_id = &listed_stream.stream;
+        rendered_table.push_str(&format!(
+            "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
+             yet: `tatolab stop {stream_id}` then `tatolab start {stream_id}` asks for it.\n"
+        ));
     }
     rendered_table
 }
@@ -650,10 +673,10 @@ mod tests {
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
-                 "node_count": 4},
+                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": []},
                 {"stream": "a-back-9f8e7d", "display_name": "back", "state": "stopped",
                  "location": {"project_directory": "/srv/a", "stream_function": "rigs:back"},
-                 "node_count": null},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
             ]
         }))
         .unwrap();
@@ -673,9 +696,9 @@ mod tests {
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
-                 "node_count": 4, "failed_because": null},
+                 "node_count": 4, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null},
                 {"stream": "main", "display_name": "main", "state": "failed", "location": null,
-                 "node_count": null, "failed_because": "an earlier runtime recorded it"},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": "an earlier runtime recorded it"},
             ]
         }))
         .unwrap();
@@ -691,15 +714,37 @@ mod tests {
     }
 
     #[test]
+    fn the_streams_table_says_under_it_which_access_each_waiting_stream_needs_asked_for() {
+        let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
+            "streams": [
+                {"stream": "desk-0a1b2c", "display_name": "desk", "state": "running",
+                 "location": {"project_directory": "/srv/desk", "stream_function": "stream"},
+                 "node_count": 3,
+                 "capture_devices_whose_access_was_never_asked_for": ["camera", "microphone"]},
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            rendered_streams_table(&list_streams_result.streams),
+            "ID           NAME  STATE    NODES  PROJECT    FUNCTION\n\
+             desk-0a1b2c  desk  running  3      /srv/desk  stream\n\
+             \n\
+             desk-0a1b2c is waiting for camera and microphone access, which nobody has asked \
+             for yet: `tatolab stop desk-0a1b2c` then `tatolab start desk-0a1b2c` asks for it.\n"
+        );
+    }
+
+    #[test]
     fn the_streams_table_says_under_it_the_step_each_preparing_stream_is_on() {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
                 {"stream": "desk-0a1b2c", "display_name": "desk", "state": "preparing",
                  "location": {"project_directory": "/srv/desk", "stream_function": "stream"},
-                 "node_count": null, "action": "Rabc-1", "step": "making_the_venv"},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-1", "step": "making_the_venv"},
                 {"stream": "hall-3d4e5f", "display_name": "hall", "state": "preparing",
                  "location": {"project_directory": "/srv/hall", "stream_function": "stream"},
-                 "node_count": null, "action": "Rabc-2", "step": null},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-2", "step": null},
             ]
         }))
         .unwrap();

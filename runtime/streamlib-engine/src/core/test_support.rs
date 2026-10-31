@@ -267,11 +267,12 @@ impl crate::core::ManualProcessor for MockSourceRefusingAnAccessNobodyAskedFor::
     ) -> crate::core::error::Result<()> {
         match ctx.capture_device_access_prompting() {
             crate::core::context::CaptureDeviceAccessPrompting::MayAskTheUser => Ok(()),
-            crate::core::context::CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor => {
-                Err(crate::core::error::Error::Configuration(
-                    MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR.to_string(),
-                ))
-            }
+            crate::core::context::CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor => Err(
+                crate::core::error::Error::CaptureDeviceAccessNeverAskedFor {
+                    device: crate::core::error::PrivacyGatedCaptureDevice::Camera,
+                    refusal: MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR.to_string(),
+                },
+            ),
         }
     }
     fn teardown(

@@ -8,6 +8,7 @@ use parking_lot::{Condvar, Mutex};
 use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
+use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::processors::ProcessorState;
 
 /// A processor's state together with the signal that it changed.
@@ -23,6 +24,9 @@ pub struct ObservableProcessorState {
     /// a `setup()` that returned an error carries that error's text, so a
     /// caller waiting for the graph is told the reason and not just the state.
     failure_reason: Mutex<Option<String>>,
+    /// The capture device whose access was never asked for, when that is why
+    /// `setup()` refused.
+    capture_device_access_never_asked_for: Mutex<Option<PrivacyGatedCaptureDevice>>,
 }
 
 impl ObservableProcessorState {
@@ -32,6 +36,7 @@ impl ObservableProcessorState {
             current: Mutex::new(initial),
             changed: Condvar::new(),
             failure_reason: Mutex::new(None),
+            capture_device_access_never_asked_for: Mutex::new(None),
         }
     }
 
@@ -49,8 +54,32 @@ impl ObservableProcessorState {
     /// Move the processor to `Error`, keeping `reason` for whoever asks why,
     /// and wake everything waiting on it.
     pub fn fail_with(&self, reason: impl Into<String>) {
+        self.fail_with_reason_and_capture_device(reason.into(), None);
+    }
+
+    /// Move the processor to `Error` because its `setup()` returned
+    /// `setup_refusal`, keeping the refusal's text and the capture device it
+    /// names when nobody had asked for that device's access, and wake
+    /// everything waiting on it.
+    pub fn fail_with_the_setup_refusal(&self, setup_refusal: &Error) {
+        let capture_device_access_never_asked_for = match setup_refusal {
+            Error::CaptureDeviceAccessNeverAskedFor { device, .. } => Some(*device),
+            _ => None,
+        };
+        self.fail_with_reason_and_capture_device(
+            format!("setup failed: {setup_refusal}"),
+            capture_device_access_never_asked_for,
+        );
+    }
+
+    fn fail_with_reason_and_capture_device(
+        &self,
+        reason: String,
+        capture_device_access_never_asked_for: Option<PrivacyGatedCaptureDevice>,
+    ) {
         let mut current = self.current.lock();
-        *self.failure_reason.lock() = Some(reason.into());
+        *self.failure_reason.lock() = Some(reason);
+        *self.capture_device_access_never_asked_for.lock() = capture_device_access_never_asked_for;
         *current = ProcessorState::Error;
         self.changed.notify_all();
     }
@@ -58,6 +87,12 @@ impl ObservableProcessorState {
     /// Why the processor failed, when it failed through [`Self::fail_with`].
     pub fn failure_reason(&self) -> Option<String> {
         self.failure_reason.lock().clone()
+    }
+
+    /// The capture device whose access nobody had asked for, when that is why
+    /// the processor's `setup()` refused.
+    pub fn capture_device_access_never_asked_for(&self) -> Option<PrivacyGatedCaptureDevice> {
+        *self.capture_device_access_never_asked_for.lock()
     }
 
     /// Move the processor to `state`, unless it has already failed.
@@ -250,6 +285,37 @@ mod tests {
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
             ProcessorState::Error,
             "a failure with a reason ends the wait like one without"
+        );
+    }
+
+    /// A setup that refused a capture device nobody asked access for keeps the
+    /// device beside its words; any other refusal names no device.
+    #[test]
+    fn a_setup_refusing_a_capture_device_never_asked_for_keeps_the_device() {
+        let waiting_for_the_camera = ObservableProcessorState::new(ProcessorState::Pending);
+        waiting_for_the_camera.fail_with_the_setup_refusal(
+            &Error::CaptureDeviceAccessNeverAskedFor {
+                device: PrivacyGatedCaptureDevice::Camera,
+                refusal: "Camera access has not been asked for yet".to_owned(),
+            },
+        );
+        assert_eq!(waiting_for_the_camera.current(), ProcessorState::Error);
+        assert_eq!(
+            waiting_for_the_camera.capture_device_access_never_asked_for(),
+            Some(PrivacyGatedCaptureDevice::Camera)
+        );
+        assert_eq!(
+            waiting_for_the_camera.failure_reason().as_deref(),
+            Some("setup failed: Camera access has not been asked for yet")
+        );
+
+        let refused_otherwise = ObservableProcessorState::new(ProcessorState::Pending);
+        refused_otherwise
+            .fail_with_the_setup_refusal(&Error::Configuration("no such camera".to_owned()));
+        assert_eq!(refused_otherwise.current(), ProcessorState::Error);
+        assert_eq!(
+            refused_otherwise.capture_device_access_never_asked_for(),
+            None
         );
     }
 

@@ -239,7 +239,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   project's `@stream` functions), `stop_stream` (unload; record `stopped`), `start_stream` (a
   stopped or failed one), `remove_project` (unload and forget every stream of the project),
   `rename_stream` (the display name), `list_streams` (id, display name, location, running /
-  preparing / stopping / stopped / failed and why, node count) and `expose_port
+  preparing / stopping / stopped / failed and why, node count, and each capture device whose
+  access a loaded stream waits on because nobody has asked for it) and `expose_port
   {stream, node, port, level}`, `level` one of `internal`, `private`, `public`, which sets the
   port's level live, cutting at once every reader the level no longer allows, and records the
   owner's ruling on the stream's record — the owner's `expose` wins over the function's
@@ -2223,7 +2224,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   something the user did: a stream someone loads or starts may ask, and a stream the runtime
   re-loads on its own at its start never does — its node's `setup()` refuses a device nobody
   has answered for, by name, saying to restart the stream or reload its project to be asked,
-  so logging in never puts a prompt up out of nowhere. Owner, 2026-10-31. The engine is
+  so logging in never puts a prompt up out of nowhere. `list_streams` names each such device
+  on the loaded stream, as `capture_devices_whose_access_was_never_asked_for`, so a client
+  shows the stream waiting for that access and offers to allow it — a `stop_stream` then
+  `start_stream`, which asks. Owner, 2026-10-31. The engine is
   not the permission subject — the application that launched it is, found by walking up the
   process tree — so a refusal names that responsible application and the Camera or Microphone
   setting to change, and never says "Python". A microphone's AUHAL unit is bound only after

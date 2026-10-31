@@ -317,6 +317,14 @@ pub enum Error {
     #[error("Invalid configuration: {0}")]
     Configuration(String),
 
+    /// A node refused a privacy-gated capture device whose access nobody has
+    /// asked the user for, because nobody acted on its stream.
+    #[error("{refusal}")]
+    CaptureDeviceAccessNeverAskedFor {
+        device: PrivacyGatedCaptureDevice,
+        refusal: String,
+    },
+
     #[error("Config update failed: {0}")]
     Config(String),
 
@@ -437,6 +445,45 @@ impl PortDirection {
 impl std::fmt::Display for PortDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_wire_str())
+    }
+}
+
+/// A capture device the platform gates behind a privacy prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PrivacyGatedCaptureDevice {
+    Camera,
+    Microphone,
+}
+
+impl PrivacyGatedCaptureDevice {
+    /// The device as a sentence names it mid-way.
+    pub fn lowercase_name(self) -> &'static str {
+        match self {
+            Self::Camera => "camera",
+            Self::Microphone => "microphone",
+        }
+    }
+
+    /// The device as the platform's privacy settings list it.
+    pub fn privacy_setting_name(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::Microphone => "Microphone",
+        }
+    }
+
+    /// What starts flowing once the user allows it.
+    pub fn what_starts_once_allowed(self) -> &'static str {
+        match self {
+            Self::Camera => "Frames start",
+            Self::Microphone => "Audio starts",
+        }
+    }
+}
+
+impl std::fmt::Display for PrivacyGatedCaptureDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.lowercase_name())
     }
 }
 

@@ -32,7 +32,7 @@ fn listed_stream(
     json!({
         "stream": stream_id, "display_name": display_name, "state": "running",
         "location": {"project_directory": project_directory, "stream_function": "stream:main"},
-        "node_count": 3, "failed_because": null,
+        "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
     })
 }
 
@@ -364,10 +364,10 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
             &json!({"streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
                  "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
-                 "node_count": 3},
+                 "node_count": 3, "capture_devices_whose_access_was_never_asked_for": []},
                 {"stream": "mic-listen-9f8e7d", "display_name": "Desk mic", "state": "stopped",
                  "location": {"project_directory": "/srv/mic", "stream_function": "stream:listen"},
-                 "node_count": null},
+                 "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
             ]})
             .to_string(),
         ),

@@ -50,7 +50,7 @@ use rmcp::{prompt_handler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
-use streamlib::sdk::error::{Error, Result as StreamlibResult};
+use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
 use streamlib::sdk::graph::{
     InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, OutputPortExposureLevel,
 };
@@ -63,14 +63,14 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AddRelayToolResult, CancelStreamActionToolResult, ConfigureRelayToolResult,
-    CreateProjectToolResult, DescribeStreamActionToolResult, DescribeStreamActionToolResultStream,
-    ExposePortLevel, ExposePortToolResult, ListProjectStreamsToolResult,
-    ListProjectStreamsToolResultStream, ListRelaysToolResult, ListStreamsToolResult,
-    ListStreamsToolResultStream, ListedStreamState, LogsToolResult, RemoveProjectToolResult,
-    RemoveRelayToolResult, RenameStreamToolResult, RunProjectToolResult, StartStreamToolResult,
-    StopStreamToolResult, StreamActionKindOnTheWire, StreamActionStateOnTheWire,
-    StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    AddRelayToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
+    ConfigureRelayToolResult, CreateProjectToolResult, DescribeStreamActionToolResult,
+    DescribeStreamActionToolResultStream, ExposePortLevel, ExposePortToolResult,
+    ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListRelaysToolResult,
+    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LogsToolResult,
+    RemoveProjectToolResult, RemoveRelayToolResult, RenameStreamToolResult, RunProjectToolResult,
+    StartStreamToolResult, StopStreamToolResult, StreamActionKindOnTheWire,
+    StreamActionStateOnTheWire, StreamActionStepOnTheWire, StreamLocationOnTheWire,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -883,7 +883,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `preparing` (an action that loads it — a `run_project` or a `start_stream` — is queued or under way on it, named by `action`, on its `step`: `making_the_venv`, `compiling` or `starting`, `null` while it waits), `stopping` (a `stop_stream`, or a `remove_project` of its project, is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `preparing` (an action that loads it — a `run_project` or a `start_stream` — is queued or under way on it, named by `action`, on its `step`: `making_the_venv`, `compiling` or `starting`, `null` while it waits), `stopping` (a `stop_stream`, or a `remove_project` of its project, is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `stop_stream` then `start_stream` of the stream asks."
     )]
     async fn list_streams(
         &self,
@@ -906,6 +906,11 @@ impl LocalApiMcpServerHandler {
                         state: listed_stream_state_on_the_wire(listing.state),
                         node_count: listing.node_count,
                         failed_because: listing.failed_because,
+                        capture_devices_whose_access_was_never_asked_for: listing
+                            .capture_devices_whose_access_was_never_asked_for
+                            .into_iter()
+                            .map(capture_device_on_the_wire)
+                            .collect(),
                         step: listing
                             .stream_action_under_way
                             .as_ref()
@@ -1048,6 +1053,13 @@ fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamSta
         StreamListingState::Failed => ListedStreamState::Failed,
         StreamListingState::Preparing => ListedStreamState::Preparing,
         StreamListingState::Stopping => ListedStreamState::Stopping,
+    }
+}
+
+fn capture_device_on_the_wire(device: PrivacyGatedCaptureDevice) -> CaptureDeviceOnTheWire {
+    match device {
+        PrivacyGatedCaptureDevice::Camera => CaptureDeviceOnTheWire::Camera,
+        PrivacyGatedCaptureDevice::Microphone => CaptureDeviceOnTheWire::Microphone,
     }
 }
 
@@ -2703,6 +2715,7 @@ pub(crate) mod tests {
                         "state": "running",
                         "node_count": null,
                         "failed_because": null,
+                        "capture_devices_whose_access_was_never_asked_for": [],
                         "action": null,
                         "step": null,
                     }]

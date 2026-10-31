@@ -7,53 +7,24 @@ use std::time::Duration;
 
 use crate::apple::responsible_gui_application::responsible_gui_application_name;
 use crate::core::context::CaptureDeviceAccessPrompting;
+pub(crate) use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::{Error, Result};
 
 /// How long a request may sit unanswered before the user is told where the
 /// prompt is and what else answers it.
 const UNANSWERED_REQUEST_REMINDER_DELAY: Duration = Duration::from_secs(10);
 
-/// A capture device macOS gates behind a privacy prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrivacyGatedCaptureDevice {
-    Camera,
-    Microphone,
-}
+/// The AVFoundation media type of `device`.
+fn av_media_type_of(
+    device: PrivacyGatedCaptureDevice,
+) -> Option<&'static objc2_av_foundation::AVMediaType> {
+    use objc2_av_foundation::{AVMediaTypeAudio, AVMediaTypeVideo};
 
-impl PrivacyGatedCaptureDevice {
-    /// The device as a sentence names it mid-way.
-    fn lowercase_name(self) -> &'static str {
-        match self {
-            PrivacyGatedCaptureDevice::Camera => "camera",
-            PrivacyGatedCaptureDevice::Microphone => "microphone",
-        }
-    }
-
-    /// The device as System Settings › Privacy & Security lists it.
-    fn privacy_setting_name(self) -> &'static str {
-        match self {
-            PrivacyGatedCaptureDevice::Camera => "Camera",
-            PrivacyGatedCaptureDevice::Microphone => "Microphone",
-        }
-    }
-
-    /// What starts flowing once the user allows it.
-    fn what_starts_once_allowed(self) -> &'static str {
-        match self {
-            PrivacyGatedCaptureDevice::Camera => "Frames start",
-            PrivacyGatedCaptureDevice::Microphone => "Audio starts",
-        }
-    }
-
-    fn av_media_type(self) -> Option<&'static objc2_av_foundation::AVMediaType> {
-        use objc2_av_foundation::{AVMediaTypeAudio, AVMediaTypeVideo};
-
-        // SAFETY: both are AVFoundation-exported constants.
-        unsafe {
-            match self {
-                PrivacyGatedCaptureDevice::Camera => AVMediaTypeVideo,
-                PrivacyGatedCaptureDevice::Microphone => AVMediaTypeAudio,
-            }
+    // SAFETY: both are AVFoundation-exported constants.
+    unsafe {
+        match device {
+            PrivacyGatedCaptureDevice::Camera => AVMediaTypeVideo,
+            PrivacyGatedCaptureDevice::Microphone => AVMediaTypeAudio,
         }
     }
 }
@@ -99,7 +70,7 @@ impl CaptureDeviceAuthorizationAuthority for AvFoundationCaptureDeviceAuthorizat
     fn authorization_status(&self) -> CaptureDeviceAuthorizationStatus {
         use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice};
 
-        let Some(media_type) = self.0.av_media_type() else {
+        let Some(media_type) = av_media_type_of(self.0) else {
             return CaptureDeviceAuthorizationStatus::Restricted;
         };
         // SAFETY: a status read, callable from any thread.
@@ -116,7 +87,7 @@ impl CaptureDeviceAuthorizationAuthority for AvFoundationCaptureDeviceAuthorizat
         use objc2_av_foundation::AVCaptureDevice;
         use std::sync::Mutex;
 
-        let Some(media_type) = self.0.av_media_type() else {
+        let Some(media_type) = av_media_type_of(self.0) else {
             answer(false);
             return;
         };
@@ -231,10 +202,13 @@ fn authorize_the_capture_device_reminding_the_user_through(
         CaptureDeviceAuthorizationStatus::NotDetermined
             if prompting == CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor =>
         {
-            Err(Error::Configuration(capture_device_refusal_for_the_user(
+            Err(Error::CaptureDeviceAccessNeverAskedFor {
                 device,
-                CaptureDeviceRefusal::NeverAskedForAndNobodyActed,
-            )))
+                refusal: capture_device_refusal_for_the_user(
+                    device,
+                    CaptureDeviceRefusal::NeverAskedForAndNobodyActed,
+                ),
+            })
         }
         CaptureDeviceAuthorizationStatus::NotDetermined => {
             let responsible_application = responsible_application_for_the_user();
@@ -765,6 +739,13 @@ mod tests {
             assert!(
                 refusal.to_string().contains("restart this stream"),
                 "{device:?}: {refusal}"
+            );
+            assert!(
+                matches!(
+                    refusal,
+                    Error::CaptureDeviceAccessNeverAskedFor { device: refused, .. } if refused == device
+                ),
+                "{device:?}: {refusal:?}"
             );
         }
     }

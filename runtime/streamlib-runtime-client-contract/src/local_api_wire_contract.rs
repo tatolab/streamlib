@@ -104,12 +104,36 @@ pub struct ListStreamsToolResultStream {
     pub node_count: Option<usize>,
     /// Why it is failed; `null` when it is not.
     pub failed_because: Option<String>,
+    /// Each capture device a node of the loaded stream refused because nobody has asked the user
+    /// for its access — the runtime re-loaded it on its own at its start — once each; a
+    /// `stop_stream` then `start_stream` of it asks. Empty when it is not loaded.
+    pub capture_devices_whose_access_was_never_asked_for: Vec<CaptureDeviceOnTheWire>,
     /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
     /// is `preparing`.
     pub action: Option<String>,
     /// The step that action is on; `null` while it waits in its project's queue, and unless the
     /// stream is `preparing`.
     pub step: Option<StreamActionStepOnTheWire>,
+}
+
+/// A capture device the platform gates behind a privacy prompt, as `list_streams` spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureDeviceOnTheWire {
+    /// The camera.
+    Camera,
+    /// The microphone.
+    Microphone,
+}
+
+impl CaptureDeviceOnTheWire {
+    /// The device as the wire spells it.
+    pub fn wire_spelling(self) -> &'static str {
+        match self {
+            CaptureDeviceOnTheWire::Camera => "camera",
+            CaptureDeviceOnTheWire::Microphone => "microphone",
+        }
+    }
 }
 
 /// The state of one stream `list_streams` lists.
@@ -611,6 +635,10 @@ mod tests {
                         state: ListedStreamState::Running,
                         node_count: Some(4),
                         failed_because: None,
+                        capture_devices_whose_access_was_never_asked_for: vec![
+                            CaptureDeviceOnTheWire::Camera,
+                            CaptureDeviceOnTheWire::Microphone,
+                        ],
                         action: None,
                         step: None,
                     },
@@ -621,6 +649,7 @@ mod tests {
                         state: ListedStreamState::Failed,
                         node_count: None,
                         failed_because: Some("an earlier runtime recorded it".to_owned()),
+                        capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         action: None,
                         step: None,
                     },
@@ -634,12 +663,13 @@ mod tests {
                         state: ListedStreamState::Preparing,
                         node_count: None,
                         failed_because: None,
+                        capture_devices_whose_access_was_never_asked_for: Vec::new(),
                         action: Some("Rabc-3".to_owned()),
                         step: Some(StreamActionStepOnTheWire::MakingTheVenv),
                     },
                 ],
             }),
-            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null,"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","stream_function":"stream"},"state":"preparing","node_count":null,"failed_because":null,"action":"Rabc-3","step":"making_the_venv"}]}"#
+            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","stream_function":"stream"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
         );
         assert_eq!(
             wire_text(&RunProjectToolResult {
