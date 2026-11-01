@@ -3717,6 +3717,12 @@ mod tests {
     const STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE: &str =
         "#!/bin/sh\n[ \"$2\" = -c ] && exit 0\n";
 
+    /// A temporary directory spelled as the runtime keys a project, symlinks resolved:
+    /// macOS's temporary directory sits under `/var`, a link to `/private/var`.
+    fn resolved_temporary_directory(temporary_directory: &tempfile::TempDir) -> PathBuf {
+        std::fs::canonicalize(temporary_directory.path()).expect("a resolvable temporary directory")
+    }
+
     /// A project whose `.venv/bin/python` is a shell script standing in for
     /// the compile entry.
     struct ProjectWithAStubCompile {
@@ -3742,7 +3748,7 @@ mod tests {
             )
             .expect("the project's pyproject.toml");
             Self {
-                project_directory: temporary_directory.path().to_path_buf(),
+                project_directory: resolved_temporary_directory(&temporary_directory),
                 _directory_removed_on_drop: Arc::new(temporary_directory),
             }
         }
@@ -3754,10 +3760,11 @@ mod tests {
         fn two_with_no_venv_whose_ids_collide(function_name: &str) -> (Self, Self) {
             let parent =
                 Arc::new(a_temporary_directory_at_owner_only_mode().expect("a parent directory"));
+            let resolved_parent = resolved_temporary_directory(&parent);
             let mut project_directory_by_stream_id = std::collections::HashMap::new();
             let (first, second) = (0u32..)
                 .find_map(|attempt| {
-                    let project_directory = parent.path().join(attempt.to_string()).join("rig");
+                    let project_directory = resolved_parent.join(attempt.to_string()).join("rig");
                     let stream_id = StreamLocation {
                         project_directory: project_directory.clone(),
                         stream_function: format!("stream:{function_name}"),

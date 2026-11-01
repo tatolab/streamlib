@@ -715,22 +715,28 @@ mod tests {
             None,
         );
 
+        // A project is keyed by its resolved directory; macOS's temporary directory is under a symlink.
+        let first_project_directory = std::fs::canonicalize(first_project.path()).unwrap();
         assert_eq!(camera.stream_id(), Some("camera"));
         assert_eq!(camera.action_id(), Some("R-test-1"));
         assert_eq!(the_load.stream_id(), None);
         assert_eq!(
             spelled_otherwise.route().project_directory(),
-            Some(first_project.path()),
+            Some(first_project_directory.as_path()),
             "a project spelled through a symlink is keyed by its resolved directory"
         );
         std::fs::remove_file(&the_same_project_spelled_through_a_symlink).unwrap();
         assert_eq!(
             camera.route().project_directory(),
-            Some(first_project.path())
+            Some(first_project_directory.as_path())
         );
         assert_eq!(
             elsewhere.route().project_directory(),
-            Some(second_project.path())
+            Some(
+                std::fs::canonicalize(second_project.path())
+                    .unwrap()
+                    .as_path()
+            )
         );
         assert!(!Arc::ptr_eq(camera.route(), elsewhere.route()));
     }
