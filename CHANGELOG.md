@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.7](https://github.com/tatolab/streamlib/compare/v0.68.6...v0.68.7) (2026-11-01)
+
+
+### Bug Fixes
+
+* **scaffold:** a new project floors tatolab-stream at the version of the runtime that created it ([#3036](https://github.com/tatolab/streamlib/issues/3036)) ([87790de](https://github.com/tatolab/streamlib/commit/87790deb07511cadd31d7862797d067abf97479e))
+
 ## [0.68.6](https://github.com/tatolab/streamlib/compare/v0.68.5...v0.68.6) (2026-11-01)
 
 
