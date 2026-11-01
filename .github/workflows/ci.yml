@@ -667,9 +667,6 @@ jobs:
           # tests need the feature to isolate each test's machine.
           cargo test --locked -p tatolab-cli \
             --features machine-directories-under-a-test-root
-          # `--test-threads=1`: two of these open iceoryx2 nodes in child
-          # processes of this same binary and race each other in parallel.
-          cargo test --locked -p streamlib-engine --lib -- --test-threads=1
           # The surface-share service's raw-Mach arm. IOSurface and Mach need
           # no GPU.
           cargo test --locked -p streamlib-surface-client
@@ -711,11 +708,14 @@ jobs:
           brew install molten-vk vulkan-loader vulkan-tools
           vulkaninfo --summary
 
-      # Its real-engine tests create and load a stream, whose start builds the
-      # engine's GPU context.
-      - name: Local API server tests on the Metal device
+      # Their stream-action and real-engine tests create and load a stream,
+      # whose start builds the engine's GPU context.
+      - name: Engine and local API server tests on the Metal device
         if: github.event_name != 'pull_request'
         run: |
+          # `--test-threads=1`: two of these open iceoryx2 nodes in child
+          # processes of this same binary and race each other in parallel.
+          cargo test --locked -p streamlib-engine --lib -- --test-threads=1
           TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
             cargo test --locked -p streamlib-api-server --lib \
             --features machine-directories-under-a-test-root
