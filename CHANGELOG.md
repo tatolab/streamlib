@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.6](https://github.com/tatolab/streamlib/compare/v0.68.5...v0.68.6) (2026-11-01)
+
+
+### Bug Fixes
+
+* **release:** prove each distribution against the runtime's create-and-load flow, so the release publishes again ([#3033](https://github.com/tatolab/streamlib/issues/3033)) ([3d0fb1e](https://github.com/tatolab/streamlib/commit/3d0fb1e44767a0477ec131a53292f17b73448ea7))
+
 ## [0.68.5](https://github.com/tatolab/streamlib/compare/v0.68.4...v0.68.5) (2026-10-31)
 
 
