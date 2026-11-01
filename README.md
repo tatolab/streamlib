@@ -96,7 +96,8 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-A new project's `pyproject.toml` depends on `tatolab-stream>=0.54.2` and `numpy>=2.1`.
+A new project's `pyproject.toml` depends on `numpy>=2.1` and on `tatolab-stream` at least as new as
+the runtime that created it.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.

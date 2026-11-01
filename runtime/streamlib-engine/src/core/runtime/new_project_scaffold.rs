@@ -35,6 +35,10 @@ const GITIGNORE_TEMPLATE: &str =
 
 const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"tatolab-stream-project\"";
 
+/// The template's `tatolab-stream` requirement, raised on render to this runtime's own version:
+/// a project depending on an older `tatolab-stream` is refused by the runtime that created it.
+const PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-stream>=0.54.2\"";
+
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
@@ -56,10 +60,15 @@ fn without_license_header(python_template: &'static str) -> &'static str {
 pub(crate) fn render_scaffold_template_files(
     distribution_name: &str,
 ) -> Vec<ScaffoldedProjectFile> {
-    let rendered_pyproject_toml = PYPROJECT_TOML_TEMPLATE.replace(
-        PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER,
-        &format!("name = \"{distribution_name}\""),
-    );
+    let rendered_pyproject_toml = PYPROJECT_TOML_TEMPLATE
+        .replace(
+            PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER,
+            &format!("name = \"{distribution_name}\""),
+        )
+        .replace(
+            PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER,
+            &format!("\"tatolab-stream>={}\"", env!("CARGO_PKG_VERSION")),
+        );
 
     vec![
         ScaffoldedProjectFile {
@@ -245,6 +254,13 @@ mod tests {
     }
 
     #[test]
+    fn the_tatolab_stream_requirement_placeholder_is_present_in_its_template() {
+        assert!(
+            PYPROJECT_TOML_TEMPLATE.contains(PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER)
+        );
+    }
+
+    #[test]
     fn every_file_is_rendered_without_the_licence_header_and_names_its_distribution() {
         let rendered_files = render_scaffold_template_files("probe-app");
         for rendered_file in &rendered_files {
@@ -263,10 +279,11 @@ mod tests {
             );
         }
         assert!(
-            rendered_files[4]
-                .rendered_contents
-                .contains("dependencies = [\"tatolab-stream>=0.54.2\", \"numpy>=2.1\"]"),
-            "a new project floors tatolab-stream above PyPI's 0.0.0 placeholder"
+            rendered_files[4].rendered_contents.contains(&format!(
+                "dependencies = [\"tatolab-stream>={}\", \"numpy>=2.1\"]",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "a new project floors tatolab-stream at the version of the runtime that created it"
         );
         assert!(
             rendered_files[4]
