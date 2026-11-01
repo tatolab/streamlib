@@ -857,7 +857,7 @@ mod tests {
     }
 
     /// A loopback port free when chosen.
-    #[cfg(any(target_os = "macos", feature = "machine-directories-under-a-test-root"))]
+    #[cfg(feature = "machine-directories-under-a-test-root")]
     fn a_free_loopback_port() -> u16 {
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .unwrap()
@@ -1078,6 +1078,28 @@ mod tests {
 
         const PROBING_CHILD_TEST_PATH: &str = "machine_runtime_lock::tests::taken_and_probed_on_this_floor::probes_and_refused_takes_by_the_holder_leave_the_lock_held";
 
+        /// A loopback port free when chosen, below the 49152–65535 range macOS draws a
+        /// port-0 bind from: a test probes the lock while it is free, and a listener
+        /// another test binds to port 0 meanwhile could otherwise land on it.
+        #[cfg(target_os = "macos")]
+        fn a_free_loopback_port_below_the_ephemeral_range() -> u16 {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            const FIRST_CANDIDATE_PORT: u32 = 20_000;
+            const CANDIDATE_PORT_COUNT: u32 = 20_000;
+            static NEXT_CANDIDATE_OFFSET: AtomicU32 = AtomicU32::new(0);
+            let offset_of_this_process = std::process::id().wrapping_mul(97);
+            for _candidate in 0..CANDIDATE_PORT_COUNT {
+                let candidate_offset = offset_of_this_process
+                    .wrapping_add(NEXT_CANDIDATE_OFFSET.fetch_add(1, Ordering::SeqCst))
+                    % CANDIDATE_PORT_COUNT;
+                let candidate_port = (FIRST_CANDIDATE_PORT + candidate_offset) as u16;
+                if TcpListener::bind((Ipv4Addr::LOCALHOST, candidate_port)).is_ok() {
+                    return candidate_port;
+                }
+            }
+            panic!("no loopback port below the ephemeral range is free");
+        }
+
         /// A lock location only one test uses.
         struct LockLocationOnlyThisTestUses {
             location: MachineRuntimeLockLocation,
@@ -1107,7 +1129,7 @@ mod tests {
                     location: MachineRuntimeLockLocation {
                         loopback_http_listener_address: SocketAddrV4::new(
                             Ipv4Addr::LOCALHOST,
-                            a_free_loopback_port(),
+                            a_free_loopback_port_below_the_ephemeral_range(),
                         ),
                     },
                 }
