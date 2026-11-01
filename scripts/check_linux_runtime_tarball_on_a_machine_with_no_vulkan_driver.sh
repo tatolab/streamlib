@@ -99,7 +99,11 @@ mkdir -p /tmp/stream-on-the-software-device
 python3 -m venv /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 
-"$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-new.log 2>&1 || true
+if ! "$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-new.log 2>&1; then
+	cat /tmp/tatolab-new.log /tmp/tatolabd.log
+	echo "error: tatolab new did not queue the create" >&2
+	exit 1
+fi
 device_deadline=$((SECONDS + 120))
 until grep -q 'Selected Vulkan device' /tmp/tatolabd.log; do
 	if [ "$SECONDS" -ge "$device_deadline" ] || ! kill -0 "$tatolabd_pid" 2>/dev/null; then
