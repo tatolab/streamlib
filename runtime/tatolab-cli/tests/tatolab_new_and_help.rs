@@ -104,7 +104,12 @@ fn help_lists_exactly_the_served_verbs() {
 #[test]
 fn new_in_a_directory_creates_the_project_there_through_the_runtime_and_says_how_to_follow_it() {
     let working_directory = tempfile::tempdir().unwrap();
-    let project_directory = working_directory.path().join("My Probe App");
+    // `new` sends the directory resolved, and macOS's temporary directory is under a symlink.
+    let project_directory = working_directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("My Probe App");
     let (isolated_machine_directories, stub_local_api_server) =
         a_runtime_answering_create_project(StubToolAnswer::tool_result(
             &create_project_tool_result_text("Rabc-1", &project_directory),

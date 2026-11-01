@@ -93,12 +93,17 @@ until "$tatolab_executable" streams >/dev/null 2>&1; do
 	sleep 1
 done
 
-"$tatolab_executable" new /tmp/stream-on-the-software-device
+# The venv is made first, from this checkout's `tatolab-stream`, so the load
+# `tatolab new` queues finds an interpreter that runs and syncs nothing.
+mkdir -p /tmp/stream-on-the-software-device
 python3 -m venv /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 
-cd /tmp/stream-on-the-software-device
-"$tatolab_executable" run >/tmp/tatolab-run.log 2>&1 || true
+if ! "$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-new.log 2>&1; then
+	cat /tmp/tatolab-new.log /tmp/tatolabd.log
+	echo "error: tatolab new did not queue the create" >&2
+	exit 1
+fi
 device_deadline=$((SECONDS + 120))
 until grep -q 'Selected Vulkan device' /tmp/tatolabd.log; do
 	if [ "$SECONDS" -ge "$device_deadline" ] || ! kill -0 "$tatolabd_pid" 2>/dev/null; then
@@ -112,8 +117,8 @@ kill -0 "$tatolabd_pid" 2>/dev/null || tatolabd_survived_the_stream_start=no
 kill -INT "$tatolabd_pid" 2>/dev/null || true
 wait "$tatolabd_pid" 2>/dev/null || true
 
-echo "--- tatolab run"
-cat /tmp/tatolab-run.log
+echo "--- tatolab new"
+cat /tmp/tatolab-new.log
 echo "--- tatolabd"
 cat /tmp/tatolabd.log
 echo "---"

@@ -114,17 +114,12 @@ jobs:
             fi
           done
 
-      # `tatolab new` writes the scaffold.
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build the native tatolab CLI
-        run: cargo build --locked --release -p tatolab-cli
-
       # What a user's `uv sync` gives a scaffolded stream: this run's
       # `tatolab-stream` and the numpy the scaffold declares, and nothing of
       # the runtime. Importing a node runs its decorator and boots no engine, so
-      # this needs no GPU.
+      # this needs no GPU. The project is the scaffold template the runtime
+      # embeds and writes on `tatolab new`, laid out as it writes it, so no
+      # runtime has to be running here.
       - name: A scaffolded stream's nodes import beside this run's tatolab-stream
         run: |
           python3 -m venv /tmp/scaffold-venv
@@ -142,7 +137,9 @@ jobs:
           assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
 
-          target/release/tatolab new /tmp/scaffold-check
+          cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
+          mv /tmp/scaffold-check/python-version /tmp/scaffold-check/.python-version
+          mv /tmp/scaffold-check/gitignore /tmp/scaffold-check/.gitignore
           test -f /tmp/scaffold-check/stream.py
           test -f /tmp/scaffold-check/nodes/halftone_lens_effect.py
           test -f /tmp/scaffold-check/nodes/brightness_meter.py
