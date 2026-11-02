@@ -397,8 +397,8 @@ jobs:
 
       # The engine's build script compiles GLSL with glslc, the Linux engine
       # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build the vendored shaderc; clang, glslangValidator and spirv-opt
-      # build rive-runtime for tatolab-rive. `timeout-minutes` is the backstop the
+      # build the vendored shaderc; clang, glslangValidator, spirv-opt
+      # and libuuid build rive-runtime for tatolab-rive. `timeout-minutes` is the backstop the
       # composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12

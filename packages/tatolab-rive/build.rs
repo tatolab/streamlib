@@ -10,7 +10,8 @@
 //! A checkout named by `TATOLAB_RIVE_RUNTIME_DIRECTORY` is used as it is;
 //! otherwise the pinned revision is fetched into `OUT_DIR`. The build needs
 //! `git`, `ninja`, `clang`, `make`, `python3`, `glslangValidator`,
-//! `spirv-opt`, `nm` and `objcopy` on `PATH`.
+//! `spirv-opt`, `nm` and `objcopy` on `PATH`, and libuuid's headers for
+//! rive-runtime's premake.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
