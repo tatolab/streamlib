@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
-use streamlib_surface_adapter::{SurfaceFormat, SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::{SurfaceFormat, SurfaceRegistration};
 
 /// Inputs the registration site hands to
 /// [`crate::CpuReadbackSurfaceAdapter::register_host_surface`].
@@ -174,8 +174,6 @@ impl ReservedSurfaceTimelineSignalValue<'_> {
 /// consumer-side adapter never mutates it because layout transitions
 /// are issued on the host's `VkDevice`.
 pub(crate) struct SurfaceState<P: DevicePrivilege> {
-    #[allow(dead_code)]
-    pub(crate) surface_id: SurfaceId,
     pub(crate) texture: Option<Arc<P::Texture>>,
     pub(crate) planes: Vec<PlaneSlot<P>>,
     /// `produce_done` timeline — see
