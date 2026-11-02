@@ -151,6 +151,9 @@ class InvertingEffectProbe:
         gpu = ctx.gpu_limited_access
 
         def apply_and_compare() -> "dict[str, Any]":
+            self.claim_on_the_source_frame = gpu.claim_surface_against_producer_reuse(
+                frame.surface_id
+            )
             output_bag = self.effect.apply_to_frame(gpu, frame, dials={"strength": 1.0})
             source = _pixels_of(gpu, frame.surface_id)
             expected = source.copy()
@@ -192,6 +195,9 @@ class PreDeclaredHelpersProbe:
         gpu = ctx.gpu_limited_access
 
         def apply_each() -> "dict[str, Any]":
+            self.claim_on_the_source_frame = gpu.claim_surface_against_producer_reuse(
+                frame.surface_id
+            )
             source = _pixels_of(gpu, frame.surface_id)
             expected_by_name = {
                 "mirror_through_texel_helper": source[:, ::-1],
