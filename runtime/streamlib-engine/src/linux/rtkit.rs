@@ -165,6 +165,12 @@ fn min_nice_level(props: &Proxy<'static>) -> i32 {
 /// gives the strongest preemption rtkit will broker without the call
 /// being refused.
 pub fn make_current_thread_realtime() -> Result<(), String> {
+    make_thread_of_this_process_realtime(current_tid())
+}
+
+/// Ask rtkit to schedule the thread `tid` of this process as `SCHED_RR` at
+/// its policy max, as [`make_current_thread_realtime`] does for the caller.
+pub fn make_thread_of_this_process_realtime(tid: u64) -> Result<(), String> {
     let RtkitProxies { rtkit, properties } =
         proxies().ok_or_else(|| "rtkit not available on system bus".to_string())?;
 
@@ -173,7 +179,6 @@ pub fn make_current_thread_realtime() -> Result<(), String> {
     }
 
     let priority = max_realtime_priority(properties);
-    let tid = current_tid();
     rtkit
         .call::<_, _, ()>("MakeThreadRealtime", &(tid, priority))
         .map_err(|e| format!("rtkit::MakeThreadRealtime(tid={tid}, prio={priority}): {e}"))

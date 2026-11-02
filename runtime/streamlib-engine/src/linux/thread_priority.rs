@@ -27,6 +27,40 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
     }
 }
 
+/// Ask for realtime scheduling on the thread `thread_id` of this process:
+/// rtkit first, then `sched_setscheduler` directly. The refusal says why both
+/// failed; the thread then stays on `SCHED_OTHER`.
+pub fn apply_realtime_priority_to_thread_of_this_process(
+    thread_id: u64,
+) -> std::result::Result<(), String> {
+    let rtkit_refusal = match rtkit::make_thread_of_this_process_realtime(thread_id) {
+        Ok(()) => return Ok(()),
+        Err(refusal) => refusal,
+    };
+    // SAFETY: a zeroed `sched_param` is valid, and `sched_setscheduler` only
+    // reads it.
+    let direct_result = unsafe {
+        let mut parameters: libc::sched_param = std::mem::zeroed();
+        parameters.sched_priority = 80;
+        libc::sched_setscheduler(thread_id as libc::pid_t, libc::SCHED_FIFO, &parameters)
+    };
+    if direct_result == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "{rtkit_refusal}; sched_setscheduler(SCHED_FIFO): {}",
+        std::io::Error::last_os_error()
+    ))
+}
+
+/// Whether the thread `thread_id` of this process is already `SCHED_FIFO` or
+/// `SCHED_RR`.
+pub fn thread_of_this_process_is_realtime(thread_id: u64) -> bool {
+    // SAFETY: `sched_getscheduler` only reads the policy of the named thread.
+    let policy = unsafe { libc::sched_getscheduler(thread_id as libc::pid_t) };
+    policy == libc::SCHED_FIFO || policy == libc::SCHED_RR
+}
+
 fn set_realtime_priority() -> Result<()> {
     match rtkit::make_current_thread_realtime() {
         Ok(()) => {

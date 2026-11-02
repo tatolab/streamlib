@@ -1,0 +1,30 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-owned-device-video-codec-nodes"
+description = "The H.264 and H.265 encoder node bodies the tatolab-h264 and tatolab-h265 modules run on a Vulkan device they own, reading and writing their ports through the module host table"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_owned_device_video_codec_nodes"
+path = "src/lib.rs"
+
+[dependencies]
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.2.0" }
+serde.workspace = true
+rmp-serde.workspace = true
+tracing.workspace = true
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.12" }
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.12" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.12" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.12" }
+
+[lints]
+workspace = true

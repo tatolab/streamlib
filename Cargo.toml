@@ -13,6 +13,7 @@ members = [
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import (Linux) or IOSurface host-memory import (macOS) + bind + map. Adapters depend on this NOT the full engine, so the FullAccess capability boundary is type-system enforced
     "runtime/streamlib-video-bitstream", # engine-free, GPU-free: H.264 and H.265 Annex-B access units, NAL units and sequence parameter sets — what the codec tiers and codec modules parse streams with
     "runtime/streamlib-vulkan-video", # Vulkan Video encode and decode over any device that names its queues and allocator — the engine's own, or the owned device a codec module codes on in its helper
+    "runtime/streamlib-owned-device-video-codec-nodes", # the H.264 / H.265 node bodies the tatolab-h264 and tatolab-h265 modules code with on a Vulkan device their helper owns, through the module host table
     "adapters/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux and macOS)
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux; absent on macOS)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux and macOS)
@@ -50,7 +51,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.68.11"
+version = "0.68.12"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]

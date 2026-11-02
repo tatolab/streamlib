@@ -7,7 +7,9 @@
 pub use streamlib_vulkan_video::{decode, encode, nv12_to_rgb, rgb_to_nv12};
 pub(crate) mod vulkan_video_codec_backend;
 
-pub use decode::{DecodedFrame, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
+pub use decode::{
+    DecodedFrame, DecodedPictureDelivery, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
+};
 pub use encode::{Codec, EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 pub use encode::{EncodedOutput, FrameType};
 pub use nv12_to_rgb::Nv12ToRgbConverter;

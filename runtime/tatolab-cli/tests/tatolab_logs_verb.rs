@@ -8,85 +8,9 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, Instant};
-
 use common::tatolab_binary_run::{
     run_tatolab_reading_no_runtime_directory, standard_error_text, standard_output_text,
 };
-
-/// How long a follow assertion waits before failing rather than hanging.
-const FOLLOW_LINE_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// A `tatolab logs --follow` running in the background, its output read line by line.
-struct FollowingTatolab {
-    tatolab_process: Child,
-    standard_output_lines: Receiver<String>,
-}
-
-impl FollowingTatolab {
-    fn spawn(mut tatolab_command: Command) -> Self {
-        let mut tatolab_process = tatolab_command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        Self {
-            standard_output_lines: lines_read_in_the_background(
-                tatolab_process.stdout.take().unwrap(),
-            ),
-            tatolab_process,
-        }
-    }
-
-    fn next_standard_output_line(&self, awaited: &str) -> String {
-        self.standard_output_lines
-            .recv_timeout(FOLLOW_LINE_TIMEOUT)
-            .unwrap_or_else(|_| {
-                panic!("expected {awaited} on stdout within {FOLLOW_LINE_TIMEOUT:?}")
-            })
-    }
-
-    /// Ctrl-C, as a terminal delivers it, and the exit that follows.
-    fn interrupt_and_wait(mut self) -> ExitStatus {
-        // SAFETY: `kill` takes a pid and a signal number and touches no memory.
-        let kill_result =
-            unsafe { libc::kill(self.tatolab_process.id() as libc::pid_t, libc::SIGINT) };
-        assert_eq!(kill_result, 0);
-        let exit_deadline = Instant::now() + FOLLOW_LINE_TIMEOUT;
-        loop {
-            if let Some(exit_status) = self.tatolab_process.try_wait().unwrap() {
-                return exit_status;
-            }
-            if Instant::now() > exit_deadline {
-                self.tatolab_process.kill().unwrap();
-                panic!(
-                    "`tatolab logs --follow` did not end within {FOLLOW_LINE_TIMEOUT:?} of Ctrl-C"
-                );
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-}
-
-fn lines_read_in_the_background(stream: impl Read + Send + 'static) -> Receiver<String> {
-    let (line_sender, line_receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { return };
-            if line_sender.send(line).is_err() {
-                return;
-            }
-        }
-    });
-    line_receiver
-}
-
-fn rendered_line(message: &str, level_column: &str) -> String {
-    format!("21:04:27.573 [{level_column}] [Rabc/rust] tatolabd — {message}")
-}
 
 #[test]
 fn the_logs_help_names_the_project_and_every_flag() {
@@ -164,7 +88,81 @@ mod against_an_isolated_machine {
         StubLocalApiScript, StubStreamLogRecords, StubToolAnswer,
     };
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
-    use super::{FollowingTatolab, rendered_line};
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Child, Command, ExitStatus, Stdio};
+    use std::sync::mpsc::{self, Receiver};
+    use std::time::{Duration, Instant};
+
+    /// How long a follow assertion waits before failing rather than hanging.
+    const FOLLOW_LINE_TIMEOUT: Duration = Duration::from_secs(15);
+
+    /// A `tatolab logs --follow` running in the background, its output read line by line.
+    struct FollowingTatolab {
+        tatolab_process: Child,
+        standard_output_lines: Receiver<String>,
+    }
+
+    impl FollowingTatolab {
+        fn spawn(mut tatolab_command: Command) -> Self {
+            let mut tatolab_process = tatolab_command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            Self {
+                standard_output_lines: lines_read_in_the_background(
+                    tatolab_process.stdout.take().unwrap(),
+                ),
+                tatolab_process,
+            }
+        }
+
+        fn next_standard_output_line(&self, awaited: &str) -> String {
+            self.standard_output_lines
+                .recv_timeout(FOLLOW_LINE_TIMEOUT)
+                .unwrap_or_else(|_| {
+                    panic!("expected {awaited} on stdout within {FOLLOW_LINE_TIMEOUT:?}")
+                })
+        }
+
+        /// Ctrl-C, as a terminal delivers it, and the exit that follows.
+        fn interrupt_and_wait(mut self) -> ExitStatus {
+            // SAFETY: `kill` takes a pid and a signal number and touches no memory.
+            let kill_result =
+                unsafe { libc::kill(self.tatolab_process.id() as libc::pid_t, libc::SIGINT) };
+            assert_eq!(kill_result, 0);
+            let exit_deadline = Instant::now() + FOLLOW_LINE_TIMEOUT;
+            loop {
+                if let Some(exit_status) = self.tatolab_process.try_wait().unwrap() {
+                    return exit_status;
+                }
+                if Instant::now() > exit_deadline {
+                    self.tatolab_process.kill().unwrap();
+                    panic!(
+                        "`tatolab logs --follow` did not end within {FOLLOW_LINE_TIMEOUT:?} of Ctrl-C"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    fn lines_read_in_the_background(stream: impl Read + Send + 'static) -> Receiver<String> {
+        let (line_sender, line_receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { return };
+                if line_sender.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        line_receiver
+    }
+
+    fn rendered_line(message: &str, level_column: &str) -> String {
+        format!("21:04:27.573 [{level_column}] [Rabc/rust] tatolabd — {message}")
+    }
 
     /// The id of the stream the stub runtime lists as `camera`.
     const DESK_CAMERA_STREAM_ID: &str = "desk-camera-0a1b2c";
