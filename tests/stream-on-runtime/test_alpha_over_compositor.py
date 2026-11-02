@@ -92,7 +92,7 @@ def test_premultiplied_layers_blend_over_transparent_black_at_their_placements(
     assert channels_off_the_reference(
         observed, reference_composite(layers_read_as_straight_alpha)
     ) > 0
-    assert observed[-1, -1].tolist() == [0, 0, 0, 0], "outside every layer is transparent black"
+    assert observed[-1, 0].tolist() == [0, 0, 0, 0], "outside every layer is transparent black"
 
 
 @pytest.mark.parametrize(
