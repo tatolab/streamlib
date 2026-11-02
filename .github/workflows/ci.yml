@@ -597,6 +597,16 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.camera._native
           uvx pyright@1.1.411
 
+      # Pure Python; its pixel tests ran in the integration suite above, whose
+      # venv installs it.
+      - name: "Compositor: GPU-free tests and types"
+        working-directory: packages/tatolab-compositor
+        run: |
+          uv venv --python 3.10 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
+          .venv/bin/python -m pytest tests -v
+          uvx pyright@1.1.411
+
       - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
         working-directory: packages/tatolab-microphone
         run: |
