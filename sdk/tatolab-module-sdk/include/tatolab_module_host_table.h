@@ -38,7 +38,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(0)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(1)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -64,6 +64,11 @@ typedef int32_t ModuleHostTableStatus;
  * A wait elapsed with no input port holding a message.
  */
 #define MODULE_HOST_TABLE_STATUS_TIMED_OUT ((ModuleHostTableStatus)INT32_C(2))
+
+/**
+ * The stream the verb asked about has ended; the error message says why.
+ */
+#define MODULE_HOST_TABLE_STATUS_ENDED ((ModuleHostTableStatus)INT32_C(3))
 
 /**
  * The verb was refused; the error message says why.
@@ -99,6 +104,22 @@ typedef int32_t ModuleHostTableStatus;
  * The `ModuleHostTable.log` level of a per-step trace.
  */
 #define MODULE_HOST_TABLE_LOG_LEVEL_TRACE UINT32_C(5)
+
+/**
+ * A requested `ModuleHostTableAudioStreamFormat.sample_format` that takes
+ * whatever the device opened in; never the format of an opened stream.
+ */
+#define MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY UINT32_C(0)
+
+/**
+ * 32-bit little-endian float scalars.
+ */
+#define MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32 UINT32_C(1)
+
+/**
+ * 16-bit little-endian signed integer scalars.
+ */
+#define MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16 UINT32_C(2)
 
 /**
  * How many bytes of a refusal's message the caller's buffer holds; a longer
@@ -170,6 +191,76 @@ typedef struct ModuleHostTableReadMessage {
     uint64_t lost_since_last_read;
     void *host_owned_message;
 } ModuleHostTableReadMessage;
+
+/**
+ * An audio stream's rate, channel count and scalar encoding. In a request,
+ * a zero field takes whatever the device opened in.
+ */
+typedef struct ModuleHostTableAudioStreamFormat {
+    uint32_t sample_rate;
+    uint32_t channels;
+    /**
+     * One of the `MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_*` values.
+     */
+    uint32_t sample_format;
+} ModuleHostTableAudioStreamFormat;
+
+/**
+ * What a module asks the host to open a capture stream on.
+ */
+typedef struct ModuleHostTableAudioCaptureStreamRequest {
+    /**
+     * The backend-named device; empty takes the backend's default.
+     */
+    ModuleHostTableUtf8 device_id;
+    /**
+     * The format the stream must open in; a device that opens in another is
+     * refused, never converted.
+     */
+    ModuleHostTableAudioStreamFormat requested_format;
+    /**
+     * Always zero; keeps the struct's size a multiple of 8 on every target.
+     */
+    uint32_t reserved;
+} ModuleHostTableAudioCaptureStreamRequest;
+
+/**
+ * An audio stream the host opened for the module, valid until it is closed;
+ * `0` names no stream.
+ */
+typedef struct ModuleHostTableAudioStreamHandle {
+    uint64_t value;
+} ModuleHostTableAudioStreamHandle;
+
+/**
+ * One block a capture device delivered, borrowed for the length of the
+ * callback it is handed to.
+ */
+typedef struct ModuleHostTableCapturedAudioBlock {
+    /**
+     * Interleaved little-endian scalars in the stream's format.
+     */
+    ModuleHostTableBytes interleaved_sample_bytes;
+    /**
+     * Per-channel samples: the bytes hold `sample_count × channels` scalars.
+     */
+    uint32_t sample_count;
+    /**
+     * Always zero; keeps the next field 8-aligned on every target.
+     */
+    uint32_t reserved;
+    /**
+     * The monotonic instant of the block's first sample as the device timed
+     * it, never the instant of delivery.
+     */
+    int64_t first_sample_timestamp_ns;
+} ModuleHostTableCapturedAudioBlock;
+
+/**
+ * What a capture stream calls with each block, on the host's device thread.
+ * It must not block, and must not call a verb on the stream delivering it.
+ */
+typedef void (*ModuleHostTableCapturedAudioBlockCallback)(void *callback_context, const ModuleHostTableCapturedAudioBlock *captured_block);
 
 /**
  * The verbs a node's native code reaches its node through, and the node host
@@ -252,6 +343,34 @@ typedef struct ModuleHostTable {
      * retained.
      */
     ModuleHostTableUtf8 (*host_capabilities_json)(void *node_host);
+    /**
+     * Open a capture stream through the engine's audio device backend, under
+     * the stream's capture-prompting policy, and write the format it opened in.
+     * Minor 1.
+     */
+    ModuleHostTableStatus (*audio_capture_stream_open)(void *node_host, const ModuleHostTableAudioCaptureStreamRequest *request, ModuleHostTableAudioStreamHandle *opened_stream, ModuleHostTableAudioStreamFormat *opened_format, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Begin calling `block_callback` with `callback_context` for every block
+     * the stream captures, replacing any callback an earlier call installed.
+     * The replaced callback is not called once this returns. Minor 1.
+     */
+    ModuleHostTableStatus (*audio_capture_stream_start)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableCapturedAudioBlockCallback block_callback, void *callback_context, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Stop delivering; the callback is not called again once this returns.
+     * Minor 1.
+     */
+    ModuleHostTableStatus (*audio_capture_stream_stop)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
+    /**
+     * `MODULE_HOST_TABLE_STATUS_OK` while the device serves the stream;
+     * `MODULE_HOST_TABLE_STATUS_ENDED`, with the failure written, once it
+     * stopped. Minor 1.
+     */
+    ModuleHostTableStatus (*audio_capture_stream_liveness)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Stop delivering and close the stream; its handle names nothing after.
+     * Minor 1.
+     */
+    void (*audio_capture_stream_close)(void *node_host, ModuleHostTableAudioStreamHandle stream);
 } ModuleHostTable;
 
 #ifdef __cplusplus
