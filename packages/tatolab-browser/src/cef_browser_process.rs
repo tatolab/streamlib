@@ -92,6 +92,7 @@ struct PagePublishing {
     audio_stream: Mutex<Option<PageAudioStreamTimeline>>,
     interleaved_audio: Mutex<Vec<f32>>,
     first_frame_refusal_logged: AtomicBool,
+    publishing_stopped: AtomicBool,
     page_closed: Mutex<Option<SyncSender<()>>>,
 }
 
@@ -101,6 +102,9 @@ impl PagePublishing {
     }
 
     fn publish_painted_frame(&self, painted_bgra_rows: &[u8], width: u32, height: u32) {
+        if self.publishing_stopped.load(Ordering::Acquire) {
+            return;
+        }
         match self.write_painted_frame(painted_bgra_rows, width, height) {
             Ok(()) => {
                 let published = self
@@ -180,6 +184,9 @@ impl PagePublishing {
     }
 
     fn publish_page_object(&self, published_json: &str) {
+        if self.publishing_stopped.load(Ordering::Acquire) {
+            return;
+        }
         let written = events_msgpack_map_of_published_json(published_json).and_then(|payload| {
             self.events_output_port
                 .write(&payload, None, true)
@@ -219,6 +226,9 @@ impl PagePublishing {
 
     /// Publish one planar packet; `channel_planes` hold `sample_count` samples each.
     fn publish_audio_packet(&self, channel_planes: &[&[f32]], sample_count: u32) {
+        if self.publishing_stopped.load(Ordering::Acquire) {
+            return;
+        }
         let arrived_at_ns = self.module_host.monotonic_now_ns();
         let mut audio_stream = self
             .audio_stream
@@ -352,8 +362,7 @@ fn initialize_cef(
         ));
     }
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-    let root_cache_directory =
-        std::env::temp_dir().join(format!("tatolab-browser-{}", std::process::id()));
+    let root_cache_directory = create_an_owner_only_cef_cache_directory()?;
     let path_text = |path: &Path| CefString::from(path.to_string_lossy().as_ref());
     let settings = Settings {
         no_sandbox: 1,
@@ -391,6 +400,29 @@ fn initialize_cef(
         ));
     }
     Ok(())
+}
+
+/// A fresh directory only this user can open, named unpredictably, under the
+/// system temporary directory. CEF holds it for the helper's whole life.
+fn create_an_owner_only_cef_cache_directory() -> Result<PathBuf, String> {
+    let template = std::env::temp_dir().join("tatolab-browser-XXXXXX");
+    let mut template_bytes = CString::new(template.as_os_str().as_encoded_bytes())
+        .map_err(|_| format!("{} holds a NUL", template.display()))?
+        .into_bytes_with_nul();
+    // SAFETY: mkdtemp rewrites the trailing XXXXXX of a NUL-terminated buffer
+    // it is handed exclusively, and creates the directory with mode 0700.
+    let created = unsafe { libc::mkdtemp(template_bytes.as_mut_ptr().cast()) };
+    if created.is_null() {
+        return Err(format!(
+            "no CEF cache directory could be created from {}: {}",
+            template.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    template_bytes.pop();
+    Ok(PathBuf::from(std::ffi::OsString::from(
+        String::from_utf8_lossy(&template_bytes).into_owned(),
+    )))
 }
 
 /// The page the CEF thread renders, while one is open.
@@ -747,6 +779,7 @@ impl BrowserPageRendering {
             audio_stream: Mutex::new(None),
             interleaved_audio: Mutex::new(Vec::new()),
             first_frame_refusal_logged: AtomicBool::new(false),
+            publishing_stopped: AtomicBool::new(false),
             page_closed: Mutex::new(Some(page_closed_sender)),
         });
         let (opened, open_outcome) = std::sync::mpsc::sync_channel(1);
@@ -791,9 +824,12 @@ impl BrowserPageRendering {
         &self.counters
     }
 
-    /// Stop delivering data and close the page, waiting for CEF to let it go.
-    /// Idempotent.
+    /// Stop publishing and delivering data, then close the page, waiting for
+    /// CEF to let it go. Idempotent.
     pub fn close(&mut self) {
+        self.publishing
+            .publishing_stopped
+            .store(true, Ordering::Release);
         self.data_input_stop.store(true, Ordering::Release);
         if let Some(data_input_thread) = self.data_input_thread.take() {
             let _ = data_input_thread.join();

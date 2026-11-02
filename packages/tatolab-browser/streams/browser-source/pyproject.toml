@@ -2,7 +2,7 @@
 name = "tatolab-browser-browser-source"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.68.7", "tatolab-browser"]
+dependencies = ["tatolab-stream>=0.68.8", "tatolab-browser"]
 
 # The wheel as a third party's stream would take it, built from this checkout
 # rather than an index: an ordinary non-editable dependency.
