@@ -761,29 +761,28 @@ mod tests {
             return;
         };
 
-        for runtime in [ProcessorRuntime::Python] {
-            let gpu_handle = gpu.clone();
-            let result = run_setup_phase(runtime.clone(), &gpu, || {
-                let sandbox = GpuContextLimitedAccess::new(gpu_handle);
-                let (done_tx, done_rx) = mpsc::channel();
-                thread::spawn(move || {
-                    let inner = sandbox.escalate(|_full| Ok::<(), Error>(()));
-                    let _ = done_tx.send(inner);
-                });
-                done_rx
-                    .recv_timeout(Duration::from_secs(5))
-                    .map_err(|_| {
-                        Error::Runtime(format!(
-                            "{TEST}: concurrent escalate did not complete within 5s \
-                             (runtime={runtime:?}) — outer setup-phase wrap is holding \
-                             processor_setup_lock against the bridge's escalate worker \
-                             (#867)"
-                        ))
-                    })?
-                    .map_err(|e| Error::Runtime(format!("{TEST}: inner escalate failed: {e}")))
+        let runtime = ProcessorRuntime::Python;
+        let gpu_handle = gpu.clone();
+        let result = run_setup_phase(runtime.clone(), &gpu, || {
+            let sandbox = GpuContextLimitedAccess::new(gpu_handle);
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::spawn(move || {
+                let inner = sandbox.escalate(|_full| Ok::<(), Error>(()));
+                let _ = done_tx.send(inner);
             });
-            result.unwrap_or_else(|e| panic!("{TEST} (runtime={runtime:?}): {e}"));
-        }
+            done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| {
+                    Error::Runtime(format!(
+                        "{TEST}: concurrent escalate did not complete within 5s \
+                         (runtime={runtime:?}) — outer setup-phase wrap is holding \
+                         processor_setup_lock against the bridge's escalate worker \
+                         (#867)"
+                    ))
+                })?
+                .map_err(|e| Error::Runtime(format!("{TEST}: inner escalate failed: {e}")))
+        });
+        result.unwrap_or_else(|e| panic!("{TEST} (runtime={runtime:?}): {e}"));
     }
 
     /// Mirror of [`subprocess_host_setup_phase_does_not_block_concurrent_escalate`]

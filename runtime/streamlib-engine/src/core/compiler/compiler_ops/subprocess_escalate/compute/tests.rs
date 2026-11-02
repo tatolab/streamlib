@@ -689,9 +689,9 @@ fn a_dispatch_reads_one_surface_and_writes_another() {
         })
         .expect("the output texture reads back");
 
-    for (pixel_index, pixel) in output_pixels.chunks_exact(4).enumerate() {
+    for (pixel_index, pixel) in output_pixels.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(
-            pixel, INVERTED_RGBA,
+            *pixel, INVERTED_RGBA,
             "pixel {pixel_index} must be the inverted seed — the kernel read \
                      `source_image` and wrote `output_image`, by name"
         );
@@ -1118,8 +1118,8 @@ fn tracked_layout_of_surface(
 }
 
 fn assert_every_pixel_is(pixels: &[u8], expected: [u8; 4], what: &str) {
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
-        assert_eq!(pixel, expected, "pixel {index} of {what}");
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        assert_eq!(*pixel, expected, "pixel {index} of {what}");
     }
 }
 

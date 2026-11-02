@@ -442,7 +442,9 @@ mod tests {
         let read = read_an_audio_block_off_the_wire(&wire).expect("decodes");
         let scalars: Vec<i16> = read
             .interleaved_sample_bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|scalar| i16::from_le_bytes([scalar[0], scalar[1]]))
             .collect();
         assert_eq!(scalars, vec![32_767, -32_768, 32_767, -32_768, 0]);
@@ -478,7 +480,9 @@ mod tests {
         let read_back = read_an_audio_block_off_the_wire(&re_encoded).expect("decodes");
         let round_tripped: Vec<i16> = read_back
             .interleaved_sample_bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|scalar| i16::from_le_bytes([scalar[0], scalar[1]]))
             .collect();
         assert_eq!(round_tripped, source);

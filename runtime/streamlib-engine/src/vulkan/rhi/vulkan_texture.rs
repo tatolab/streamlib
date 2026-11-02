@@ -1367,11 +1367,9 @@ impl HostVulkanTexture {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .build();
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map(|r| r)
-            .map_err(|e| {
-                Error::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
-            })?;
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+            Error::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
+        })?;
 
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
         let alloc_size = allocation_size.max(mem_requirements.size);

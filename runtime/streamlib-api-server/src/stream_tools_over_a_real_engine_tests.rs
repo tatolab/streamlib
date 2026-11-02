@@ -1661,7 +1661,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         engine.engine.ids_of_the_loaded_streams(),
-        [camera_stream_id.clone()]
+        std::slice::from_ref(&camera_stream_id)
     );
 
     let call = |tool_name: &'static str, arguments: Value| {
@@ -1785,7 +1785,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     let studio_stream_id = project.stream_id_of("studio");
     assert_eq!(
         engine.engine.ids_of_the_loaded_streams(),
-        [studio_stream_id.clone()]
+        std::slice::from_ref(&studio_stream_id)
     );
     let camera_listing = the_listing_of(&operations_on_the_loaded_streams, &camera_stream_id).await;
     assert_eq!(camera_listing["state"], "failed", "{camera_listing}");

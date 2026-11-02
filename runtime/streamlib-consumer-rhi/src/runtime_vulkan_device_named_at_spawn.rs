@@ -39,10 +39,13 @@ pub fn vulkan_device_uuid_from_hex(vulkan_device_uuid_as_hex: &str) -> Option<[u
         return None;
     }
     let mut vulkan_device_uuid = [0u8; 16];
-    for (byte, hex_pair) in vulkan_device_uuid
-        .iter_mut()
-        .zip(vulkan_device_uuid_as_hex.as_bytes().chunks_exact(2))
-    {
+    for (byte, hex_pair) in vulkan_device_uuid.iter_mut().zip(
+        vulkan_device_uuid_as_hex
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter(),
+    ) {
         *byte = u8::from_str_radix(std::str::from_utf8(hex_pair).ok()?, 16).ok()?;
     }
     Some(vulkan_device_uuid)

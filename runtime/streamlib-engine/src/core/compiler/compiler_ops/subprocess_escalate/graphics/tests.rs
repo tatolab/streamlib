@@ -1436,9 +1436,9 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
             Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
         })
         .expect("the colour target reads back");
-    for (pixel_index, pixel) in rendered.chunks_exact(4).enumerate() {
+    for (pixel_index, pixel) in rendered.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(
-            pixel, INVERTED_RGBA,
+            *pixel, INVERTED_RGBA,
             "pixel {pixel_index} must be the inverted seed — the draw read \
                      `source_image`, by name, and painted the target it was given"
         );
@@ -1565,15 +1565,15 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
             Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
         })
         .expect("the colour target reads back");
-    for (pixel_index, pixel) in rendered.chunks_exact(4).enumerate() {
+    for (pixel_index, pixel) in rendered.as_chunks::<4>().0.iter().enumerate() {
         if pixel_index % 64 < 32 {
             assert_eq!(
-                pixel, INVERTED_RGBA,
+                *pixel, INVERTED_RGBA,
                 "pixel {pixel_index} is inside the scissor and must be the inverted seed"
             );
         } else {
             assert_eq!(
-                pixel, TRANSPARENT_BLACK_RGBA,
+                *pixel, TRANSPARENT_BLACK_RGBA,
                 "pixel {pixel_index} is outside the scissor, so nothing painted it — the \
                          pass must have cleared it rather than loaded contents its own transition \
                          from UNDEFINED had already discarded"

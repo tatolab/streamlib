@@ -221,7 +221,7 @@ fn lines_binding_api_version_in_a_device_properties_pattern(body: &str) -> Vec<u
         else {
             continue;
         };
-        if body[after_type..].as_bytes()[brace_offset] != b'{' {
+        if body.as_bytes()[after_type..][brace_offset] != b'{' {
             continue;
         }
         let pattern_start = after_type + brace_offset;
