@@ -195,7 +195,6 @@ class V4l2CameraSource:
         capture = _native.V4l2CameraCapture(
             self._config.device_path, self._config.max_width, self._config.max_height
         )
-        self._capture = capture
         if capture.bytes_per_line % CAPTURED_BYTES_PER_TEXEL != 0:
             raise ValueError(
                 f"V4l2CameraSource: {capture.device_path} delivers {capture.bytes_per_line}-byte "
@@ -241,6 +240,7 @@ class V4l2CameraSource:
             f"{capture.nominal_frames_per_second} fps, {capture.bytes_per_line} bytes a row, "
             f"colour {self._color_info}"
         )
+        self._capture = capture
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         capture = self._capture

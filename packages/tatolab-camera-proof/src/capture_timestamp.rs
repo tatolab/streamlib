@@ -25,7 +25,7 @@ pub enum ResolvedCaptureTimestamp {
     /// The driver's monotonic stamp lay ahead of dequeue (vivid stamps about
     /// 0.9 of a period early), so the dequeue instant stands in for it.
     ClampedToDequeue(i64),
-    /// The stamp is on a clock the runtime cannot join, so the dequeue instant stands in for it.
+    /// The stamp is absent or on a clock the runtime cannot join, so the dequeue instant stands in for it.
     DequeueInstant(i64),
 }
 
@@ -55,6 +55,9 @@ pub fn resolve_capture_timestamp(
     let device_stamp_ns = timestamp_seconds
         .saturating_mul(1_000_000_000)
         .saturating_add(timestamp_microseconds.saturating_mul(1_000));
+    if device_stamp_ns <= 0 {
+        return ResolvedCaptureTimestamp::DequeueInstant(dequeue_instant_ns);
+    }
     if device_stamp_ns > dequeue_instant_ns {
         return ResolvedCaptureTimestamp::ClampedToDequeue(dequeue_instant_ns);
     }
@@ -88,6 +91,14 @@ mod tests {
     fn a_stamp_on_an_unknown_clock_is_replaced_by_the_dequeue_instant() {
         assert_eq!(
             resolve_capture_timestamp(UNKNOWN_CLOCK, 10, 500, 42),
+            ResolvedCaptureTimestamp::DequeueInstant(42)
+        );
+    }
+
+    #[test]
+    fn a_zero_monotonic_stamp_is_replaced_by_the_dequeue_instant() {
+        assert_eq!(
+            resolve_capture_timestamp(MONOTONIC, 0, 0, 42),
             ResolvedCaptureTimestamp::DequeueInstant(42)
         );
     }
