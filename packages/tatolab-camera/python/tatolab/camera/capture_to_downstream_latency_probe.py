@@ -4,7 +4,7 @@
 """`CaptureToDownstreamLatencyProbe`: how late and how often camera frames reach a downstream node.
 
 A frame's `timestamp_ns` is its capture instant on the machine's monotonic
-clock, from the built-in `CameraSource` and from `V4l2CameraSource` alike, so
+clock, from the built-in `CameraSource` and from this wheel's alike, so
 the probe measures both the same way: the clock when the frame is read, less
 the clock when it was captured.
 """

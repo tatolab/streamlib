@@ -60,7 +60,7 @@ target/
 Cargo.lock
 !/Cargo.lock
 !/packages/streamlib-webrtc/Cargo.lock
-!/packages/tatolab-camera-proof/Cargo.lock
+!/packages/tatolab-camera/Cargo.lock
 
 # Node/Nx
 node_modules/

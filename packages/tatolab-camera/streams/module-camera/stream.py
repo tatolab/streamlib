@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The camera as a module: `V4l2CameraSource` → H.264, exposed on this machine, with a latency probe.
+"""The camera as a module: `tatolab.camera.CameraSource` → H.264, exposed on this machine, with a latency probe.
 
 Watch it at http://127.0.0.1:4446/watch/<machine>/main. The probe's reports
 land in the project's log; `../built-in-camera` is the same stream with the
@@ -10,7 +10,7 @@ built-in `CameraSource`, for comparison on the same device.
 
 from tatolab.stream import Exposure, H264Encoder, StreamBuilder, stream
 
-from tatolab.camera_proof import CaptureToDownstreamLatencyProbe, V4l2CameraSource
+from tatolab.camera import CameraSource, CaptureToDownstreamLatencyProbe
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.
 CAMERA_DEVICE_PATH: str | None = None
@@ -18,11 +18,11 @@ CAMERA_DEVICE_PATH: str | None = None
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """The camera through the proof module, encoded and exposed; frame rate and latency logged."""
+    """The camera through this module, encoded and exposed; frame rate and latency logged."""
     camera_config: dict[str, object] = {"max_width": 1920, "max_height": 1080}
     if CAMERA_DEVICE_PATH is not None:
         camera_config["device_path"] = CAMERA_DEVICE_PATH
-    camera = stream_builder.add(V4l2CameraSource, config=camera_config)
+    camera = stream_builder.add(CameraSource, config=camera_config)
     probe = stream_builder.add(
         CaptureToDownstreamLatencyProbe, config={"camera_label": "module"}
     )

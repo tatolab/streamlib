@@ -6,17 +6,20 @@ against this crate alone, and the runtime that starts its node lends the table.
 
 ## What the table carries
 
-Version 1.0 carries, for the ports a node lends to its native code:
+Version 1.1 carries, for the ports a node lends to its native code:
 
 - open, write and catalog-entry on an output port;
 - open, read and wait on input ports;
 - the node's stop flag;
 - log records into the node's log, at the host's levels;
 - the runtime's monotonic clock;
-- the host's capabilities, as JSON.
+- the host's capabilities, as JSON;
+- surfaces: import a linear DMA-BUF fd with its plane layout, acquire a texture
+  from the node's output pool, convert a YCbCr surface into an RGBA texture,
+  read a surface's id, and release it.
 
 Every verb is callable from any thread with no Python attached. The table carries
-plain data and opaque handles only. No engine or GPU object crosses it, and
+plain data, opaque handles and borrowed fds only. No engine or GPU object crosses it, and
 `cargo xtask check-module-host-table-surface` keeps it that way.
 
 ## Reaching it

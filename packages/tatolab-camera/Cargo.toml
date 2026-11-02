@@ -1,10 +1,10 @@
 [package]
-name = "tatolab-camera-proof"
+name = "tatolab-camera"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
-description = "A Linux camera built the way a third party would build one: V4L2 capture in the wheel's own Rust, conversion in its own GLSL."
+description = "A camera node as an extension wheel: V4L2 capture handed to the engine as DMA-BUFs and converted on the GPU, with no CPU copy."
 repository = "https://github.com/tatolab/streamlib"
 license = "BUSL-1.1"
 publish = false
@@ -15,6 +15,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+# The module host table the capture thread imports, converts and publishes
+# through, with no Python attached. The one engine-facing dependency, and it
+# links no engine.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.1.0", features = ["pyo3"] }
+rmp = "0.8.15"
+
+[dev-dependencies]
+rmpv = "1.3.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 v4l = "0.14"

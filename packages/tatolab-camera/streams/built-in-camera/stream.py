@@ -4,7 +4,7 @@
 """The baseline: the built-in `CameraSource` → H.264, exposed on this machine, with the same latency probe.
 
 The same graph as `../module-camera` with the engine's own camera in place of
-the proof module, so the two reports compare one device under one probe.
+this wheel's, so the two reports compare one device under one probe.
 """
 
 from tatolab.stream import (
@@ -16,7 +16,7 @@ from tatolab.stream import (
     stream,
 )
 
-from tatolab.camera_proof import CaptureToDownstreamLatencyProbe
+from tatolab.camera import CaptureToDownstreamLatencyProbe
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.
 CAMERA_DEVICE_PATH: str | None = None

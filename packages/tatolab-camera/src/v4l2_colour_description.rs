@@ -75,18 +75,16 @@ impl V4l2CaptureFormatColourFields {
     }
 }
 
-/// The luma weights `Kr` and `Kb` the conversion kernel decodes with.
-///
-/// An unspecified matrix falls back the way a player does: BT.709 at HD and
-/// above, BT.601 below it.
-pub fn luma_weights_for_matrix(matrix: Option<&str>, frame_height: u32) -> (f32, f32) {
+/// The matrix a frame is decoded with: the one the driver named, else the one a
+/// player falls back to — BT.709 at HD and above, BT.601 below it.
+pub fn matrix_name_or_the_players_fallback(
+    matrix: Option<&'static str>,
+    frame_height: u32,
+) -> &'static str {
     match matrix {
-        Some("bt709") => (0.2126, 0.0722),
-        Some("smpte170m") | Some("bt470_bg") => (0.299, 0.114),
-        Some("bt2020_ncl") | Some("bt2020_cl") => (0.2627, 0.0593),
-        Some("smpte240m") => (0.212, 0.087),
-        _ if frame_height >= 720 => (0.2126, 0.0722),
-        _ => (0.299, 0.114),
+        Some(matrix) => matrix,
+        None if frame_height >= 720 => "bt709",
+        None => "smpte170m",
     }
 }
 
@@ -245,11 +243,11 @@ mod tests {
 
     #[test]
     fn an_unspecified_matrix_decodes_by_the_frame_height() {
-        assert_eq!(luma_weights_for_matrix(None, 1080), (0.2126, 0.0722));
-        assert_eq!(luma_weights_for_matrix(None, 480), (0.299, 0.114));
+        assert_eq!(matrix_name_or_the_players_fallback(None, 1080), "bt709");
+        assert_eq!(matrix_name_or_the_players_fallback(None, 480), "smpte170m");
         assert_eq!(
-            luma_weights_for_matrix(Some("smpte170m"), 1080),
-            (0.299, 0.114)
+            matrix_name_or_the_players_fallback(Some("smpte170m"), 1080),
+            "smpte170m"
         );
     }
 }
