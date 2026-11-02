@@ -631,7 +631,18 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
             )?);
             PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE.len()
         }
-        NoticesGenerationTarget::ExtensionPackage { .. } => 0,
+        NoticesGenerationTarget::ExtensionPackage { .. } => {
+            let projects_compiled_in =
+                projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(&project_root)?;
+            if !projects_compiled_in.is_empty() {
+                notices.push('\n');
+                notices.push_str(&render_the_extension_appendix_of_vendored_sources(
+                    workspace_root,
+                    &projects_compiled_in,
+                )?);
+            }
+            projects_compiled_in.len()
+        }
     };
 
     let notices_path = project_root.join(THIRD_PARTY_NOTICES_FILE_NAME);
@@ -898,6 +909,64 @@ fn render_the_appendix_cargo_about_cannot_produce(
     Ok(appendix)
 }
 
+/// The crate whose build script compiles VulkanMemoryAllocator and the
+/// Vulkan-Headers it includes into whatever links it.
+const VULKANALIA_VMA_FORK_CRATE_NAME: &str = "tatolab-vulkanalia-vma";
+
+/// The vendored projects an extension's own lockfile shows it compiles in:
+/// the VMA fork's trees when it resolves `tatolab-vulkanalia-vma`.
+fn projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+    extension_project_root: &Path,
+) -> Result<Vec<&'static ProjectWhoseNoticeCargoAboutCannotProduce>> {
+    let lockfile_path = extension_project_root.join("Cargo.lock");
+    let lockfile = std::fs::read_to_string(&lockfile_path)
+        .with_context(|| format!("reading {}", lockfile_path.display()))?;
+    let resolves_the_vma_fork = lockfile
+        .lines()
+        .any(|line| line.trim() == format!("name = \"{VULKANALIA_VMA_FORK_CRATE_NAME}\""));
+    Ok(PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+        .iter()
+        .filter(|project| {
+            resolves_the_vma_fork
+                && project.roster
+                    == NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript
+        })
+        .collect())
+}
+
+/// The notices of `projects`, which an extension compiles in from sources
+/// vendored in this repository and so reach no graph `cargo about` walks.
+fn render_the_extension_appendix_of_vendored_sources(
+    workspace_root: &Path,
+    projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce],
+) -> Result<String> {
+    let source_trees = NoticeSourceTrees {
+        registry_crate_roots: BTreeMap::new(),
+        workspace_root: workspace_root.to_path_buf(),
+    };
+    let mut appendix = String::from(
+        "## Notices `cargo about` cannot produce\n\
+         \n\
+         Every project below is compiled into the wheel by\n\
+         `vendor/tatolab-vulkanalia-vma/build.rs` from sources checked into this repository, so it\n\
+         appears in no resolve graph `cargo about` walks. These sections are appended by\n\
+         `cargo xtask generate-third-party-notices`.\n",
+    );
+    for project in projects {
+        let notice = read_one_notice(project, &source_trees)?;
+        write!(
+            appendix,
+            "\n### {} ({})\n\nUpstream: <{}>\n\n{}",
+            project.display_name,
+            project.license_summary,
+            project.upstream_repository_url,
+            fenced_licence_text_block(&notice)
+                .with_context(|| format!("fencing the {} notice", project.display_name))?,
+        )?;
+    }
+    Ok(appendix)
+}
+
 /// The fence every licence text in a notices file is reproduced in.
 const LICENCE_TEXT_FENCE: &str = "````";
 
@@ -1125,6 +1194,49 @@ mod tests {
             workspace_root: workspace_root(),
         };
         (fixture, source_trees)
+    }
+
+    fn extension_root_whose_lockfile_resolves(package_names: &[&str]) -> TempDir {
+        let extension_root = TempDir::new().expect("tempdir");
+        let lockfile: String = package_names
+            .iter()
+            .map(|name| format!("[[package]]\nname = \"{name}\"\nversion = \"0.0.0\"\n\n"))
+            .collect();
+        fs::write(extension_root.path().join("Cargo.lock"), lockfile).expect("write lockfile");
+        extension_root
+    }
+
+    #[test]
+    fn an_extension_compiling_the_vma_fork_carries_the_trees_it_compiles_in() {
+        let extension_root =
+            extension_root_whose_lockfile_resolves(&["pyo3", "tatolab-vulkanalia-vma"]);
+        let projects = projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+            extension_root.path(),
+        )
+        .expect("read lockfile");
+        let names: Vec<&str> = projects
+            .iter()
+            .map(|project| project.display_name)
+            .collect();
+        assert_eq!(names, ["VulkanMemoryAllocator", "Vulkan-Headers"]);
+
+        let appendix =
+            render_the_extension_appendix_of_vendored_sources(&workspace_root(), &projects)
+                .expect("render");
+        assert!(appendix.contains("### VulkanMemoryAllocator (MIT)"));
+        assert!(appendix.contains("Copyright"));
+    }
+
+    #[test]
+    fn an_extension_without_the_vma_fork_carries_no_vendored_appendix() {
+        let extension_root = extension_root_whose_lockfile_resolves(&["pyo3", "webrtc"]);
+        assert!(
+            projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+                extension_root.path()
+            )
+            .expect("read lockfile")
+            .is_empty()
+        );
     }
 
     #[test]

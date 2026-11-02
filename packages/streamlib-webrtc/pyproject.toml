@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-webrtc"
-version = "0.68.7"
+version = "0.68.11"
 description = "WHIP publish and WHEP play nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,12 @@ classifiers = [
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
 dependencies = ["tatolab-stream>=0.47.0"]
+
+# The node catalog lists these in every stream whose environment installs this
+# distribution, before a graph names one.
+[project.entry-points."tatolab.nodes"]
+WhipPublisher = "tatolab.webrtc.processors:WhipPublisher"
+WhepPlayer = "tatolab.webrtc.processors:WhepPlayer"
 
 [project.urls]
 Homepage = "https://tatolab.com"

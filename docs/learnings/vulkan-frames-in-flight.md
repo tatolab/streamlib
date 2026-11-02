@@ -81,4 +81,7 @@ no external holder. They stay sized to `MAX_FRAMES_IN_FLIGHT`.
 ## Reference
 - Refactor commit: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
 - Per-image render-finished semaphore fix: issue #296
-- Implementation: `runtime/streamlib-engine/src/linux/processors/display.rs` (search `MAX_FRAMES_IN_FLIGHT` and `render_finished_semaphores`)
+- Where the rule applies now: sizing a texture ring's `count` — `create_texture_ring` in
+  `runtime/streamlib-engine/src/core/context/gpu_context.rs` and
+  `runtime/streamlib-engine/src/core/context/texture_ring.rs`. No engine code defines a
+  `MAX_FRAMES_IN_FLIGHT` constant; the value 2 is the documented sizing.

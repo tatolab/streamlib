@@ -233,6 +233,20 @@ class RuntimeContextFullAccess(_RuntimeContextMembersBothCapabilitiesShare, Prot
         """The privileged GPU capability."""
         ...
 
+    def open_module_host_table(
+        self, *, output_ports: Sequence[str] = (), input_ports: Sequence[str] = ()
+    ) -> object:
+        """Lend `output_ports` and `input_ports` to the node's native code.
+
+        Returns the module host table as a capsule named
+        `tatolab.runtime.module_host_table`, which the native half reads with
+        `tatolab-module-sdk` and reaches those ports through from its own
+        threads, without the GIL. From here on a Python write to a lent output
+        port, or a read of a lent input port, is refused by name. A node that
+        lends an input port declares `execution="manual"`.
+        """
+        ...
+
 
 @runtime_backed_protocol
 class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, Protocol):

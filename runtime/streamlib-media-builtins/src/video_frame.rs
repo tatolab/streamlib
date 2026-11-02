@@ -14,6 +14,7 @@ use serde::de::{self, DeserializeOwned, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
+use streamlib::sdk::color::ResolveH273ColorVuiDefaults as _;
 
 /// Video frame bag: references a GPU surface by id — pixels never ride the
 /// link. `surface_id` is the handoff contract (texture cache in-process,

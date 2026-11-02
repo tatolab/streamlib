@@ -29,7 +29,8 @@ use crate::core::color::H273ColorVui;
 use crate::core::color::h273_color_vui::matrix;
 use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
 use crate::vulkan::rhi::VulkanComputeKernel;
-use crate::vulkan::video::video_context::{VideoContext, VideoError};
+use crate::vulkan::video::VideoContext;
+use streamlib_vulkan_video::VideoError;
 
 /// Pre-compiled SPIR-V bytecode for the NV12→RGB compute shader.
 const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nv12_to_rgb.spv"));
@@ -462,9 +463,9 @@ impl Nv12ToRgbConverter {
             // Each thread handles one pixel, workgroup is 8x8.
             let group_x = (self.width + 7) / 8;
             let group_y = (self.height + 7) / 8;
-            self.kernel.record(cb, group_x, group_y, 1).map_err(|e| {
-                VideoError::Engine(format!("nv12_to_rgb kernel record failed: {e}"))
-            })?;
+            self.kernel
+                .record(cb, group_x, group_y, 1)
+                .map_err(|e| VideoError::Rhi(format!("nv12_to_rgb kernel record failed: {e}")))?;
 
             // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---
             let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()

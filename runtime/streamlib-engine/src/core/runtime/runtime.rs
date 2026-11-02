@@ -648,7 +648,6 @@ impl Runner {
         let streamlib_home =
             streamlib_runtime_client_contract::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
-        crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
@@ -1799,19 +1798,8 @@ mod tests {
         // Runtime creates successfully
     }
 
-    /// Locks one half of the empty-substrate invariant from issue
-    /// #793 / the All-Dynamic Package Loading milestone:
-    /// `Runner::new()` itself must not walk any compile-time-linked
-    /// registration source. The other half — the `#[processor]` macro
-    /// not emitting `inventory::submit!(FactoryRegistration { ... })`
-    /// — is locked by `xtask check-no-inventory-submit` in CI, not by
-    /// this test.
-    ///
-    /// Together the two locks make regression impossible: even if a
-    /// future agent re-introduces the macro emission, `Runner::new()`
-    /// has nothing to walk it with, and even if a future agent re-adds
-    /// a registry-walking call to `Runner::new()`, the CI gate refuses
-    /// any `inventory::submit!(FactoryRegistration ...)` for it to find.
+    /// `Runner::new()` must not walk any compile-time-linked registration
+    /// source: the engine substrate ships empty.
     ///
     /// `PROCESSOR_REGISTRY` is a process-global `LazyLock` and earlier
     /// tests in the same binary may have populated it, so the

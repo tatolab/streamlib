@@ -57,12 +57,6 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
-    # `option-ext`, reached through `dirs` in the Linux closure. MPL-2.0 is
-    # file-level copyleft: the obligation attaches to MPL-licensed files that
-    # have been modified, and we neither modify nor vendor them. Allowed on
-    # that reading, and named here so the reading is visible rather than
-    # inferred from the identifier's presence.
-    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
@@ -201,6 +195,11 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-vulkan-video"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-test-fixtures"
 expression = "BUSL-1.1"
 license-files = []
@@ -227,5 +226,10 @@ license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-read-track"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "tatolab-module-sdk"
 expression = "BUSL-1.1"
 license-files = []

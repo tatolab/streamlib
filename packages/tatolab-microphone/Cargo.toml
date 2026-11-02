@@ -1,0 +1,38 @@
+[package]
+name = "tatolab-microphone"
+version = "0.68.11"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "Microphone capture for StreamLib, as the tatolab-microphone extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `tatolab.microphone` imports. cdylib only: nothing
+# links this crate as a Rust library.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.10 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+
+# The engine's audio device backend and the node's output port, both reached
+# through the module host table. It links no engine.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.1.0", features = ["pyo3"] }
+
+# The audio-block wire map: a msgpack named map with `samples` as `bin`.
+serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11.19"
+rmp-serde = "1.3.0"
+
+[dev-dependencies]
+rmpv = "1.3.0"
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

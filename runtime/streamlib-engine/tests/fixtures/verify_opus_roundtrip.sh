@@ -18,9 +18,9 @@
 #
 # Exit status is the verdict, stdout is the report JSON and nothing else, so a
 # caller can pipe it. Progress goes to stderr. The fixture starts the runtime
-# unit's `tatolabd` and loads the stream into it with `tatolab run` (see
-# fixture_runtime_unit.sh), so it refuses to run while another runtime holds
-# the machine.
+# unit's `tatolabd` and loads the stream into it as a project of its own with
+# `tatolab run --dir` (see fixture_runtime_unit.sh), so it refuses to run while
+# another runtime holds the machine.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,26 +54,22 @@ fi
 
 OUTPUT_DIR="$(mktemp -d -t streamlib-opus-roundtrip-XXXXXX)"
 CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
-STREAM_NAME="opus_roundtrip_fixture"
+PROJECT_DIR="$OUTPUT_DIR/opus-roundtrip"
+write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/opus_roundtrip_stream.py" \
+    known_signal_through_opus_and_back opus_roundtrip_fixture "$FIXTURE_VENV_DIRECTORY"
+STREAM_ID="$(stream_id_of_the_fixture_project_stream "$PROJECT_DIR" opus_roundtrip_fixture)"
 # The runtime's output — the engine's log mirror, the stream's records among
 # it — with `tatolab run`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
 STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
 
-STREAM_RUN_PID=""
-# Installed before the runtime starts and idempotent — `kill` of an unset pid
-# is swallowed. A strand here costs a live engine holding a GPU context and an
-# iceoryx2 node, which contaminates every later run on the same rig; the
-# SIGTERM makes `tatolab run` stop its stream, the runtime then takes SIGINT,
-# and each wait is bounded so a stop that hangs cannot hold the script open.
+# Installed before the runtime starts and idempotent — a removal with nothing
+# loaded does nothing. A strand here costs a live engine holding a GPU context
+# and an iceoryx2 node, which contaminates every later run on the same rig; the
+# project's removal unloads its stream, the runtime then takes SIGINT, and each
+# wait is bounded so a stop that hangs cannot hold the script open.
 stop_and_wait_for_the_stream_and_the_runtime() {
-    if [ -n "$STREAM_RUN_PID" ] && kill "$STREAM_RUN_PID" 2>/dev/null; then
-        for _ in $(seq 60); do
-            kill -0 "$STREAM_RUN_PID" 2>/dev/null || break
-            sleep 0.5
-        done
-        wait "$STREAM_RUN_PID" 2>/dev/null
-    fi
+    remove_the_fixture_projects
     stop_the_fixture_runtime 30
 }
 trap stop_and_wait_for_the_stream_and_the_runtime EXIT
@@ -91,16 +87,12 @@ if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     echo "ERROR: the fixture could not start its runtime" >&2
     exit 1
 fi
-echo "loading the Opus round-trip stream as $STREAM_NAME" >&2
-"$TATOLAB_EXECUTABLE" run --dir "$HERE" --name "$STREAM_NAME" opus_roundtrip_stream.py \
-    >"$STREAM_RUN_LOG" 2>&1 &
-STREAM_RUN_PID=$!
-
-# Addressed by the name it was loaded under, so another stream declaring an
-# OpusDecoder of its own is never the one measured. Polled rather than slept:
-# the stream compiles and the engine brings up a GPU context and an iceoryx2
-# node, and a fixed sleep is either flaky or slow.
-if ! wait_until_the_stream_is_running "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
+echo "loading the Opus round-trip stream as $STREAM_ID" >&2
+# Addressed by its stream id, so another stream declaring an OpusDecoder of its
+# own is never the one measured. Polled rather than slept: the stream compiles
+# and the engine brings up a GPU context and an iceoryx2 node, and a fixed
+# sleep is either flaky or slow.
+if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_ID" "$STREAM_RUN_LOG"; then
     echo "ERROR: the round-trip stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -40 "$STREAM_RUN_LOG" >&2
     tail -40 "$NODE_LOG" >&2
@@ -132,7 +124,7 @@ fi
 # cadence and timestamp continuity, read off the wire rather than from the
 # recorder that also does the measuring.
 if ! "$HERE/verify_audio_channel.sh" opusdecoder \
-    --stream "$STREAM_NAME" --count 64 --port audio >&2; then
+    --stream "$STREAM_ID" --count 64 --port audio >&2; then
     echo "ERROR: the decoder's channel failed its block-level contract" >&2
     exit 1
 fi
@@ -143,7 +135,7 @@ for _ in $(seq 120); do
     if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then
         break
     fi
-    if ! kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
+    if ! the_stream_is_loaded "$STREAM_ID"; then
         echo "ERROR: the round-trip stream was unloaded before writing its capture" >&2
         tail -40 "$NODE_LOG" >&2
         exit 1

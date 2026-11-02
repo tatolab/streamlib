@@ -3,8 +3,6 @@
 
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
-use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
@@ -43,40 +41,6 @@ struct VulkanImportedPlane {
     memory: vk::DeviceMemory,
     mapped_ptr: *mut u8,
     size: vk::DeviceSize,
-}
-
-/// Bitstream direction selector for [`HostVulkanBuffer::new_video_bitstream`].
-/// Picks `VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR` vs
-/// `VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR` — the two roles a
-/// HOST_VISIBLE codec bitstream buffer can serve.
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VideoBitstreamDirection {
-    /// Encoder output: driver writes compressed NAL bytes; CPU reads
-    /// the result via the persistently-mapped pointer for muxing.
-    Encode,
-    /// Decoder input: CPU writes compressed NAL bytes via the
-    /// persistently-mapped pointer; driver reads to drive decode.
-    Decode,
-}
-
-/// Inputs for [`HostVulkanBuffer::new_video_bitstream`].
-///
-/// Bitstream buffers are HOST_VISIBLE + HOST_COHERENT + persistently
-/// mapped + sequential-write-optimized. The buffer is bound to a
-/// codec profile via `VkVideoProfileListInfoKHR` chained on the
-/// buffer's `pNext` so the driver knows which codec the bytes serve.
-///
-/// `size` is the upfront allocation size in bytes. Growth (when a
-/// frame doesn't fit) is the codec layer's concern — the codec drops
-/// the existing buffer and constructs a fresh, larger one via this
-/// same constructor.
-#[cfg(target_os = "linux")]
-pub struct VideoBitstreamBufferDescriptor<'a> {
-    pub label: &'a str,
-    pub size: u64,
-    pub direction: VideoBitstreamDirection,
-    pub video_profile: &'a vk::VideoProfileInfoKHR,
 }
 
 /// Generic Vulkan `VkBuffer` allocation primitive — flat bytes with usage flags
@@ -782,103 +746,6 @@ impl HostVulkanBuffer {
             memory_origin: HostVulkanBufferMemoryOrigin::VmaAllocationExportableAsOpaqueFd,
             imported_host_range_owner: None,
             mapped_ptr: std::ptr::null_mut(),
-            extra_imported_planes: Vec::new(),
-            size,
-        })
-    }
-
-    /// Allocate a HOST_VISIBLE + HOST_COHERENT video bitstream buffer
-    /// bound to the codec profile in `descriptor.video_profile`.
-    ///
-    /// Direction (encode / decode) drives the required
-    /// `VkBufferUsageFlags` bit:
-    /// - [`VideoBitstreamDirection::Encode`] →
-    ///   `VIDEO_ENCODE_DST_BIT_KHR` — driver writes encoded NAL bytes
-    ///   into the buffer; CPU reads via [`Self::mapped_ptr`] for muxing.
-    /// - [`VideoBitstreamDirection::Decode`] →
-    ///   `VIDEO_DECODE_SRC_BIT_KHR` — CPU writes input NAL bytes into
-    ///   the buffer; driver reads to drive decode.
-    ///
-    /// The buffer is allocated with `MAPPED` + `HOST_ACCESS_SEQUENTIAL_WRITE`
-    /// and is NOT DMA-BUF exportable (codec stays host-side). The call
-    /// is wrapped in [`HostVulkanDevice::lock_device`] so concurrent
-    /// processor submissions can't race the allocation on NVIDIA Linux.
-    ///
-    /// Growth is the codec layer's concern: when a frame doesn't fit
-    /// the codec drops this buffer and constructs a fresh, larger one.
-    /// Engine-tier `resize()` is deliberately absent — every modern
-    /// explicit-API engine surveyed (wgpu, Bevy, Dawn, UE5, Granite)
-    /// and every Vulkan-Video reference codec (FFmpeg, NVIDIA
-    /// `vk_video_samples`) puts growth at the caller or in a pool
-    /// one layer above the primitive.
-    #[tracing::instrument(level = "trace", skip(vulkan_device, descriptor), fields(label = descriptor.label, size = descriptor.size, dir = ?descriptor.direction))]
-    pub fn new_video_bitstream(
-        vulkan_device: &Arc<HostVulkanDevice>,
-        descriptor: &VideoBitstreamBufferDescriptor<'_>,
-    ) -> Result<Self> {
-        if descriptor.size == 0 {
-            return Err(Error::Configuration(format!(
-                "HostVulkanBuffer::new_video_bitstream ({}): size must be > 0",
-                descriptor.label,
-            )));
-        }
-        let size = descriptor.size as vk::DeviceSize;
-
-        let usage = match descriptor.direction {
-            VideoBitstreamDirection::Encode => vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR,
-            VideoBitstreamDirection::Decode => vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR,
-        };
-
-        let mut profile_list = vk::VideoProfileListInfoKHR::builder()
-            .profiles(std::slice::from_ref(descriptor.video_profile));
-
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(size)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .push_next(&mut profile_list);
-
-        let alloc_opts = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ..Default::default()
-        };
-
-        let allocator = vulkan_device.allocator();
-
-        // Acquire the device-level resource lock so concurrent processor
-        // submissions can't race the allocation on NVIDIA Linux.
-        let _device_lock = vulkan_device.lock_device();
-
-        let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "HostVulkanBuffer::new_video_bitstream ({}): vmaCreateBuffer failed: {e}",
-                    descriptor.label,
-                ))
-            })?;
-
-        let alloc_info = allocator.get_allocation_info(allocation);
-        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
-        if mapped_ptr.is_null() {
-            unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(Error::GpuError(format!(
-                "HostVulkanBuffer::new_video_bitstream ({}): VMA mapped pointer is null \
-                 — expected persistent mapping",
-                descriptor.label,
-            )));
-        }
-
-        Ok(Self {
-            vulkan_device: Arc::clone(vulkan_device),
-            buffer,
-            allocation: Some(allocation),
-            imported_memory: None,
-            memory_origin: HostVulkanBufferMemoryOrigin::VmaAllocation,
-            imported_host_range_owner: None,
-            mapped_ptr,
             extra_imported_planes: Vec::new(),
             size,
         })
@@ -1623,10 +1490,6 @@ unsafe impl Sync for HostVulkanBuffer {}
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
-    use crate::core::test_support::rig_only_capability_skip::{
-        RigOnlyCapability, skip_unless_this_machine_has,
-    };
-    #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
     use std::os::fd::{FromRawFd as _, OwnedFd};
 
@@ -1636,10 +1499,6 @@ mod tests {
         let (read_end, _write_end_closed_here) = std::io::pipe().expect("a pipe opens");
         OwnedFd::from(read_end)
     }
-    #[cfg(target_os = "linux")]
-    use crate::vulkan::rhi::video_profile_test_fixture::{
-        VideoProfileWithOwnedCodecExtensionChain, device_supports_h264_for_bitstream_direction,
-    };
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -2633,115 +2492,5 @@ mod tests {
             before, after,
             "failed import must not leak VkDeviceMemory — live count: before={before}, after={after}"
         );
-    }
-
-    /// `new_video_bitstream` rejects `size = 0` with a [`Error::Configuration`]
-    /// **before** reaching the VMA allocator. Mentally reverting the
-    /// `size == 0` guard would let the call fall through to
-    /// `vmaCreateBuffer`, which errors out with a driver-level
-    /// [`Error::GpuError`] — distinguishable, so the test would fail.
-    /// Locks the early-validation contract that callers depend on
-    /// (the codec's resize loop catches `size == 0` via this early
-    /// path).
-    #[cfg(target_os = "linux")]
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
-    #[test]
-    fn new_video_bitstream_rejects_zero_size() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        for direction in [
-            VideoBitstreamDirection::Encode,
-            VideoBitstreamDirection::Decode,
-        ] {
-            let profile =
-                VideoProfileWithOwnedCodecExtensionChain::h264_for_bitstream_direction(direction);
-            let descriptor = VideoBitstreamBufferDescriptor {
-                label: "test/zero-size",
-                size: 0,
-                direction,
-                video_profile: profile.video_profile_info(),
-            };
-            match HostVulkanBuffer::new_video_bitstream(&device, &descriptor) {
-                Err(crate::core::Error::Configuration(msg)) => {
-                    assert!(
-                        msg.contains("size must be > 0"),
-                        "zero-size error must explain the constraint, got: {msg}"
-                    );
-                    assert!(
-                        msg.contains("test/zero-size"),
-                        "zero-size error must carry the label, got: {msg}"
-                    );
-                }
-                Err(e) => {
-                    panic!("zero size ({direction:?}): expected Configuration error, got {e}")
-                }
-                Ok(_) => panic!("zero size ({direction:?}): expected rejection, got Ok"),
-            }
-        }
-    }
-
-    /// `new_video_bitstream` encode + decode each pick the correct usage
-    /// flag, allocate HOST_VISIBLE + persistently-mapped memory, and
-    /// expose a non-null `mapped_ptr` + accurate `size`. Hardware-gated
-    /// because real VMA + a real `VkVideoProfileInfoKHR` are required.
-    ///
-    /// A direction the device has no H.264 support for — the codec extension
-    /// enabled and a queue family for it — is skipped; a direction it does
-    /// support must allocate. Swallowing the driver's rejection instead would
-    /// leave the test unable to fail.
-    #[cfg(target_os = "linux")]
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
-    #[test]
-    fn new_video_bitstream_succeeds_for_both_directions() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        const SIZE: u64 = 1 << 20; // 1 MiB
-        for direction in [
-            VideoBitstreamDirection::Encode,
-            VideoBitstreamDirection::Decode,
-        ] {
-            if skip_unless_this_machine_has(
-                RigOnlyCapability::VulkanVideo,
-                device_supports_h264_for_bitstream_direction(&device, direction),
-            ) {
-                continue;
-            }
-            let profile =
-                VideoProfileWithOwnedCodecExtensionChain::h264_for_bitstream_direction(direction);
-            let descriptor = VideoBitstreamBufferDescriptor {
-                label: "test/bitstream-positive",
-                size: SIZE,
-                direction,
-                video_profile: profile.video_profile_info(),
-            };
-            let bitstream_buffer = HostVulkanBuffer::new_video_bitstream(&device, &descriptor)
-                .unwrap_or_else(|e| panic!("{direction:?}: bitstream allocation failed: {e}"));
-            assert_eq!(bitstream_buffer.size(), SIZE, "size must match descriptor");
-            assert!(
-                !bitstream_buffer.mapped_ptr().is_null(),
-                "{direction:?} bitstream buffer must be persistently mapped"
-            );
-            assert_ne!(
-                bitstream_buffer.buffer(),
-                vk::Buffer::null(),
-                "VkBuffer handle must be non-null"
-            );
-        }
     }
 }

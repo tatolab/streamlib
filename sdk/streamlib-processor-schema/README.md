@@ -1,26 +1,23 @@
 # streamlib-processor-schema
 
-Processor schema types and YAML parser shared between the `streamlib`
-runtime and `streamlib-macros`.
+Processor schema types shared between the `streamlib` runtime and
+`streamlib-macros`.
 
 ## Purpose
 
-Both crates need to agree on the on-disk shape of processor manifests
-and the small handful of execution-related enums those manifests
-declare. This crate is the single source of truth for those types so
+Both crates need to agree on the shape of a processor schema and the
+small handful of execution-related enums it declares. This crate is the single source of truth for those types so
 the macro and the runtime can't drift.
 
 ## Contents
 
 - `ProcessorSchema`, `ProcessorPortSchema`, `ProcessorConfigSchema`,
-  `ProcessorStateField`, `ProcessorLanguage` — typed mirror of a
-  processor YAML manifest.
-- `parse_processor_yaml`, `parse_processor_yaml_file` — YAML parser
-  with the project's manifest contract.
+  `ProcessorStateField`, `ProcessorLanguage` — the typed processor
+  schema.
 - `ProcessExecution`, `ThreadPriority`, `ExecutionConfig` — execution
   mode + priority types referenced by the
   `#[streamlib::processor(execution = Reactive)]` attribute.
-- `compute_schema_id`, `to_pascal_case`, `to_snake_case` — helpers
+- `to_pascal_case`, `to_snake_case` — helpers
   shared between codegen sites and the runtime.
 
 ## Why these types are shared

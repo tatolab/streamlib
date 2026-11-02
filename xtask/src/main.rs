@@ -13,17 +13,18 @@ pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_iceoryx2_construction;
+pub mod check_module_host_table_surface;
 pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
-pub mod check_no_inventory_submit;
 pub mod check_no_tatolab_namespace_package_init;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod generate_built_in_node_classes;
+pub mod generate_module_host_table_c_header;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
@@ -178,7 +179,7 @@ pub fn tracked_files_under_scan_roots(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all fifteen in well under a second, and why CI runs them as
+/// lets one process run all sixteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -188,7 +189,14 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         "check-no-in-process-placement",
         check_no_in_process_placement::run,
     ),
-    ("check-no-inventory-submit", check_no_inventory_submit::run),
+    (
+        "check-module-host-table-surface",
+        check_module_host_table_surface::run,
+    ),
+    (
+        "generate-module-host-table-c-header --check",
+        generate_module_host_table_c_header::check,
+    ),
     (
         "check-no-escalate-in-lifecycle",
         check_no_escalate_in_lifecycle::run,
@@ -376,6 +384,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "-p",
                 "streamlib-python-wheel",
                 "-p",
+                "tatolab-module-sdk",
+                "-p",
                 "streamlib-relay-adapter-sdk",
                 "-p",
                 "streamlib-relay-adapter-local",
@@ -388,7 +398,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "-p",
                 "streamlib-relay-track-reader",
                 "--features",
-                "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
+                "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,tatolab-module-sdk/pyo3",
                 "--lib",
                 "--bins",
                 "--tests",
@@ -512,13 +522,11 @@ enum Commands {
     /// See `docs/decisions/helper-process-placement-only.md`.
     CheckNoInProcessPlacement,
 
-    /// CI gate for the all-dynamic registration rule. Fails on any
-    /// `inventory::submit!(FactoryRegistration { ... })` in live code —
-    /// the `#[processor]` macro emits none, and the pattern would bypass the
-    /// dynamic-load model. `RuntimeInitHookRegistration`
-    /// inventory submissions are unaffected — only `FactoryRegistration`
-    /// is flagged.
-    CheckNoInventorySubmit,
+    /// CI gate keeping the module host table data-plane only: every field of
+    /// `tatolab-module-sdk`'s `#[repr(C)]` table is plain data, a handle or an
+    /// `extern "C"` verb over them — never an engine or RHI type — and the SDK
+    /// depends on no engine crate. See [`check_module_host_table_surface`].
+    CheckModuleHostTableSurface,
 
     /// CI gate for the escalate-from-lifecycle ban. Fails when
     /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
@@ -711,6 +719,16 @@ enum Commands {
         check: bool,
     },
 
+    /// Regenerate `tatolab-module-sdk`'s `include/tatolab_module_host_table.h`
+    /// from the table's Rust mirror. `--check` fails when the checked-in header
+    /// differs from a regeneration; `check-all-source-gates` runs it. See
+    /// [`generate_module_host_table_c_header`].
+    GenerateModuleHostTableCHeader {
+        /// Fail when the checked-in header differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
     /// via `cargo about generate`, plus the vendored C++ projects that are not
     /// packages in the Cargo resolve graph and so reach the file only by being
@@ -745,7 +763,9 @@ fn main() -> Result<()> {
         Commands::CheckNoInProcessPlacement => {
             check_no_in_process_placement::run(&workspace_root()?)?
         }
-        Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
+        Commands::CheckModuleHostTableSurface => {
+            check_module_host_table_surface::run(&workspace_root()?)?
+        }
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
@@ -800,6 +820,9 @@ fn main() -> Result<()> {
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?
+        }
+        Commands::GenerateModuleHostTableCHeader { check } => {
+            generate_module_host_table_c_header::run(&workspace_root()?, check)?
         }
         Commands::GenerateThirdPartyNotices {
             extension_package_directory,
