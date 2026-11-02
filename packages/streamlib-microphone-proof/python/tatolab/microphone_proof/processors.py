@@ -93,6 +93,7 @@ class MicrophoneProofSource:
         self._gil_churners: "list[threading.Thread]" = []
         self._written_blocks = 0
         self._failed_writes = 0
+        self._drain_thread_priority = "not started"
 
     @node.output(catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"))
     def audio(self) -> None:
@@ -134,14 +135,15 @@ class MicrophoneProofSource:
             churner.start()
             self._gil_churners.append(churner)
         log.info(
-            f"MicrophoneProofSource: capturing, device thread realtime="
-            f"{capture.device_thread_is_realtime}, gil_churn_threads="
+            f"MicrophoneProofSource: capturing, gil_churn_threads="
             f"{self._config.gil_churn_threads}"
         )
 
     def _drain_until_stopped(
         self, capture: "_native.AlsaMicrophoneCapture", outputs: LinkOutputDataWriter
     ) -> None:
+        # The built-in's publishing thread is realtime too; the drain is this node's.
+        self._drain_thread_priority = _native.make_the_calling_thread_realtime()
         while True:
             message = capture.next_message(DRAIN_WAIT_TIMEOUT_MS)
             if message is None:
@@ -180,7 +182,8 @@ class MicrophoneProofSource:
                 f"written_blocks={self._written_blocks} failed_writes={self._failed_writes} "
                 f"ring_dropped_blocks={capture.ring_dropped_block_count} "
                 f"device_overruns={capture.device_overrun_count} "
-                f"device_thread_realtime={capture.device_thread_is_realtime} "
+                f"device_thread_priority={capture.device_thread_priority!r} "
+                f"drain_thread_priority={self._drain_thread_priority!r} "
                 f"capture_failure={capture.failure_that_ended_the_capture}"
             )
 

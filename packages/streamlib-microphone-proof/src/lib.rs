@@ -9,6 +9,7 @@ mod alsa_capture_thread;
 mod audio_block_message;
 mod captured_audio_block_ring;
 mod monotonic_clock;
+mod realtime_thread_priority;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -211,12 +212,14 @@ impl AlsaMicrophoneCapture {
         self.report.captured_block_count.load(Ordering::Relaxed)
     }
 
-    /// Whether the device thread got `SCHED_FIFO`.
+    /// How the device thread is scheduled, once it has started.
     #[getter]
-    fn device_thread_is_realtime(&self) -> bool {
+    fn device_thread_priority(&self) -> Option<String> {
         self.report
-            .device_thread_is_realtime
-            .load(Ordering::Relaxed)
+            .device_thread_priority
+            .lock()
+            .ok()
+            .and_then(|priority| priority.clone())
     }
 
     /// Why the device thread ended on its own, if it did.
@@ -260,6 +263,12 @@ impl AlsaMicrophoneCapture {
     }
 }
 
+/// Make the calling OS thread realtime the way the engine does; how it ended up scheduled.
+#[pyfunction]
+fn make_the_calling_thread_realtime() -> String {
+    realtime_thread_priority::make_the_calling_thread_realtime().description()
+}
+
 /// Nanoseconds on the clock this wheel stamps blocks with.
 #[pyfunction]
 fn monotonic_now_ns() -> i64 {
@@ -271,5 +280,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<AlsaMicrophoneCapture>()?;
     module.add_class::<CapturedAudioBlockMessage>()?;
     module.add_function(wrap_pyfunction!(monotonic_now_ns, module)?)?;
+    module.add_function(wrap_pyfunction!(make_the_calling_thread_realtime, module)?)?;
     Ok(())
 }

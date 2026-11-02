@@ -11,12 +11,10 @@ use crate::alsa_capture_library::{
 };
 use crate::captured_audio_block_ring::{CapturedAudioBlock, CapturedAudioBlockRing};
 use crate::monotonic_clock::monotonic_now_ns;
+use crate::realtime_thread_priority::make_the_calling_thread_realtime;
 
 /// How long one wait for a period lasts before the thread looks at its stop flag.
 const PERIOD_WAIT_TIMEOUT_MS: i32 = 100;
-
-/// `SCHED_FIFO` priority the engine's own realtime threads ask for.
-const DEVICE_THREAD_SCHED_FIFO_PRIORITY: i32 = 80;
 
 const BYTES_PER_F32_SAMPLE: usize = 4;
 
@@ -25,7 +23,7 @@ const BYTES_PER_F32_SAMPLE: usize = 4;
 pub(crate) struct AlsaCaptureThreadReport {
     pub(crate) device_overrun_count: AtomicU64,
     pub(crate) captured_block_count: AtomicU64,
-    pub(crate) device_thread_is_realtime: AtomicBool,
+    pub(crate) device_thread_priority: Mutex<Option<String>>,
     pub(crate) failure_that_ended_the_capture: Mutex<Option<String>>,
 }
 
@@ -46,9 +44,10 @@ pub(crate) fn capture_into_the_ring_until_stopped(
     stop_requested: &AtomicBool,
     report: &AlsaCaptureThreadReport,
 ) {
-    report
-        .device_thread_is_realtime
-        .store(make_this_thread_sched_fifo(), Ordering::Relaxed);
+    let priority = make_the_calling_thread_realtime();
+    if let Ok(mut slot) = report.device_thread_priority.lock() {
+        *slot = Some(priority.description());
+    }
     if let Some(failure) =
         read_blocks_until_stopped(&mut pcm, format, block_frames, ring, stop_requested, report)
     {
@@ -139,15 +138,4 @@ fn recover(
             pcm.library().error_text(error_code)
         )
     })
-}
-
-/// Whether this thread now runs `SCHED_FIFO`; without `CAP_SYS_NICE` or an `rtprio`
-/// limit it stays where it was.
-fn make_this_thread_sched_fifo() -> bool {
-    // SAFETY: a zeroed `sched_param` is valid, and the call only reads it.
-    unsafe {
-        let mut parameters: libc::sched_param = std::mem::zeroed();
-        parameters.sched_priority = DEVICE_THREAD_SCHED_FIFO_PRIORITY;
-        libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &parameters) == 0
-    }
 }

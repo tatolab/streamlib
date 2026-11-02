@@ -5,7 +5,15 @@
 
 from typing import final
 
-__all__ = ["AlsaMicrophoneCapture", "CapturedAudioBlockMessage", "monotonic_now_ns"]
+__all__ = [
+    "AlsaMicrophoneCapture",
+    "CapturedAudioBlockMessage",
+    "make_the_calling_thread_realtime",
+    "monotonic_now_ns",
+]
+
+def make_the_calling_thread_realtime() -> str:
+    """Make the calling OS thread realtime the way the engine does; how it ended up scheduled."""
 
 def monotonic_now_ns() -> int:
     """Nanoseconds on the clock this wheel stamps blocks with."""
@@ -46,7 +54,7 @@ class AlsaMicrophoneCapture:
     @property
     def captured_block_count(self) -> int: ...
     @property
-    def device_thread_is_realtime(self) -> bool: ...
+    def device_thread_priority(self) -> "str | None": ...
     @property
     def failure_that_ended_the_capture(self) -> "str | None": ...
     @property
