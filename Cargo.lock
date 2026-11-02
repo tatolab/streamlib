@@ -6094,6 +6094,7 @@ dependencies = [
 name = "streamlib-vulkan-video"
 version = "0.68.11"
 dependencies = [
+ "libc",
  "streamlib-consumer-rhi",
  "streamlib-error",
  "streamlib-video-bitstream",

@@ -5,7 +5,6 @@
 
 use vulkanalia::vk;
 use vulkanalia::vk::Handle;
-use vulkanalia_vma as vma;
 
 // ---------------------------------------------------------------------------
 // DPB output mode
@@ -36,12 +35,9 @@ impl Default for DpbOutputMode {
 /// When the library allocates the DPB, this borrows from the internal pool.
 /// When the caller provides output images, the library fills in the metadata.
 #[derive(Debug)]
-/// Optional staging buffer for inline readback within the decode command buffer.
+/// The buffer the decode command buffer copies the decoded NV12 picture into.
 pub struct StagingBuffer {
     pub buffer: vk::Buffer,
-    pub allocation: vma::Allocation,
-    pub size: u64,
-    pub mapped_ptr: *mut u8,
 }
 
 pub struct DecodedFrame {
@@ -244,9 +240,21 @@ pub struct SimpleDecoderConfig {
     pub max_height: u32,
     /// DPB/output mode.
     pub output_mode: DpbOutputMode,
-    /// When true, decoded frames are converted from NV12 to RGBA via GPU
-    /// compute shader before readback. Default false (raw NV12 output).
-    pub rgba_output: bool,
+    /// How each decoded picture is handed back.
+    pub decoded_picture_delivery: DecodedPictureDelivery,
+}
+
+/// How [`crate::SimpleDecoder`] hands a decoded picture back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecodedPictureDelivery {
+    /// The coded NV12 picture, read back into [`SimpleDecodedFrame::data`].
+    #[default]
+    ReadBackNv12,
+    /// The display window converted to RGBA on the GPU, then read back.
+    ReadBackRgba,
+    /// The coded NV12 picture left in a DMA-BUF this decoder exports, named
+    /// by [`SimpleDecodedFrame::exported_nv12`]; nothing is read back.
+    Nv12InAnExportedDmaBuf,
 }
 
 impl Default for SimpleDecoderConfig {
@@ -256,7 +264,7 @@ impl Default for SimpleDecoderConfig {
             max_width: 0,
             max_height: 0,
             output_mode: DpbOutputMode::Coincide,
-            rgba_output: false,
+            decoded_picture_delivery: DecodedPictureDelivery::ReadBackNv12,
         }
     }
 }
@@ -270,7 +278,8 @@ impl Default for SimpleDecoderConfig {
 /// coded picture with its padding intact.
 #[derive(Debug, Clone)]
 pub struct SimpleDecodedFrame {
-    /// Raw pixel data (NV12 or RGBA depending on `is_rgba`).
+    /// Raw pixel data (NV12 or RGBA depending on `is_rgba`); empty when the
+    /// picture is in [`Self::exported_nv12`].
     pub data: Vec<u8>,
     /// Width of `data` in pixels — cropped to the conformance window on the
     /// RGBA path, the coded width on the raw NV12 path.
@@ -287,6 +296,10 @@ pub struct SimpleDecodedFrame {
     /// The colour the decoded samples are in, matrix and range always set —
     /// on the RGBA path, the colour `data` was converted from.
     pub decoded_picture_color_vui: streamlib_consumer_rhi::h273_color_vui::H273ColorVui,
+    /// The display window's NV12 planes in an exported DMA-BUF, under
+    /// [`DecodedPictureDelivery::Nv12InAnExportedDmaBuf`]; `width` and
+    /// `height` are then the display window's.
+    pub exported_nv12: Option<super::exported_nv12_dma_buf_ring::ExportedNv12DmaBufPicture>,
 }
 
 // ---------------------------------------------------------------------------

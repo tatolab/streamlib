@@ -57,7 +57,10 @@ pub use annex_b_nal_units::{
     split_annex_b_nal_units, why_no_decoder_could_enter_on_these_parameter_sets,
 };
 #[cfg(target_os = "linux")]
-pub use decode::{DecodedFrame, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
+pub use decode::exported_nv12_dma_buf_ring::ExportedNv12DmaBufPicture;
+pub use decode::{
+    DecodedFrame, DecodedPictureDelivery, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
+};
 #[cfg(target_os = "linux")]
 pub use encode::{
     Codec, EncodePacket, EncodedOutput, FrameType, Preset, SimpleEncoder, SimpleEncoderConfig,

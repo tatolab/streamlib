@@ -46,5 +46,9 @@ path = "../../sdk/streamlib-error"
 version = "0.68.11"
 optional = true
 
+# The hardware tests map an exported DMA-BUF the way an importer reads one.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true

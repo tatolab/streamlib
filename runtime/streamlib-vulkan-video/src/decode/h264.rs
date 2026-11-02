@@ -479,23 +479,11 @@ impl SimpleDecoder {
         let height = self.coded_picture_height;
         let display_window = self.decoded_picture_display_window_or_whole_picture();
 
-        let mut output = if self.nv12_converter.is_some() {
-            DecodedFrame {
-                staging_buffer: None,
-                ..DecodedFrame::default()
-            }
-        } else {
-            self.ensure_readback_staging(width, height)?;
-            let &(stg_buf, stg_alloc, stg_size, stg_ptr) = self.readback_staging.as_ref().unwrap();
-            DecodedFrame {
-                staging_buffer: Some(StagingBuffer {
-                    buffer: stg_buf,
-                    allocation: stg_alloc,
-                    size: stg_size,
-                    mapped_ptr: stg_ptr,
-                }),
-                ..DecodedFrame::default()
-            }
+        let (staging_buffer, exported_nv12_ring_slot_index) =
+            self.staging_buffer_for_the_next_picture(width, height)?;
+        let mut output = DecodedFrame {
+            staging_buffer,
+            ..DecodedFrame::default()
         };
 
         // Use VkVideoDecoder (ported code) for H.264 decode
@@ -550,6 +538,7 @@ impl SimpleDecoder {
             poc: poc[0],
             setup_slot,
             _setup_image: setup_image,
+            exported_nv12_ring_slot_index,
         });
 
         self.frame_counter += 1;
