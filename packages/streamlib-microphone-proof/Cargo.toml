@@ -1,0 +1,36 @@
+[package]
+name = "streamlib-microphone-proof"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "Throwaway proof that a microphone captures from a Python node's helper process as well as the built-in."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `tatolab.microphone_proof.processors` imports.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+# ALSA is opened at runtime, so the wheel builds and imports on a machine with
+# no `libasound2-dev`, as the engine's own ALSA arm does.
+libloading = "0.8"
+libc = "0.2"
+# `force_push` is the ring's whole overflow policy: the oldest block goes, and
+# the device thread never waits on the consumer.
+crossbeam-queue = "0.3"
+rmp-serde = "1.3"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+
+[dev-dependencies]
+rmpv = "1.3"
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]
