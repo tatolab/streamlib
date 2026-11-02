@@ -381,7 +381,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.68.8"
+version = "0.68.9"
 dependencies = [
  "libc",
  "objc2",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-h264"
-version = "0.68.8"
+version = "0.68.9"
 dependencies = [
  "pyo3",
  "rmp-serde",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.68.8"
+version = "0.68.9"
 dependencies = [
  "libc",
  "mach2",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-vulkan-video"
-version = "0.68.8"
+version = "0.68.9"
 dependencies = [
  "streamlib-consumer-rhi",
  "tatolab-vulkanalia",
