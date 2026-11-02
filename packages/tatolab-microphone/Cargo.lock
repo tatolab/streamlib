@@ -220,7 +220,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tatolab-microphone"
-version = "0.68.10"
+version = "0.68.11"
 dependencies = [
  "pyo3",
  "rmp-serde",
