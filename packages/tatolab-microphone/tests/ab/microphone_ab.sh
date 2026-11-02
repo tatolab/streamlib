@@ -76,7 +76,7 @@ stop_the_cpu_stress() {
 
 RUNTIME_STATE_HOME=""
 stop_everything() {
-    stop_the_fixture_stream_runs
+    remove_the_fixture_projects
     stop_the_fixture_runtime
     stop_the_cpu_stress
     [ -z "$RUNTIME_STATE_HOME" ] || rm -rf "$RUNTIME_STATE_HOME"
@@ -106,13 +106,22 @@ cat "$OUTPUT_DIR/rig.txt"
 # its own project: a copy of `<arm>_arm/` and the recorder beside the evidence,
 # its `.venv` this wheel's.
 run_one_arm() {
-    local arm="$1"
+    local arm="$1" stream_function_name="$2"
     local recording="$OUTPUT_DIR/$arm.csv"
     local arm_project_directory="$OUTPUT_DIR/$arm.project"
     rm -rf "$arm_project_directory"
     cp -r "$SCRIPT_DIR/${arm}_arm" "$arm_project_directory"
     cp "$SCRIPT_DIR/audio_block_arrival_recorder.py" "$arm_project_directory/"
     ln -s "$PACKAGE_DIR/.venv" "$arm_project_directory/.venv"
+    cat >"$arm_project_directory/pyproject.toml" <<TOML
+[project]
+name = "microphone-ab-$arm"
+version = "0.0.0"
+requires-python = ">=3.10"
+TOML
+    local arm_stream_id
+    arm_stream_id="$(stream_id_of_the_fixture_project_stream "$arm_project_directory" "$stream_function_name")" \
+        || fail "arm $arm: could not derive its stream id"
     RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-microphone-ab-state-XXXXXX")"
     say "Arm $arm: starting the runtime"
     STREAMLIB_MICROPHONE_AB_RECORDING_PATH="$recording" \
@@ -122,20 +131,15 @@ run_one_arm() {
         start_the_fixture_runtime "$OUTPUT_DIR/$arm.runtime.log" "$RUNTIME_STATE_HOME" \
         || fail "arm $arm: the runtime did not start"
     start_the_cpu_stress
-    local arm_stream_id
-    if ! "$TATOLAB_EXECUTABLE" run --dir "$arm_project_directory" >"$OUTPUT_DIR/$arm.run.log" 2>&1 \
-        || ! arm_stream_id="$(name_of_the_stream_a_rig_serves_once_it_runs "$FIXTURE_RUNTIME_PID" 120)"; then
+    if ! start_the_fixture_project "$arm_project_directory" "$arm_stream_id" "$OUTPUT_DIR/$arm.run.log"; then
         tail -40 "$OUTPUT_DIR/$arm.run.log" >&2
         tail -40 "$OUTPUT_DIR/$arm.runtime.log" >&2
         fail "arm $arm: the stream never ran"
     fi
     say "Arm $arm: stream $arm_stream_id running for ${RUN_SECONDS}s under $CPU_STRESS_PROCESSES stress processes"
     sleep "$(( RUN_SECONDS + WARMUP_SECONDS ))"
-    "$TATOLAB_EXECUTABLE" stop "$arm_stream_id" >>"$OUTPUT_DIR/$arm.run.log" 2>&1
-    for _ in $(seq 1 30); do
-        the_stream_is_running "$arm_stream_id" || break
-        sleep 1
-    done
+    remove_the_fixture_projects
+    [ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" = 0 ] || say "Arm $arm: the stream did not unload within 10 s"
     stop_the_cpu_stress
     stop_the_fixture_runtime 15
     rm -rf "$RUNTIME_STATE_HOME"
@@ -147,8 +151,8 @@ run_one_arm() {
         | tee "$OUTPUT_DIR/$arm.source_report.txt"
 }
 
-run_one_arm built_in
-run_one_arm module
+run_one_arm built_in built_in_microphone_into_the_recorder
+run_one_arm module module_microphone_into_the_recorder
 
 "$VENV_PYTHON" "$SCRIPT_DIR/audio_block_arrival_report.py" \
     "$OUTPUT_DIR/built_in.csv" "$OUTPUT_DIR/module.csv" \
