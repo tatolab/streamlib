@@ -4474,11 +4474,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Produce a [`GpuContextFullAccess`] view of the same underlying context.
-    ///
-    /// In #323 this becomes private and only reachable through
-    /// `escalate(|full| …)`; today it is `pub(crate)` so the runtime and
-    /// processor setup paths can still reach the full surface without a
-    /// compile-time barrier.
+    #[cfg(test)]
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
         GpuContextFullAccess::counting_one_offs_against_the_node(
             self.host_inner().clone(),

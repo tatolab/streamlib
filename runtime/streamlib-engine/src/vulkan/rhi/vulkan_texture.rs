@@ -20,30 +20,6 @@ use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmis
 #[cfg(target_os = "macos")]
 use super::vulkan_metal_working_set_budget::frame_device_memory_request_for_a_private_iosurface;
 
-#[cfg(target_os = "linux")]
-use super::drm_modifier_probe::fourcc;
-
-/// Map a `TextureFormat` to the DRM FOURCC the EGL probe uses to look up
-/// render-target-capable modifiers. Returns `None` for formats that aren't
-/// part of the cross-language surface ABI (the ones the modifier probe
-/// doesn't interrogate).
-#[cfg(target_os = "linux")]
-fn texture_format_to_fourcc(format: TextureFormat) -> Option<u32> {
-    match format {
-        // BGRA8_UNORM in Vulkan = ARGB8888 in DRM (channel order matches once
-        // little-endian byte layout is taken into account).
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
-            Some(fourcc::DRM_FORMAT_ARGB8888)
-        }
-        // RGBA8_UNORM in Vulkan = ABGR8888 in DRM.
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
-            Some(fourcc::DRM_FORMAT_ABGR8888)
-        }
-        TextureFormat::Nv12 => Some(fourcc::DRM_FORMAT_NV12),
-        TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => None,
-    }
-}
-
 /// Convert RHI TextureFormat to Vulkan format.
 fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
     match format {
