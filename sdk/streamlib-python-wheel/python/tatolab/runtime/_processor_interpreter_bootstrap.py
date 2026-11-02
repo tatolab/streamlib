@@ -11,7 +11,9 @@ interpreter running this file by path, with the lend directory (the one holding
 the class by the import path the parent derived from it, opens that processor's
 own iceoryx2 ports from the wiring the parent sends, and drives its lifecycle.
 Run with `--describe <import path>...`, it instead prints each class's
-declaration as one JSON document on stdout and exits.
+declaration as one JSON document on stdout and exits; run with
+`--describe-installed-modules`, it does the same for every class an installed
+distribution declares in the `tatolab.nodes` entry-point group.
 
 Startup order is load-bearing. Up to the lent runtime's import this file uses
 the standard library only and parses as Python 3.7, so an interpreter that
@@ -45,6 +47,12 @@ from typing import Any, NoReturn, Optional
 OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 10)
 
 DESCRIBE_ARGUMENT = "--describe"
+DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"
+DESCRIBE_ARGUMENTS = (DESCRIBE_ARGUMENT, DESCRIBE_INSTALLED_MODULES_ARGUMENT)
+
+#: The entry-point group an installed distribution declares its node classes in,
+#: each entry's value a `module:qualname` import path.
+INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP = "tatolab.nodes"
 
 _described_document_fd: Optional[int] = None
 
@@ -122,7 +130,7 @@ if __name__ == "__main__":
     # Before the lent runtime and `tatolab.stream` import, so nothing their
     # imports print reaches the document; only the interpreter's own site hooks
     # run earlier.
-    if sys.argv[1:2] == [DESCRIBE_ARGUMENT]:
+    if sys.argv[1:2] and sys.argv[1] in DESCRIBE_ARGUMENTS:
         _reserve_stdout_for_the_described_document()
     _import_the_lent_runtime_or_refuse()
 
@@ -148,6 +156,7 @@ from tatolab.runtime._engine import (
     engine_build_id_compiled_into_this_extension,
     limited_access_view_of_runtime_context_for_helper_process,
     note_pause_state_from_parent_on_runtime_context,
+    note_stop_request_from_parent_on_runtime_context,
     open_node_link_data_access_for_helper_process,
     open_runtime_context_full_access_for_helper_process,
 )
@@ -993,6 +1002,77 @@ def describe_processor_classes_onto_stdout(import_paths: "list[str]") -> int:
     return 1 if refused_node_types else 0
 
 
+def node_classes_installed_distributions_declare() -> "list[dict[str, str]]":
+    """Every `tatolab.nodes` entry point an installed distribution declares,
+    once per import path, in the order `importlib.metadata` finds them."""
+    from importlib import metadata
+
+    installed_modules: "list[dict[str, str]]" = []
+    seen_import_paths: "set[str]" = set()
+    for entry_point in metadata.entry_points(group=INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP):
+        import_path = entry_point.value.split("[", 1)[0].strip().replace(" ", "")
+        if import_path in seen_import_paths:
+            continue
+        seen_import_paths.add(import_path)
+        distribution = entry_point.dist
+        installed_modules.append(
+            {
+                "import_path": import_path,
+                "entry_point": entry_point.name,
+                "distribution": distribution.name if distribution is not None else "",
+                "distribution_version": (
+                    distribution.version if distribution is not None else ""
+                ),
+            }
+        )
+    return installed_modules
+
+
+def describe_installed_modules_onto_stdout() -> int:
+    """Print one JSON document describing every class installed distributions
+    declare in `tatolab.nodes`; always 0, since an installed module that cannot
+    be described is reported in the document and never fails the stream.
+
+    Wire contract with the engine: the `--describe` document, plus
+    `"installed_modules": [{"import_path": ..., "entry_point": ...,
+    "distribution": ..., "distribution_version": ...}]` naming where each
+    described or refused class came from.
+    """
+    described_document_fd = _reserve_stdout_for_the_described_document()
+    described_node_types: "list[dict[str, Any]]" = []
+    refused_node_types: "list[dict[str, str]]" = []
+    try:
+        installed_modules = node_classes_installed_distributions_declare()
+    except Exception:
+        installed_modules = []
+        sys.stderr.write(
+            f"cannot list the `{INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP}` entry points:\n"
+            f"{traceback.format_exc()}"
+        )
+    for installed_module in installed_modules:
+        import_path = installed_module["import_path"]
+        try:
+            described_node_types.append(describe_one_processor_class(import_path))
+        except ProcessorClassNotDescribable as refusal:
+            refused_node_types.append({"import_path": import_path, "refusal": str(refusal)})
+            sys.stderr.write(
+                f"cannot describe {import_path}, which {installed_module['distribution']} "
+                f"declares in `{INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP}`: {refusal}\n"
+            )
+    sys.stderr.flush()
+    described_document = json.dumps(
+        {
+            "described_node_types": described_node_types,
+            "refused_node_types": refused_node_types,
+            "installed_modules": installed_modules,
+        },
+        allow_nan=False,
+    )
+    with os.fdopen(described_document_fd, "w", encoding="utf-8") as described_document_output:
+        described_document_output.write(described_document + "\n")
+    return 0
+
+
 # =============================================================================
 # Opening this processor's own ports
 # =============================================================================
@@ -1321,6 +1401,9 @@ class HelperProcessLifecycle:
             return
         execution_mode = command.get("execution", "reactive")
         self._running = True
+        note_stop_request_from_parent_on_runtime_context(
+            self._hosted.full_access_context, False
+        )
         if execution_mode == "reactive":
             self._run_reactive()
         elif execution_mode == "continuous":
@@ -1423,6 +1506,9 @@ class HelperProcessLifecycle:
     def _stop(self) -> None:
         self._running = False
         if self._hosted is not None:
+            note_stop_request_from_parent_on_runtime_context(
+                self._hosted.full_access_context, True
+            )
             self._hosted.call_hook("stop", self._hosted.full_access_context)
         self._bridge.send({"rpc": "stopped"})
 
@@ -1430,6 +1516,9 @@ class HelperProcessLifecycle:
         self._running = False
         self._torn_down = True
         if self._hosted is not None:
+            note_stop_request_from_parent_on_runtime_context(
+                self._hosted.full_access_context, True
+            )
             self._hosted.call_hook("teardown", self._hosted.full_access_context)
         try:
             every_release_sent = self._bridge.wait_for_every_release_queued_so_far(
@@ -1591,8 +1680,8 @@ def _write_a_bootstrap_fatal_to_raw_stderr(bootstrap_failure: object) -> None:
 
 
 def main(arguments: "list[str]") -> int:
-    """Describe the classes `--describe` names, or run one processor until its
-    parent tears it down."""
+    """Describe the classes `--describe` names, or the installed modules'
+    classes, or run one processor until its parent tears it down."""
     try:
         _refuse_an_engine_built_other_than_the_parents()
     except HelperProcessProtocolError as bootstrap_failure:
@@ -1612,10 +1701,20 @@ def main(arguments: "list[str]") -> int:
             traceback.print_exc()
             describe_exit_status = 1
         _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
+    if arguments == [DESCRIBE_INSTALLED_MODULES_ARGUMENT]:
+        _end_the_describe_once_its_parent_closes_stdin()
+        log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
+        try:
+            describe_exit_status = describe_installed_modules_onto_stdout()
+        except BaseException:
+            traceback.print_exc()
+            describe_exit_status = 1
+        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
-            f"a processor interpreter takes no arguments, or `{DESCRIBE_ARGUMENT}` and "
-            f"import paths; it was given {arguments!r}"
+            f"a processor interpreter takes no arguments, `{DESCRIBE_ARGUMENT}` and "
+            f"import paths, or `{DESCRIBE_INSTALLED_MODULES_ARGUMENT}` alone; it was given "
+            f"{arguments!r}"
         )
         return 1
     run_one_processor_until_its_parent_tears_it_down()

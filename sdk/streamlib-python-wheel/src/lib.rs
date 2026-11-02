@@ -20,6 +20,7 @@ mod python_helper_process_pixel_exchange;
 mod python_logging;
 #[cfg(target_os = "macos")]
 mod python_metal_framework_queue_synchronization;
+mod python_module_host_table;
 mod python_monotonic_timer;
 mod python_processor_context;
 mod python_processor_declaration;
@@ -45,6 +46,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         python_processor_context::note_pause_state_from_parent_on_runtime_context,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_context::note_stop_request_from_parent_on_runtime_context,
         module
     )?)?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;

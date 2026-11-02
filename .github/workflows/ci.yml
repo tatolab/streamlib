@@ -285,11 +285,11 @@ jobs:
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
-          -p streamlib-python-wheel
+          -p streamlib-python-wheel -p tatolab-module-sdk
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track -p streamlib-relay-track-reader
-          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,tatolab-module-sdk/pyo3
           --lib --bins --tests
 
       - name: Save the compile-fail tests' build
@@ -660,6 +660,7 @@ jobs:
           # refused naming the floor and the rest of it loads.
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
+          cargo test --locked -p tatolab-module-sdk --features pyo3
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local \
             -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro

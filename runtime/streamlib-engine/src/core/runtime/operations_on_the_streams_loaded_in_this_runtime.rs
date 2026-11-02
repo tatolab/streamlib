@@ -15,6 +15,7 @@ use super::{
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
 use crate::core::graph::OutputPortExposureLevel;
+use crate::core::processors::InstalledModuleOfANodeType;
 
 /// What the local API reaches a runtime through: the runtime's description, the
 /// stream a call names, a stream's node catalog, and the stream
@@ -49,11 +50,21 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     ) -> Result<Vec<ProcessorDescriptor>>;
 
     /// The node types described in the own interpreter of the loaded stream
-    /// `stream_id` names, with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
+    /// `stream_id` names that no installed module declares, with the same
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
+
+    /// The node types installed modules declare in the `tatolab.nodes`
+    /// entry points of the loaded stream `stream_id` names, each with the
+    /// distribution declaring it, with the same
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
+    fn node_types_installed_modules_declare_in_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)>>;
 
     /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
@@ -137,7 +148,18 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         self.loaded_stream_of_the_id(stream_id).map(|stream| {
             stream
                 .node_types_this_stream_resolves()
-                .descriptors_described_in_this_streams_processor_interpreter()
+                .descriptors_described_in_this_streams_processor_interpreter_no_installed_module_declares()
+        })
+    }
+
+    fn node_types_installed_modules_declare_in_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)>> {
+        self.loaded_stream_of_the_id(stream_id).map(|stream| {
+            stream
+                .node_types_this_stream_resolves()
+                .node_types_installed_modules_declare()
         })
     }
 

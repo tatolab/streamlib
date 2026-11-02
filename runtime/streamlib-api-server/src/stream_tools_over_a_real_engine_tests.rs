@@ -383,6 +383,18 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .node_types_described_in_the_interpreter_of_the_stream_a_call_names(stream_id)
     }
+    fn node_types_installed_modules_declare_in_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<
+        Vec<(
+            ProcessorDescriptor,
+            streamlib::sdk::processors::InstalledModuleOfANodeType,
+        )>,
+    > {
+        self.engine
+            .node_types_installed_modules_declare_in_the_stream_a_call_names(stream_id)
+    }
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.ids_of_the_loaded_streams()
     }

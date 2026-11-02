@@ -5,12 +5,15 @@
 //! `@node` classes import as `tatolab.webrtc._native`.
 //!
 //! The engine never calls anything here. A processor extension's per-frame work
-//! is its own package's Rust, reached directly from its own Python.
+//! is its own package's Rust: the publisher's is reached from its own Python,
+//! and the player's runs on a thread of its own, writing its node's ports
+//! through the module host table.
 
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
+use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
+use tatolab_module_sdk::{ModuleHost, ModuleHostLogLevel, ModuleHostOutputPort};
 
 pub mod error;
 pub mod h264_rtp_depacketiser;
@@ -26,14 +29,18 @@ pub mod received_media_assembly;
 pub mod session_description;
 pub mod transport_stack;
 pub mod webrtc_peer_connection;
+pub mod whep_player;
 pub mod whep_session;
 mod whip_publish_loopback;
 pub mod whip_session;
 
 use crate::error::WebRtcExtensionError;
-use crate::opus_identification_header::hex_encoded_opus_identification_header_for_rtp_stream;
-use crate::received_media_assembly::{ReceivedOpusPacket, ReceivedVideoAccessUnit};
-use crate::whep_session::{ReceivedMedia, WhepPlayingSession};
+use crate::whep_player::{
+    ENCODED_AUDIO_OUTPUT_PORT, ENCODED_VIDEO_OUTPUT_PORT, MessageTheWhepPlayerWrites,
+    WhepPlayerCatalogEntry, WhepPlayerConnectedSession, WhepPlayerLogLevel, WhepPlayerOutputPort,
+    WhepPlayerOutputPorts, WhepPlayerSessionDialer, WhepPlayerStopSignal, play_until_stopped,
+};
+use crate::whep_session::WhepPlayingSession;
 use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
 
 /// Only the first frame of a stream, so that no two frames share a presentation
@@ -198,186 +205,186 @@ fn connected(
     session.ok_or(WebRtcExtensionError::NotConnected { protocol: "WHIP" })
 }
 
-/// Plays encoded media back from a WHEP endpoint.
+/// `WhepPlayer`'s reading thread, started over the module host table its
+/// node lent the two output ports through.
 ///
-/// The player's reading thread owns the session for its whole life — it
-/// connects, drains and closes it — so no two threads reach one session. The
-/// lock is taken inside `detach` in every method regardless, because taking it
-/// with the GIL held while another thread holds it across a detached network
-/// call is a deadlock and not a wait: the detached thread cannot re-attach to
-/// release it.
+/// The thread dials, drains and redials on its own; every frame it receives is
+/// written from that thread with no Python attached, and its log records reach
+/// the node's log through the table.
 #[pyclass]
-struct WhepSession {
-    endpoint_url: String,
-    bearer_token: Option<String>,
-    session: Mutex<Option<WhepPlayingSession>>,
+struct WhepPlayerThread {
+    stop_signal: Arc<WhepPlayerStopSignal>,
+    reading_thread: Mutex<Option<ReadingThreadEnding>>,
+}
+
+struct ReadingThreadEnding {
+    join_handle: std::thread::JoinHandle<()>,
+    ended: mpsc::Receiver<()>,
 }
 
 #[pymethods]
-impl WhepSession {
+impl WhepPlayerThread {
+    /// Start playing `endpoint_url` onto the ports `module_host_table` lends:
+    /// `encoded_video` and `encoded_audio`.
     #[new]
-    #[pyo3(signature = (endpoint_url, bearer_token=None))]
-    fn new(endpoint_url: String, bearer_token: Option<String>) -> Self {
-        Self {
+    #[pyo3(signature = (module_host_table, endpoint_url, bearer_token=None))]
+    fn start(
+        module_host_table: &Bound<'_, PyAny>,
+        endpoint_url: String,
+        bearer_token: Option<String>,
+    ) -> PyResult<Self> {
+        let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        let output_ports = WhepPlayerOutputPortsLentByTheModuleHost::open(&module_host)?;
+        forward_this_modules_tracing_records_to(&module_host);
+        let module_host_for_the_stop_flag = module_host.clone();
+        let stop_signal = Arc::new(WhepPlayerStopSignal::also_set_when(Box::new(move || {
+            module_host_for_the_stop_flag.stop_requested()
+        })));
+        let dialer = WhepSessionDialer {
             endpoint_url,
             bearer_token,
-            session: Mutex::new(None),
-        }
-    }
-
-    /// Connect and begin draining. Called from the processor's own thread, not
-    /// from `setup()`, so a relay outage cannot spend the start-up budget.
-    fn connect(&self, python: Python<'_>) -> PyResult<()> {
-        let endpoint_url = self.endpoint_url.clone();
-        let bearer_token = self.bearer_token.clone();
-
-        python.detach(|| {
-            let mut session = self.locked_session()?;
-            if session.is_some() {
-                return Err(WebRtcExtensionError::Refused {
-                    what: "this WHEP session is already connected".to_owned(),
-                });
-            }
-            *session = Some(
-                transport_stack::transport_runtime()?
-                    .block_on(WhepPlayingSession::connect(endpoint_url, bearer_token))?,
-            );
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    /// The next assembled access unit or Opus packet, or `None` if none arrived
-    /// within `timeout_ms` — which is how the reading thread stays responsive
-    /// to a stop it has been asked for.
-    fn next_media(&self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
-        let received = python.detach(|| {
-            let mut locked = self.locked_session()?;
-            let session = locked
-                .as_mut()
-                .ok_or(WebRtcExtensionError::NotConnected { protocol: "WHEP" })?;
-            Ok::<_, WebRtcExtensionError>(
-                transport_stack::transport_runtime()?
-                    .block_on(session.next_media(Duration::from_millis(timeout_ms))),
-            )
-        })?;
-
-        Ok(match received {
-            Some(ReceivedMedia::Video(access_unit)) => {
-                Some(Py::new(python, PlayedVideoAccessUnit::from(access_unit))?.into_any())
-            }
-            Some(ReceivedMedia::Audio(packet)) => {
-                Some(Py::new(python, PlayedOpusPacket::from(packet))?.into_any())
-            }
-            None => None,
+        };
+        let (thread_ended, ended) = mpsc::channel();
+        let stop_signal_of_the_thread = Arc::clone(&stop_signal);
+        let join_handle = std::thread::Builder::new()
+            .name("whep-player".to_owned())
+            .spawn(move || {
+                play_until_stopped(
+                    &dialer,
+                    &output_ports,
+                    &stop_signal_of_the_thread,
+                    &mut |delay| stop_signal_of_the_thread.wait_unless_stopped(delay),
+                );
+                let _ = thread_ended.send(());
+            })
+            .map_err(|spawn_failure| WebRtcExtensionError::Transport {
+                what: format!("the WHEP player's reading thread did not start: {spawn_failure}"),
+            })?;
+        Ok(Self {
+            stop_signal,
+            reading_thread: Mutex::new(Some(ReadingThreadEnding { join_handle, ended })),
         })
     }
 
-    /// Close the peer connection and DELETE the session.
-    fn close(&self, python: Python<'_>) -> PyResult<()> {
+    /// Ask the thread to stop and wait up to `timeout_seconds` for it: `True`
+    /// when it ended. A thread still inside a connect outlives the wait and
+    /// closes its session itself when the connect returns.
+    fn stop_and_join(&self, python: Python<'_>, timeout_seconds: f64) -> bool {
+        self.stop_signal.set();
+        let timeout = Duration::try_from_secs_f64(timeout_seconds).unwrap_or(Duration::ZERO);
         python.detach(|| {
-            let taken = self.locked_session()?.take();
-            if let Some(session) = taken
-                && let Ok(runtime) = transport_stack::transport_runtime()
-            {
-                runtime.block_on(session.close());
+            let Ok(mut reading_thread) = self.reading_thread.lock() else {
+                return false;
+            };
+            let Some(ending) = reading_thread.take() else {
+                return true;
+            };
+            match ending.ended.recv_timeout(timeout) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = ending.join_handle.join();
+                    true
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    *reading_thread = Some(ending);
+                    false
+                }
             }
-            Ok::<(), WebRtcExtensionError>(())
-        })?;
-        Ok(())
-    }
-
-    #[getter]
-    fn is_connected(&self, python: Python<'_>) -> PyResult<bool> {
-        Ok(python.detach(|| self.locked_session().map(|session| session.is_some()))?)
+        })
     }
 }
 
-impl WhepSession {
-    fn locked_session(
+/// The two output ports and the log the node host lent this wheel.
+struct WhepPlayerOutputPortsLentByTheModuleHost {
+    module_host: ModuleHost,
+    encoded_video: ModuleHostOutputPort,
+    encoded_audio: ModuleHostOutputPort,
+}
+
+impl WhepPlayerOutputPortsLentByTheModuleHost {
+    fn open(module_host: &ModuleHost) -> Result<Self, tatolab_module_sdk::ModuleHostError> {
+        Ok(Self {
+            module_host: module_host.clone(),
+            encoded_video: module_host.open_output_port(ENCODED_VIDEO_OUTPUT_PORT)?,
+            encoded_audio: module_host.open_output_port(ENCODED_AUDIO_OUTPUT_PORT)?,
+        })
+    }
+
+    fn output_port(&self, port: WhepPlayerOutputPort) -> &ModuleHostOutputPort {
+        match port {
+            WhepPlayerOutputPort::EncodedVideo => &self.encoded_video,
+            WhepPlayerOutputPort::EncodedAudio => &self.encoded_audio,
+        }
+    }
+}
+
+impl WhepPlayerOutputPorts for WhepPlayerOutputPortsLentByTheModuleHost {
+    fn write(
         &self,
-    ) -> Result<MutexGuard<'_, Option<WhepPlayingSession>>, WebRtcExtensionError> {
-        self.session
-            .lock()
-            .map_err(|_| WebRtcExtensionError::Transport {
-                what: "the WHEP session's state was left poisoned by an earlier panic".to_owned(),
-            })
+        port: WhepPlayerOutputPort,
+        media_frame: &[u8],
+        timestamp_ns: i64,
+        starts_group: bool,
+    ) -> Result<(), String> {
+        self.output_port(port)
+            .write(media_frame, Some(timestamp_ns), starts_group)
+            .map_err(|refusal| refusal.to_string())
+    }
+
+    fn set_catalog_entry(
+        &self,
+        port: WhepPlayerOutputPort,
+        catalog_entry: &WhepPlayerCatalogEntry,
+    ) -> Result<(), String> {
+        self.output_port(port)
+            .set_catalog_entry(catalog_entry.section(), &catalog_entry.entry_json())
+            .map_err(|refusal| refusal.to_string())
+    }
+
+    fn log(&self, level: WhepPlayerLogLevel, message: &str) {
+        let level = match level {
+            WhepPlayerLogLevel::Error => ModuleHostLogLevel::Error,
+            WhepPlayerLogLevel::Warn => ModuleHostLogLevel::Warn,
+            WhepPlayerLogLevel::Info => ModuleHostLogLevel::Info,
+        };
+        self.module_host
+            .log(level, "tatolab_webrtc::whep_player", message);
     }
 }
 
-/// One access unit off a WHEP stream, with what its port's catalog entry
-/// states taken from the stream itself.
-#[pyclass]
-struct PlayedVideoAccessUnit {
-    inner: ReceivedVideoAccessUnit,
+/// Dials a fresh WHEP session per attempt.
+struct WhepSessionDialer {
+    endpoint_url: String,
+    bearer_token: Option<String>,
 }
 
-impl From<ReceivedVideoAccessUnit> for PlayedVideoAccessUnit {
-    fn from(inner: ReceivedVideoAccessUnit) -> Self {
-        Self { inner }
-    }
-}
-
-#[pymethods]
-impl PlayedVideoAccessUnit {
-    /// The access unit as one media frame, behind the varint of its stamp.
-    #[getter]
-    fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
-    }
-    #[getter]
-    fn is_sync_point(&self) -> bool {
-        self.inner.is_sync_point
-    }
-    #[getter]
-    fn codec(&self) -> String {
-        self.inner.sequence_parameter_set.avc1_codec_string()
-    }
-    #[getter]
-    fn coded_width(&self) -> u32 {
-        self.inner.sequence_parameter_set.coded_width
-    }
-    #[getter]
-    fn coded_height(&self) -> u32 {
-        self.inner.sequence_parameter_set.coded_height
-    }
-    #[getter]
-    fn timestamp_ns(&self) -> i64 {
-        self.inner.timestamp_ns
+impl WhepPlayerSessionDialer for WhepSessionDialer {
+    fn dial(&self) -> Result<Box<dyn WhepPlayerConnectedSession>, WebRtcExtensionError> {
+        let session = transport_stack::transport_runtime()?.block_on(
+            WhepPlayingSession::connect(self.endpoint_url.clone(), self.bearer_token.clone()),
+        )?;
+        Ok(Box::new(ConnectedWhepPlayingSession { session }))
     }
 }
 
-/// One Opus packet off a WHEP stream, with what its port's catalog entry
-/// states taken from the stream itself.
-#[pyclass]
-struct PlayedOpusPacket {
-    inner: ReceivedOpusPacket,
+struct ConnectedWhepPlayingSession {
+    session: WhepPlayingSession,
 }
 
-impl From<ReceivedOpusPacket> for PlayedOpusPacket {
-    fn from(inner: ReceivedOpusPacket) -> Self {
-        Self { inner }
+impl WhepPlayerConnectedSession for ConnectedWhepPlayingSession {
+    fn next_message(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<MessageTheWhepPlayerWrites>, WebRtcExtensionError> {
+        transport_stack::transport_runtime()?
+            .block_on(self.session.next_media(timeout))
+            .map(MessageTheWhepPlayerWrites::of_received_media)
+            .transpose()
     }
-}
 
-#[pymethods]
-impl PlayedOpusPacket {
-    /// The packet as one media frame, behind the varint of its stamp.
-    #[getter]
-    fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
-    }
-    #[getter]
-    fn channels(&self) -> u8 {
-        self.inner.channel_layout.channel_count()
-    }
-    #[getter]
-    fn opus_identification_header_hex(&self) -> String {
-        hex_encoded_opus_identification_header_for_rtp_stream(self.inner.channel_layout)
-    }
-    #[getter]
-    fn timestamp_ns(&self) -> i64 {
-        self.inner.timestamp_ns
+    fn close(&mut self) {
+        if let Ok(runtime) = transport_stack::transport_runtime() {
+            runtime.block_on(self.session.close());
+        }
     }
 }
 
@@ -392,8 +399,6 @@ fn this_wheels_monotonic_now_ns() -> i64 {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(this_wheels_monotonic_now_ns, module)?)?;
     module.add_class::<WhipSession>()?;
-    module.add_class::<WhepSession>()?;
-    module.add_class::<PlayedVideoAccessUnit>()?;
-    module.add_class::<PlayedOpusPacket>()?;
+    module.add_class::<WhepPlayerThread>()?;
     Ok(())
 }

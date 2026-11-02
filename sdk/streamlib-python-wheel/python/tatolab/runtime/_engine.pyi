@@ -32,6 +32,7 @@ __all__ = [
     "engine_build_id_compiled_into_this_extension",
     "limited_access_view_of_runtime_context_for_helper_process",
     "note_pause_state_from_parent_on_runtime_context",
+    "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
 ]
@@ -66,6 +67,11 @@ def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
 ) -> None:
     """Record on a helper's context the pause state its parent just announced."""
+
+def note_stop_request_from_parent_on_runtime_context(
+    full_access_context: _stream_protocols.RuntimeContextFullAccess, stop_requested: bool
+) -> None:
+    """Record on a helper's context whether its parent asked the node to stop."""
 
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:

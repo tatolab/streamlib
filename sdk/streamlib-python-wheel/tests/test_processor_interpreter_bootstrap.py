@@ -596,6 +596,83 @@ def test_describe_refuses_an_engine_built_other_than_the_parents(project_directo
     assert f"its parent is engine build {another_build}" in described.stderr
 
 
+
+# ---- describe the installed modules -----------------------------------------
+
+
+def install_a_distribution_declaring_nodes(
+    project_directory: Path, distribution: str, version: str, entry_points: "dict[str, str]"
+) -> None:
+    """A `.dist-info` on the project directory, which `importlib.metadata` reads
+    as an installed distribution declaring `entry_points` in `tatolab.nodes`."""
+    dist_info = project_directory / f"{distribution.replace('-', '_')}-{version}.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {distribution}\nVersion: {version}\n"
+    )
+    (dist_info / "entry_points.txt").write_text(
+        "[tatolab.nodes]\n"
+        + "".join(f"{name} = {value}\n" for name, value in entry_points.items())
+    )
+
+
+def test_an_installed_distributions_node_classes_are_described_with_where_they_came_from(
+    project_directory: Path,
+):
+    install_a_distribution_declaring_nodes(
+        project_directory,
+        "tatolab-ticking",
+        "2.4.0",
+        {"Ticker": "described_nodes:Ticker", "Missing": "no_such_installed_module:Missing"},
+    )
+
+    described = run_the_bootstrap(project_directory, "--describe-installed-modules")
+
+    assert described.returncode == 0, described.stderr
+    document = json.loads(described.stdout)
+    assert [node["import_path"] for node in document["described_node_types"]] == [
+        "described_nodes:Ticker"
+    ]
+    assert refused_import_paths_in(document) == ["no_such_installed_module:Missing"]
+    assert sorted(document["installed_modules"], key=lambda module: module["import_path"]) == [
+        {
+            "import_path": "described_nodes:Ticker",
+            "entry_point": "Ticker",
+            "distribution": "tatolab-ticking",
+            "distribution_version": "2.4.0",
+        },
+        {
+            "import_path": "no_such_installed_module:Missing",
+            "entry_point": "Missing",
+            "distribution": "tatolab-ticking",
+            "distribution_version": "2.4.0",
+        },
+    ]
+    assert "cannot describe no_such_installed_module:Missing, which tatolab-ticking" in (
+        described.stderr
+    )
+
+
+def test_an_environment_installing_no_node_classes_describes_none(project_directory: Path):
+    described = run_the_bootstrap(project_directory, "--describe-installed-modules")
+
+    assert described.returncode == 0, described.stderr
+    document = json.loads(described.stdout)
+    assert document["described_node_types"] == []
+    assert document["refused_node_types"] == []
+    assert all(
+        module["distribution"] != "tatolab-ticking" for module in document["installed_modules"]
+    )
+
+
+def test_describing_the_installed_modules_takes_no_import_paths(project_directory: Path):
+    refused = run_the_bootstrap(
+        project_directory, "--describe-installed-modules", "described_nodes:Ticker"
+    )
+
+    assert refused.returncode == 1
+    assert "`--describe-installed-modules` alone" in refused.stderr
+
 # ---- the interpreter, and the path the bootstrap runs from ------------------
 
 

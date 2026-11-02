@@ -1167,6 +1167,8 @@ impl LoadedStreamInThisRuntime {
                 graph.nodes.iter().map(|node| &node.processor_type),
                 lend_directory,
             )?;
+        self.processor_interpreter_launch_record
+            .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         graph.validate(&self.node_types_this_stream_resolves)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();

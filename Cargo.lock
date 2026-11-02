@@ -6023,6 +6023,7 @@ dependencies = [
  "streamlib-media-builtins",
  "streamlib-runtime-client-contract",
  "streamlib-surface-client",
+ "tatolab-module-sdk",
  "tracing",
 ]
 
@@ -6253,6 +6254,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tatolab-module-sdk"
+version = "1.0.0"
+dependencies = [
+ "pyo3",
+ "tracing",
 ]
 
 [[package]]
@@ -7851,6 +7860,7 @@ dependencies = [
  "clap",
  "png",
  "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
  "sha2 0.10.9",

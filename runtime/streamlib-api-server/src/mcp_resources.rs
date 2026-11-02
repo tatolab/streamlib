@@ -38,7 +38,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
     ListResourcesResult::with_all_items(vec![
         Resource::new(NODE_CATALOG_RESOURCE_URI, "node-catalog")
             .with_title("Node catalog")
-            .with_description("Every node type `add_node` can take, each under the `type` it takes: its description, its config schema (JSON Schema 2020-12; the keys `add_node`'s `config` takes) and its input and output ports. `nodes` holds the types compiled into the runtime, which any stream can add; `streams` holds, under each loaded stream's name, the Python types its own interpreter has described, which only that stream can add.")
+            .with_description("Every node type `add_node` can take, each under the `type` it takes: its description, its config schema (JSON Schema 2020-12; the keys `add_node`'s `config` takes) and its input and output ports. `nodes` holds the types compiled into the runtime, which any stream can add; `streams` holds, under each loaded stream's name, the Python types its own interpreter has described, which only that stream can add: under `nodes` the ones its graph or a live add named, and under `installed` the ones installed distributions declare in its environment's `tatolab.nodes` entry points, each with its `distribution`, `distribution_version` and `entry_point`.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(LIVE_GRAPH_RESOURCE_URI, "graph")
             .with_title("Live graph")
