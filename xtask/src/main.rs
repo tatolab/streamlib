@@ -24,6 +24,7 @@ pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod generate_built_in_node_classes;
+pub mod generate_module_host_table_c_header;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
@@ -191,6 +192,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     (
         "check-module-host-table-surface",
         check_module_host_table_surface::run,
+    ),
+    (
+        "generate-module-host-table-c-header --check",
+        generate_module_host_table_c_header::check,
     ),
     (
         "check-no-escalate-in-lifecycle",
@@ -712,6 +717,16 @@ enum Commands {
         check: bool,
     },
 
+    /// Regenerate `tatolab-module-sdk`'s `include/tatolab_module_host_table.h`
+    /// from the table's Rust mirror. `--check` fails when the checked-in header
+    /// differs from a regeneration; `check-all-source-gates` runs it. See
+    /// [`generate_module_host_table_c_header`].
+    GenerateModuleHostTableCHeader {
+        /// Fail when the checked-in header differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
     /// via `cargo about generate`, plus the vendored C++ projects that are not
     /// packages in the Cargo resolve graph and so reach the file only by being
@@ -803,6 +818,9 @@ fn main() -> Result<()> {
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?
+        }
+        Commands::GenerateModuleHostTableCHeader { check } => {
+            generate_module_host_table_c_header::run(&workspace_root()?, check)?
         }
         Commands::GenerateThirdPartyNotices {
             extension_package_directory,
