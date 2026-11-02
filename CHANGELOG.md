@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.11](https://github.com/tatolab/streamlib/compare/v0.68.10...v0.68.11) (2026-11-02)
+
+
+### Features
+
+* **microphone-proof:** prove a microphone captures from a helper-process module as well as the built-in ([#3058](https://github.com/tatolab/streamlib/issues/3058)) ([77dae74](https://github.com/tatolab/streamlib/commit/77dae74d3dcf6d158edbe1f1c8c7f300a48f25db)), closes [#3039](https://github.com/tatolab/streamlib/issues/3039)
+
 ## [0.68.10](https://github.com/tatolab/streamlib/compare/v0.68.9...v0.68.10) (2026-11-02)
 
 
