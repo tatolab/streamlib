@@ -3,12 +3,13 @@
 
 """`CameraSource`: a camera whose every frame reaches the GPU with no CPU copy.
 
-`start()` lends the `video` output to this wheel's Rust, which adopts each
+`setup()` lends the `video` output to this wheel's Rust, which opens the
+camera and adopts each
 capture buffer once through the module host table — a V4L2 driver buffer
 exported as a DMA-BUF on Linux, an AVFoundation IOSurface on macOS — and per
 frame converts it on the GPU into a texture from the node's output pool and
-publishes a `VideoFrame` naming it. Python runs at start and stop, never at
-frame cadence.
+publishes a `VideoFrame` naming it once `start()` runs. Python runs at setup,
+start and stop, never at frame cadence.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ class CameraSourceConfig:
         "Captures a camera — V4L2 on Linux, AVFoundation on macOS — and converts each frame "
         "on the GPU, with no CPU copy. On macOS a stream someone loads or starts asks for camera "
         "access without waiting, and frames begin once the user allows it; a stream the runtime "
-        "re-loads on its own never asks, and is refused at start until access has been answered."
+        "re-loads on its own never asks, and is refused at setup until access has been answered."
     ),
 )
 class CameraSource:
@@ -64,7 +65,9 @@ class CameraSource:
     @node.output(description="RGBA frames from the camera, as VideoFrame records")
     def video(self) -> VideoFrame: ...
 
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        """Lend `video` to the native half and open the camera, so a camera that
+        cannot be opened, or that camera access refuses, refuses the node here."""
         module_host_table = ctx.open_module_host_table(output_ports=[VIDEO_OUTPUT_PORT])
         if sys.platform == "darwin":
             avfoundation_capture = _native.AvFoundationZeroCopyCameraCapture(
@@ -78,7 +81,7 @@ class CameraSource:
             self._capture = avfoundation_capture
             log.info(
                 f"CameraSource: {avfoundation_capture.device_name} "
-                f"({avfoundation_capture.device_id}) streams {avfoundation_capture.fourcc} "
+                f"({avfoundation_capture.device_id}) opened in {avfoundation_capture.fourcc} "
                 f"{avfoundation_capture.width}x{avfoundation_capture.height} at "
                 f"{avfoundation_capture.nominal_frames_per_second} fps"
             )
@@ -93,13 +96,19 @@ class CameraSource:
         )
         self._capture = v4l2_capture
         log.info(
-            f"CameraSource: {v4l2_capture.device_path} ({v4l2_capture.card_name}) streams "
+            f"CameraSource: {v4l2_capture.device_path} ({v4l2_capture.card_name}) opened in "
             f"{v4l2_capture.fourcc} {v4l2_capture.width}x{v4l2_capture.height} at "
             f"{v4l2_capture.nominal_frames_per_second} fps, {v4l2_capture.bytes_per_line} bytes "
             f"a row, colour primaries={v4l2_capture.colour_primaries} "
             f"transfer={v4l2_capture.colour_transfer} matrix={v4l2_capture.colour_matrix} "
             f"range={v4l2_capture.colour_range}"
         )
+
+    def start(self, ctx: RuntimeContextFullAccess) -> None:
+        del ctx
+        if self._capture is None:
+            raise RuntimeError("CameraSource: start() ran before setup() opened the camera")
+        self._capture.start()
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx

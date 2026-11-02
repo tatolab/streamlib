@@ -14,8 +14,6 @@ from typing import ClassVar, Literal, TypedDict
 from ._built_in_node import BuiltInNode
 
 __all__ = [
-    "CameraSource",
-    "CameraSourceConfig",
     "H264Decoder",
     "H264DecoderConfig",
     "H264Encoder",
@@ -35,50 +33,6 @@ __all__ = [
     "VirtualCameraSink",
     "VirtualCameraSinkConfig",
 ]
-
-
-class CameraSourceConfig(TypedDict, total=False):
-    """`CameraSource`'s config: the keys `stream_builder.add` takes."""
-
-    device_id: str | None
-    """The capture backend's name for the device — a V4L2 device path (`/dev/video0`) on
-    Linux, an AVFoundation camera's unique ID on macOS. Absent: the first
-    capture-capable device found — on macOS the first built-in camera, ahead of external
-    cameras and camera extensions.
-    """
-
-    max_height: int | None
-    """Resolution cap; the negotiated format is clamped to fit. Default 1080."""
-
-    max_width: int | None
-    """Resolution cap; the negotiated format is clamped to fit. Default 1920."""
-
-
-class CameraSource(BuiltInNode[CameraSourceConfig]):
-    """Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF
-    when the device exports it, CPU upload otherwise), AVFoundation on macOS (zero-copy
-    IOSurface import, CPU upload otherwise).
-
-    `video` publishes an ordinary `VideoFrame` whose `timestamp_ns` is the instant the
-    device captured it, on the machine's monotonic clock. A named `device_id` that
-    cannot be opened is refused at `setup()` by name, as is every camera on a platform
-    no capture backend serves.
-
-    On macOS a stream someone loads or starts asks for camera access without waiting:
-    the graph starts, and frames begin once the user allows it. A stream the runtime
-    re-loads on its own as it starts never asks, and is refused at `setup()` until
-    camera access has been answered. macOS asks on behalf of the application that
-    launched the process — the terminal, not Python — so a refusal names that
-    application and the setting to change.
-
-    Outputs:
-        `video`: Live camera video frames.
-            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-
-    Config: `CameraSourceConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:CameraSource"
 
 
 class H264DecoderConfig(TypedDict, total=False):

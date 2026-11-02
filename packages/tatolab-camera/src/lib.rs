@@ -63,7 +63,7 @@ impl PythonV4l2ZeroCopyCameraCapture {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
         let capture = python
             .detach(|| {
-                V4l2ZeroCopyCameraCapture::start(
+                V4l2ZeroCopyCameraCapture::open(
                     module_host,
                     &video_output_port,
                     device_path.as_deref(),
@@ -131,6 +131,13 @@ impl PythonV4l2ZeroCopyCameraCapture {
         self.capture.format().colour.range
     }
 
+    /// Stream on and publish every frame from the capture thread.
+    fn start(&mut self, python: Python<'_>) -> PyResult<()> {
+        python
+            .detach(|| self.capture.start())
+            .map_err(|refusal| PyOSError::new_err(refusal.0))
+    }
+
     /// Stop streaming and release the device. Idempotent.
     fn stop(&mut self, python: Python<'_>) {
         python.detach(|| self.capture.stop());
@@ -169,7 +176,7 @@ impl PythonAvFoundationZeroCopyCameraCapture {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
         let capture = python
             .detach(|| {
-                AvFoundationZeroCopyCameraCapture::start(
+                AvFoundationZeroCopyCameraCapture::open(
                     module_host,
                     &video_output_port,
                     device_id.as_deref(),
@@ -210,6 +217,13 @@ impl PythonAvFoundationZeroCopyCameraCapture {
     #[getter]
     fn nominal_frames_per_second(&self) -> Option<u32> {
         self.capture.format().nominal_frames_per_second
+    }
+
+    /// Start the session, or start it once the user grants camera access.
+    fn start(&mut self, python: Python<'_>) -> PyResult<()> {
+        python
+            .detach(|| self.capture.start())
+            .map_err(|refusal| PyOSError::new_err(refusal.0))
     }
 
     /// Stop the session and give its surfaces back. Idempotent.

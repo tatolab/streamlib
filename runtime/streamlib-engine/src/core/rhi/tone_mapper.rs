@@ -131,9 +131,7 @@ pub struct ToneMapperFinalTextureLayouts {
 /// Constructed directly by consumers via [`RhiToneMapper::new`]. The
 /// kernel is allocated lazily on first dispatch, so construction is
 /// effectively free — consumers can hold their own instance as a
-/// struct field without worrying about pre-warm cost. Mirrors the
-/// shape `CameraSource` uses for `RhiColorConverter` (held in
-/// `CameraGpuResources` and dispatched per-frame).
+/// struct field without worrying about pre-warm cost.
 ///
 /// No engine-side shared cache: there's no per-`(src,dst)` keying to
 /// amortize, and each consumer owning its instance keeps resource

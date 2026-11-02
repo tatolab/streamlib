@@ -4,8 +4,7 @@
 """The camera as a module: `tatolab.camera.CameraSource` → H.264, exposed on this machine, with a latency probe.
 
 Watch it at http://127.0.0.1:4446/watch/<machine>/main. The probe's reports
-land in the project's log; `../built-in-camera` is the same stream with the
-built-in `CameraSource`, for comparison on the same device.
+land in the project's log.
 """
 
 from tatolab.stream import Exposure, H264Encoder, StreamBuilder, stream

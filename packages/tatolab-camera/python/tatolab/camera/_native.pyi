@@ -26,7 +26,7 @@ if sys.platform == "linux":
             max_height: int,
             output_pool_rotation_depth: int,
         ) -> V4l2ZeroCopyCameraCapture:
-            """Open the camera, adopt its buffers and start publishing on `video_output_port`.
+            """Open the camera and adopt its buffers; publishing on `video_output_port` waits for `start`.
 
             `module_host_table` is what `ctx.open_module_host_table(output_ports=[video_output_port])`
             returns.
@@ -54,6 +54,8 @@ if sys.platform == "linux":
         def colour_matrix(self) -> str | None: ...
         @property
         def colour_range(self) -> str | None: ...
+        def start(self) -> None:
+            """Stream on and publish every frame from the capture thread."""
         def stop(self) -> None:
             """Stop streaming and release the device. Idempotent."""
 
@@ -80,12 +82,12 @@ if sys.platform == "darwin":
             max_height: int,
             output_pool_rotation_depth: int,
         ) -> AvFoundationZeroCopyCameraCapture:
-            """Open the camera and start publishing on `video_output_port`.
+            """Open the camera and settle camera access; publishing waits for `start`.
 
-            Starts at once when camera access is allowed, and once the user
-            allows it while macOS is asking. A camera macOS refuses, or one
-            nobody was asked for when the runtime re-loaded the stream on its
-            own, raises `OSError` naming what to change.
+            Asks the user without waiting when macOS has never asked. A camera
+            macOS refuses, or one nobody was asked for when the runtime
+            re-loaded the stream on its own, raises `OSError` naming what to
+            change.
             """
         @property
         def device_id(self) -> str:
@@ -101,6 +103,8 @@ if sys.platform == "darwin":
         def height(self) -> int: ...
         @property
         def nominal_frames_per_second(self) -> int | None: ...
+        def start(self) -> None:
+            """Start the session, or start it once the user grants camera access."""
         def stop(self) -> None:
             """Stop the session and give its surfaces back. Idempotent."""
 

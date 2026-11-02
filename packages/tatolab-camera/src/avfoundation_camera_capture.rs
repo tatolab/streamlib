@@ -302,9 +302,10 @@ impl CameraAccessPrompting {
 
 /// Where camera access stands for one capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CameraAccessAtStart {
+enum CameraAccess {
     Granted,
-    /// macOS is asking the user; the session starts once they allow it.
+    /// macOS is asking the user; a started capture's session starts once they
+    /// allow it.
     AwaitingTheUsersAnswer,
 }
 
@@ -364,6 +365,8 @@ struct AvFoundationCaptureSessionControl {
     session_control_queue: DispatchRetained<DispatchQueue>,
     sample_buffer_queue: DispatchRetained<DispatchQueue>,
     running_session: Option<AvFoundationRunningCaptureSession>,
+    camera_access: CameraAccess,
+    start_requested: bool,
     stopped: bool,
 }
 
@@ -372,7 +375,11 @@ impl AvFoundationCaptureSessionControl {
     /// frame delivery and start it, on the control queue, returning once it
     /// runs. `startRunning` may take seconds while the camera powers up.
     fn configure_and_start_the_session(&mut self) -> Result<(), CameraCaptureRefusal> {
-        if self.stopped || self.running_session.is_some() {
+        if self.stopped
+            || !self.start_requested
+            || self.camera_access != CameraAccess::Granted
+            || self.running_session.is_some()
+        {
             return Ok(());
         }
         let session_request = SendToTheControlQueue(AvFoundationCaptureSessionRequest {
@@ -911,9 +918,9 @@ pub struct AvFoundationZeroCopyCameraCapture {
 
 impl AvFoundationZeroCopyCameraCapture {
     /// Open `device_id`, or the first camera listed, negotiate its format and
-    /// start publishing on `video_output_port_name` — at once when camera
-    /// access is allowed, or once the user allows it when macOS is asking.
-    pub fn start(
+    /// settle camera access — refusing one the user denied, or one never asked
+    /// for when the host may not ask — publishing nothing until [`Self::start`].
+    pub fn open(
         module_host: ModuleHost,
         video_output_port_name: &str,
         device_id: Option<&str>,
@@ -980,28 +987,38 @@ impl AvFoundationZeroCopyCameraCapture {
                 None,
             ),
             running_session: None,
+            camera_access: CameraAccess::AwaitingTheUsersAnswer,
+            start_requested: false,
             stopped: false,
         }));
 
-        match authorize_the_camera_without_waiting_for_the_user(
+        let camera_access = authorize_the_camera_without_waiting_for_the_user(
             &module_host,
             camera_access_prompting,
             Arc::downgrade(&capture_session_control),
-        )? {
-            CameraAccessAtStart::Granted => {
-                capture_session_control
-                    .lock()
-                    .map_err(|_| {
-                        CameraCaptureRefusal("the capture's control lock is poisoned".to_string())
-                    })?
-                    .configure_and_start_the_session()?;
-            }
-            CameraAccessAtStart::AwaitingTheUsersAnswer => {}
+        )?;
+        if camera_access == CameraAccess::Granted {
+            capture_session_control
+                .lock()
+                .map_err(|_| poisoned_control_lock())?
+                .camera_access = CameraAccess::Granted;
         }
         Ok(Self {
             format,
             capture_session_control,
         })
+    }
+
+    /// Start the session at once when camera access is allowed, or once the
+    /// user allows it when macOS is still asking. A started or stopped capture
+    /// stays as it is.
+    pub fn start(&mut self) -> Result<(), CameraCaptureRefusal> {
+        let mut control = self
+            .capture_session_control
+            .lock()
+            .map_err(|_| poisoned_control_lock())?;
+        control.start_requested = true;
+        control.configure_and_start_the_session()
     }
 
     /// What the device negotiated.
@@ -1024,6 +1041,10 @@ impl Drop for AvFoundationZeroCopyCameraCapture {
     }
 }
 
+fn poisoned_control_lock() -> CameraCaptureRefusal {
+    CameraCaptureRefusal("the capture's control lock is poisoned".to_string())
+}
+
 /// Make sure camera access has been requested, never waiting on the user: a
 /// request still with the user answers only when they do, so the session
 /// starts from the answer, whenever it arrives. A refusal already on record
@@ -1033,7 +1054,7 @@ fn authorize_the_camera_without_waiting_for_the_user(
     module_host: &ModuleHost,
     camera_access_prompting: CameraAccessPrompting,
     capture_session_control: Weak<Mutex<AvFoundationCaptureSessionControl>>,
-) -> Result<CameraAccessAtStart, CameraCaptureRefusal> {
+) -> Result<CameraAccess, CameraCaptureRefusal> {
     // SAFETY: `AVMediaTypeVideo` is an AVFoundation-exported constant.
     let Some(video) = (unsafe { AVMediaTypeVideo }) else {
         return Err(camera_access_refusal(AVAuthorizationStatus::Restricted));
@@ -1041,7 +1062,7 @@ fn authorize_the_camera_without_waiting_for_the_user(
     // SAFETY: a status read, callable from any thread.
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(video) };
     match status {
-        AVAuthorizationStatus::Authorized => Ok(CameraAccessAtStart::Granted),
+        AVAuthorizationStatus::Authorized => Ok(CameraAccess::Granted),
         AVAuthorizationStatus::NotDetermined
             if camera_access_prompting == CameraAccessPrompting::MayAskTheUser =>
         {
@@ -1073,14 +1094,14 @@ fn authorize_the_camera_without_waiting_for_the_user(
                     &completion_handler,
                 )
             };
-            Ok(CameraAccessAtStart::AwaitingTheUsersAnswer)
+            Ok(CameraAccess::AwaitingTheUsersAnswer)
         }
         refused => Err(camera_access_refusal(refused)),
     }
 }
 
-/// Start the session on a grant, unless the capture stopped meanwhile; log a
-/// denial naming what to change.
+/// Record a grant and start the session if the capture was started and has
+/// not stopped meanwhile; log a denial naming what to change.
 fn the_users_camera_answer_arrived(
     module_host: &ModuleHost,
     capture_session_control: &Weak<Mutex<AvFoundationCaptureSessionControl>>,
@@ -1105,6 +1126,7 @@ fn the_users_camera_answer_arrived(
         CAMERA_LOG_TARGET,
         "camera access allowed",
     );
+    control.camera_access = CameraAccess::Granted;
     if let Err(start_refusal) = control.configure_and_start_the_session() {
         module_host.log(
             ModuleHostLogLevel::Error,

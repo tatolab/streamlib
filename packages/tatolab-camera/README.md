@@ -5,8 +5,8 @@ wheel that depends on `tatolab-stream`, `pyo3` and `tatolab-module-sdk`, and on
 no engine crate.
 
 - `CameraSource` opens a camera in its own processor interpreter. On
-  `start()` it lends its `video` output to this wheel's Rust, which adopts each
-  capture buffer once through the module host table:
+  `setup()` it lends its `video` output to this wheel's Rust, which opens the
+  camera and adopts each capture buffer once through the module host table:
   - on Linux, each V4L2 driver buffer exported as a DMA-BUF (`VIDIOC_EXPBUF`),
     with its NV12 or YUYV plane layout;
   - on macOS, each IOSurface an AVFoundation capture session delivers, in
@@ -14,13 +14,13 @@ no engine crate.
 
   Per frame, the capture thread takes a texture from the node's output pool,
   has the engine convert the filled buffer into it on the GPU, and publishes a
-  `VideoFrame` naming it. No frame is copied on the CPU, and Python never runs
+  `VideoFrame` naming it, from `start()` on. No frame is copied on the CPU, and Python never runs
   at frame cadence. `device_id` names a V4L2 node such as `/dev/video0` on
   Linux and an AVFoundation unique ID on macOS.
 - On macOS, camera access is asked for only by a `CameraSource`, and only in a
   stream someone loads or starts: it asks without waiting, and frames begin once
   the user allows it. A stream the runtime re-loads on its own as it starts never
-  asks, and its `CameraSource` refuses at `start()` until access was answered.
+  asks, and its `CameraSource` refuses at `setup()` until access was answered.
   A stream with no camera node never touches AVFoundation.
 - `CaptureToDownstreamLatencyProbe` logs the frame rate and the
   capture-to-read latency of the frames it receives.
