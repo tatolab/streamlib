@@ -210,7 +210,6 @@ impl OpenGlSurfaceAdapter {
         }
 
         let state = SurfaceState {
-            surface_id: id,
             image,
             texture,
             target,

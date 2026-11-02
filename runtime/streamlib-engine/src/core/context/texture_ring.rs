@@ -508,7 +508,6 @@ impl std::fmt::Debug for TextureRing {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn texture_ring_slot_surface_id_max_bytes_constant() {

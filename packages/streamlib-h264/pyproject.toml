@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-h264"
-version = "0.68.11"
-description = "H.264 encode for Tatolab streams, on a Vulkan device the module owns."
+version = "0.68.12"
+description = "H.264 encode and decode for Tatolab streams, on a Vulkan device the module owns."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
@@ -35,6 +35,7 @@ dependencies = ["tatolab-stream>=0.47.0"]
 # The node catalog lists these in every stream whose environment installs this
 # distribution, before a graph names one.
 [project.entry-points."tatolab.nodes"]
+H264Decoder = "tatolab.h264.processors:H264Decoder"
 H264Encoder = "tatolab.h264.processors:H264Encoder"
 
 [project.urls]

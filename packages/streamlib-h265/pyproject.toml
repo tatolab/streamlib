@@ -1,0 +1,78 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-h265"
+version = "0.68.11"
+description = "H.265 encode and decode for Tatolab streams, on a Vulkan device the module owns."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+# PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
+# discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
+# own, `THIRD-PARTY-NOTICES.md` for every dependency's. The SPDX id above says
+# BUSL-1.1 and nothing about who the Licensor is or when the Change Date falls
+# — the parameters are the licence, so the text has to travel too.
+#
+# `LICENSE` is a symlink to the repo root, which maturin follows; the notices
+# are this project's own, generated over its own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory <this directory>`.
+# The engine wheel's notices cover the engine wheel and are not inherited here.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Video",
+]
+# The stream package and nothing of the engine: the nodes here run in a
+# processor interpreter, which borrows `tatolab.runtime` from the runtime that
+# starts it. A minimum, never an exact pin, as a third party's package
+# depends on it.
+dependencies = ["tatolab-stream>=0.47.0"]
+
+# The node catalog lists these in every stream whose environment installs this
+# distribution, before a graph names one.
+[project.entry-points."tatolab.nodes"]
+H265Decoder = "tatolab.h265.processors:H265Decoder"
+H265Encoder = "tatolab.h265.processors:H265Encoder"
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.h265._native"
+features = ["pyo3/extension-module"]
+
+# The engine wheel's macOS floor, so this wheel installs wherever that one does.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "15.0"
+
+[tool.pyright]
+include = ["python", "tests"]
+# The package is checked from source, not from an install, so `tests/` needs the
+# package root on the search path. Its helper-side tests import `tatolab.runtime`,
+# which no venv of a package holds — they borrow it from the runtime unit's lend —
+# so pyright reads it from the engine's own source and stub in this checkout.
+extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
+# Checked at the version floor rather than whatever interpreter the venv happens
+# to be — `requires-python` is the promise.
+pythonVersion = "3.10"
+# Standard rather than strict, matching the engine wheel: strict turns on
+# `reportPrivateUsage`, which fights the `_native` shape this package is built
+# on, and demands annotations on every pytest fixture parameter.
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
+# it describes. `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_gpu: needs a real GPU; deselected in CI with -m 'not requires_gpu'",
+]

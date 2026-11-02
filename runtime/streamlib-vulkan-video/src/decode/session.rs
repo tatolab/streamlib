@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use super::SimpleDecoder;
+use super::{DecodedPictureDelivery, SimpleDecoder};
 use crate::VideoError;
 use crate::nv_video_parser::vulkan_h264_decoder::{
     H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
@@ -21,8 +21,8 @@ use streamlib_video_bitstream::h265_sequence_parameter_set::H265LevelIdc;
 impl SimpleDecoder {
     /// Eagerly allocate the GPU resources used during decode.
     ///
-    /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
-    /// enabled) instead of on the first `feed()` call, for first-frame
+    /// Creates the NV12→RGBA compute converter now (under
+    /// [`DecodedPictureDelivery::ReadBackRgba`]) instead of on the first `feed()` call, for first-frame
     /// latency; the exportable VMA blocks the converter's DEVICE_LOCAL image
     /// rides through are pre-warmed at `HostVulkanDevice::new()`.
     ///
@@ -32,7 +32,7 @@ impl SimpleDecoder {
         if self.nv12_converter.is_some() {
             return Ok(());
         }
-        if !self.config.rgba_output {
+        if self.config.decoded_picture_delivery != DecodedPictureDelivery::ReadBackRgba {
             return Ok(());
         }
         // The extent `pre_initialize_session` hands `start_video_sequence`,
@@ -145,7 +145,7 @@ impl SimpleDecoder {
             if self.transfer_queue_family != self.decode_queue_family {
                 families.push(self.transfer_queue_family);
             }
-            if self.config.rgba_output
+            if self.config.decoded_picture_delivery == DecodedPictureDelivery::ReadBackRgba
                 && self.compute_queue_family != self.decode_queue_family
                 && !families.contains(&self.compute_queue_family)
             {
@@ -230,7 +230,7 @@ impl SimpleDecoder {
                 if self.transfer_queue_family != self.decode_queue_family {
                     families.push(self.transfer_queue_family);
                 }
-                if self.config.rgba_output
+                if self.config.decoded_picture_delivery == DecodedPictureDelivery::ReadBackRgba
                     && self.compute_queue_family != self.decode_queue_family
                     && !families.contains(&self.compute_queue_family)
                 {
@@ -267,12 +267,14 @@ impl SimpleDecoder {
 
         self.session_configured = true;
 
-        // Create NV12→RGBA GPU converter if rgba_output is enabled.
+        // Create NV12→RGBA GPU converter under `DecodedPictureDelivery::ReadBackRgba`.
         // If prepare_gpu_decode_resources() already created one (eager path),
         // reuse it rather than reallocating — that path sized it to the same
         // config caps this one hands start_video_sequence, so the converter
         // and the DPB already agree.
-        if self.config.rgba_output && self.nv12_converter.is_none() {
+        if self.config.decoded_picture_delivery == DecodedPictureDelivery::ReadBackRgba
+            && self.nv12_converter.is_none()
+        {
             // Exactly the extent `start_video_sequence` was handed above, which
             // is what the DPB images were created at. The conversion shader
             // samples the DPB through normalized coordinates derived from this
@@ -293,7 +295,7 @@ impl SimpleDecoder {
                 height,
                 first_picture_ycbcr_model_and_range,
             )?);
-            info!(width, height, rgba_output = true, "Session configured");
+            info!(width, height, "Session configured");
         } else {
             info!(width, height, "Session configured");
         }

@@ -14,7 +14,9 @@ use crate::core::context::{
 use crate::core::rhi::{PixelFormat, VulkanLayout};
 use crate::core::{Error, Result};
 
-use super::decode::{SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
+use super::decode::{
+    DecodedPictureDelivery, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
+};
 use super::encode::{Codec, EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 use crate::core::context::TextureRegistration;
 use crate::host_rhi::HostTextureExt;
@@ -64,7 +66,7 @@ impl VideoCodecBackend for VulkanVideoCodecBackend {
             // Decoded pictures come back RGBA via the GPU NV12→RGBA compute
             // stage, which is what the pooled `Rgba32` pixel buffers they are
             // staged into are sized and formatted for.
-            rgba_output: true,
+            decoded_picture_delivery: DecodedPictureDelivery::ReadBackRgba,
             ..SimpleDecoderConfig::default()
         })?;
         Ok(Box::new(VulkanVideoDecodeSession {

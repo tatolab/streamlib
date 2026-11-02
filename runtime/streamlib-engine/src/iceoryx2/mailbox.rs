@@ -153,7 +153,7 @@ impl PortMailbox {
     /// costs nothing — a reader waits for one more bag.
     fn take_out_of_the_total(&self, frame: &PortMailboxQueuedFrame) {
         if frame.measure != 0 {
-            let _ = self.queued_frame_measure_total.fetch_update(
+            let _ = self.queued_frame_measure_total.try_update(
                 Ordering::Relaxed,
                 Ordering::Relaxed,
                 |total| Some(total.saturating_sub(frame.measure)),

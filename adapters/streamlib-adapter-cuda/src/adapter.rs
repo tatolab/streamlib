@@ -140,13 +140,11 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         let inserted = self.surfaces.register(
             id,
             SurfaceState {
-                surface_id: id,
                 resource: SurfaceResource::Buffer {
                     pixel_buffer: registration.pixel_buffer,
                 },
                 produce_done: registration.produce_done,
                 consume_done: registration.consume_done,
-                current_layout: registration.initial_layout,
                 read_holders: 0,
                 write_held: false,
                 current_signal_value: 0,
@@ -195,13 +193,11 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         let inserted = self.surfaces.register(
             id,
             SurfaceState {
-                surface_id: id,
                 resource: SurfaceResource::Image {
                     texture: registration.texture,
                 },
                 produce_done: registration.produce_done,
                 consume_done: registration.consume_done,
-                current_layout: registration.initial_layout,
                 read_holders: 0,
                 write_held: false,
                 current_signal_value: 0,
@@ -1202,9 +1198,4 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
             tracing::error!(?surface_id, %value, %e, "produce_done signal failed on write release");
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

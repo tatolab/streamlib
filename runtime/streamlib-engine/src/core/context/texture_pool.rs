@@ -491,21 +491,6 @@ unsafe impl Send for PooledTextureHandle {}
 unsafe impl Sync for PooledTextureHandle {}
 
 impl PooledTextureHandle {
-    /// The host's pool allocator builds a `PooledTextureHandleInner`,
-    /// leaks it via `Box::into_raw`, resolves the host-mode vtable,
-    /// and assembles the plugin ABI shape.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        texture: Texture,
-        pool_inner: Arc<TexturePoolInner>,
-        slot_id: PoolSlotId,
-        width: u32,
-        height: u32,
-        format: TextureFormat,
-    ) -> Self {
-        Self::from_parts(texture, pool_inner, slot_id, width, height, format)
-    }
-
     /// Internal helper used by every platform-specific allocator
     /// path. Leaks a `Box<PooledTextureHandleInner>` as the opaque
     /// handle and captures the host-mode vtable pointer.
@@ -797,12 +782,6 @@ impl TexturePool {
     /// Get statistics about pool usage.
     pub fn stats(&self) -> TexturePoolStats {
         self.inner.stats()
-    }
-
-    /// Get the inner pool reference (for advanced usage).
-    #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &Arc<TexturePoolInner> {
-        &self.inner
     }
 }
 
