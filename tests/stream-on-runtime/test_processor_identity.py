@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from importlib.metadata import entry_points
 from pathlib import Path
 
 from conftest import NO_VULKAN_DRIVER_REFUSAL, StreamRunWithNoVulkanDriverOutcome
@@ -112,14 +113,22 @@ MakeTatolabProject = Callable[..., Path]
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
+def node_types_the_suite_venvs_installed_modules_catalog() -> "frozenset[str]":
+    """The `tatolab.nodes` entry points of the modules the suite's venv installs, which the
+    engine describes into every stream run from it alongside the stream's own classes."""
+    return frozenset(entry_point.value for entry_point in entry_points(group="tatolab.nodes"))
+
+
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
-    """Every identity the engine derived for the stream's Python node types, off
-    its own registration records, in order."""
+    """Every identity the engine derived for the stream's own Python node types, off its
+    own registration records, in order."""
+    catalogued_by_an_installed_module = node_types_the_suite_venvs_installed_modules_catalog()
     return [
-        found.group(1)
+        identity
         for line in stderr_text.splitlines()
         if PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
         and (found := DERIVED_IDENTITY_PATTERN.search(line))
+        and (identity := found.group(1)) not in catalogued_by_an_installed_module
     ]
 
 
