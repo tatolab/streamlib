@@ -34,7 +34,6 @@ cuda = ["dep:cudarc"]
 # capsule path) need exactly it.
 dlpark.workspace = true
 streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.68.7" }
-thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
