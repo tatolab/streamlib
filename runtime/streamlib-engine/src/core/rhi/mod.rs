@@ -20,6 +20,7 @@ pub(crate) mod leaked_arc_strong_count;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
+mod pixel_planes_within_one_allocation;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
@@ -86,6 +87,7 @@ pub use pixel_buffer_pool::{
     pool_slot_key_of_surface_id, published_frame_id_of_pool_slot,
     split_pool_slot_and_frame_generation,
 };
+pub use pixel_planes_within_one_allocation::PixelPlanesWithinOneAllocation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use ray_tracing_kernel::ray_tracing_spirv_type_to_kind;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -81,6 +81,15 @@ pub fn render_module_host_table_c_header(abi_source: &str) -> Result<String> {
                 let value = render_constant_value(item, &type_alias_scalar_names)?;
                 writeln!(declarations, "#define {} {value}\n", item.ident)?;
             }
+            syn::Item::Type(item)
+                if is_public(&item.vis) && matches!(item.ty.as_ref(), syn::Type::BareFn(_)) =>
+            {
+                declarations.push_str(&render_doc_comment(&item.attrs, ""));
+                let function_pointer_declarator =
+                    render_c_declaration(&item.ty, &item.ident.to_string())
+                        .with_context(|| format!("type {}", item.ident))?;
+                writeln!(declarations, "typedef {function_pointer_declarator};\n")?;
+            }
             syn::Item::Type(item) if is_public(&item.vis) => {
                 let scalar_name = item.ty.to_token_stream().to_string();
                 let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
@@ -384,6 +393,24 @@ mod tests {
         );
         assert!(
             header.contains("    void (*log)(void *node_host, const uint8_t *target);\n"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn a_function_pointer_alias_renders_as_a_c_typedef() {
+        let header = render_module_host_table_c_header(
+            r#"
+            pub type ModuleHostTableBlockCallback =
+                unsafe extern "C" fn(callback_context: *mut c_void, sample_count: u32);
+            "#,
+        )
+        .unwrap();
+        assert!(
+            header.contains(
+                "typedef void (*ModuleHostTableBlockCallback)(void *callback_context, \
+                 uint32_t sample_count);"
+            ),
             "{header}"
         );
     }

@@ -27,7 +27,9 @@ mod texture;
 pub(crate) use export_staging::{
     CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
 };
-pub(crate) use foreign_dma_buf::HelperForeignSurfaceUnregisterDebt;
+pub(crate) use foreign_dma_buf::{
+    HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
+};
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
 
@@ -261,10 +263,7 @@ impl HelperCheckedOutPixelSurface {
             )));
         };
         let exported = duplicate_first_plane_fd_for_export(exportable_plane_fds, "surface")?;
-        Ok((
-            exported.into_raw_fd(),
-            self.bytes_per_row * u64::from(self.height),
-        ))
+        Ok((exported.into_raw_fd(), self.consumer_buffer.plane_size(0)))
     }
 
     /// The OPAQUE_FD memory fd plus the allocation-stable shape a foreign

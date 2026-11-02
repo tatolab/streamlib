@@ -7,13 +7,16 @@
 use std::time::Duration;
 
 use crate::module_host_table_abi::{
-    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
+    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
+    MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_TRACE, MODULE_HOST_TABLE_LOG_LEVEL_WARN,
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
-    ModuleHostTableBytes, ModuleHostTableErrorMessage, ModuleHostTablePortHandle,
-    ModuleHostTableReadMessage, ModuleHostTableStatus, ModuleHostTableUtf8,
+    ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
+    ModuleHostTableErrorMessage, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableStatus,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 /// Why the module host table, or one of its verbs, refused.
@@ -317,6 +320,130 @@ impl ModuleHost {
         }
     }
 
+    /// Adopt a foreign DMA-BUF as a surface the graph can resolve: `fd` stays
+    /// the caller's, and the pixels of `pixel_format` sit at each plane's
+    /// offset and row stride inside its `allocation_byte_size` bytes.
+    pub fn import_dma_buf(
+        &self,
+        dma_buf: &ModuleHostForeignDmaBuf<'_>,
+    ) -> Result<ModuleHostSurface, ModuleHostError> {
+        let plane_count = dma_buf.plane_offsets_bytes.len();
+        if plane_count != dma_buf.plane_strides_bytes.len()
+            || plane_count == 0
+            || plane_count > MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES
+        {
+            return Err(ModuleHostError::VerbRefused {
+                verb: "surface_import_dma_buf",
+                refusal: format!(
+                    "a DMA-BUF import states 1 to {MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES} \
+                     planes, one offset and one stride each; this one states {} offset(s) and \
+                     {} stride(s)",
+                    dma_buf.plane_offsets_bytes.len(),
+                    dma_buf.plane_strides_bytes.len()
+                ),
+            });
+        }
+        let mut plane_offsets_bytes = [0u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
+        let mut plane_strides_bytes = [0u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
+        plane_offsets_bytes[..plane_count].copy_from_slice(dma_buf.plane_offsets_bytes);
+        plane_strides_bytes[..plane_count].copy_from_slice(dma_buf.plane_strides_bytes);
+        let dma_buf_import = ModuleHostTableDmaBufImport {
+            fd: dma_buf.fd,
+            width: dma_buf.width,
+            height: dma_buf.height,
+            plane_count: plane_count as u32,
+            pixel_format: ModuleHostTableUtf8::of(dma_buf.pixel_format),
+            allocation_byte_size: dma_buf.allocation_byte_size,
+            drm_format_modifier: dma_buf.drm_format_modifier,
+            plane_offsets_bytes,
+            plane_strides_bytes,
+        };
+        let mut imported_surface = ModuleHostTableSurfaceHandle { value: 0 };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: the node host is retained by `self`, and every pointer is
+        // to a live local for the length of the call.
+        let status = unsafe {
+            (self.module_host_table.surface_import_dma_buf)(
+                self.module_host_table.node_host,
+                &dma_buf_import,
+                &mut imported_surface,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_import_dma_buf", status, &error_message)?;
+        Ok(ModuleHostSurface {
+            module_host: self.clone(),
+            handle: imported_surface,
+        })
+    }
+
+    /// Take the next texture out of the node output pool `pool_key`.
+    pub fn acquire_texture_from_node_output_pool(
+        &self,
+        request: &ModuleHostNodeOutputTextureRequest<'_>,
+    ) -> Result<ModuleHostSurface, ModuleHostError> {
+        let usage = request.usage.join(",");
+        let table_request = ModuleHostTableNodeOutputTextureRequest {
+            pool_key: ModuleHostTableUtf8::of(request.pool_key),
+            texture_format: ModuleHostTableUtf8::of(request.texture_format),
+            usage: ModuleHostTableUtf8::of(&usage),
+            width: request.width,
+            height: request.height,
+            rotation_depth: request.rotation_depth,
+            reserved: 0,
+        };
+        let mut acquired_surface = ModuleHostTableSurfaceHandle { value: 0 };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`.
+        let status = unsafe {
+            (self
+                .module_host_table
+                .output_texture_acquire_from_node_output_pool)(
+                self.module_host_table.node_host,
+                &table_request,
+                &mut acquired_surface,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok(
+            "output_texture_acquire_from_node_output_pool",
+            status,
+            &error_message,
+        )?;
+        Ok(ModuleHostSurface {
+            module_host: self.clone(),
+            handle: acquired_surface,
+        })
+    }
+
+    /// Convert `source`'s YCbCr pixels, described by `source_color`, into the
+    /// RGBA texture `destination`, returning once its next reader sees them.
+    pub fn convert_surface_into(
+        &self,
+        source: &ModuleHostSurface,
+        destination: &ModuleHostSurface,
+        source_color: &ModuleHostColorInfo<'_>,
+    ) -> Result<(), ModuleHostError> {
+        let table_color = ModuleHostTableColorInfo {
+            primaries: ModuleHostTableUtf8::of(source_color.primaries.unwrap_or("")),
+            transfer: ModuleHostTableUtf8::of(source_color.transfer.unwrap_or("")),
+            matrix: ModuleHostTableUtf8::of(source_color.matrix.unwrap_or("")),
+            range: ModuleHostTableUtf8::of(source_color.range.unwrap_or("")),
+        };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`; both surfaces are this host's.
+        let status = unsafe {
+            (self.module_host_table.surface_convert_into)(
+                self.module_host_table.node_host,
+                source.handle,
+                destination.handle,
+                &table_color,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_convert_into", status, &error_message)
+    }
+
     /// What the host offers, as one JSON object.
     pub fn host_capabilities_json(&self) -> &str {
         // SAFETY: the host keeps the text alive while the node host is
@@ -343,6 +470,73 @@ impl Drop for ModuleHost {
     fn drop(&mut self) {
         // SAFETY: releases the reference this value took.
         unsafe { (self.module_host_table.node_host_release)(self.module_host_table.node_host) };
+    }
+}
+
+/// A foreign DMA-BUF as [`ModuleHost::import_dma_buf`] adopts it.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostForeignDmaBuf<'description> {
+    pub fd: i32,
+    pub width: u32,
+    pub height: u32,
+    /// A pixel format wire name, such as `nv12_video_range` or `yuyv`.
+    pub pixel_format: &'description str,
+    pub allocation_byte_size: u64,
+    pub plane_offsets_bytes: &'description [u64],
+    pub plane_strides_bytes: &'description [u64],
+    /// `0`, `DRM_FORMAT_MOD_LINEAR`: the only layout a plane stride describes.
+    pub drm_format_modifier: u64,
+}
+
+/// What [`ModuleHost::acquire_texture_from_node_output_pool`] takes a texture by.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostNodeOutputTextureRequest<'description> {
+    pub pool_key: &'description str,
+    pub rotation_depth: u32,
+    pub width: u32,
+    pub height: u32,
+    /// A texture format wire name, such as `rgba8_unorm`.
+    pub texture_format: &'description str,
+    /// Usage names, such as `storage_binding` and `texture_binding`.
+    pub usage: &'description [&'description str],
+}
+
+/// A surface's H.273 colour description by axis name; `None` leaves an axis
+/// to the YCbCr default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModuleHostColorInfo<'description> {
+    pub primaries: Option<&'description str>,
+    pub transfer: Option<&'description str>,
+    pub matrix: Option<&'description str>,
+    pub range: Option<&'description str>,
+}
+
+/// A surface lent to native code; dropping it gives it back.
+#[derive(Debug)]
+pub struct ModuleHostSurface {
+    module_host: ModuleHost,
+    handle: ModuleHostTableSurfaceHandle,
+}
+
+impl ModuleHostSurface {
+    /// The surface id a message names this surface by.
+    pub fn surface_id(&self) -> &str {
+        let table = &self.module_host.module_host_table;
+        // SAFETY: the host keeps the text alive until this surface is
+        // released, which drop does after every borrow of `self` ends.
+        unsafe {
+            (table.surface_id)(table.node_host, self.handle)
+                .as_str()
+                .unwrap_or("")
+        }
+    }
+}
+
+impl Drop for ModuleHostSurface {
+    fn drop(&mut self) {
+        let table = &self.module_host.module_host_table;
+        // SAFETY: gives back the surface this value holds, once.
+        unsafe { (table.surface_release)(table.node_host, self.handle) };
     }
 }
 
