@@ -273,10 +273,6 @@ impl StreamRecordOfAnEarlierRuntime {
 
 /// One file of the state directory's `streams/`, read.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "read once per stream file at startup and listing; boxing buys nothing measurable"
-)]
 pub enum StreamRecordAsRead {
     /// A record this runtime writes.
     Current(StreamRecord),
