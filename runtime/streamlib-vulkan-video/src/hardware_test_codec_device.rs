@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{
-    OwnedVulkanVideoEncodeDevice, vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
+    OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
+    vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
 };
 
 use crate::VulkanVideoCodecDevice;
@@ -15,6 +16,19 @@ use crate::VulkanVideoCodecDevice;
 /// `None` when this machine has no Vulkan Video encode.
 pub(crate) fn owned_video_encode_device_on_the_first_gpu() -> Option<Arc<dyn VulkanVideoCodecDevice>>
 {
+    owned_video_codec_device_on_the_first_gpu(VulkanVideoCodecDirection::Encode)
+}
+
+/// An owned video-decode device on the first GPU the loader enumerates, or
+/// `None` when this machine has no Vulkan Video decode.
+pub(crate) fn owned_video_decode_device_on_the_first_gpu() -> Option<Arc<dyn VulkanVideoCodecDevice>>
+{
+    owned_video_codec_device_on_the_first_gpu(VulkanVideoCodecDirection::Decode)
+}
+
+fn owned_video_codec_device_on_the_first_gpu(
+    direction: VulkanVideoCodecDirection,
+) -> Option<Arc<dyn VulkanVideoCodecDevice>> {
     let device_uuid = match vulkan_device_uuid_of_the_first_device_the_loader_enumerates() {
         Ok(device_uuid) => device_uuid,
         Err(error) => {
@@ -22,10 +36,10 @@ pub(crate) fn owned_video_encode_device_on_the_first_gpu() -> Option<Arc<dyn Vul
             return None;
         }
     };
-    match OwnedVulkanVideoEncodeDevice::new_on_the_device_the_runtime_named(device_uuid) {
+    match OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(device_uuid, direction) {
         Ok(owned_device) => Some(Arc::new(owned_device)),
         Err(error) => {
-            tracing::warn!("Skipping — no Vulkan Video encode device available: {error}");
+            tracing::warn!("Skipping — no Vulkan Video {direction:?} device available: {error}");
             None
         }
     }

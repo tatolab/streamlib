@@ -3441,8 +3441,7 @@ impl GpuContext {
     }
 
     /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
-    /// on this context's host device, built directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
+    /// on this context's host device.
     ///
     /// Coded dimensions are auto-detected from the first SPS (query via
     /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
@@ -3455,7 +3454,7 @@ impl GpuContext {
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
         let host_device = Arc::clone(&self.device.inner);
-        crate::vulkan::video::decode::SimpleDecoder::from_host_device(host_device, config)
+        crate::vulkan::video::decode::SimpleDecoder::new(host_device, config)
             .map_err(|e| Error::GpuError(format!("create_decoder_session: {e}")))
     }
 

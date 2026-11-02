@@ -507,41 +507,6 @@ impl VulkanComputeKernelInner {
         Ok(())
     }
 
-    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
-    /// slot (`VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`) whose sampler
-    /// is baked into the descriptor-set layout via `pImmutableSamplers`
-    /// (see [`Self::new_with_immutable_samplers`]).
-    ///
-    /// The descriptor write supplies the view; the sampler field in the
-    /// write is `VK_NULL_HANDLE` because Vulkan ignores it whenever the
-    /// layout slot has an immutable sampler. The view must be in
-    /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time.
-    ///
-    /// Errors if the binding wasn't declared with an immutable sampler.
-    pub(crate) fn set_combined_image_sampler_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
-        self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
-        if !self.immutable_sampler_bindings.contains(&binding) {
-            return Err(Error::GpuError(format!(
-                "Compute kernel '{}': binding {} is SampledTexture but has no \
-                 immutable sampler; use set_sampled_texture (engine Texture) \
-                 or rebuild via new_with_immutable_samplers",
-                self.label, binding
-            )));
-        }
-        self.pending.lock().bindings.insert(
-            binding,
-            BindingResource::SampledImage {
-                view,
-                sampler: vk::Sampler::null(),
-            },
-        );
-        Ok(())
-    }
-
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
     /// slot. Escape hatch for callers that build per-plane reinterpreted-
     /// format storage views by hand against a multi-planar image. The
@@ -1162,21 +1127,9 @@ impl VulkanComputeKernel {
             .set_sampled_image_view(binding, view, layout)
     }
 
-    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
-    /// slot that was created with an immutable sampler. See
-    /// [`VulkanComputeKernelInner::set_combined_image_sampler_view`].
-    pub(crate) fn set_combined_image_sampler_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
-        self.host_inner()
-            .set_combined_image_sampler_view(binding, view)
-    }
-
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
     /// slot. See [`VulkanComputeKernelInner::set_storage_image_view`].
-    pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
+    pub fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         self.host_inner().set_storage_image_view(binding, view)
     }
 

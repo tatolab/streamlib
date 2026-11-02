@@ -449,7 +449,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ media-built-ins-become-modules)
+## Packages & extension model — IN-FLIGHT (→ media-built-ins-become-modules, browser-and-rive-source-modules)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -2730,7 +2730,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   parameter sets in the format description; the arm converts at its own edge — 4-byte start
   codes, the parameter sets in front of every sync point and nowhere else — so the published
   access unit is one wire on both floors, through the one platform-free Annex-B walk
-  (`core/annex_b_access_unit.rs`). What an arm
+  (`streamlib-video-bitstream`'s `annex_b_access_unit.rs`). What an arm
   cannot honour refuses by name at `setup()`: on VideoToolbox `effort_level`, a
   `keyframe_interval_seconds` of 0, and a decoder with no hardware support; on a Linux device
   without Vulkan Video, session construction names the missing direction instead of

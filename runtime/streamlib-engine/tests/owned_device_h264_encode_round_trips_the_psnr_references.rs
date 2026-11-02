@@ -31,7 +31,9 @@ use streamlib::sdk::context::{
     GpuContext, VideoCodecElementaryStream, VideoDecodeSessionRequest, probe_video_codec_backend,
 };
 use streamlib::sdk::engine::HostGpuDeviceExt as _;
-use streamlib_consumer_rhi::{ConsumerVulkanBuffer, OwnedVulkanVideoEncodeDevice};
+use streamlib_consumer_rhi::{
+    ConsumerVulkanBuffer, OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection,
+};
 use streamlib_engine::core::color::h273_color_vui::{primaries, transfer};
 use streamlib_vulkan_video::{
     Codec, Preset, RgbaPixelBufferVideoEncoder, SimpleEncoder, SimpleEncoderConfig,
@@ -77,7 +79,7 @@ fn test_pattern_color_vui() -> H273ColorVui {
 
 /// The encoder `H264Encoder`'s module mints for a reference-sized frame.
 fn owned_device_h264_encoder(
-    owned_device: &Arc<OwnedVulkanVideoEncodeDevice>,
+    owned_device: &Arc<OwnedVulkanVideoCodecDevice>,
 ) -> RgbaPixelBufferVideoEncoder {
     let codec_device: Arc<dyn VulkanVideoCodecDevice> = owned_device.clone();
     RgbaPixelBufferVideoEncoder::new(
@@ -106,7 +108,7 @@ fn owned_device_h264_encoder(
 /// onto the owned device as a pixel buffer.
 fn reference_imported_onto_the_owned_device(
     reference: &Rgba8Picture,
-    owned_device: &OwnedVulkanVideoEncodeDevice,
+    owned_device: &OwnedVulkanVideoCodecDevice,
 ) -> ConsumerVulkanBuffer {
     let gpu = gpu_context();
     let exported_by_the_runtime = gpu
@@ -141,8 +143,11 @@ fn owned_device_h264_round_trips_every_psnr_reference_inside_the_bands() {
         .vulkan_device()
         .physical_device_uuid();
     let owned_device = Arc::new(
-        OwnedVulkanVideoEncodeDevice::new_on_the_device_the_runtime_named(runtime_device_uuid)
-            .expect("an owned Vulkan Video encode device on the runtime's GPU"),
+        OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(
+            runtime_device_uuid,
+            VulkanVideoCodecDirection::Encode,
+        )
+        .expect("an owned Vulkan Video encode device on the runtime's GPU"),
     );
     let mut encoder = owned_device_h264_encoder(&owned_device);
     let backend = probe_video_codec_backend();

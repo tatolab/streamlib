@@ -37,8 +37,8 @@ use streamlib::sdk::context::{
 };
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_engine::core::color::h273_color_vui::{matrix, primaries, transfer};
-use streamlib_engine::core::h265_sequence_parameter_set::parse_h265_sequence_parameter_set;
-use streamlib_engine::core::nal_unit_raw_byte_sequence_payload::{
+use streamlib_video_bitstream::h265_sequence_parameter_set::parse_h265_sequence_parameter_set;
+use streamlib_video_bitstream::nal_unit_raw_byte_sequence_payload::{
     RbspBitstreamReader, remove_emulation_prevention_bytes,
 };
 
