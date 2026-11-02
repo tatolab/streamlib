@@ -155,11 +155,44 @@ pub struct ConsumerVulkanDevice {
     /// (raw `vkAllocateMemory`). Mirrors the host counterpart; surfaces leaks
     /// on drop via the warning emitted in [`Drop`].
     live_allocation_count: AtomicUsize,
-    /// Per-queue mutex serializing `vkQueueSubmit2` calls — Vulkan requires
-    /// external synchronization on the same `VkQueue` from multiple threads.
-    /// Single mutex is enough since the consumer device holds only one
-    /// queue.
+    /// The video encode queue an owned-tier device was created with, and
+    /// the codec extensions enabled for it; `None` on an import-only device.
+    video_encode_queue: Option<ConsumerVulkanVideoEncodeQueue>,
+    /// Mutex serializing `vkQueueSubmit2` and `vkDeviceWaitIdle` — Vulkan
+    /// requires external synchronization on a `VkQueue` from multiple
+    /// threads. One mutex covers the import queue and the video encode
+    /// queue alike.
     queue_mutex: Mutex<()>,
+}
+
+/// The video encode queue of a device created for Vulkan Video encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumerVulkanVideoEncodeQueue {
+    /// The `VkQueue` encode work is submitted to.
+    pub queue: vk::Queue,
+    /// The family that owns [`Self::queue`].
+    pub queue_family_index: u32,
+    /// Whether `VK_KHR_video_encode_h265` was enabled beside H.264.
+    pub supports_h265: bool,
+}
+
+/// Device extensions a Vulkan Video encode device needs; the device refuses
+/// to construct without any of them.
+#[cfg(target_os = "linux")]
+const REQUIRED_VIDEO_ENCODE_DEVICE_EXTENSIONS: &[&CStr] = &[
+    c"VK_KHR_video_queue",
+    c"VK_KHR_video_encode_queue",
+    c"VK_KHR_video_encode_h264",
+];
+
+/// What a consumer device is created for beyond importing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumerVulkanDeviceQueues {
+    /// The one GRAPHICS queue imports and layout transitions run on.
+    ImportOnly,
+    /// That queue plus a Vulkan Video encode queue.
+    #[cfg(target_os = "linux")]
+    ImportAndVideoEncode,
 }
 
 /// A physical device the Vulkan loader enumerates, as selection by
@@ -344,6 +377,31 @@ impl ConsumerVulkanDevice {
     pub fn new_on_the_device_the_runtime_named(
         vulkan_device_uuid_the_runtime_named: [u8; 16],
     ) -> Result<Self> {
+        Self::new_with_queues_on_the_device_the_runtime_named(
+            vulkan_device_uuid_the_runtime_named,
+            ConsumerVulkanDeviceQueues::ImportOnly,
+        )
+    }
+
+    /// A consumer device that also owns a Vulkan Video encode queue — the
+    /// owned-device tier a codec module encodes on, created on the device
+    /// whose `deviceUUID` is `vulkan_device_uuid_the_runtime_named` so frames
+    /// the runtime publishes import onto it. Refused by name when that device
+    /// has no encode queue family or lacks [`REQUIRED_VIDEO_ENCODE_DEVICE_EXTENSIONS`].
+    #[cfg(target_os = "linux")]
+    pub fn new_with_a_video_encode_queue_on_the_device_the_runtime_named(
+        vulkan_device_uuid_the_runtime_named: [u8; 16],
+    ) -> Result<Self> {
+        Self::new_with_queues_on_the_device_the_runtime_named(
+            vulkan_device_uuid_the_runtime_named,
+            ConsumerVulkanDeviceQueues::ImportAndVideoEncode,
+        )
+    }
+
+    fn new_with_queues_on_the_device_the_runtime_named(
+        vulkan_device_uuid_the_runtime_named: [u8; 16],
+        queues: ConsumerVulkanDeviceQueues,
+    ) -> Result<Self> {
         let (entry, instance) = create_the_consumer_vulkan_instance()?;
         let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
             physical_devices_the_loader_enumerates_on(&instance)?
@@ -422,6 +480,48 @@ impl ConsumerVulkanDevice {
             device_extensions.push(acquire_unmodified_ext.as_ptr());
         }
 
+        #[cfg(target_os = "linux")]
+        let video_encode_queue_family = match queues {
+            ConsumerVulkanDeviceQueues::ImportOnly => None,
+            ConsumerVulkanDeviceQueues::ImportAndVideoEncode => {
+                let video_encode_queue_family_index = queue_families
+                    .iter()
+                    .position(|props| props.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR))
+                    .map(|index| index as u32)
+                    .ok_or_else(|| {
+                        ConsumerRhiError::Gpu(format!(
+                            "{device_name} has no queue family with VIDEO_ENCODE, so it cannot \
+                             encode with Vulkan Video"
+                        ))
+                    })?;
+                for required_extension in REQUIRED_VIDEO_ENCODE_DEVICE_EXTENSIONS {
+                    if !available_device_ext_names.contains(required_extension) {
+                        return Err(ConsumerRhiError::Gpu(format!(
+                            "{device_name} does not advertise {}, which Vulkan Video encode \
+                             needs",
+                            required_extension.to_string_lossy()
+                        )));
+                    }
+                    device_extensions.push(required_extension.as_ptr());
+                }
+                let supports_h265 =
+                    available_device_ext_names.contains(&c"VK_KHR_video_encode_h265");
+                if supports_h265 {
+                    device_extensions.push(c"VK_KHR_video_encode_h265".as_ptr());
+                }
+                let supports_video_maintenance1 =
+                    available_device_ext_names.contains(&c"VK_KHR_video_maintenance1");
+                if supports_video_maintenance1 {
+                    device_extensions.push(c"VK_KHR_video_maintenance1".as_ptr());
+                }
+                Some((
+                    video_encode_queue_family_index,
+                    supports_h265,
+                    supports_video_maintenance1,
+                ))
+            }
+        };
+
         // A portability implementation that advertises the subset extension
         // requires it enabled (VUID-VkDeviceCreateInfo-pProperties-04451).
         let portability_subset_ext = c"VK_KHR_portability_subset";
@@ -457,11 +557,24 @@ impl ConsumerVulkanDevice {
         // Logical device. Sync2 + timeline semaphore are core in 1.3 but
         // still need their feature flags enabled.
         let queue_priorities = [1.0f32];
-        let queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_index)
-            .queue_priorities(&queue_priorities)
-            .build();
-        let queue_create_infos = [queue_create_info];
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut queue_create_infos = vec![
+            vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_index)
+                .queue_priorities(&queue_priorities)
+                .build(),
+        ];
+        #[cfg(target_os = "linux")]
+        if let Some((video_encode_queue_family_index, _, _)) = video_encode_queue_family
+            && video_encode_queue_family_index != queue_family_index
+        {
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(video_encode_queue_family_index)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
+        }
 
         let mut sync2_features = vk::PhysicalDeviceSynchronization2Features::builder()
             .synchronization2(true)
@@ -479,14 +592,26 @@ impl ConsumerVulkanDevice {
             .sampler_ycbcr_conversion(true)
             .build();
 
-        let device_create_info = vk::DeviceCreateInfo::builder()
+        #[cfg(target_os = "linux")]
+        let mut video_maintenance1_features =
+            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder()
+                .video_maintenance1(true)
+                .build();
+
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut device_create_info_builder = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
             .push_next(&mut sync2_features)
             .push_next(&mut timeline_features)
             .push_next(&mut dynamic_rendering_features)
-            .push_next(&mut vulkan_1_1_features)
-            .build();
+            .push_next(&mut vulkan_1_1_features);
+        #[cfg(target_os = "linux")]
+        if let Some((_, _, true)) = video_encode_queue_family {
+            device_create_info_builder =
+                device_create_info_builder.push_next(&mut video_maintenance1_features);
+        }
+        let device_create_info = device_create_info_builder.build();
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
             .map_err(|e| {
@@ -494,6 +619,20 @@ impl ConsumerVulkanDevice {
             })?;
 
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
+        #[cfg(target_os = "linux")]
+        let video_encode_queue =
+            video_encode_queue_family.map(|(video_encode_queue_family_index, supports_h265, _)| {
+                ConsumerVulkanVideoEncodeQueue {
+                    queue: unsafe { device.get_device_queue(video_encode_queue_family_index, 0) },
+                    queue_family_index: video_encode_queue_family_index,
+                    supports_h265,
+                }
+            });
+        #[cfg(not(target_os = "linux"))]
+        let video_encode_queue = {
+            let ConsumerVulkanDeviceQueues::ImportOnly = queues;
+            None
+        };
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
@@ -524,6 +663,7 @@ impl ConsumerVulkanDevice {
             physical_device_uuid,
             imported_host_pointer_alignment,
             live_allocation_count: AtomicUsize::new(0),
+            video_encode_queue,
             queue_mutex: Mutex::new(()),
         })
     }
@@ -630,6 +770,19 @@ impl ConsumerVulkanDevice {
     /// Queue family that owns [`Self::queue`].
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
+    }
+
+    /// The Vulkan Video encode queue, on a device created with one.
+    pub fn video_encode_queue(&self) -> Option<ConsumerVulkanVideoEncodeQueue> {
+        self.video_encode_queue
+    }
+
+    /// `vkDeviceWaitIdle` under the queue mutex, which the spec requires to
+    /// be held over every queue the device owns.
+    pub fn wait_idle(&self) -> Result<()> {
+        let _lock = self.queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { self.device.device_wait_idle() }
+            .map_err(|e| ConsumerRhiError::Gpu(format!("device_wait_idle failed: {e}")))
     }
 
     /// Find the first memory type whose bit is set in `type_filter` and

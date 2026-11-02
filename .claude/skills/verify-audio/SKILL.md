@@ -158,8 +158,8 @@ Things only the owner can do, asked for once, before the first run that needs th
 
 **The through-engine fixture measures the stream it loaded, and no other.** It starts its own
 `tatolabd` — refusing, naming the holder, while another runtime holds the machine — loads the
-loopback stream with `tatolab run --name audio_loopback_fixture`, and passes that name to every
-verb, so no other stream can answer in its place. A runtime that exits before it serves its
+loopback stream as a project of its own with `tatolab run --dir`, and passes that stream's id to
+every verb, so no other stream can answer in its place. A runtime that exits before it serves its
 local API fails at `the fixture could not start its runtime`; a stream that never runs fails at
 `the loopback stream never ran — it never answered over the local API socket with every node
 Running`, with the tails of `stream_run.log` and `node.log` — both are real failures.

@@ -11,11 +11,12 @@ scores the pictures, and reads the receiver's decoded-frame count off `graph`,
 which counts a port's writes once something reads it — the receiver exposes
 its decoded port for that.
 
-`e2e_fixture_psnr_test_pattern.sh` loads each with `tatolab run` into a
-`tatolabd` it starts with the streams' settings in its environment, which the
-compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by
-default). The sender is loaded as `codec_roundtrip_sender`, the name the
-receiver's broadcast is built from.
+`e2e_fixture_psnr_test_pattern.sh` loads each as a project of its own with
+`tatolab run --dir` into a `tatolabd` it starts with the streams' settings in
+its environment, which the compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC`
+picks the codec (`h264` by default), and
+`STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID` names the sender's stream
+id, which the receiver's broadcast is built from.
 """
 
 import json
@@ -34,9 +35,6 @@ _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
 # measured over a GOP structure this file names.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
-#: The name the harness loads the sender under.
-SENDER_STREAM_NAME = "codec_roundtrip_sender"
-
 #: The sender's exposed port, as a track of its broadcast.
 SENDER_ENCODED_TRACK = "encoder/encoded_video"
 
@@ -52,6 +50,18 @@ def _codec_markers() -> tuple[type, type]:
             f"carries; it carries {', '.join(sorted(_ENCODER_AND_DECODER_MARKERS_BY_CODEC))}"
         )
     return _ENCODER_AND_DECODER_MARKERS_BY_CODEC[codec]
+
+
+def _senders_stream_id() -> str:
+    sender_stream_id = os.environ.get(
+        "STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID"
+    )
+    if not sender_stream_id:
+        raise ValueError(
+            "STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID is unset, so the receiver "
+            "cannot name the sender's broadcast"
+        )
+    return sender_stream_id
 
 
 def _this_machines_name() -> str:
@@ -87,7 +97,7 @@ def the_senders_encoded_track_through_the_decoder(stream_builder: StreamBuilder)
         tatolab.stream.RelayTrackSource,
         name="sender",
         config={
-            "broadcast": f"{_this_machines_name()}/{SENDER_STREAM_NAME}.hang",
+            "broadcast": f"{_this_machines_name()}/{_senders_stream_id()}.hang",
             "track": SENDER_ENCODED_TRACK,
         },
     )

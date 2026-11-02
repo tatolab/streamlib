@@ -192,16 +192,6 @@ pub(crate) fn the_stub_runtimes_description()
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
-/// The tag of the stub's one load, the same for every call in this process.
-pub(crate) fn the_stub_streams_tag() -> ::streamlib::sdk::runtime::LoadedStreamTag {
-    static STUB_STREAM_TAG: ::std::sync::OnceLock<::streamlib::sdk::runtime::LoadedStreamTag> =
-        ::std::sync::OnceLock::new();
-    *STUB_STREAM_TAG.get_or_init(|| {
-        ::streamlib::sdk::runtime::LoadedStreamTag::next_in_this_process()
-            .expect("a test process has a stream tag left")
-    })
-}
-
 /// Refuse a call naming a stream other than [`STUB_STREAM_ID`], in the
 /// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
@@ -274,6 +264,20 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
                 Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_id,
+                )?;
+                Ok(Vec::new())
+            }
+            fn node_types_installed_modules_declare_in_the_stream_a_call_names(
+                &self,
+                stream_id: &str,
+            ) -> ::streamlib::sdk::error::Result<
+                Vec<(
+                    ::streamlib::sdk::descriptors::ProcessorDescriptor,
+                    ::streamlib::sdk::processors::InstalledModuleOfANodeType,
+                )>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
                     stream_id,

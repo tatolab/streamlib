@@ -36,11 +36,8 @@ from tatolab.webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
 from tatolab.webrtc.processors import (
     ENCODED_AUDIO_OUTPUT_PORT,
     ENCODED_VIDEO_OUTPUT_PORT,
-    FIRST_RECONNECT_DELAY_SECONDS,
-    HELPER_LINK_PAYLOAD_CEILING_BYTES,
-    LONGEST_RECONNECT_DELAY_SECONDS,
-    LinkOutputWriteFailure,
     PublishedTrack,
+    READER_THREAD_JOIN_TIMEOUT_SECONDS,
     VideoOrAudio,
     TRACKS_INPUT_PORT,
     _native,
@@ -54,8 +51,6 @@ from played_media_stand_ins import (
     MEDIA_FRAME_OF_AN_ACCESS_UNIT,
     MEDIA_FRAME_OF_AN_OPUS_PACKET,
     MONO_OPUS_IDENTIFICATION_HEADER_HEX,
-    AccessUnitTheSessionPlayed,
-    OpusPacketTheSessionPlayed,
 )
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
@@ -568,41 +563,6 @@ def test_a_link_publishing_the_medium_it_already_claimed_is_unchanged():
     assert resolve_track_kind("video", "encoder/encoded_video", already) == "video"
 
 
-def test_an_oversized_media_frame_is_reported_once_rather_than_silently_dropped(
-    monkeypatch,
-):
-    """The engine drops a message past the link ceiling at `debug` rather than
-    raising, which downstream looks like a stream that simply stopped. The
-    player is the only place that can say what actually happened — and a
-    per-frame condition reported per frame is noise, so it says it once."""
-    reported: "list[str]" = []
-    monkeypatch.setattr(log, "error", reported.append)
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-    over_the_ceiling = b"\x00" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)
-
-    player._report_a_media_frame_the_link_will_drop("encoded_video", over_the_ceiling)
-    player._report_a_media_frame_the_link_will_drop("encoded_video", over_the_ceiling)
-
-    assert len(reported) == 1
-    assert "encoded_video" in reported[0]
-    assert str(len(over_the_ceiling)) in reported[0]
-
-
-def test_a_media_frame_inside_the_ceiling_is_not_reported(monkeypatch):
-    reported: "list[str]" = []
-    monkeypatch.setattr(log, "error", reported.append)
-
-    WhepPlayer(
-        WhepPlayerConfig(
-            url="https://example.invalid/whep"
-        )
-    )._report_a_media_frame_the_link_will_drop(
-        "encoded_video", b"\x00" * 4096
-    )
-
-    assert reported == []
-
-
 @pytest.mark.parametrize("channels", [3, 6, 8])
 def test_multichannel_opus_is_refused_because_rtp_cannot_carry_it(channels):
     """`OpusEncoder` legally produces mapping-family-1 multistream packets for
@@ -988,196 +948,6 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
     ]
 
 
-class RecordingWhepSession:
-    """A `_native.WhepSession` stand-in whose connect outcome is scripted.
-
-    The reconnect loop is the whole reason `WhepPlayer` survives an endpoint
-    that is not yet live, and nothing about it needs a network, a device or the
-    compiled module: the player resolves `_native.WhepSession` at call time, so
-    a fake substituted on the module is what each attempt constructs.
-    """
-
-    #: Every session this class has minted, so a test can assert one per attempt.
-    constructed: "list[RecordingWhepSession]" = []
-    #: What each successive `connect()` does, popped in order: `None` succeeds,
-    #: an `Exception` is raised.
-    connect_outcomes: "list[Exception | None]" = []
-
-    def __init__(self, url: str, bearer_token: "str | None" = None) -> None:
-        del url, bearer_token
-        self.connect_calls = 0
-        self.closed = False
-        RecordingWhepSession.constructed.append(self)
-
-    def connect(self) -> None:
-        self.connect_calls += 1
-        outcome = RecordingWhepSession.connect_outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-
-    def next_media(self, timeout_ms: int) -> None:
-        del timeout_ms
-        return None
-
-    def close(self) -> None:
-        self.closed = True
-
-
-@pytest.fixture
-def scripted_whep_session(monkeypatch):
-    """Point `WhepPlayer` at the fake, and reset its class-level script.
-
-    The player logs as it connects and backs off, and `log` reaches a sink only
-    in the interpreter the runtime starts for a node, so each level is kept in a
-    list here instead.
-    """
-    RecordingWhepSession.constructed = []
-    RecordingWhepSession.connect_outcomes = []
-    monkeypatch.setattr(_native, "WhepSession", RecordingWhepSession)
-    kept_log_records: "list[str]" = []
-    route_every_log_level_to(monkeypatch, kept_log_records.append)
-    return RecordingWhepSession
-
-
-def _player_for_a_drain_that_returns_immediately() -> WhepPlayer:
-    return WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-
-
-def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
-    scripted_whep_session, monkeypatch
-):
-    """The 409 a WHEP endpoint answers before its ingest is live is not the end.
-
-    A player that gave up on the first refusal would stay alive and produce
-    nothing, and nothing downstream could tell that from an endpoint carrying
-    no media.
-    """
-    scripted_whep_session.connect_outcomes = [
-        RuntimeError("409 Conflict: Live broadcast not started yet"),
-        RuntimeError("409 Conflict: Live broadcast not started yet"),
-        None,
-    ]
-    player = _player_for_a_drain_that_returns_immediately()
-
-    waited: "list[float]" = []
-
-    def stop_after_the_third_attempt(delay_seconds: float) -> None:
-        waited.append(delay_seconds)
-
-    monkeypatch.setattr(player._stop, "wait", stop_after_the_third_attempt)
-    # The third connect succeeds, so the drain runs; end it there.
-    monkeypatch.setattr(player, "_drain_until_stopped", lambda session, outputs: None)
-    monkeypatch.setattr(
-        player._stop, "is_set", lambda: len(scripted_whep_session.constructed) >= 3
-    )
-
-    player._play_until_stopped(outputs=None)
-
-    assert len(scripted_whep_session.constructed) == 3, (
-        "each attempt constructs its own session — a closed peer connection "
-        "cannot be dialled again"
-    )
-    assert all(session.closed for session in scripted_whep_session.constructed)
-    assert waited == [
-        FIRST_RECONNECT_DELAY_SECONDS,
-        FIRST_RECONNECT_DELAY_SECONDS * 2,
-    ], "the backoff doubles between attempts"
-
-
-def test_the_backoff_stops_doubling_at_its_ceiling(scripted_whep_session, monkeypatch):
-    """An endpoint that is down for hours must not back off for hours."""
-    refusals = 12
-    scripted_whep_session.connect_outcomes = [
-        RuntimeError("still down") for _ in range(refusals)
-    ]
-    player = _player_for_a_drain_that_returns_immediately()
-
-    waited: "list[float]" = []
-    monkeypatch.setattr(player._stop, "wait", waited.append)
-    monkeypatch.setattr(
-        player._stop, "is_set", lambda: len(waited) >= refusals - 1
-    )
-
-    player._play_until_stopped(outputs=None)
-
-    ceiling = LONGEST_RECONNECT_DELAY_SECONDS
-    assert max(waited) == ceiling
-    assert waited[-1] == ceiling
-
-
-def test_a_stop_during_the_backoff_ends_the_thread_without_reconnecting(
-    scripted_whep_session, monkeypatch
-):
-    """`stop()` must return well inside the helper's five-second budget."""
-    scripted_whep_session.connect_outcomes = [RuntimeError("down")]
-    player = _player_for_a_drain_that_returns_immediately()
-
-    def stop_arrives_mid_backoff(delay_seconds: float) -> None:
-        del delay_seconds
-        player._stop.set()
-
-    monkeypatch.setattr(player._stop, "wait", stop_arrives_mid_backoff)
-
-    player._play_until_stopped(outputs=None)
-
-    assert len(scripted_whep_session.constructed) == 1, (
-        "a stop arriving during the backoff opens no further session"
-    )
-
-
-def test_a_refused_write_names_its_port_and_stops_rather_than_reconnecting(
-    scripted_whep_session, monkeypatch
-):
-    """A wire-contract violation is this player's fault, not the endpoint's.
-
-    Retrying it would spend an endpoint's session forever on a write that will be
-    refused every time, under a message naming neither the port nor the cause.
-    """
-    scripted_whep_session.connect_outcomes = [None]
-    player = _player_for_a_drain_that_returns_immediately()
-
-    def refuse_the_write(session, outputs):
-        del session, outputs
-        raise LinkOutputWriteFailure("encoded_video")
-
-    monkeypatch.setattr(player, "_drain_until_stopped", refuse_the_write)
-
-    errors: "list[str]" = []
-    monkeypatch.setattr(log, "error", errors.append)
-    monkeypatch.setattr(
-        player._stop, "wait", lambda _: pytest.fail("a refused write must not be retried")
-    )
-
-    player._play_until_stopped(outputs=None)
-
-    assert len(scripted_whep_session.constructed) == 1
-    assert scripted_whep_session.constructed[0].closed
-    assert any("encoded_video" in message for message in errors), (
-        "the port that refused the write has to reach the log"
-    )
-
-
-class WhepSessionReplayingMedia:
-    """A `_native.WhepSession` stand-in that hands back its media, then stops the player."""
-
-    def __init__(
-        self,
-        player: WhepPlayer,
-        media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]",
-    ) -> None:
-        self.player = player
-        self.media_still_to_hand_back = list(media)
-
-    def next_media(
-        self, timeout_ms: int
-    ) -> "AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed | None":
-        del timeout_ms
-        if self.media_still_to_hand_back:
-            return self.media_still_to_hand_back.pop(0)
-        self.player._stop.set()
-        return None
-
-
 class PlayerWiredToBothDecoders:
     """A `WhepPlayer`'s two output ports, each wired to a decoder's input read here."""
 
@@ -1188,6 +958,7 @@ class PlayerWiredToBothDecoders:
         decoder_inputs = _engine.open_node_link_data_access_for_helper_process()
         player_outputs = _engine.open_node_link_data_access_for_helper_process()
         output_ports = (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT)
+        player_outputs.declare_ports([], list(output_ports))
         for output_port in output_ports:
             wire_one_link(
                 player_outputs,
@@ -1209,190 +980,67 @@ class PlayerWiredToBothDecoders:
             self.parent.escalate_request_to_parent,
         )
 
-    def play(
-        self, media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]"
-    ) -> None:
-        player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-        player._drain_until_stopped(
-            cast(Any, WhepSessionReplayingMedia(player, media)),
-            self.player_context.outputs,
-        )
-
 
 @pytest.fixture
 def player_wired_to_both_decoders(request, monkeypatch) -> PlayerWiredToBothDecoders:
-    monkeypatch.setattr(_native, "PlayedOpusPacket", OpusPacketTheSessionPlayed)
     route_every_log_level_to(monkeypatch, discard_log_record)
     return PlayerWiredToBothDecoders(request)
 
 
-def test_only_a_sync_point_opens_a_group_on_the_video_port(
-    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
+def test_a_started_player_lends_both_outputs_so_python_cannot_write_them(
+    player_wired_to_both_decoders,
 ):
-    """A decoder enters a stream only where a group starts, so a delta frame
-    that claimed one would be entered with no reference picture."""
-    player_wired_to_both_decoders.play(
-        [
-            AccessUnitTheSessionPlayed(is_sync_point=True, timestamp_ns=1_000),
-            AccessUnitTheSessionPlayed(is_sync_point=False, timestamp_ns=2_000),
-        ]
-    )
-    decoder = player_wired_to_both_decoders.decoders.inputs
-
-    keyframe = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT)
-    delta = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT)
-
-    assert keyframe is not None and delta is not None
-    assert (keyframe.starts_group, keyframe.timestamp_ns) == (True, 1_000)
-    assert (delta.starts_group, delta.timestamp_ns) == (False, 2_000)
-    assert delta.payload == MEDIA_FRAME_OF_AN_ACCESS_UNIT
-
-
-def test_every_opus_packet_opens_a_group_on_the_audio_port(
-    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
-):
-    player_wired_to_both_decoders.play(
-        [
-            OpusPacketTheSessionPlayed(timestamp_ns=1_000),
-            OpusPacketTheSessionPlayed(timestamp_ns=1_020),
-        ]
-    )
-    decoder = player_wired_to_both_decoders.decoders.inputs
-
-    first = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT)
-    second = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT)
-
-    assert first is not None and second is not None
-    assert (first.starts_group, first.timestamp_ns) == (True, 1_000)
-    assert (second.starts_group, second.timestamp_ns) == (True, 1_020)
-    assert first.payload == MEDIA_FRAME_OF_AN_OPUS_PACKET
-    assert decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT) is None
-
-
-def test_each_port_states_its_entry_in_hangs_own_field_names(
-    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
-):
-    """What reaches the parent is spelled in hang's catalog field names — the
-    codec string and coded extent for video, and the codec, rate, channel count
-    and `OpusHead` for audio — which the parent parses with hang's types."""
-    player_wired_to_both_decoders.play(
-        [AccessUnitTheSessionPlayed(), OpusPacketTheSessionPlayed()]
-    )
-
-    assert player_wired_to_both_decoders.parent.catalog_entries_stated == [
-        (
-            ENCODED_VIDEO_OUTPUT_PORT,
-            "video",
-            {"codec": "avc1.42e01f", "codedWidth": 320, "codedHeight": 192},
-        ),
-        (
-            ENCODED_AUDIO_OUTPUT_PORT,
-            "audio",
-            {
-                "codec": "opus",
-                "sampleRate": 48_000,
-                "numberOfChannels": 1,
-                "description": MONO_OPUS_IDENTIFICATION_HEADER_HEX,
-            },
-        ),
-    ]
-
-
-class OutputsRecordingWritesAndEntries:
-    """`ctx.outputs` for a player, keeping its writes and entries in one order."""
-
-    def __init__(self, refuse_entries: bool = False) -> None:
-        self.refuse_entries = refuse_entries
-        self.recorded: "list[tuple[str, str, Any]]" = []
-
-    def write(
-        self,
-        port_name: str,
-        payload: bytes,
-        timestamp_ns: "int | None" = None,
-        starts_group: bool = True,
-    ) -> None:
-        del timestamp_ns, starts_group
-        self.recorded.append(("write", port_name, payload))
-
-    def set_catalog_entry(self, port_name: str, entry: CatalogEntry) -> None:
-        if self.refuse_entries:
-            raise ValueError(f"output port {port_name!r}: the entry does not parse")
-        self.recorded.append(("entry", port_name, entry))
-
-
-def play_into(
-    outputs: OutputsRecordingWritesAndEntries,
-    media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]",
-) -> None:
+    """The reading thread writes both ports through the module host table with
+    no Python attached, so a Python write to either is refused naming it."""
     player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-    player._drain_until_stopped(
-        cast(Any, WhepSessionReplayingMedia(player, media)), cast(Any, outputs)
-    )
+    context = player_wired_to_both_decoders.player_context
+    player.start(context)
+    try:
+        for output_port in (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT):
+            with pytest.raises(Exception, match=output_port):
+                context.outputs.write(output_port, b"from python")
+    finally:
+        player.stop(context)
 
 
-def test_an_entry_is_stated_before_the_first_media_frame_and_again_only_on_change(
-    monkeypatch,
+def test_a_player_whose_endpoint_never_answers_stops_inside_its_join_budget(
+    player_wired_to_both_decoders,
 ):
-    """A decoder reads its upstream entry when the first frame arrives, so the
-    entry lands first; a stream that changes extent states the new one before
-    the frame it describes."""
-    monkeypatch.setattr(_native, "PlayedOpusPacket", OpusPacketTheSessionPlayed)
-    route_every_log_level_to(monkeypatch, discard_log_record)
-    outputs = OutputsRecordingWritesAndEntries()
-    wider = AccessUnitTheSessionPlayed(
-        codec="avc1.640028", coded_width=1920, coded_height=1088
-    )
-
-    play_into(
-        outputs,
-        [
-            AccessUnitTheSessionPlayed(),
-            AccessUnitTheSessionPlayed(is_sync_point=False),
-            wider,
-            OpusPacketTheSessionPlayed(),
-            OpusPacketTheSessionPlayed(),
-        ],
-    )
-
-    assert outputs.recorded == [
-        (
-            "entry",
-            ENCODED_VIDEO_OUTPUT_PORT,
-            VideoEntry(codec="avc1.42e01f", codedWidth=320, codedHeight=192),
-        ),
-        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
-        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
-        (
-            "entry",
-            ENCODED_VIDEO_OUTPUT_PORT,
-            VideoEntry(codec="avc1.640028", codedWidth=1920, codedHeight=1088),
-        ),
-        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
-        (
-            "entry",
-            ENCODED_AUDIO_OUTPUT_PORT,
-            AudioEntry(
-                codec="opus",
-                sampleRate=48_000,
-                numberOfChannels=1,
-                description=MONO_OPUS_IDENTIFICATION_HEADER_HEX,
-            ),
-        ),
-        ("write", ENCODED_AUDIO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_OPUS_PACKET),
-        ("write", ENCODED_AUDIO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_OPUS_PACKET),
-    ]
+    """The thread reconnects with backoff against an endpoint that never
+    answers, and a stop wakes it out of the backoff rather than waiting it out."""
+    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    context = player_wired_to_both_decoders.player_context
+    player.start(context)
+    time.sleep(0.2)
+    stop_began = time.monotonic()
+    player.stop(context)
+    assert time.monotonic() - stop_began < READER_THREAD_JOIN_TIMEOUT_SECONDS + 0.5
+    assert player._reading_thread is None
 
 
-def test_a_refused_entry_names_its_port_and_writes_nothing(monkeypatch):
-    """Refused, the entry is the player's fault and not the endpoint's — the
-    same failure a refused write is, which ends the thread rather than
-    reconnecting."""
-    route_every_log_level_to(monkeypatch, discard_log_record)
-    outputs = OutputsRecordingWritesAndEntries(refuse_entries=True)
+def test_a_player_never_started_stops_and_tears_down_cleanly(
+    player_wired_to_both_decoders,
+):
+    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    context = player_wired_to_both_decoders.player_context
+    player.stop(context)
+    player.teardown(context)
 
-    with pytest.raises(LinkOutputWriteFailure) as refused:
-        play_into(outputs, [AccessUnitTheSessionPlayed()])
 
-    assert refused.value.port == ENCODED_VIDEO_OUTPUT_PORT
-    assert outputs.recorded == []
+def test_the_distribution_declares_both_nodes_for_the_node_catalog():
+    """The node catalog lists an installed module's nodes from its `tatolab.nodes`
+    entry points; each must name the class by the import path its processor
+    interpreter imports it back by."""
+    from importlib.metadata import distribution
+
+    declared = {
+        entry_point.name: entry_point
+        for entry_point in distribution("tatolab-webrtc").entry_points
+        if entry_point.group == "tatolab.nodes"
+    }
+
+    assert set(declared) == {"WhipPublisher", "WhepPlayer"}
+    for processor_class in (WhipPublisher, WhepPlayer):
+        entry_point = declared[processor_class.__name__]
+        assert entry_point.value == f"{processor_class.__module__}:{processor_class.__qualname__}"
+        assert entry_point.load() is processor_class

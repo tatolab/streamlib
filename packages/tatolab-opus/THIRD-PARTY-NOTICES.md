@@ -1449,8 +1449,8 @@ authorization of the copyright holder.
 ## Notices `cargo about` cannot produce
 
 Every project below ships inside the wheel and owes terms the generated half above
-cannot carry: it is compiled in from sources a crate above vendors, and so appears
-in no resolve graph `cargo about` walks. These sections are appended by
+cannot carry: it is compiled in from vendored sources, and so appears in no resolve
+graph `cargo about` walks. These sections are appended by
 `cargo xtask generate-third-party-notices`.
 
 - Through the `opusic-sys` crate, linked statically into the native module as `libopus.a`: libopus

@@ -50,15 +50,15 @@ clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.7", features = ["utoipa"] }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.11", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
 # re-exports them at `core::error`.
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.7" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.11" }
 
 # Procedural macros
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.7" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.11" }
 
 # Plugin ABI wire-protocol header. Dep direction reversed in #877:
 # streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
@@ -67,12 +67,12 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.7" }
 # `STREAMLIB_ABI_VERSION` from this crate directly.
 
 # Shared iceoryx2 payload types (for cross-process IPC)
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.7" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.11" }
 
 # What a running runtime leaves on disk for its clients — STREAMLIB_HOME, the
 # runtime directory, the state directory and the JSONL runtime log — defined once
 # for the engine that writes it and the engine-free CLI that reads it.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.7" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.11" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
@@ -80,7 +80,7 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.7" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.11" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -89,7 +89,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
 crossbeam-channel = "0.5"
-inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 pin-project-lite = "0.2"  # Safe pin projection for the future a stream's log route wraps
 crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
@@ -105,11 +104,9 @@ rubato.workspace = true  # Resampler behind the audio window contract's read-sid
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
 ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
 petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
-ahash = "0.8"  # Fast hashing for graph checksum computation
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4"] }  # UUID generation for PixelBufferPoolId
-dirs = "6.0"   # Cross-platform home directory resolution
 libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 dotenvy = "0.15"  # Load .env files for development environment
@@ -118,7 +115,6 @@ dotenvy = "0.15"  # Load .env files for development environment
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true  # names the setting a node's config is refused at
-serde_yaml.workspace = true
 toml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types
 
@@ -156,7 +152,7 @@ dispatch2 = "0.3"  # GCD dispatch queues
 mach2 = "0.7"  # Mach kernel API: thread priorities, timing, and the surface-share channel
 # Wire-format helpers for the per-runtime surface-share service's raw Mach
 # channel, shared with the helper-process clients that talk to it.
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.7" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.11" }
 
 # The one RHI and everything that compiles with it. Not workspace-wide: a
 # workspace-wide entry would make a Windows or wasm target build a GPU stack
@@ -172,10 +168,14 @@ shaderc = { workspace = true }
 # host side. streamlib re-exports for in-tree consumers; subprocess
 # cdylibs depend on it directly so the FullAccess capability boundary
 # is enforced by the type system.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.7" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.11" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+# The Vulkan Video encode path the H.264/H.265 built-ins encode through, and the
+# session / DPB / bitstream / query-pool primitives the decoder mints on the
+# engine's device.
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.11", features = ["engine-error-conversions"] }
 # rtkit (RealtimeKit) D-Bus client for unprivileged SCHED_FIFO / nice
 # priority elevation on Linux. PipeWire / PulseAudio / JACK use the
 # same path. Without it, `pthread_setschedparam(SCHED_FIFO|RR, ...)`
@@ -183,7 +183,7 @@ libc.workspace = true
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket.
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.7" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.11" }
 # The video device seam's V4L2 arm: device enumeration, format negotiation and
 # the mmap capture stream. A kernel ABI binding — no user-space library is
 # linked, so the wheel's `DT_NEEDED` set does not grow.
@@ -215,7 +215,7 @@ objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no
 # surface-adapter types.
-streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.68.7" }
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.68.11" }
 
 [[bench]]
 name = "logging"
@@ -251,6 +251,14 @@ required-features = ["hardware-tests"]
 [[test]]
 name = "vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps"
 path = "tests/vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps.rs"
+required-features = ["hardware-tests"]
+
+# H.264 encode on a device a module owns, round-tripped through the engine's
+# decode and scored against the PSNR references. Rig tier — it needs Vulkan
+# Video encode and decode queues — so it builds only under `hardware-tests`.
+[[test]]
+name = "owned_device_h264_encode_round_trips_the_psnr_references"
+path = "tests/owned_device_h264_encode_round_trips_the_psnr_references.rs"
 required-features = ["hardware-tests"]
 
 # The AVFoundation arm capturing from a real camera through the video device
@@ -322,6 +330,10 @@ toml = { workspace = true }
 # even though it links no audio library — the same shape
 # `vendor/tatolab-vulkanalia-vma` uses for VMA.
 cc = "1.2"
+
+# `serde_bytes` is named only inside `#[serde(with = "serde_bytes")]`, which cargo-machete does not read.
+[package.metadata.cargo-machete]
+ignored = ["serde_bytes"]
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features

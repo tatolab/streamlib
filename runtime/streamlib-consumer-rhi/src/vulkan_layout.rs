@@ -47,6 +47,74 @@ impl VulkanLayout {
     }
 }
 
+/// A layout a sampled image may be read in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampledImageReadLayout {
+    /// `SHADER_READ_ONLY_OPTIMAL`, which resolved published surfaces are left in.
+    ShaderReadOnlyOptimal,
+    /// `GENERAL`, which a compute kernel's output is left in.
+    General,
+}
+
+impl SampledImageReadLayout {
+    /// The Vulkan layout written into the sampled-image descriptor.
+    pub fn as_vk(self) -> vk::ImageLayout {
+        match self {
+            Self::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            Self::General => vk::ImageLayout::GENERAL,
+        }
+    }
+
+    /// The layout a reader samples an image published in `published_layout`
+    /// in: its own when a sampled image may be read in it, otherwise
+    /// `SHADER_READ_ONLY_OPTIMAL`, which the reader barriers it into first.
+    /// `UNDEFINED` is refused — a transition out of it may discard the picture.
+    pub fn to_read_an_image_published_in(published_layout: VulkanLayout) -> crate::Result<Self> {
+        if published_layout == VulkanLayout::UNDEFINED {
+            return Err(crate::ConsumerRhiError::Gpu(
+                "an image published in UNDEFINED (0) has no picture a barrier keeps — no \
+                 producer published a layout for it"
+                    .to_string(),
+            ));
+        }
+        Ok(Self::sampled_read_layout_matching(published_layout)
+            .unwrap_or(Self::ShaderReadOnlyOptimal))
+    }
+
+    fn sampled_read_layout_matching(layout: VulkanLayout) -> Option<Self> {
+        match layout {
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL => Some(Self::ShaderReadOnlyOptimal),
+            VulkanLayout::GENERAL => Some(Self::General),
+            _ => None,
+        }
+    }
+}
+
+impl TryFrom<VulkanLayout> for SampledImageReadLayout {
+    type Error = crate::ConsumerRhiError;
+
+    fn try_from(layout: VulkanLayout) -> crate::Result<Self> {
+        Self::sampled_read_layout_matching(layout).ok_or_else(|| {
+            crate::ConsumerRhiError::Gpu(format!(
+                "a sampled image is read in SHADER_READ_ONLY_OPTIMAL ({}) or GENERAL ({}), not \
+                 layout {}",
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
+                VulkanLayout::GENERAL.0,
+                layout.0
+            ))
+        })
+    }
+}
+
+impl From<SampledImageReadLayout> for VulkanLayout {
+    fn from(layout: SampledImageReadLayout) -> Self {
+        match layout {
+            SampledImageReadLayout::ShaderReadOnlyOptimal => Self::SHADER_READ_ONLY_OPTIMAL,
+            SampledImageReadLayout::General => Self::GENERAL,
+        }
+    }
+}
+
 #[cfg(test)]
 mod layout_tests {
     //! Layout regression tests for the plugin-ABI-crossing layout primitive.
@@ -100,5 +168,68 @@ mod layout_tests {
         ] {
             assert_eq!(VulkanLayout(layout.as_vk().as_raw()), layout);
         }
+    }
+
+    #[test]
+    fn a_sampled_image_is_read_in_shader_read_only_optimal_or_general_and_nothing_else() {
+        assert_eq!(
+            SampledImageReadLayout::try_from(VulkanLayout::SHADER_READ_ONLY_OPTIMAL).unwrap(),
+            SampledImageReadLayout::ShaderReadOnlyOptimal
+        );
+        assert_eq!(
+            SampledImageReadLayout::try_from(VulkanLayout::GENERAL).unwrap(),
+            SampledImageReadLayout::General
+        );
+        let refusal = SampledImageReadLayout::try_from(VulkanLayout::TRANSFER_DST_OPTIMAL)
+            .expect_err("a sampled image is never read in TRANSFER_DST_OPTIMAL");
+        assert!(
+            refusal
+                .to_string()
+                .contains("SHADER_READ_ONLY_OPTIMAL (5) or GENERAL (1)"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_published_image_is_read_in_its_own_layout_or_barriered_into_shader_read_only_optimal() {
+        for (published, read_in) in [
+            (
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                SampledImageReadLayout::ShaderReadOnlyOptimal,
+            ),
+            (VulkanLayout::GENERAL, SampledImageReadLayout::General),
+            (
+                VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+                SampledImageReadLayout::ShaderReadOnlyOptimal,
+            ),
+            (
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                SampledImageReadLayout::ShaderReadOnlyOptimal,
+            ),
+            (
+                VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                SampledImageReadLayout::ShaderReadOnlyOptimal,
+            ),
+        ] {
+            assert_eq!(
+                SampledImageReadLayout::to_read_an_image_published_in(published).unwrap(),
+                read_in,
+                "an image published in layout {}",
+                published.0
+            );
+        }
+        for read_in in [
+            SampledImageReadLayout::ShaderReadOnlyOptimal,
+            SampledImageReadLayout::General,
+        ] {
+            assert_eq!(
+                SampledImageReadLayout::try_from(VulkanLayout::from(read_in)).unwrap(),
+                read_in
+            );
+        }
+        let refusal =
+            SampledImageReadLayout::to_read_an_image_published_in(VulkanLayout::UNDEFINED)
+                .expect_err("a transition out of UNDEFINED may discard the picture");
+        assert!(refusal.to_string().contains("UNDEFINED"), "{refusal}");
     }
 }

@@ -295,8 +295,8 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
     assert_eq!(
         catalog["streams"],
         json!([
-            { "stream": "first", "nodes": [] },
-            { "stream": "second", "nodes": [] },
+            { "stream": "first", "nodes": [], "installed": [] },
+            { "stream": "second", "nodes": [], "installed": [] },
         ]),
         "each stream lists the types its own interpreter described"
     );

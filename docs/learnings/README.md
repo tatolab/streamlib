@@ -82,10 +82,6 @@ Avoid the two failure modes:
   Test hangs forever on `handle.join()` because it published before its spawned
   listener subscribed — the event is queued for nobody; wait on an observable
   effect of the subscribe and on `recv_timeout`, never on a bare `join()`
-- [@docs/learnings/cdylib-make-borrow-cached-fields.md](cdylib-make-borrow-cached-fields.md) —
-  Plugin pipeline runs end-to-end clean but produces zero/black output
-  when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached
-  POD fields zeroed instead of mirroring the inner
 - [@docs/learnings/slpkg-raw-device-rhi-construction.md](slpkg-raw-device-rhi-construction.md) —
   GPU package works in-process but crashes the driver (NVIDIA double-free in
   `vkCreatePipelineLayout`) as a separately-built `.slpkg` — it hand-rolled

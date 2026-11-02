@@ -9,27 +9,26 @@ surface and no GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
 and `OpusDecoder` consume — hang's legacy container, a QUIC varint timestamp in
 microseconds and then the Annex-B access unit or Opus packet. The codec, the
 coded extent and the channel count ride the ports' catalog entries. Each runs
-in its own helper process, and each calls this wheel's own Rust directly — the
-engine is never on the data path.
+in its own helper process. The publisher calls this wheel's own Rust from its
+`process()`; the player lends its two output ports to a thread of this wheel's
+Rust through the module host table, which writes every frame with no Python
+attached. The engine is never on the data path.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import threading
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal, NamedTuple, Protocol
+from typing import Annotated, Any, Literal, NamedTuple
 
 from tatolab.stream import (
     LinkInputDataReader,
-    LinkOutputDataWriter,
     Message,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.stream.catalog import AudioEntry, CatalogEntry, VideoEntry
 
 from . import _native
 
@@ -41,41 +40,13 @@ ENCODED_AUDIO_OUTPUT_PORT = "encoded_audio"
 #: publisher's inbound links cannot outnumber them.
 HIGHEST_TRACKS_IN_ONE_SESSION = 2
 
-#: How long the player's thread waits for media before looking at whether it has
-#: been asked to stop. Short enough that `stop()` returns well inside the
-#: helper's five-second teardown budget.
-PLAYER_POLL_TIMEOUT_MS = 200
-
 #: How long `stop()` waits for the reading thread. The thread's own media wait
-#: is bounded, so this only expires when it is still inside `connect()`.
+#: is bounded, so this only expires when it is still inside a connect.
 READER_THREAD_JOIN_TIMEOUT_SECONDS = 1.0
 
-#: The reconnect backoff. A WHEP endpoint answers `409 Conflict` while the live
-#: input it fronts has not started publishing yet, which is the ordinary state
-#: of a player brought up beside its publisher rather than after it — so a
-#: single failed connect cannot be the end of the stream. It lives here rather
-#: than in the session's Rust because a helper process has no `tracing`
-#: subscriber: a retry loop below the boundary would fail invisibly, and the
-#: operator would see a player that simply never produced.
-FIRST_RECONNECT_DELAY_SECONDS = 0.5
-LONGEST_RECONNECT_DELAY_SECONDS = 10.0
-
-#: How often a publisher and a player say they are still working. The engine's
-#: own built-ins report on the same cadence, and this wheel's Rust cannot: its
-#: `tracing` has no subscriber in a helper process, so anything a session wants
-#: understood has to be said from Python.
+#: How often the publisher says it is still working, on the cadence the player's
+#: reading thread reports on too.
 MEDIA_FRAMES_BETWEEN_PROGRESS_REPORTS = 300
-
-#: A helper-placed link's per-message ceiling
-#: (`streamlib-ipc-types`' untrusted-session ceiling). A message past it is
-#: dropped at `debug` by the engine rather than raised, which would look from
-#: here like a stream that simply stopped — so the player says so itself, once.
-#: Three orders of magnitude above an H.264 access unit at any sane bitrate, so
-#: this firing at all means something upstream is wrong.
-HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
-
-#: The only rate an Opus RTP stream is clocked at (RFC 7587 §4.1).
-OPUS_RTP_SAMPLE_RATE_HZ = 48_000
 
 #: The WebCodecs codec-string prefixes of H.264: `avc1` with parameter sets out
 #: of band, `avc3` inline. RTP carries the access unit either way.
@@ -83,50 +54,6 @@ H264_CODEC_STRING_PREFIXES = ("avc1.", "avc3.")
 OPUS_CODEC_STRING = "opus"
 
 VideoOrAudio = Literal["video", "audio"]
-
-
-class LinkOutputWriteFailure(Exception):
-    """A media frame or catalog entry this player wrote was refused, carrying
-    the port that refused it.
-
-    Distinguishes the one failure a reconnect cannot fix from every failure it
-    can: the endpoint is reachable and what was written is wrong, so the port
-    has to reach the log and the retry loop has to stop.
-    """
-
-    def __init__(self, port: str) -> None:
-        super().__init__(f"writing to `{port}` failed")
-        self.port = port
-
-
-class ReceivedAccessUnit(Protocol):
-    """What the player reads off one received access unit."""
-
-    @property
-    def media_frame(self) -> bytes: ...
-    @property
-    def is_sync_point(self) -> bool: ...
-    @property
-    def codec(self) -> str: ...
-    @property
-    def coded_width(self) -> int: ...
-    @property
-    def coded_height(self) -> int: ...
-    @property
-    def timestamp_ns(self) -> int: ...
-
-
-class ReceivedPacket(Protocol):
-    """What the player reads off one received Opus packet."""
-
-    @property
-    def media_frame(self) -> bytes: ...
-    @property
-    def channels(self) -> int: ...
-    @property
-    def opus_identification_header_hex(self) -> str: ...
-    @property
-    def timestamp_ns(self) -> int: ...
 
 
 class PublishedTrack(NamedTuple):
@@ -480,11 +407,7 @@ class WhepPlayer:
     def __init__(self, config: WhepPlayerConfig) -> None:
         self._url = _required_url(config.url, "WhepPlayer")
         self._bearer_token = _optional_bearer_token(config.bearer_token)
-        self._stop = threading.Event()
-        self._reader: "threading.Thread | None" = None
-        self._reported_an_oversized_media_frame = False
-        self._media_frames_written: "dict[str, int]" = {}
-        self._catalog_entry_stated_by_port: "dict[str, CatalogEntry]" = {}
+        self._reading_thread: "_native.WhepPlayerThread | None" = None
 
     @node.output()
     def encoded_video(self) -> None:
@@ -495,191 +418,37 @@ class WhepPlayer:
         """Opus packets, as media frames."""
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
-        """Hand the outputs to a thread this processor owns.
+        """Lend both outputs to a reading thread of this wheel's Rust.
 
         Connecting happens on that thread and not in `setup()`, so an endpoint
         that is slow or down cannot spend the helper's start-up budget.
         """
-        outputs = ctx.outputs
-        self._reader = threading.Thread(
-            target=lambda: self._play_until_stopped(outputs), daemon=True
+        module_host_table = ctx.open_module_host_table(
+            output_ports=[ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT]
         )
-        self._reader.start()
-
-    def _play_until_stopped(self, outputs: LinkOutputDataWriter) -> None:
-        """Connect, drain, and reconnect for as long as this processor runs.
-
-        A session per attempt, never one reused: a WHEP session is a peer
-        connection, and a closed one cannot be dialled again. This thread owns
-        each session's whole life, close included, so a teardown arriving while
-        a connect is outstanding waits for the thread rather than contending
-        with it.
-        """
-        delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
-        while not self._stop.is_set():
-            session = None
-            try:
-                log.info("WhepPlayer: opening the session")
-                session = _native.WhepSession(self._url, self._bearer_token)
-                session.connect()
-                log.info("WhepPlayer: the relay accepted the session")
-                delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
-                self._drain_until_stopped(session, outputs)
-            except LinkOutputWriteFailure as write_failure:
-                # Not the endpoint's fault and not retryable: what this player
-                # wrote is something the engine refused, so reconnecting would
-                # spend an endpoint's session forever on a write that will be
-                # refused again. Named, with its port, and the thread ends.
-                log.error(
-                    f"WhepPlayer: writing to `{write_failure.port}` "
-                    f"failed, and the reading thread is ending: "
-                    f"{write_failure.__cause__}"
-                )
-                return
-            except Exception as failure:
-                log.warn(
-                    f"WhepPlayer: the session ended ({failure}); retrying in "
-                    f"{delay_seconds:.1f}s"
-                )
-            finally:
-                if session is not None:
-                    session.close()
-            if self._stop.is_set():
-                return
-            # `wait` rather than `sleep`: a stop arriving mid-backoff should end
-            # the thread now, not after the longest delay.
-            self._stop.wait(delay_seconds)
-            delay_seconds = min(delay_seconds * 2, LONGEST_RECONNECT_DELAY_SECONDS)
-
-    def _drain_until_stopped(
-        self, session: "_native.WhepSession", outputs: LinkOutputDataWriter
-    ) -> None:
-        while not self._stop.is_set():
-            media = session.next_media(PLAYER_POLL_TIMEOUT_MS)
-            if media is None:
-                continue
-            message = _message_for(media)
-            self._state_catalog_entry_when_it_changes(
-                outputs, message.port, message.catalog_entry
-            )
-            self._report_a_media_frame_the_link_will_drop(message.port, message.payload)
-            try:
-                outputs.write(
-                    message.port,
-                    message.payload,
-                    timestamp_ns=media.timestamp_ns,
-                    starts_group=message.starts_group,
-                )
-            except Exception as write_failure:
-                raise LinkOutputWriteFailure(message.port) from write_failure
-            self._report_progress(message.port)
-
-    def _state_catalog_entry_when_it_changes(
-        self, outputs: LinkOutputDataWriter, port: str, catalog_entry: CatalogEntry
-    ) -> None:
-        if self._catalog_entry_stated_by_port.get(port) == catalog_entry:
-            return
-        try:
-            outputs.set_catalog_entry(port, catalog_entry)
-        except Exception as entry_refusal:
-            raise LinkOutputWriteFailure(port) from entry_refusal
-        self._catalog_entry_stated_by_port[port] = catalog_entry
-        log.info(f"WhepPlayer: `{port}` states {catalog_entry}")
-
-    def _report_progress(self, port: str) -> None:
-        written = self._media_frames_written.get(port, 0) + 1
-        self._media_frames_written[port] = written
-        if written == 1:
-            log.info(f"WhepPlayer: first media frame written on `{port}`")
-        elif written % MEDIA_FRAMES_BETWEEN_PROGRESS_REPORTS == 0:
-            log.info(f"WhepPlayer: `{port}` media_frames_written={written}")
-
-    def _report_a_media_frame_the_link_will_drop(
-        self, port: str, payload: bytes
-    ) -> None:
-        if len(payload) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
-            return
-        if self._reported_an_oversized_media_frame:
-            return
-        self._reported_an_oversized_media_frame = True
-        log.error(
-            f"WhepPlayer: a {len(payload)}-byte media frame on `{port}` is past the "
-            f"{HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling and will be "
-            f"dropped without reaching the decoder. Reported once."
+        self._reading_thread = _native.WhepPlayerThread(
+            module_host_table, self._url, self._bearer_token
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
-        self._stop.set()
-        if self._reader is None:
+        self._stop_the_reading_thread()
+
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
+        del ctx
+        self._stop_the_reading_thread()
+
+    def _stop_the_reading_thread(self) -> None:
+        if self._reading_thread is None:
             return
         # Bounded well inside the helper's five-second teardown budget: the
-        # thread's own wait for media is bounded at PLAYER_POLL_TIMEOUT_MS.
-        # A thread still inside `connect()` against an unresponsive relay
-        # outlives this, and closes the session itself when the connect
-        # returns — which is the most a stop can honestly promise.
-        self._reader.join(timeout=READER_THREAD_JOIN_TIMEOUT_SECONDS)
-        if self._reader.is_alive():
+        # thread's own wait for media is bounded. A thread still inside a
+        # connect against an unresponsive relay outlives this, and closes the
+        # session itself when the connect returns — which is the most a stop
+        # can honestly promise.
+        if not self._reading_thread.stop_and_join(READER_THREAD_JOIN_TIMEOUT_SECONDS):
             log.warn(
                 "WhepPlayer: the reading thread is still connecting; the session "
                 "will close when that connect returns"
             )
-        self._reader = None
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop.set()
-
-
-class MessageThePlayerWritesToOneOutputPort(NamedTuple):
-    """One received item as the player publishes it, with the entry its port states."""
-
-    port: str
-    payload: bytes
-    starts_group: bool
-    catalog_entry: CatalogEntry
-
-
-def _message_for(
-    media: "_native.PlayedVideoAccessUnit | _native.PlayedOpusPacket",
-) -> MessageThePlayerWritesToOneOutputPort:
-    """The port, media frame, group flag and catalog entry one received item is published with.
-
-    A decoder enters a video stream only at a sync point, so only one opens a
-    group; every Opus packet is one.
-    """
-    if isinstance(media, _native.PlayedOpusPacket):
-        return MessageThePlayerWritesToOneOutputPort(
-            port=ENCODED_AUDIO_OUTPUT_PORT,
-            payload=media.media_frame,
-            starts_group=True,
-            catalog_entry=audio_catalog_entry_of(media),
-        )
-    return MessageThePlayerWritesToOneOutputPort(
-        port=ENCODED_VIDEO_OUTPUT_PORT,
-        payload=media.media_frame,
-        starts_group=media.is_sync_point,
-        catalog_entry=video_catalog_entry_of(media),
-    )
-
-
-def video_catalog_entry_of(access_unit: ReceivedAccessUnit) -> VideoEntry:
-    """The `encoded_video` entry one access unit's stream states.
-
-    No `description`: the parameter sets ride inline in the access units.
-    """
-    return VideoEntry(
-        codec=access_unit.codec,
-        codedWidth=access_unit.coded_width,
-        codedHeight=access_unit.coded_height,
-    )
-
-
-def audio_catalog_entry_of(packet: ReceivedPacket) -> AudioEntry:
-    """The `encoded_audio` entry one Opus packet's stream states."""
-    return AudioEntry(
-        codec=OPUS_CODEC_STRING,
-        sampleRate=OPUS_RTP_SAMPLE_RATE_HZ,
-        numberOfChannels=packet.channels,
-        description=packet.opus_identification_header_hex,
-    )
+        self._reading_thread = None

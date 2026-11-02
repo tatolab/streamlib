@@ -16,10 +16,7 @@ mod compile_result;
 mod compiler;
 pub mod compiler_ops;
 mod compiler_transaction;
-mod link_config_change;
 mod pending_operation;
-mod pending_operation_queue;
-mod processor_config_change;
 mod processor_thread_shutdown;
 pub(crate) mod scheduling;
 

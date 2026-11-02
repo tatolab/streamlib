@@ -25,6 +25,18 @@ struct NodeTypeDescribedInAStreamsProcessorInterpreter {
     constructor: DynamicProcessorConstructorFn,
 }
 
+/// The installed distribution that declares a node type in its `tatolab.nodes`
+/// entry points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledModuleOfANodeType {
+    /// The distribution's name, as `importlib.metadata` reads it.
+    pub distribution: String,
+    /// The distribution's installed version.
+    pub distribution_version: String,
+    /// The entry point's name in `tatolab.nodes`.
+    pub entry_point: String,
+}
+
 /// The node types one loaded stream resolves: every natively compiled type in
 /// [`PROCESSOR_REGISTRY`], then the types described in the stream's own
 /// processor interpreter.
@@ -32,6 +44,8 @@ struct NodeTypeDescribedInAStreamsProcessorInterpreter {
 pub struct NodeTypesOneStreamResolves {
     described_in_this_streams_processor_interpreter:
         RwLock<HashMap<ProcessorClassImportPath, NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+    installed_module_declaring_each_described_type:
+        RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
 }
 
 impl NodeTypesOneStreamResolves {
@@ -184,6 +198,52 @@ impl NodeTypesOneStreamResolves {
             .values()
             .map(|described| described.descriptor.clone())
             .collect()
+    }
+
+    /// Record that `installed_module` declares the described type `node_type`.
+    pub(crate) fn record_the_installed_module_declaring(
+        &self,
+        node_type: ProcessorClassImportPath,
+        installed_module: InstalledModuleOfANodeType,
+    ) {
+        self.installed_module_declaring_each_described_type
+            .write()
+            .insert(node_type, installed_module);
+    }
+
+    /// The descriptors of every described type no installed module declares:
+    /// the ones a graph or a live add named.
+    pub fn descriptors_described_in_this_streams_processor_interpreter_no_installed_module_declares(
+        &self,
+    ) -> Vec<ProcessorDescriptor> {
+        let installed = self.installed_module_declaring_each_described_type.read();
+        self.descriptors_described_in_this_streams_processor_interpreter()
+            .into_iter()
+            .filter(|descriptor| !installed.contains_key(&descriptor.processor_class_import_path))
+            .collect()
+    }
+
+    /// Every described type an installed module declares, with that module,
+    /// in import-path order.
+    pub fn node_types_installed_modules_declare(
+        &self,
+    ) -> Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)> {
+        let installed = self.installed_module_declaring_each_described_type.read();
+        let described = self.described_in_this_streams_processor_interpreter.read();
+        let mut node_types: Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)> = installed
+            .iter()
+            .filter_map(|(node_type, installed_module)| {
+                described
+                    .get(node_type)
+                    .map(|described| (described.descriptor.clone(), installed_module.clone()))
+            })
+            .collect();
+        node_types.sort_by(|(left, _), (right, _)| {
+            left.processor_class_import_path
+                .as_str()
+                .cmp(right.processor_class_import_path.as_str())
+        });
+        node_types
     }
 
     /// The native types, then the types described in this stream's processor

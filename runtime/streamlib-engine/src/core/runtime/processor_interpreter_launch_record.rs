@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::compiler::compiler_ops::processor_interpreter_describe::{
-    a_processor_interpreter_describes, describe_and_register_node_types_in_a_processor_interpreter,
+    INSTALLED_MODULES_DESCRIBE_BOUND, a_processor_interpreter_describes,
+    describe_and_register_node_types_in_a_processor_interpreter,
+    describe_the_node_types_installed_modules_declare_within,
+    register_the_node_types_installed_modules_declare,
 };
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
 use crate::core::descriptors::ProcessorClassImportPath;
@@ -91,6 +94,57 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         self.describe_and_register(std::slice::from_ref(node_type), lend_directory)
+    }
+
+    /// Describe every class installed distributions declare in `tatolab.nodes`
+    /// and register each into this stream, so its catalog lists them before a
+    /// graph names one. A stream with no environment or no lend directory has
+    /// no interpreter to read them in; a describe that fails is warned about
+    /// and leaves the stream as it was, since no graph depends on it.
+    pub(crate) fn describe_and_register_the_node_types_installed_modules_declare(
+        &self,
+        lend_directory: Option<&Path>,
+    ) {
+        let (Some(stream_environment), Some(lend_directory)) =
+            (self.stream_environment.as_ref(), lend_directory)
+        else {
+            return;
+        };
+        let described = describe_the_node_types_installed_modules_declare_within(
+            stream_environment,
+            lend_directory,
+            INSTALLED_MODULES_DESCRIBE_BOUND,
+            &self.the_stream_its_helpers_belong_to,
+            &|| {
+                self.describes_interrupted_by_the_host
+                    .load(Ordering::SeqCst)
+            },
+        );
+        let described = match described {
+            Ok(described) => described,
+            Err(refusal) => {
+                tracing::warn!(
+                    %refusal,
+                    "the stream's installed modules were not described, so its node catalog \
+                     lists none of their node types"
+                );
+                return;
+            }
+        };
+        let registered = register_the_node_types_installed_modules_declare(
+            &self.node_types_this_stream_resolves,
+            described,
+            stream_environment,
+            lend_directory,
+            &self.the_stream_its_helpers_belong_to,
+        );
+        for node_type in registered {
+            self.stream_identity.publish_on_this_streams_topic(
+                RuntimeEvent::RuntimeDidRegisterProcessorType {
+                    processor_type: node_type,
+                },
+            );
+        }
     }
 
     fn describe_and_register(
@@ -733,6 +787,146 @@ mod tests {
                 "a process the refused load's describe left behind is still running"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A project directory holding a stand-in interpreter that answers a
+    /// describe of the installed modules with `installed_modules_document`,
+    /// and every other describe with an empty document.
+    fn a_project_whose_installed_modules_describe_as(
+        installed_modules_document: serde_json::Value,
+    ) -> (tempfile::TempDir, StreamEnvironment) {
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let interpreter = project_directory.path().join("stub-python");
+        let empty_document = serde_json::json!({
+            "described_node_types": [],
+            "refused_node_types": [],
+        });
+        crate::core::test_support::write_an_executable_script_from_a_child_process(
+            &interpreter,
+            &format!(
+                "#!/bin/sh\ncase \"$*\" in\n*--describe-installed-modules*)\n\
+                 cat <<'DESCRIBED'\n{installed_modules_document}\nDESCRIBED\n;;\n\
+                 *)\ncat <<'DESCRIBED'\n{empty_document}\nDESCRIBED\n;;\nesac\n"
+            ),
+        );
+        let stream_environment = StreamEnvironment {
+            project_directory: project_directory.path().to_path_buf(),
+            interpreter,
+        };
+        (project_directory, stream_environment)
+    }
+
+    fn an_installed_module_declaring(
+        node_type: &ProcessorClassImportPath,
+        distribution: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "import_path": node_type.as_str(),
+            "entry_point": "Blur",
+            "distribution": distribution,
+            "distribution_version": "1.2.3",
+        })
+    }
+
+    /// An installed distribution's `tatolab.nodes` classes reach the stream's
+    /// catalog at load, before a graph names one, each under the distribution
+    /// declaring it; the graph's own types stay out of the installed section.
+    #[test]
+    #[serial]
+    fn a_load_lists_the_node_types_installed_modules_declare_before_a_graph_names_one() {
+        let rust_type = a_rust_type_registered_as("BesideAnInstalledModule");
+        let installed_type = import_path("tatolab_blur.processors:Blur");
+        let (_project_directory, stream_environment) =
+            a_project_whose_installed_modules_describe_as(serde_json::json!({
+                "described_node_types": [a_described_type(&installed_type, "video")],
+                "refused_node_types": [],
+                "installed_modules": [an_installed_module_declaring(&installed_type, "tatolab-blur")],
+            }));
+        let runner = Runner::new().unwrap();
+        runner
+            .set_processor_interpreter_lend_directory(LEND_DIRECTORY_FOR_TEST.into())
+            .expect("the runner's first lend directory");
+
+        let stream = runner
+            .load_stream_from_graph_snapshot(
+                &a_graph_of(&[&rust_type]),
+                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                    .with_stream_id("main"),
+            )
+            .expect("a graph of a Rust type loads beside an installed module");
+
+        let node_types = stream.node_types_this_stream_resolves();
+        let installed = node_types.node_types_installed_modules_declare();
+        assert_eq!(installed.len(), 1);
+        let (descriptor, installed_module) = &installed[0];
+        assert_eq!(descriptor.processor_class_import_path, installed_type);
+        assert_eq!(
+            installed_module,
+            &crate::core::processors::InstalledModuleOfANodeType {
+                distribution: "tatolab-blur".to_string(),
+                distribution_version: "1.2.3".to_string(),
+                entry_point: "Blur".to_string(),
+            }
+        );
+        assert_eq!(
+            input_port_names_the_stream_resolves_for(&stream, &installed_type),
+            ["video"]
+        );
+        assert!(
+            node_types
+                .descriptors_described_in_this_streams_processor_interpreter_no_installed_module_declares()
+                .is_empty()
+        );
+        assert!(PROCESSOR_REGISTRY.descriptor(&installed_type).is_none());
+    }
+
+    /// An installed module that cannot be described, or an installed-modules
+    /// describe that prints nothing, never fails a load no graph node needs it for.
+    #[test]
+    #[serial]
+    fn an_installed_module_that_cannot_be_described_leaves_the_load_standing() {
+        let rust_type = a_rust_type_registered_as("BesideARefusedInstalledModule");
+        let refused_type = import_path("tatolab_broken.processors:Broken");
+        let (_refusing_project, refusing_environment) =
+            a_project_whose_installed_modules_describe_as(serde_json::json!({
+                "described_node_types": [],
+                "refused_node_types": [{
+                    "import_path": refused_type.as_str(),
+                    "refusal": "its module `tatolab_broken.processors` did not import",
+                }],
+                "installed_modules": [an_installed_module_declaring(&refused_type, "tatolab-broken")],
+            }));
+        let (_silent_project, silent_environment) =
+            a_project_whose_installed_modules_describe_as(serde_json::json!(null));
+        let runner = Runner::new().unwrap();
+        runner
+            .set_processor_interpreter_lend_directory(LEND_DIRECTORY_FOR_TEST.into())
+            .expect("the runner's first lend directory");
+
+        for (stream_id, stream_environment) in [
+            ("refusing", refusing_environment),
+            ("silent", silent_environment),
+        ] {
+            let stream = runner
+                .load_stream_from_graph_snapshot(
+                    &a_graph_of(&[&rust_type]),
+                    OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                        .with_stream_id(stream_id),
+                )
+                .expect("the load stands without the installed module");
+            assert!(
+                stream
+                    .node_types_this_stream_resolves()
+                    .node_types_installed_modules_declare()
+                    .is_empty()
+            );
+            assert!(
+                stream
+                    .node_types_this_stream_resolves()
+                    .descriptor(&refused_type)
+                    .is_none()
+            );
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
     self as h265dec, HEVC_DPB_SIZE, MAX_NUM_PPS, MAX_NUM_VPS, NalUnitType as H265NalUnitType,
     VulkanH265Decoder,
 };
-use crate::vulkan::video::video_context::VideoError;
+use streamlib_vulkan_video::VideoError;
 
 use super::decoded_picture_display_window::{
     H265ConformanceWindowSyntax, SpsCropOffsets, h265_conformance_window,

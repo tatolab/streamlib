@@ -14,7 +14,8 @@ In a stream project:
 uv add tatolab-webrtc
 ```
 
-It installs from PyPI with the `tatolab-stream` package it depends on.
+It installs from PyPI with the `tatolab-stream` package it depends on. Once it is installed, the
+node catalog lists both nodes under the stream's `installed` section, before a graph names one.
 
 ```python
 from tatolab.webrtc import WhepPlayer, WhipPublisher

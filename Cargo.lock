@@ -55,19 +55,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ahash"
-version = "0.8.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
-dependencies = [
- "cfg-if",
- "getrandom 0.3.4",
- "once_cell",
- "version_check",
- "zerocopy",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1378,27 +1365,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirs"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
-dependencies = [
- "dirs-sys",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2694,15 +2660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inventory"
-version = "0.3.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009ae045c87e7082cb72dab0ccd01ae075dd00141ddc108f43a0ea150a9e7227"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3900,12 +3857,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "option-ext"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
-
-[[package]]
 name = "ordered-stream"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4578,17 +4529,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce70a74e890531977d37e532c34d45e9055d2409ed08ddba14529471ed0be16"
 dependencies = [
  "bitflags 2.11.0",
-]
-
-[[package]]
-name = "redox_users"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
-dependencies = [
- "getrandom 0.2.17",
- "libredox",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5315,19 +5255,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap 2.13.0",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "serdect"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5674,7 +5601,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -5684,7 +5611,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -5696,14 +5623,13 @@ dependencies = [
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
- "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "cudarc",
  "dlpark",
@@ -5717,14 +5643,13 @@ dependencies = [
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -5747,7 +5672,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "png",
@@ -5769,7 +5694,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -5781,14 +5706,13 @@ dependencies = [
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
- "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "streamlib-api-server"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "axum",
  "futures-util",
@@ -5800,12 +5724,10 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-macros",
  "streamlib-media-builtins",
  "streamlib-relay-adapter-sdk",
  "streamlib-runtime-client-contract",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "toml 0.8.23",
@@ -5819,7 +5741,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "objc2",
@@ -5828,15 +5750,15 @@ dependencies = [
  "objc2-metal",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
  "thiserror 2.0.18",
  "tracing",
 ]
 
 [[package]]
 name = "streamlib-engine"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
- "ahash",
  "anyhow",
  "anymap2",
  "block2",
@@ -5846,14 +5768,12 @@ dependencies = [
  "crossbeam-queue",
  "ctrlc",
  "cuid2",
- "dirs",
  "dispatch2",
  "dotenvy",
  "hang",
  "hound",
  "iceoryx2",
  "iceoryx2-log",
- "inventory",
  "libc",
  "libloading 0.8.9",
  "mach2",
@@ -5883,7 +5803,6 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "serde_path_to_error",
- "serde_yaml",
  "serial_test",
  "sha2 0.10.9",
  "shaderc",
@@ -5897,6 +5816,7 @@ dependencies = [
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
+ "streamlib-vulkan-video",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tempfile",
@@ -5914,7 +5834,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5924,7 +5844,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "iceoryx2",
  "tracing",
@@ -5932,7 +5852,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5946,7 +5866,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "hang",
  "libc",
@@ -5970,13 +5890,12 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "serde_yaml",
  "thiserror 2.0.18",
  "unicode-normalization",
  "utoipa",
@@ -5984,7 +5903,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "cudarc",
  "libc",
@@ -5996,7 +5915,6 @@ dependencies = [
  "pyo3",
  "rmp-serde",
  "rmpv",
- "serde",
  "serde_json",
  "streamlib",
  "streamlib-adapter-cuda",
@@ -6004,12 +5922,13 @@ dependencies = [
  "streamlib-media-builtins",
  "streamlib-runtime-client-contract",
  "streamlib-surface-client",
+ "tatolab-module-sdk",
  "tracing",
 ]
 
 [[package]]
 name = "streamlib-relay-adapter-cloudflare"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -6020,7 +5939,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-local"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -6043,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-moqpro"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "base64 0.22.1",
  "moq-auth",
@@ -6057,7 +5976,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-sdk"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "base64 0.22.1",
  "schemars 0.8.22",
@@ -6075,7 +5994,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-track-reader"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "futures-util",
  "moq-net",
@@ -6084,7 +6003,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-runtime-client-contract"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -6097,7 +6016,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-adapter"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -6108,7 +6027,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "libc",
  "mach2",
@@ -6121,12 +6040,22 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "serde",
  "serde_json",
  "streamlib",
- "streamlib-macros",
+]
+
+[[package]]
+name = "streamlib-vulkan-video"
+version = "0.68.11"
+dependencies = [
+ "streamlib-consumer-rhi",
+ "streamlib-error",
+ "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
+ "tracing",
 ]
 
 [[package]]
@@ -6219,7 +6148,7 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tatolab-cli"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "axum",
  "clap",
@@ -6237,8 +6166,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tatolab-module-sdk"
+version = "1.1.0"
+dependencies = [
+ "pyo3",
+ "tracing",
+]
+
+[[package]]
 name = "tatolab-read-track"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -6286,7 +6223,7 @@ dependencies = [
 
 [[package]]
 name = "tatolabd"
-version = "0.68.7"
+version = "0.68.11"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
@@ -6868,12 +6805,6 @@ dependencies = [
  "crypto-common 0.1.7",
  "subtle",
 ]
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
@@ -7832,6 +7763,7 @@ dependencies = [
  "clap",
  "png",
  "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
  "sha2 0.10.9",

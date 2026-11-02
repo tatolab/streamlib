@@ -47,7 +47,9 @@ use crate::core::annex_b_access_unit::{
     NalUnitLengthPrefixWidth, annex_b_access_unit_from_length_prefixed_sample,
 };
 use crate::core::color::h273_color_vui::color_vui_every_engine_encoder_writes;
-use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId, ResolvedColorInfo};
+use crate::core::color::{
+    ColorSpaceKind, H273ColorVui, RangeId, ResolveH273ColorVuiDefaults, ResolvedColorInfo,
+};
 use crate::core::context::{
     EncodedVideoAccessUnitFromSession, GpuContextFullAccess, GpuContextLimitedAccess,
     VideoCodecElementaryStream, VideoEncodeSession, VideoEncodeSessionRequest,

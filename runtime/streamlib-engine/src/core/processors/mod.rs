@@ -32,7 +32,7 @@ pub use __generated_private::{
 };
 
 pub use empty_config::EmptyConfig;
-pub use node_types_one_stream_resolves::NodeTypesOneStreamResolves;
+pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 // Bridge-internal: the board one helper's own bridge keeps. Deliberately not
 // re-exported — `sdk::processors` is a blanket glob, and nothing outside this

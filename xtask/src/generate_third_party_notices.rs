@@ -653,8 +653,8 @@ impl NoticesGenerationTarget {
             }
             Self::ExtensionPackage { .. } => {
                 "Every project below ships inside the wheel and owes terms the generated half above\n\
-                 cannot carry: it is compiled in from sources a crate above vendors, and so appears\n\
-                 in no resolve graph `cargo about` walks. These sections are appended by\n\
+                 cannot carry: it is compiled in from vendored sources, and so appears in no resolve\n\
+                 graph `cargo about` walks. These sections are appended by\n\
                  `cargo xtask generate-third-party-notices`.\n"
             }
         }
@@ -699,7 +699,19 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
     }
 
-    let projects_carried = target.projects_whose_notices_it_carries();
+    let mut projects_carried = target.projects_whose_notices_it_carries();
+    if matches!(target, NoticesGenerationTarget::ExtensionPackage { .. }) {
+        for project in
+            projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(&project_root)?
+        {
+            if !projects_carried
+                .iter()
+                .any(|carried| std::ptr::eq(*carried, project))
+            {
+                projects_carried.push(project);
+            }
+        }
+    }
     if !projects_carried.is_empty() {
         let source_trees = NoticeSourceTrees {
             registry_crate_roots: locate_registry_crate_roots(&project_root, &projects_carried)?,
@@ -977,6 +989,31 @@ fn render_the_appendix_cargo_about_cannot_produce(
     Ok(appendix)
 }
 
+/// The crate whose build script compiles VulkanMemoryAllocator and the
+/// Vulkan-Headers it includes into whatever links it.
+const VULKANALIA_VMA_FORK_CRATE_NAME: &str = "tatolab-vulkanalia-vma";
+
+/// The vendored projects an extension's own lockfile shows it compiles in:
+/// the VMA fork's trees when it resolves `tatolab-vulkanalia-vma`.
+fn projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+    extension_project_root: &Path,
+) -> Result<Vec<&'static ProjectWhoseNoticeCargoAboutCannotProduce>> {
+    let lockfile_path = extension_project_root.join("Cargo.lock");
+    let lockfile = std::fs::read_to_string(&lockfile_path)
+        .with_context(|| format!("reading {}", lockfile_path.display()))?;
+    let resolves_the_vma_fork = lockfile
+        .lines()
+        .any(|line| line.trim() == format!("name = \"{VULKANALIA_VMA_FORK_CRATE_NAME}\""));
+    Ok(PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+        .iter()
+        .filter(|project| {
+            resolves_the_vma_fork
+                && project.roster
+                    == NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript
+        })
+        .collect())
+}
+
 /// The fence every licence text in a notices file is reproduced in.
 const LICENCE_TEXT_FENCE: &str = "````";
 
@@ -1221,6 +1258,56 @@ mod tests {
             &target.projects_whose_notices_it_carries(),
             source_trees,
         )
+    }
+
+    fn extension_root_whose_lockfile_resolves(package_names: &[&str]) -> TempDir {
+        let extension_root = TempDir::new().expect("tempdir");
+        let lockfile: String = package_names
+            .iter()
+            .map(|name| format!("[[package]]\nname = \"{name}\"\nversion = \"0.0.0\"\n\n"))
+            .collect();
+        fs::write(extension_root.path().join("Cargo.lock"), lockfile).expect("write lockfile");
+        extension_root
+    }
+
+    #[test]
+    fn an_extension_compiling_the_vma_fork_carries_the_trees_it_compiles_in() {
+        let extension_root =
+            extension_root_whose_lockfile_resolves(&["pyo3", "tatolab-vulkanalia-vma"]);
+        let projects = projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+            extension_root.path(),
+        )
+        .expect("read lockfile");
+        let names: Vec<&str> = projects
+            .iter()
+            .map(|project| project.display_name)
+            .collect();
+        assert_eq!(names, ["VulkanMemoryAllocator", "Vulkan-Headers"]);
+
+        let source_trees = NoticeSourceTrees {
+            registry_crate_roots: BTreeMap::new(),
+            workspace_root: workspace_root(),
+        };
+        let appendix = render_the_appendix_cargo_about_cannot_produce(
+            &opus_extension_target(),
+            &projects,
+            &source_trees,
+        )
+        .expect("render");
+        assert!(appendix.contains("### VulkanMemoryAllocator (MIT)"));
+        assert!(appendix.contains("Copyright"));
+    }
+
+    #[test]
+    fn an_extension_without_the_vma_fork_carries_no_vendored_appendix() {
+        let extension_root = extension_root_whose_lockfile_resolves(&["pyo3", "webrtc"]);
+        assert!(
+            projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
+                extension_root.path()
+            )
+            .expect("read lockfile")
+            .is_empty()
+        );
     }
 
     #[test]
