@@ -33,9 +33,13 @@ Source = "https://github.com/tatolab/streamlib"
 python-source = "python"
 module-name = "tatolab.browser._native"
 features = ["pyo3/extension-module"]
+# CEF loads from `cef/` through `_native`'s `$ORIGIN/cef` rpath, beside the
+# resources it reads; an auditwheel repair would graft a second libcef and
+# the system libraries Chromium links into `tatolab.libs/` and repoint it.
+compatibility = "linux"
 # The CEF runtime and the subprocess binary, staged by `stage_cef_runtime.py`
-# and kept out of git.
-include = [{ path = "python/tatolab/browser/cef/**/*", format = "wheel" }]
+# and kept out of git. Relative to `python-source`.
+include = [{ path = "tatolab/browser/cef/**/*", format = "wheel" }]
 
 [tool.pyright]
 include = ["python", "streams"]
