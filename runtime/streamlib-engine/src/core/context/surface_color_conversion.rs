@@ -288,6 +288,9 @@ fn pooled_frame_held_in_this_process(
     gpu: &GpuContext,
     surface_id: &str,
 ) -> Result<Option<SurfaceColorConversionSource>> {
+    if crate::core::rhi::PublishedPixelBufferFrameId::parse(surface_id).is_none() {
+        return Ok(None);
+    }
     if let Some(pixel_buffer) = gpu.pooled_backing_held_in_this_process(surface_id)
         && pixel_buffer.width != 0
     {

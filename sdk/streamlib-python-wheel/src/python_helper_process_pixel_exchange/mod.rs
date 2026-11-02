@@ -638,6 +638,7 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// `convert_surface_into` named it as its source — the parent then holds
     /// what it resolved until the adoption's release says to drop it. Every
     /// other source is a surface whose own release already tells the parent.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     foreign_adoptions_and_whether_a_conversion_named_them:
         Mutex<std::collections::HashMap<String, bool>>,
 }
