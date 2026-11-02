@@ -5619,7 +5619,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -5629,7 +5629,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -5647,7 +5647,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "cudarc",
  "dlpark",
@@ -5667,7 +5667,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -5690,7 +5690,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "png",
@@ -5712,7 +5712,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -5730,7 +5730,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-api-server"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "axum",
  "futures-util",
@@ -5759,7 +5759,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "objc2",
@@ -5768,13 +5768,14 @@ dependencies = [
  "objc2-metal",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
  "thiserror 2.0.18",
  "tracing",
 ]
 
 [[package]]
 name = "streamlib-engine"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "anyhow",
  "anymap2",
@@ -5833,6 +5834,7 @@ dependencies = [
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
+ "streamlib-vulkan-video",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tempfile",
@@ -5850,7 +5852,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5860,7 +5862,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "iceoryx2",
  "tracing",
@@ -5868,7 +5870,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5882,7 +5884,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "hang",
  "libc",
@@ -5907,7 +5909,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -5920,7 +5922,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "cudarc",
  "libc",
@@ -5945,7 +5947,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-cloudflare"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -5956,7 +5958,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-local"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -5979,7 +5981,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-moqpro"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "base64 0.22.1",
  "moq-auth",
@@ -5993,7 +5995,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-sdk"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "base64 0.22.1",
  "schemars 0.8.22",
@@ -6011,7 +6013,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-track-reader"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "futures-util",
  "moq-net",
@@ -6020,7 +6022,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-runtime-client-contract"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "serde",
@@ -6033,7 +6035,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-adapter"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -6044,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "libc",
  "mach2",
@@ -6057,11 +6059,22 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "serde",
  "serde_json",
  "streamlib",
+]
+
+[[package]]
+name = "streamlib-vulkan-video"
+version = "0.68.11"
+dependencies = [
+ "streamlib-consumer-rhi",
+ "streamlib-error",
+ "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
+ "tracing",
 ]
 
 [[package]]
@@ -6154,7 +6167,7 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tatolab-cli"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "axum",
  "clap",
@@ -6181,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-read-track"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -6229,7 +6242,7 @@ dependencies = [
 
 [[package]]
 name = "tatolabd"
-version = "0.68.8"
+version = "0.68.11"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",

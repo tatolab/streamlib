@@ -111,7 +111,10 @@ impl SurfaceColorConversionSession {
         let source_layout = source
             .planes
             .color_converter_source_layout(source.pixel_format)?;
-        let resolved_color = source_color.resolve_defaults(ColorSpaceKind::Yuv);
+        let resolved_color = crate::core::color::ResolveH273ColorVuiDefaults::resolve_defaults(
+            source_color,
+            ColorSpaceKind::Yuv,
+        );
         let color_converter = match self
             .color_converters_by_source_format
             .get(&source.pixel_format)

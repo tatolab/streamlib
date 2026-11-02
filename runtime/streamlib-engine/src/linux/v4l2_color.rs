@@ -230,6 +230,7 @@ fn full_range_from_v4l2(quantization: u32, colorspace: u32) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::color::ResolveH273ColorVuiDefaults;
 
     #[test]
     fn rec709_explicit_maps_to_bt709() {

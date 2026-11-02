@@ -30,71 +30,14 @@ use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
 
 use self::decoded_picture_display_window::DecodedPictureDisplayWindow;
+use crate::vulkan::video::VideoContext;
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     MAX_DPB_SIZE as H264_MAX_DPB_SIZE, VulkanH264Decoder,
 };
 use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
     HEVC_DPB_SIZE, VulkanH265Decoder,
 };
-use crate::vulkan::video::video_context::{VideoContext, VideoError};
-
-/// Why no decoder could enter a stream on these parameter-set bytes, or
-/// `None` when they open one.
-///
-/// The bytes `vkGetEncodedVideoSessionParametersKHR` hands an encoder back
-/// are implementation-defined, and an encoder that prepends them to its sync
-/// points has made them the stream's only entry point: a decoder that cannot
-/// find them configures no session and decodes nothing, however many slices
-/// follow. This answers the question with the engine's own NAL reader — the
-/// one that will actually be asked to find them — so the check and the reader
-/// cannot disagree about what is framed correctly.
-///
-/// It asks for exactly what this decoder needs and no more. An SPS, because
-/// [`SimpleDecoder`] configures its session from one and refuses without the
-/// dimensions it carries; a PPS, because a slice resolves its `pic_parameter_
-/// set_id` against the parsed set and fails by name when it is absent. Not a
-/// VPS: the H.265 path defaults every field it would have read, so demanding
-/// one would refuse an encoder session whose stream this engine decodes.
-pub(crate) fn why_no_decoder_could_enter_on_these_parameter_sets(
-    parameter_set_bytes: &[u8],
-    codec: crate::vulkan::video::encode::Codec,
-) -> Option<String> {
-    let required_parameter_sets: &[(u8, &str)] = match codec {
-        crate::vulkan::video::encode::Codec::H264 => &[(7, "SPS"), (8, "PPS")],
-        crate::vulkan::video::encode::Codec::H265 => &[(33, "SPS"), (34, "PPS")],
-    };
-    // The reader's own floor: `feed` skips an H.265 NAL shorter than its
-    // two-byte header, so a truncated one must not count as a parameter set
-    // here either — the whole point is that this check and the reader agree.
-    let nal_header_bytes = match codec {
-        crate::vulkan::video::encode::Codec::H264 => 1,
-        crate::vulkan::video::encode::Codec::H265 => 2,
-    };
-    let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(parameter_set_bytes)
-        .iter()
-        .filter(|nal_unit| nal_unit.len() >= nal_header_bytes)
-        .map(|nal_unit| match codec {
-            crate::vulkan::video::encode::Codec::H264 => nal_unit[0] & 0x1F,
-            crate::vulkan::video::encode::Codec::H265 => (nal_unit[0] >> 1) & 0x3F,
-        })
-        .collect();
-
-    let missing: Vec<&str> = required_parameter_sets
-        .iter()
-        .filter(|(nal_unit_type, _)| !nal_unit_types.contains(nal_unit_type))
-        .map(|(_, name)| *name)
-        .collect();
-    if missing.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "the engine's own NAL reader finds no {} in the {} byte(s) of parameter sets — it read \
-         the Annex-B NAL unit types {:?}",
-        missing.join(" and "),
-        parameter_set_bytes.len(),
-        nal_unit_types,
-    ))
-}
+use streamlib_vulkan_video::VideoError;
 
 // ======================================================================
 // SimpleDecoder — high-level decoder with auto NAL parsing
@@ -268,8 +211,6 @@ impl SimpleDecoder {
             config,
             host_device.instance().clone(),
             host_device.device().clone(),
-            host_device.physical_device(),
-            host_device.allocator().clone(),
             host_arc,
             decode_queue,
             decode_queue_family,
@@ -286,21 +227,13 @@ impl SimpleDecoder {
         config: SimpleDecoderConfig,
         instance: vulkanalia::Instance,
         device: vulkanalia::Device,
-        physical_device: vk::PhysicalDevice,
-        allocator: Arc<vma::Allocator>,
         host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
         decode_queue: vk::Queue,
         decode_queue_family: u32,
         transfer_queue: vk::Queue,
         transfer_queue_family: u32,
     ) -> Result<Self, VideoError> {
-        let ctx = Arc::new(VideoContext::from_external(
-            instance.clone(),
-            device.clone(),
-            physical_device,
-            allocator,
-            host_device.clone(),
-        )?);
+        let ctx = Arc::new(VideoContext::new(host_device.clone())?);
 
         // Load Vulkan for the Entry field (required by struct, not used for external path).
         let entry = unsafe {
@@ -396,7 +329,7 @@ impl SimpleDecoder {
         self.nal_buffer.extend_from_slice(data);
 
         // Split into NAL units
-        let nals = Self::split_nal_units_owned(&self.nal_buffer);
+        let nals = streamlib_vulkan_video::split_annex_b_nal_units(&self.nal_buffer);
 
         if nals.is_empty() {
             return Ok(Vec::new());
@@ -428,7 +361,7 @@ impl SimpleDecoder {
 
         // Process each NAL
         let mut frames = Vec::new();
-        let extracted_nals = Self::split_nal_units_owned(&buffer_copy);
+        let extracted_nals = streamlib_vulkan_video::split_annex_b_nal_units(&buffer_copy);
 
         let is_h265 = self.config.codec == crate::vulkan::video::encode::Codec::H265;
 
@@ -692,65 +625,6 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
     // Private: NAL unit splitting
     // ------------------------------------------------------------------
-
-    /// Find Annex B start codes and split into NAL units (owned version).
-    fn split_nal_units_owned(data: &[u8]) -> Vec<Vec<u8>> {
-        let mut nals = Vec::new();
-        let mut i = 0;
-        let mut start: Option<usize> = None;
-
-        while i + 2 < data.len() {
-            let is_start_code = if i + 3 < data.len()
-                && data[i] == 0
-                && data[i + 1] == 0
-                && data[i + 2] == 0
-                && data[i + 3] == 1
-            {
-                Some(4)
-            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                Some(3)
-            } else {
-                None
-            };
-
-            if let Some(sc_len) = is_start_code {
-                if let Some(s) = start {
-                    Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..i]);
-                }
-                start = Some(i + sc_len);
-                i += sc_len;
-            } else {
-                i += 1;
-            }
-        }
-
-        if let Some(s) = start {
-            if s < data.len() {
-                Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..]);
-            }
-        }
-
-        nals
-    }
-
-    /// Push one split-out NAL with its Annex-B `trailing_zero_8bits` removed.
-    /// A four-byte start code absorbs one leading zero, so a zero sitting
-    /// between a NAL and a `00 00 00 01` would otherwise stay attached to the
-    /// NAL — asymmetrically with the three-byte case, which absorbs it. Safe
-    /// to trim unconditionally: a well-formed NAL never ends in a raw `0x00`
-    /// (its last byte carries the `rbsp_stop_bit`, and `cabac_zero_words`
-    /// end in `0x03` after emulation prevention).
-    fn push_nal_without_trailing_zero_bytes(nals: &mut Vec<Vec<u8>>, nal_bytes: &[u8]) {
-        let trailing_zero_count = nal_bytes
-            .iter()
-            .rev()
-            .take_while(|byte| **byte == 0)
-            .count();
-        let payload = &nal_bytes[..nal_bytes.len() - trailing_zero_count];
-        if !payload.is_empty() {
-            nals.push(payload.to_vec());
-        }
-    }
 
     /// Find the byte position of the last start code in the buffer.
     fn find_last_start_code_pos(data: &[u8]) -> Option<usize> {

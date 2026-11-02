@@ -282,6 +282,15 @@ fn plane_row_bytes_and_row_count(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_engine_and_the_surface_client_name_the_same_plane_strides_field() {
+        assert_eq!(
+            SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD,
+            streamlib_surface_client::SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD
+        );
+    }
+
     const V4L2_NV12_1080P_BYTES_PER_LINE: u64 = 1920;
     const V4L2_NV12_1080P_SIZE_IMAGE: u64 = 1920 * 1080 * 3 / 2;
 

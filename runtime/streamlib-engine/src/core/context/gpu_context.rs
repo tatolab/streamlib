@@ -2952,77 +2952,6 @@ impl GpuContext {
         )
     }
 
-    /// Create a Vulkan video session — the privileged
-    /// `VkVideoSessionKHR` + bound device memory the codec layer
-    /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.
-    ///
-    /// FullAccess-only: the session creation path goes through
-    /// `vkCreateVideoSessionKHR` + `vkBindVideoSessionMemoryKHR`,
-    /// both excluded from the consumer-rhi carve-out. Subprocess
-    /// consumers that need codec output reach it through the normal
-    /// `surface_id` contract — they import the codec's render
-    /// target, not the session itself.
-    #[cfg(target_os = "linux")]
-    pub fn create_video_session(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoSessionDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanVideoSession>> {
-        let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::HostVulkanVideoSession::new(vulkan_device, descriptor)
-    }
-
-    /// Create a Vulkan video session parameters object parented to
-    /// `session`. Companion to [`Self::create_video_session`]; covers
-    /// `vkCreateVideoSessionParametersKHR`'s codec-specific add-info
-    /// chain (H.264 / H.265 SPS / PPS / VPS plus encoder quality-level).
-    #[cfg(target_os = "linux")]
-    pub fn create_video_session_parameters(
-        &self,
-        session: &Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
-        descriptor: &crate::vulkan::rhi::VideoSessionParametersDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> {
-        crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(session, descriptor)
-    }
-
-    /// Allocate a video DPB (Decoded Picture Buffer) image bound to a
-    /// codec profile. Backs
-    /// [`GpuContextFullAccess::create_video_dpb_texture`]; the
-    /// FullAccess wrapper enforces the privileged-scope invariants
-    /// and dispatches here for the Boxed mode (subprocess
-    /// `ScopeToken` mode errors out — codec packages live host-side).
-    #[cfg(target_os = "linux")]
-    pub fn create_video_dpb_texture(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoDpbTextureDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanTexture> {
-        let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::HostVulkanTexture::new_video_dpb(vulkan_device, descriptor)
-    }
-
-    /// Allocate a video bitstream buffer bound to a codec profile.
-    /// Backs [`GpuContextFullAccess::create_video_bitstream_buffer`].
-    #[cfg(target_os = "linux")]
-    pub fn create_video_bitstream_buffer(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoBitstreamBufferDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanBuffer> {
-        let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::HostVulkanBuffer::new_video_bitstream(vulkan_device, descriptor)
-    }
-
-    /// Allocate a Vulkan query pool. Backs
-    /// [`GpuContextFullAccess::create_query_pool`]. Generic over
-    /// `VkQueryType` — services timestamp, occlusion, pipeline-statistics,
-    /// and video-encode-feedback queries through one primitive.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_query_pool(
-        &self,
-        descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanQueryPool> {
-        let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::HostVulkanQueryPool::new(vulkan_device, descriptor)
-    }
-
     /// Create a graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state. Graphics counterpart to
     /// [`Self::create_compute_kernel`].
@@ -3501,9 +3430,8 @@ impl GpuContext {
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
     ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
         let host_device = Arc::clone(&self.device.inner);
-        let mut encoder =
-            crate::vulkan::video::encode::SimpleEncoder::from_host_device(host_device, config)
-                .map_err(|e| Error::GpuError(format!("create_encoder_session: {e}")))?;
+        let mut encoder = crate::vulkan::video::encode::SimpleEncoder::new(host_device, config)
+            .map_err(|e| Error::GpuError(format!("create_encoder_session: {e}")))?;
         encoder.prepare_gpu_encode_resources().map_err(|e| {
             Error::GpuError(format!(
                 "create_encoder_session: prepare GPU encode resources: {e}"
@@ -5442,77 +5370,6 @@ impl GpuContextFullAccess {
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
         self.host_inner().create_compute_kernel(descriptor)
-    }
-
-    /// Create a Vulkan video session — the privileged
-    /// `VkVideoSessionKHR` + bound device memory the codec layer
-    /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.
-    ///
-    /// FullAccess-only and host-only: helper processes do not
-    /// build their own codec layers — codecs live inside
-    /// the host engine.
-    #[cfg(target_os = "linux")]
-    pub fn create_video_session(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoSessionDescriptor<'_>,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>> {
-        self.host_inner().create_video_session(descriptor)
-    }
-
-    /// Create Vulkan video session parameters parented to `session`.
-    /// Companion to [`Self::create_video_session`]; same FullAccess +
-    /// host-only privilege story.
-    #[cfg(target_os = "linux")]
-    pub fn create_video_session_parameters(
-        &self,
-        session: &std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
-        descriptor: &crate::vulkan::rhi::VideoSessionParametersDescriptor<'_>,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> {
-        self.host_inner()
-            .create_video_session_parameters(session, descriptor)
-    }
-
-    /// Allocate a video DPB (Decoded Picture Buffer) image bound to a
-    /// codec profile — the engine-RHI primitive the codec layer uses
-    /// for reference-picture and decode-target images.
-    ///
-    /// FullAccess-only and host-only: codecs live inside the
-    /// host engine, so helper processes do not construct DPB images
-    /// directly — they consume codec output through the surface-share
-    /// registry.
-    #[cfg(target_os = "linux")]
-    pub fn create_video_dpb_texture(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoDpbTextureDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanTexture> {
-        self.host_inner().create_video_dpb_texture(descriptor)
-    }
-
-    /// Allocate a video bitstream buffer bound to a codec profile —
-    /// the HOST_VISIBLE engine-RHI primitive the codec layer uses for
-    /// the encoder's output NAL bytes (and the decoder's input
-    /// bytes). Same FullAccess + host-only privilege story as
-    /// [`Self::create_video_dpb_texture`].
-    #[cfg(target_os = "linux")]
-    pub fn create_video_bitstream_buffer(
-        &self,
-        descriptor: &crate::vulkan::rhi::VideoBitstreamBufferDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanBuffer> {
-        self.host_inner().create_video_bitstream_buffer(descriptor)
-    }
-
-    /// Allocate a Vulkan query pool — the generic engine-RHI primitive
-    /// servicing every query class (timestamp, occlusion,
-    /// pipeline-statistics, video-encode-feedback). FullAccess-only;
-    /// helper processes do not construct query pools — they consume
-    /// codec results (when applicable) through the surface-share /
-    /// escalate IPC channels, not by reaching into pool primitives.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_query_pool(
-        &self,
-        descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
-    ) -> Result<crate::vulkan::rhi::HostVulkanQueryPool> {
-        self.host_inner().create_query_pool(descriptor)
     }
 
     /// Build an engine-owned multi-step command-buffer recorder. See

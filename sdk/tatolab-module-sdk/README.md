@@ -89,6 +89,13 @@ With the default `tracing` feature,
 `module_host_tracing::forward_this_modules_tracing_records_to(&module_host)`
 routes the module's own `tracing` records into the node's log.
 
+## From C
+
+`include/tatolab_module_host_table.h` declares the same table for a native half
+written in C or C++. It is generated from `src/module_host_table_abi.rs` by
+`cargo xtask generate-module-host-table-c-header`, and CI fails when the two
+differ.
+
 ## Versioning
 
 The table is append-only. A module built against minor N loads on any runtime

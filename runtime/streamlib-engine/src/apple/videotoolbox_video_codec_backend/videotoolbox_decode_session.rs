@@ -40,7 +40,7 @@ use crate::core::annex_b_access_unit::{
     NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
     length_prefix_annex_b_access_unit,
 };
-use crate::core::color::ColorSpaceKind;
+use crate::core::color::{ColorSpaceKind, ResolveH273ColorVuiDefaults};
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, GpuContextLimitedAccess, VideoCodecElementaryStream,
     VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,

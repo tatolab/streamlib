@@ -39,10 +39,11 @@
 # rig's header gives: saturated bars sit at the ends of the coded range and a
 # range swap clips straight back to them.
 #
-# The streams (`whip_whep_roundtrip_stream.py`) are loaded with `tatolab run
-# --name`, compiled in this package's own `.venv` — `tatolab-stream` and a
-# current `maturin develop` of this wheel, and no engine — on a `tatolabd` this
-# script starts and stops itself. The runtime unit, its `tatolab` verbs and the
+# The streams (`whip_whep_roundtrip_stream.py`) are loaded each as a project of
+# its own with `tatolab run --dir`, compiled in this package's own `.venv`,
+# which each project's `.venv` links to — `tatolab-stream` and a current
+# `maturin develop` of this wheel, and no engine — on a `tatolabd` this script
+# starts and stops itself. The runtime unit, its `tatolab` verbs and the
 # runtime's start and stop are the engine fixtures' `fixture_runtime_unit.sh`,
 # so the same rules hold: the runtime takes the machine's lock and serves this
 # user's local API socket, so the run is refused while another runtime holds
@@ -74,7 +75,6 @@
 #                             measured (default 20)
 #   DECODED_FRAMES_FLOOR      frames the receiver's decoder must have written
 #                             (default 10)
-#   RUN_SECONDS               budget of each stream run (default 120)
 #   MEDIA_DEADLINE_SECONDS    how long to wait for the first decoded frame
 #                             after both streams are up (default 60) — an
 #                             ingest has to be live before playback can
@@ -99,14 +99,11 @@ BASELINE_TSV="$SCRIPT_DIR/psnr_test_pattern_bar_colors_baseline_whip_whep_h264.t
 OUTPUT_DIR="${1:-/tmp/streamlib-webrtc-live-$(date +%s)}"
 OBJECT_COUNT="${OBJECT_COUNT:-20}"
 DECODED_FRAMES_FLOOR="${DECODED_FRAMES_FLOOR:-10}"
-RUN_SECONDS="${RUN_SECONDS:-120}"
 MEDIA_DEADLINE_SECONDS="${MEDIA_DEADLINE_SECONDS:-60}"
 TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
 
-SENDER_STREAM_NAME="whip_whep_roundtrip_sender"
-RECEIVER_STREAM_NAME="whip_whep_roundtrip_receiver"
 PLAYER_ENCODED_VIDEO_TRACK="player/encoded_video"
 
 say() { echo "[webrtc-live] $*"; }
@@ -198,7 +195,7 @@ refuse_a_credential_written_into_the_output_directory() {
     done
 }
 stop_everything_and_scan_for_credentials() {
-    stop_the_fixture_stream_runs
+    remove_the_fixture_projects
     stop_the_fixture_runtime
     rm -rf "$RUNTIME_STATE_HOME"
     stop_the_signal
@@ -265,22 +262,31 @@ if ! STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
     fail "could not start the runtime the streams run on"
 fi
 
-run_the_fixture_stream() {
-    local stream_name="$1" stream_function="$2" run_log_file="$3"
-    start_the_fixture_stream_run "$PACKAGE_DIR" \
-        "tests/live/whip_whep_roundtrip_stream.py:$stream_function" \
-        "$stream_name" "$run_log_file" "$RUN_SECONDS" || {
+# Beside the state directory and removed with it, so the credential scan of
+# the output directory never walks the venv each `.venv` links to.
+SENDER_PROJECT_DIR="$RUNTIME_STATE_HOME/whip-whep-roundtrip-sender"
+RECEIVER_PROJECT_DIR="$RUNTIME_STATE_HOME/whip-whep-roundtrip-receiver"
+write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/whip_whep_roundtrip_stream.py" \
+    test_pattern_and_microphone_published_over_whip whip_whep_roundtrip_sender \
+    "$PACKAGE_DIR/.venv"
+write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/whip_whep_roundtrip_stream.py" \
+    the_same_input_played_back_over_whep_through_the_decoders whip_whep_roundtrip_receiver \
+    "$PACKAGE_DIR/.venv"
+SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" whip_whep_roundtrip_sender)"
+RECEIVER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$RECEIVER_PROJECT_DIR" whip_whep_roundtrip_receiver)"
+
+run_the_fixture_project() {
+    local project_directory="$1" stream_id="$2" run_log_file="$3"
+    start_the_fixture_project "$project_directory" "$stream_id" "$run_log_file" || {
         tail -40 "$run_log_file" >&2
         tail -40 "$LOG_FILE" >&2
-        fail "the stream $stream_name never ran — it never answered over the local API socket with every node Running"
+        fail "the stream $stream_id never ran — it never answered over the local API socket with every node Running"
     }
-    say "Running:           $stream_name"
+    say "Running:           $stream_id"
 }
 say "Publishing over WHIP and playing back over WHEP..."
-run_the_fixture_stream "$SENDER_STREAM_NAME" \
-    test_pattern_and_microphone_published_over_whip "$SENDER_RUN_LOG_FILE"
-run_the_fixture_stream "$RECEIVER_STREAM_NAME" \
-    the_same_input_played_back_over_whep_through_the_decoders "$RECEIVER_RUN_LOG_FILE"
+run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"
+run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_STREAM_ID" "$RECEIVER_RUN_LOG_FILE"
 
 # A graph that does not answer yet is a frame not decoded yet; the floor is
 # what fails.
@@ -288,7 +294,7 @@ wait_until_the_decoder_has_written() {
     local frame_floor="$1" deadline_seconds="$2"
     for _ in $(seq 1 "$deadline_seconds"); do
         RECEIVER_DECODED_FRAMES="$(written_messages_of_the_output_port \
-            "$RECEIVER_STREAM_NAME" video_decoder video)" || RECEIVER_DECODED_FRAMES=0
+            "$RECEIVER_STREAM_ID" video_decoder video)" || RECEIVER_DECODED_FRAMES=0
         [ "$RECEIVER_DECODED_FRAMES" -ge "$frame_floor" ] 2>/dev/null && return 0
         sleep 1
     done
@@ -309,7 +315,7 @@ wait_until_the_decoder_has_written 1 "$MEDIA_DEADLINE_SECONDS" || {
 # ── The video arm: what came back off the endpoint ───────────────────
 MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" \
     || fail "the runtime's loopback listing at $LOOPBACK_HTTP_LISTING_URL did not name the machine"
-RECEIVER_BROADCAST="$MACHINE_NAME/$RECEIVER_STREAM_NAME.hang"
+RECEIVER_BROADCAST="$MACHINE_NAME/$RECEIVER_STREAM_ID.hang"
 say "Reading:           $PLAYER_ENCODED_VIDEO_TRACK of $RECEIVER_BROADCAST"
 if ! read_the_track_at_the_local_relay "$RECEIVER_BROADCAST" "$PLAYER_ENCODED_VIDEO_TRACK" \
         "$OBJECT_COUNT" "$ENCODED_TRACK_DIR" 2> "$OUTPUT_DIR/read_track.log"; then
@@ -337,12 +343,12 @@ say "Receiver decoded:  $RECEIVER_DECODED_FRAMES frames"
 # silent there means the arm cannot run, and only a decoder that stayed empty
 # while the encoder spoke is a failure.
 PUBLISHED_AUDIO_PACKETS="$(written_messages_of_the_output_port \
-    "$SENDER_STREAM_NAME" audio_encoder encoded_audio)" \
+    "$SENDER_STREAM_ID" audio_encoder encoded_audio)" \
     || fail "could not read the audio encoder's written count off the sender's graph"
 if [ "$PUBLISHED_AUDIO_PACKETS" -eq 0 ]; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
 elif "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
-        --stream "$RECEIVER_STREAM_NAME" --port audio --count 8 \
+        --stream "$RECEIVER_STREAM_ID" --port audio --count 8 \
         > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
     AUDIO_VERDICT="pass"
 else
@@ -350,9 +356,9 @@ else
 fi
 say "Audio channel:     $AUDIO_VERDICT ($OUTPUT_DIR/audio_channel.json)"
 
-stop_the_fixture_stream_runs
-[ "$FIXTURE_STREAM_RUN_NEEDED_SIGKILL" -eq 0 ] \
-    || fail "a stream run did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
+remove_the_fixture_projects
+[ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" -eq 0 ] \
+    || fail "a stream was still loaded 10 s after its project's removal; a teardown that hangs is a finding, not a slow unload"
 stop_the_fixture_runtime 15
 the_fixture_runtime_stopped_cleanly \
     || fail "the runtime did not stop cleanly once its streams were unloaded; a teardown that hangs is a finding, not a slow exit"

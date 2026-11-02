@@ -42,8 +42,6 @@ pub use vulkan_sync::HostVulkanTimelineSemaphore;
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_texture::HostVulkanTexture;
-#[cfg(target_os = "linux")]
-pub use vulkan_texture::{VideoDpbDirection, VideoDpbTextureDescriptor};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_upload_resources::HostVulkanUploadResources;
 
@@ -71,8 +69,6 @@ pub use vulkan_tone_mapper::VulkanToneMapper;
 
 pub(crate) mod vulkan_buffer;
 pub use vulkan_buffer::HostVulkanBuffer;
-#[cfg(target_os = "linux")]
-pub use vulkan_buffer::{VideoBitstreamBufferDescriptor, VideoBitstreamDirection};
 
 mod vulkan_storage_binding;
 pub use vulkan_storage_binding::{
@@ -107,7 +103,8 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
 mod vulkan_compute_kernel;
 mod vulkan_kernel_capability_refusal;
-pub use vulkan_compute_kernel::{SampledImageReadLayout, VulkanComputeKernel};
+pub use streamlib_consumer_rhi::SampledImageReadLayout;
+pub use vulkan_compute_kernel::VulkanComputeKernel;
 
 mod vulkan_graphics_kernel;
 mod vulkan_pipeline_cache_on_disk;
@@ -154,21 +151,7 @@ mod vulkan_host_mapping_read_by_gpu;
 pub use vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;
 
 #[cfg(target_os = "linux")]
-mod vulkan_video_session;
-#[cfg(target_os = "linux")]
-pub use vulkan_video_session::{
-    HostVulkanVideoSession, HostVulkanVideoSessionParameters, VideoSessionDescriptor,
-    VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
-};
-#[cfg(target_os = "linux")]
-pub(crate) use vulkan_video_session::{
-    VIDEO_DECODE_CODEC_OPERATIONS, VIDEO_ENCODE_CODEC_OPERATIONS, VideoCodecOperationDirection,
-};
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_query_pool;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor};
+mod vulkan_video_codec_device;
 
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;

@@ -38,6 +38,16 @@
           "type": "toml",
           "path": "packages/tatolab-microphone/pyproject.toml",
           "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/streamlib-h264/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/streamlib-h264/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }

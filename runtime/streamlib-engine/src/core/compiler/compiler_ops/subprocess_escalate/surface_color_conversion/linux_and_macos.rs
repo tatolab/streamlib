@@ -3,7 +3,7 @@
 
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::surface_bound_kernel_binding::publish_bound_surface_layouts_to_surface_share;
-use crate::core::color::H273ColorVui;
+use crate::core::color::h273_color_vui::h273_color_vui_from_color_info_axis_names;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestColorInfoAxisNames, EscalateRequestConvertSurfaceInto,
@@ -34,7 +34,7 @@ pub(in super::super) fn handle_convert_surface_into(
         matrix,
         range,
     } = source_color;
-    let converted = H273ColorVui::from_color_info_axis_names(
+    let converted = h273_color_vui_from_color_info_axis_names(
         primaries.as_deref(),
         transfer.as_deref(),
         matrix.as_deref(),
