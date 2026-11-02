@@ -3,11 +3,14 @@
 
 """A Rive lower third: `tatolab.rive.RiveSource` → H.264, exposed on this machine, its text driven by data.
 
-Point `RIV_PATH` at a `.riv` file whose artboard's default view-model instance
-has a string property at `TITLE_PROPERTY_PATH`. Once a second the ticker sends a
-new title on the source's `data` input. Watch it at
+Put a `.riv` file named `lower_third.riv` beside this file, or point `RIV_PATH`
+at one, whose artboard's default view-model instance has a string property at
+`TITLE_PROPERTY_PATH`. Once a second the ticker sends a new title on the
+source's `data` input. Watch it at
 http://127.0.0.1:4446/watch/<machine>/main.
 """
+
+from pathlib import Path
 
 from tatolab.stream import (
     Exposure,
@@ -19,7 +22,8 @@ from tatolab.stream import (
 from lower_third_title_ticker import LowerThirdTitleTicker
 from tatolab.rive import RiveSource
 
-RIV_PATH = "lower_third.riv"
+# Absolute, because the source's process does not run in this folder.
+RIV_PATH = str(Path(__file__).resolve().parent / "lower_third.riv")
 TITLE_PROPERTY_PATH = "Name"
 # The sample lower third's state machine reaches its entrance ("In") from its
 # first state only when both triggers fire in the same message.

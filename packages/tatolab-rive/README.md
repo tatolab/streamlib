@@ -30,8 +30,10 @@ headers (`uuid-dev`) for premake. Set
 
 ## Run it
 
-With this machine's runtime running, set `RIV_PATH` and `TITLE_PROPERTY_PATH`
-in `streams/rive-lower-third/stream.py`, then:
+With this machine's runtime running, put a lower third at
+`streams/rive-lower-third/lower_third.riv` (or set `RIV_PATH`), and set
+`TITLE_PROPERTY_PATH` and `ENTRANCE_TRIGGER_PATHS` in `stream.py` to match its
+view model and state machine, then:
 
 ```bash
 cd streams/rive-lower-third
