@@ -6,12 +6,12 @@
 use tracing::{debug, warn};
 use vulkanalia::vk;
 
-use crate::vulkan::video::nv_video_parser::vulkan_h26x_decoder::SliceType;
-use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
+use crate::VideoError;
+use crate::nv_video_parser::vulkan_h26x_decoder::SliceType;
+use crate::nv_video_parser::vulkan_h264_decoder::{
     self as h264dec, BitstreamReader as H264BitstreamReader, MAX_DPB_SIZE as H264_MAX_DPB_SIZE,
     MAX_REFS as H264_MAX_REFS, VulkanH264Decoder, reference_picture_list_initialization_p_frame,
 };
-use streamlib_vulkan_video::VideoError;
 
 use super::decoded_picture_display_window::{
     H264FrameCroppingSyntax, SpsCropOffsets, h264_frame_cropping_window,
@@ -90,7 +90,7 @@ impl SimpleDecoder {
     /// Uses the same logic as pipeline_test.rs parse_sps_info().
     #[allow(dead_code)] // Utility for external callers
     pub(crate) fn parse_sps_dimensions(sps_nalu: &[u8]) -> (u32, u32) {
-        use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::BitstreamReader;
+        use crate::nv_video_parser::vulkan_h264_decoder::BitstreamReader;
 
         if sps_nalu.len() < 5 {
             return (0, 0);

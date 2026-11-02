@@ -36,11 +36,12 @@
 //!   `streamlib::sdk::error::Error` provides a `From` impl, so the
 //!   host side can wrap consumer errors with `?`.
 //!
-//! - [`OwnedVulkanVideoEncodeDevice`] — the owned-device tier: a
+//! - [`OwnedVulkanVideoCodecDevice`] — the owned-device tier: a
 //!   consumer device a codec module creates on the runtime's GPU with a
-//!   Vulkan Video encode queue and an allocator of its own. Frames still
-//!   cross by import; the codec's own sessions, reference pictures and
-//!   bitstream buffers are allocated on it by `streamlib-vulkan-video`.
+//!   Vulkan Video encode or decode queue and an allocator of its own.
+//!   Frames still cross by import; the codec's own sessions, reference
+//!   pictures and bitstream buffers are allocated on it by
+//!   `streamlib-vulkan-video`.
 //!
 //! What does NOT live here: anything that calls `vkAllocateMemory`
 //! without an `VkImportMemoryFdInfoKHR` outside the owned-device tier,
@@ -74,7 +75,7 @@ mod device_capability;
 #[cfg(target_os = "macos")]
 mod iosurface_backed_image;
 #[cfg(target_os = "linux")]
-mod owned_vulkan_video_encode_device;
+mod owned_vulkan_video_codec_device;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -107,7 +108,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_device::{
-    ConsumerVulkanDevice, ConsumerVulkanVideoEncodeQueue,
+    ConsumerVulkanDevice, ConsumerVulkanVideoCodecQueue, VulkanVideoCodecDirection,
     vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -125,7 +126,7 @@ pub use iosurface_backed_image::{
     refusal_of_an_iosurface_for_an_image_of_format,
 };
 #[cfg(target_os = "linux")]
-pub use owned_vulkan_video_encode_device::OwnedVulkanVideoEncodeDevice;
+pub use owned_vulkan_video_codec_device::OwnedVulkanVideoCodecDevice;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

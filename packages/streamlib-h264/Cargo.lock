@@ -422,10 +422,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-video-bitstream"
+version = "0.68.11"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
 name = "streamlib-vulkan-video"
 version = "0.68.11"
 dependencies = [
  "streamlib-consumer-rhi",
+ "streamlib-video-bitstream",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tracing",

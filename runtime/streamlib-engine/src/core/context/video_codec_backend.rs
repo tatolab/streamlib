@@ -20,14 +20,7 @@ use crate::core::Result;
 use crate::core::color::H273ColorVui;
 use crate::core::rhi::{PixelBuffer, PublishedPixelBufferFrameId};
 
-/// The elementary stream a codec session encodes or decodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VideoCodecElementaryStream {
-    /// H.264 / AVC.
-    H264,
-    /// H.265 / HEVC.
-    H265,
-}
+pub use streamlib_video_bitstream::VideoCodecElementaryStream;
 
 /// The encode knobs a block's config sets — known at `setup()`, before any
 /// frame says what extent or rate the session codes.

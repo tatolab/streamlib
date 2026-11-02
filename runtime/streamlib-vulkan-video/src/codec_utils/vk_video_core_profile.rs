@@ -20,7 +20,7 @@
 
 use vulkanalia::vk;
 
-use streamlib_vulkan_video::{
+use crate::{
     VIDEO_DECODE_CODEC_OPERATIONS, VIDEO_ENCODE_CODEC_OPERATIONS, VideoCodecOperationDirection,
 };
 

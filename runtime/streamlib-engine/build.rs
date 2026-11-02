@@ -208,13 +208,6 @@ fn compile_shaders() {
             "offscreen_blit.frag.spv",
             "fragment",
         ),
-        // Vulkan Video decode (`vulkan/video/`) — NV12 → RGBA compute
-        // conversion used by SimpleDecoder's RGBA output mode.
-        (
-            "src/vulkan/video/shaders/nv12_to_rgb.comp",
-            "nv12_to_rgb.spv",
-            "compute",
-        ),
         // The read-one-write-another conformance shader for named N-binding
         // compute dispatch.
         (

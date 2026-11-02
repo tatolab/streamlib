@@ -14,14 +14,14 @@ use vulkanalia::vk::{
 };
 
 use super::vk_parser_video_picture_parameters::VkParserVideoPictureParameters;
-use crate::vulkan::video::VideoContext;
-use crate::vulkan::video::decode::{DecodeSubmitInfo, DecodedFrame};
-use streamlib_vulkan_video::{
+use crate::VulkanVideoDecodeContext;
+use crate::decode::{DecodeSubmitInfo, DecodedFrame};
+use crate::{
     VideoBitstreamBufferDescriptor, VideoBitstreamDirection, VideoDpbDirection,
     VideoDpbImageDescriptor, VulkanVideoBitstreamBuffer, VulkanVideoDpbImage, VulkanVideoSession,
     VulkanVideoSessionParameters,
 };
-use streamlib_vulkan_video::{VideoError, VideoResult};
+use crate::{VideoError, VideoResult};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -301,12 +301,12 @@ pub const MAX_RENDER_TARGETS: usize = 32;
 ///   `vulkanalia::Device` + extension function tables.
 pub struct VkVideoDecoder {
     // Real Vulkan device context — replaces the C++ opaque pointer.
-    ctx: Arc<crate::vulkan::video::VideoContext>,
+    ctx: Arc<crate::VulkanVideoDecodeContext>,
     queue: vk::Queue,
     queue_family_index: u32,
 
     // Host-side queue submission gateway (per-queue mutex synchronization).
-    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    codec_device: Arc<dyn crate::VulkanVideoCodecDevice>,
 
     current_video_queue_indx: i32,
     coded_extent: vk::Extent2D,
@@ -377,12 +377,12 @@ impl VkVideoDecoder {
 
     /// Create a new VkVideoDecoder with real Vulkan device context.
     pub fn new(
-        ctx: Arc<VideoContext>,
+        ctx: Arc<VulkanVideoDecodeContext>,
         queue_family_index: u32,
         queue: vk::Queue,
         codec_operation: vk::VideoCodecOperationFlagsKHR,
     ) -> VideoResult<Self> {
-        let host_device = ctx.host_device().clone();
+        let codec_device = ctx.codec_device().clone();
         let device = ctx.device();
 
         // Create command pool for the decode queue family
@@ -449,7 +449,7 @@ impl VkVideoDecoder {
             ctx,
             queue,
             queue_family_index,
-            host_device,
+            codec_device,
             current_video_queue_indx: 0,
             coded_extent: vk::Extent2D::default(),
             video_format: VkParserDetectedVideoFormat::default(),
@@ -597,7 +597,7 @@ impl VkVideoDecoder {
 
         // --- Create video session ---
         let max_dpb_slots = video_format.max_num_dpb_slots.max(4);
-        let session_descriptor = streamlib_vulkan_video::VideoSessionDescriptor {
+        let session_descriptor = crate::VideoSessionDescriptor {
             label: "vk_video_decoder/session",
             session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
             video_queue_family: self.queue_family_index,
@@ -1359,7 +1359,7 @@ impl VkVideoDecoder {
             let submit_info = vk::SubmitInfo2::builder()
                 .command_buffer_infos(&cb_submits)
                 .build();
-            self.host_device
+            self.codec_device
                 .submit_to_queue(self.queue, &[submit_info], self.fence)
                 .map_err(VideoError::from)?;
             self.decode_in_flight = true;
@@ -1512,7 +1512,7 @@ impl VkVideoDecoder {
         let device = self.ctx.device();
 
         // Wait for all operations to complete before cleanup.
-        let _ = self.ctx.host_device().wait_idle();
+        let _ = self.ctx.codec_device().wait_idle();
 
         // Destroy DPB image views.
         for &view in &self.dpb_image_views {

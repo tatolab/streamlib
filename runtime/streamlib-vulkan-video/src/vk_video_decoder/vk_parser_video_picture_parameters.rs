@@ -14,7 +14,7 @@ use vulkanalia::vk;
 
 // Placeholder import — will be used when codec_utils types are fully integrated.
 #[allow(unused_imports)]
-use crate::vulkan::video::codec_utils;
+use crate::codec_utils;
 
 // ---------------------------------------------------------------------------
 // StdVideoPictureParametersSet types (placeholder — lives in codec_utils)

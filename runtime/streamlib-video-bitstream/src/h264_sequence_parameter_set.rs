@@ -4,7 +4,7 @@
 //! The opening of an H.264 sequence parameter set (ITU-T H.264 §7.3.2.1.1):
 //! the profile, constraint flags and level an `avc1` codec string spells.
 
-use crate::core::nal_unit_raw_byte_sequence_payload::{
+use crate::nal_unit_raw_byte_sequence_payload::{
     RbspBitstreamReader, remove_emulation_prevention_bytes,
 };
 
@@ -39,13 +39,10 @@ impl H264ProfileAndLevelFromSequenceParameterSet {
     /// The WebCodecs / RFC 6381 codec string for a stream with this profile
     /// and level — `avc1.640028` for High at level 4.0.
     pub fn avc1_codec_string(&self) -> String {
-        hang::catalog::H264 {
-            inline: false,
-            profile: self.profile_idc,
-            constraints: self.constraint_set_flags,
-            level: self.level_idc,
-        }
-        .to_string()
+        format!(
+            "avc1.{:02x}{:02x}{:02x}",
+            self.profile_idc, self.constraint_set_flags, self.level_idc
+        )
     }
 }
 
