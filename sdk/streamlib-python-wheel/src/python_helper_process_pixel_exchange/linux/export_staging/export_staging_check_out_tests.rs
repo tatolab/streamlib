@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::fd::{FromRawFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
 
 use pyo3::types::PyModule;

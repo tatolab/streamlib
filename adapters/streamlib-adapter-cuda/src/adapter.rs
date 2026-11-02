@@ -1203,8 +1203,3 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

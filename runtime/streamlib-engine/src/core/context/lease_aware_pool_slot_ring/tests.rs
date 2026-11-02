@@ -392,7 +392,7 @@ fn a_slot_flagged_to_be_freed_is_reused_only_once_no_other_slot_is_unheld() {
         },
     );
     let minted = LeaseAwarePoolMintedFrameGenerations::default();
-    let mut next_published = |ring: &mut LeaseAwarePoolSlotRing<_>| {
+    let next_published = |ring: &mut LeaseAwarePoolSlotRing<_>| {
         let slot_index = ring
             .hand_off_a_reusable_slot(ANY_ONE_UNHELD_SLOT_IS_REUSABLE, None, &minted)
             .expect("an unheld slot is handed out");

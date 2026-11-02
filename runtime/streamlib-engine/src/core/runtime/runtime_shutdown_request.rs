@@ -94,13 +94,10 @@ pub fn request_the_shutdown_of_every_loaded_stream(reason: &str) -> Result<()> {
 pub(crate) fn escalate_the_machines_shutdown_for_a_delivered_signal(
     signal_name: &str,
 ) -> RuntimeShutdownEscalation {
-    let (Ok(previous) | Err(previous)) = THE_MACHINES_SHUTDOWN_ESCALATION.fetch_update(
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-        |stored| {
+    let (Ok(previous) | Err(previous)) =
+        THE_MACHINES_SHUTDOWN_ESCALATION.try_update(Ordering::SeqCst, Ordering::SeqCst, |stored| {
             Some(RuntimeShutdownEscalation::from_stored(stored).next_for_a_delivered_signal() as u8)
-        },
-    );
+        });
     let reached = RuntimeShutdownEscalation::from_stored(previous).next_for_a_delivered_signal();
     match reached {
         RuntimeShutdownEscalation::NotRequested | RuntimeShutdownEscalation::Graceful => {

@@ -49,3 +49,7 @@ png = "0.17"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 
+
+# stdout and stderr are the output channel of a development tool.
+[lints.clippy]
+disallowed_macros = "allow"
