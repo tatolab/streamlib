@@ -22,11 +22,13 @@
 #               timeslice cost shows as the rate each holds as N grows, beside
 #               the encoder engine's utilisation.
 #
-# The streams (`owned_device_encoder_streams.py`) compile in this package's own
-# `.venv` — `tatolab-stream` and a current `maturin develop` of this wheel — on
-# a `tatolabd` this script starts and stops itself through the engine fixtures'
-# `fixture_runtime_unit.sh`, so it refuses to run while another runtime holds
-# the machine.
+# The streams load as a user's do: this script writes a project — a
+# `pyproject.toml` and a `stream.py` defining one `@stream` per encoder over
+# `owned_device_encoder_streams.py` — whose `.venv` is this package's own
+# (`tatolab-stream` and a current `maturin develop` of this wheel), and queues
+# its load with `tatolab run --dir` on a `tatolabd` this script starts and stops
+# itself through the engine fixtures' `fixture_runtime_unit.sh`, so it refuses
+# to run while another runtime holds the machine.
 #
 # Usage:
 #   packages/streamlib-h264/tests/live/owned_device_encoders.sh isolation [output_dir]
@@ -47,7 +49,6 @@ PACKAGE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGE_DIR/../.." && pwd)"
 ENGINE_FIXTURES="$REPO_ROOT/runtime/streamlib-engine/tests/fixtures"
 ENGINE_H264_BASELINE_TSV="$ENGINE_FIXTURES/psnr_test_pattern_bar_colors_baseline_h264.tsv"
-STREAMS_FILE="tests/live/owned_device_encoder_streams.py"
 
 MODE="${1:-}"
 case "$MODE" in
@@ -107,7 +108,6 @@ mkdir -p "$OUTPUT_DIR"
 LOG_FILE="$OUTPUT_DIR/runtime.log"
 RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-h264-runtime-state-XXXXXX")"
 stop_everything() {
-    stop_the_fixture_stream_runs
     stop_the_fixture_runtime
     rm -rf "$RUNTIME_STATE_HOME"
 }
@@ -118,18 +118,72 @@ if ! RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info,_na
     fail "could not start the runtime the streams run on"
 fi
 
-stream_name_of() { echo "owned_device_encoder_$1"; }
+PROJECT_DIR="$OUTPUT_DIR/owned-device-encoders"
+mkdir -p "$PROJECT_DIR"
+ln -sfn "$PACKAGE_DIR/.venv" "$PROJECT_DIR/.venv"
+ln -sfn "$SCRIPT_DIR/owned_device_encoder_streams.py" "$PROJECT_DIR/owned_device_encoder_streams.py"
+cat > "$PROJECT_DIR/pyproject.toml" <<'TOML'
+[project]
+name = "owned-device-encoders"
+version = "0.0.0"
+requires-python = ">=3.10"
+TOML
+{
+    echo "from tatolab.stream import StreamBuilder, stream"
+    echo "from owned_device_encoder_streams import test_pattern_through_an_owned_device_encoder"
+    for stream_number in $(seq 1 "$STREAM_COUNT"); do
+        echo ""
+        echo ""
+        echo "@stream"
+        echo "def owned_device_encoder_$stream_number(stream_builder: StreamBuilder) -> None:"
+        echo "    test_pattern_through_an_owned_device_encoder(stream_builder, $stream_number)"
+    done
+} > "$PROJECT_DIR/stream.py"
 
+"$TATOLAB_EXECUTABLE" run --dir "$PROJECT_DIR" > "$OUTPUT_DIR/run.log" 2>&1 \
+    || { cat "$OUTPUT_DIR/run.log" >&2; fail "tatolab run refused the project"; }
+
+# The stream id `owned_device_encoder_<n>` of the project loads under,
+# `<folder>-<function>-<hash>`: the folder and function names cast as the
+# runtime casts them, and six hex digits of SHA-256 over
+# `<resolved project directory>\n<module:qualname>`.
+stream_id_of_encoder_stream() {
+    "$VENV_PYTHON" -c '
+import hashlib, pathlib, sys
+from tatolab.stream._exposed_name_cast import cast_exposed_name_to_url_safe
+project_directory = pathlib.Path(sys.argv[1]).resolve()
+function_name = "owned_device_encoder_" + sys.argv[2]
+location_hash = hashlib.sha256(
+    f"{project_directory}\nstream:{function_name}".encode()
+).hexdigest()[:6]
+print("-".join([
+    cast_exposed_name_to_url_safe(project_directory.name),
+    cast_exposed_name_to_url_safe(function_name),
+    location_hash,
+]))
+' "$PROJECT_DIR" "$1"
+}
+
+declare -A STREAM_ID_OF_ENCODER
 for stream_number in $(seq 1 "$STREAM_COUNT"); do
-    stream_name="$(stream_name_of "$stream_number")"
-    start_the_fixture_stream_run "$PACKAGE_DIR" "$STREAMS_FILE:$stream_name" \
-        "$stream_name" "$OUTPUT_DIR/${stream_name}_run.log" "$RUN_SECONDS" || {
-        tail -40 "$OUTPUT_DIR/${stream_name}_run.log" >&2
-        tail -40 "$LOG_FILE" >&2
-        fail "the stream $stream_name never ran"
+    for _ in $(seq 1 360); do
+        stream_id="$(stream_id_of_encoder_stream "$stream_number")" \
+            || fail "could not compute the stream id of owned_device_encoder_$stream_number"
+        if the_stream_is_running "$stream_id"; then
+            STREAM_ID_OF_ENCODER[$stream_number]="$stream_id"
+            break
+        fi
+        sleep 0.5
+    done
+    [ -n "${STREAM_ID_OF_ENCODER[$stream_number]:-}" ] || {
+        "$TATOLAB_EXECUTABLE" graph > "$OUTPUT_DIR/graph_at_failure.json" 2>&1
+        tail -60 "$LOG_FILE" >&2
+        "$TATOLAB_EXECUTABLE" streams >> "$OUTPUT_DIR/graph_at_failure.json" 2>&1
+        fail "the stream $stream_id never ran (graph and streams in $OUTPUT_DIR/graph_at_failure.json)"
     }
-    say "Running:           $stream_name"
+    say "Running:           ${STREAM_ID_OF_ENCODER[$stream_number]}"
 done
+stream_name_of() { echo "${STREAM_ID_OF_ENCODER[$1]}"; }
 
 frames_written_by() {
     written_messages_of_the_output_port "$(stream_name_of "$1")" "encoder_$1" encoded_video
