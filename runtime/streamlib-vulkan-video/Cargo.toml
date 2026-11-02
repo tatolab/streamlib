@@ -1,0 +1,42 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-vulkan-video"
+description = "Vulkan Video encode for StreamLib, on any device that names its queues and allocator: the engine's own device or one a codec module owns"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[features]
+# Gates the tests that mint codec resources on a real GPU:
+#   cargo test -p streamlib-vulkan-video --features hardware-tests -- --test-threads=1
+hardware-tests = []
+# Conversions to and from the engine's `streamlib_error::Error`, for the
+# engine, which encodes and decodes through this crate on its own device.
+engine-error-conversions = ["dep:streamlib-error"]
+
+[lib]
+name = "streamlib_vulkan_video"
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vulkanalia.workspace = true
+vulkanalia-vma.workspace = true
+tracing.workspace = true
+
+# The owned-device tier a codec module encodes on, and the layout vocabulary
+# shared with the rest of the RHI.
+[target.'cfg(target_os = "linux")'.dependencies.streamlib-consumer-rhi]
+path = "../streamlib-consumer-rhi"
+version = "0.68.8"
+
+[target.'cfg(target_os = "linux")'.dependencies.streamlib-error]
+path = "../../sdk/streamlib-error"
+version = "0.68.8"
+optional = true
+
+[lints]
+workspace = true

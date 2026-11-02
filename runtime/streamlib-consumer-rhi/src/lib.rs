@@ -36,17 +36,24 @@
 //!   `streamlib::sdk::error::Error` provides a `From` impl, so the
 //!   host side can wrap consumer errors with `?`.
 //!
+//! - [`OwnedVulkanVideoEncodeDevice`] — the owned-device tier: a
+//!   consumer device a codec module creates on the runtime's GPU with a
+//!   Vulkan Video encode queue and an allocator of its own. Frames still
+//!   cross by import; the codec's own sessions, reference pictures and
+//!   bitstream buffers are allocated on it by `streamlib-vulkan-video`.
+//!
 //! What does NOT live here: anything that calls `vkAllocateMemory`
-//! without an `VkImportMemoryFdInfoKHR`, anything that builds a
-//! `VkPipeline`, anything that owns a `VkQueue` typed for the host's
-//! transfer / encode / decode / compute roles. Those stay in
-//! `streamlib::vulkan::rhi` and are reachable
-//! only behind the host-side `GpuContextFullAccess` capability.
+//! without an `VkImportMemoryFdInfoKHR` outside the owned-device tier,
+//! anything that builds a `VkPipeline`, and the host's own transfer /
+//! encode / decode / compute queues. Those stay in
+//! `streamlib::vulkan::rhi` and are reachable only behind the host-side
+//! `GpuContextFullAccess` capability.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 mod error;
 mod formats;
+pub mod h273_color_vui;
 mod pixel_format;
 pub mod runtime_unit_layout;
 mod runtime_vulkan_device_named_at_spawn;
@@ -66,6 +73,8 @@ mod consumer_vulkan_texture;
 mod device_capability;
 #[cfg(target_os = "macos")]
 mod iosurface_backed_image;
+#[cfg(target_os = "linux")]
+mod owned_vulkan_video_encode_device;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -79,6 +88,7 @@ mod vulkan_loader_library;
 
 pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
+pub use h273_color_vui::{H273_UNSPECIFIED, H273ColorVui};
 pub use pixel_format::PixelFormat;
 pub use runtime_vulkan_device_named_at_spawn::{
     RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE, lowercase_hex_of_vulkan_device_uuid,
@@ -97,7 +107,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_device::{
-    ConsumerVulkanDevice, vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
+    ConsumerVulkanDevice, ConsumerVulkanVideoEncodeQueue,
+    vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
@@ -113,6 +124,8 @@ pub use iosurface_backed_image::{
     create_image_over_iosurface, device_local_memory_type_that_is_not_host_visible,
     refusal_of_an_iosurface_for_an_image_of_format,
 };
+#[cfg(target_os = "linux")]
+pub use owned_vulkan_video_encode_device::OwnedVulkanVideoEncodeDevice;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -120,7 +133,7 @@ pub use vulkan_image_usage::VulkanImageUsage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_layout::VulkanLayout;
+pub use vulkan_layout::{SampledImageReadLayout, VulkanLayout};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_loader_library::{
     VulkanLoaderLibraryNotFound, open_the_first_vulkan_loader_library_that_opens,

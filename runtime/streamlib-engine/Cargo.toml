@@ -172,6 +172,10 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.8
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+# The Vulkan Video encode path the H.264/H.265 built-ins encode through, and the
+# session / DPB / bitstream / query-pool primitives the decoder mints on the
+# engine's device.
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.8", features = ["engine-error-conversions"] }
 # rtkit (RealtimeKit) D-Bus client for unprivileged SCHED_FIFO / nice
 # priority elevation on Linux. PipeWire / PulseAudio / JACK use the
 # same path. Without it, `pthread_setschedparam(SCHED_FIFO|RR, ...)`
@@ -247,6 +251,14 @@ required-features = ["hardware-tests"]
 [[test]]
 name = "vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps"
 path = "tests/vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps.rs"
+required-features = ["hardware-tests"]
+
+# H.264 encode on a device a module owns, round-tripped through the engine's
+# decode and scored against the PSNR references. Rig tier — it needs Vulkan
+# Video encode and decode queues — so it builds only under `hardware-tests`.
+[[test]]
+name = "owned_device_h264_encode_round_trips_the_psnr_references"
+path = "tests/owned_device_h264_encode_round_trips_the_psnr_references.rs"
 required-features = ["hardware-tests"]
 
 # The AVFoundation arm capturing from a real camera through the video device
