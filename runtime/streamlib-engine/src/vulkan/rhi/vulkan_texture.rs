@@ -5,7 +5,6 @@
 
 use std::sync::{Arc, OnceLock};
 
-#[cfg(any(target_os = "linux", test))]
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;

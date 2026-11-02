@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
