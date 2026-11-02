@@ -2072,18 +2072,18 @@ impl GpuContext {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let surface_store = self.surface_store.lock().unwrap();
-            if let Some(store) = surface_store.as_ref()
-                && let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id)
-            {
-                let resolved_layout = texture_layout.map(VulkanLayout).unwrap_or(ipc_layout);
-                if resolved_layout != VulkanLayout::UNDEFINED
-                    && let Some(image) = texture.vulkan_inner().image()
-                {
-                    self.device
-                        .inner
-                        .acquire_from_foreign(image, resolved_layout.as_vk())?;
+            if let Some(store) = surface_store.as_ref() {
+                if let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id) {
+                    let resolved_layout = texture_layout.map(VulkanLayout).unwrap_or(ipc_layout);
+                    if resolved_layout != VulkanLayout::UNDEFINED {
+                        if let Some(image) = texture.vulkan_inner().image() {
+                            self.device
+                                .inner
+                                .acquire_from_foreign(image, resolved_layout.as_vk())?;
+                        }
+                    }
+                    return Ok(TextureRegistration::new(texture, resolved_layout));
                 }
-                return Ok(TextureRegistration::new(texture, resolved_layout));
             }
         }
 
@@ -4451,7 +4451,7 @@ impl GpuContextLimitedAccess {
         // `GpuContext`.
         unsafe {
             let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
-            arc
+            &**arc
         }
     }
 
@@ -4607,7 +4607,7 @@ impl GpuContextFullAccess {
         // for the duration of `&self`.
         unsafe {
             let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
-            arc
+            &**arc
         }
     }
 }
