@@ -506,7 +506,7 @@ pub fn parse_h265_short_term_ref_pic_set(
         let mut use_delta_flag = [0u8; MAX_NUM_STRPS_ENTRIES + 1];
 
         let delta_idx_minus1 = if idx == num_short_term_ref_pic_sets {
-            reader.ue()? as u32
+            reader.ue()?
         } else {
             0
         };
@@ -540,7 +540,7 @@ pub fn parse_h265_short_term_ref_pic_set(
 
         let total = rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize;
         for j in 0..=total {
-            if j >= MAX_NUM_STRPS_ENTRIES + 1 {
+            if j > MAX_NUM_STRPS_ENTRIES {
                 break;
             }
             used_by_curr_pic_flag[j] = reader.u(1)? as u8;
@@ -580,17 +580,16 @@ pub fn parse_h265_short_term_ref_pic_set(
                 && use_delta_flag
                     [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize]
                     != 0
+                && i < MAX_NUM_STRPS_ENTRIES
             {
-                if i < MAX_NUM_STRPS_ENTRIES {
-                    strps.delta_poc_s0[i] = delta_rps;
-                    std_strps.delta_poc_s0_minus1[i] = delta_rps as u16;
-                    strps.used_by_curr_pic_s0[i] = used_by_curr_pic_flag
-                        [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
-                    if strps.used_by_curr_pic_s0[i] != 0 {
-                        std_strps.used_by_curr_pic_s0_flag |= 1 << i;
-                    }
-                    i += 1;
+                strps.delta_poc_s0[i] = delta_rps;
+                std_strps.delta_poc_s0_minus1[i] = delta_rps as u16;
+                strps.used_by_curr_pic_s0[i] = used_by_curr_pic_flag
+                    [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
+                if strps.used_by_curr_pic_s0[i] != 0 {
+                    std_strps.used_by_curr_pic_s0_flag |= 1 << i;
                 }
+                i += 1;
             }
             for j in 0..rstrps.num_negative_pics as usize {
                 let d_poc = rstrps.delta_poc_s0[j] + delta_rps;
@@ -633,17 +632,16 @@ pub fn parse_h265_short_term_ref_pic_set(
                 && use_delta_flag
                     [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize]
                     != 0
+                && i < MAX_NUM_STRPS_ENTRIES
             {
-                if i < MAX_NUM_STRPS_ENTRIES {
-                    strps.delta_poc_s1[i] = delta_rps;
-                    std_strps.delta_poc_s1_minus1[i] = delta_rps;
-                    strps.used_by_curr_pic_s1[i] = used_by_curr_pic_flag
-                        [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
-                    if strps.used_by_curr_pic_s1[i] != 0 {
-                        std_strps.used_by_curr_pic_s1_flag |= 1 << i;
-                    }
-                    i += 1;
+                strps.delta_poc_s1[i] = delta_rps;
+                std_strps.delta_poc_s1_minus1[i] = delta_rps;
+                strps.used_by_curr_pic_s1[i] = used_by_curr_pic_flag
+                    [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
+                if strps.used_by_curr_pic_s1[i] != 0 {
+                    std_strps.used_by_curr_pic_s1_flag |= 1 << i;
                 }
+                i += 1;
             }
             for j in 0..rstrps.num_positive_pics as usize {
                 let d_poc = rstrps.delta_poc_s1[j] + delta_rps;
@@ -677,8 +675,8 @@ pub fn parse_h265_short_term_ref_pic_set(
         }
     } else {
         // Direct coding (no inter-prediction)
-        let num_negative_pics = reader.ue()? as u32;
-        let num_positive_pics = reader.ue()? as u32;
+        let num_negative_pics = reader.ue()?;
+        let num_positive_pics = reader.ue()?;
         if num_negative_pics as usize > MAX_NUM_STRPS_ENTRIES
             || num_positive_pics as usize > MAX_NUM_STRPS_ENTRIES
             || (num_negative_pics + num_positive_pics) as usize > MAX_NUM_STRPS_ENTRIES
@@ -764,7 +762,7 @@ pub fn parse_h265_scaling_list_data(
                 if size_id > 1 {
                     let dc_coef = reader.se()?;
                     scle.scaling_list_dc_coef_minus8 = dc_coef;
-                    if dc_coef < -7 || dc_coef > 247 {
+                    if !(-7..=247).contains(&dc_coef) {
                         tracing::warn!("Invalid scaling_list_dc_coef_minus8 ({})", dc_coef);
                         return None;
                     }
@@ -773,7 +771,7 @@ pub fn parse_h265_scaling_list_data(
                 for i in 0..coef_num as usize {
                     let delta_coef = reader.se()?;
                     scle.scaling_list_delta_coef[i] = delta_coef as i8;
-                    if delta_coef < -128 || delta_coef > 127 {
+                    if !(-128..=127).contains(&delta_coef) {
                         tracing::warn!("Invalid scaling_list_delta_coef ({})", delta_coef);
                         return None;
                     }
@@ -940,7 +938,7 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
         sps.long_term_ref_pics_sps.used_by_curr_pic_lt_sps_flag = 0;
         for i in 0..num_lt as usize {
             sps.long_term_ref_pics_sps.lt_ref_pic_poc_lsb_sps[i] =
-                reader.u(sps.log2_max_pic_order_cnt_lsb_minus4 as u32 + 4)? as u32;
+                reader.u(sps.log2_max_pic_order_cnt_lsb_minus4 as u32 + 4)?;
             if reader.u(1)? != 0 {
                 sps.long_term_ref_pics_sps.used_by_curr_pic_lt_sps_flag |= 1 << i;
             }

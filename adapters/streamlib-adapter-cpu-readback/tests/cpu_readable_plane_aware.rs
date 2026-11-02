@@ -65,7 +65,7 @@ fn cpu_readable_default_plane_count_is_one() {
             .acquire_write(&descriptor)
             .expect("acquire_write");
         let bytes = guard.view_mut().plane_mut(0).bytes_mut();
-        for chunk in bytes.chunks_exact_mut(4) {
+        for chunk in bytes.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&pattern);
         }
     }
@@ -85,7 +85,7 @@ fn cpu_readable_default_plane_count_is_one() {
         "plane_bytes(0) must alias read_bytes() for single-plane formats"
     );
     assert_eq!(dyn_view.plane_bytes(0).len(), 32 * 16 * 4);
-    for chunk in dyn_view.plane_bytes(0).chunks_exact(4) {
+    for chunk in dyn_view.plane_bytes(0).as_chunks::<4>().0 {
         assert_eq!(chunk, &pattern);
     }
 }
@@ -131,7 +131,8 @@ fn cpu_readable_walks_all_planes_for_nv12() {
             .view_mut()
             .plane_mut(1)
             .bytes_mut()
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>()
+            .0
         {
             chunk.copy_from_slice(&UV_BYTES);
         }
@@ -164,7 +165,7 @@ fn cpu_readable_walks_all_planes_for_nv12() {
                     (width / 2) * (height / 2) * 2,
                     "UV plane size"
                 );
-                for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+                for (i, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
                     assert_eq!(chunk, &UV_BYTES, "UV pair {i}: {chunk:02x?}");
                 }
             }

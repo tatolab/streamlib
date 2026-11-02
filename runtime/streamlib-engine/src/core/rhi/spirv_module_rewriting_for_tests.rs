@@ -162,7 +162,7 @@ pub(crate) fn split_a_multi_byte_character_across_op_source_and_op_source_contin
 fn with_literal_bytes(leading_words: &[u32], literal: &[u8]) -> Vec<u32> {
     let mut literal_bytes = literal.to_vec();
     literal_bytes.push(0);
-    while literal_bytes.len() % 4 != 0 {
+    while !literal_bytes.len().is_multiple_of(4) {
         literal_bytes.push(0);
     }
     let mut instruction = leading_words.to_vec();
@@ -229,7 +229,7 @@ fn decode_spirv_literal_string(words: &[u32]) -> String {
 fn encode_spirv_literal_string(literal: &str) -> Vec<u32> {
     let mut bytes = literal.as_bytes().to_vec();
     bytes.push(0);
-    while bytes.len() % 4 != 0 {
+    while !bytes.len().is_multiple_of(4) {
         bytes.push(0);
     }
     spirv_module_words(&bytes)

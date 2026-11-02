@@ -143,7 +143,8 @@ fn nv12_multi_plane_write_round_trips_to_read() {
             .view_mut()
             .plane_mut(1)
             .bytes_mut()
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>()
+            .0
         {
             chunk.copy_from_slice(&UV_BYTES);
         }
@@ -164,7 +165,7 @@ fn nv12_multi_plane_write_round_trips_to_read() {
     let uv = view.plane(1);
     let uv_bytes = uv.bytes();
     assert_eq!(uv_bytes.len() as u32, (width / 2) * (height / 2) * 2);
-    for (i, chunk) in uv_bytes.chunks_exact(2).enumerate() {
+    for (i, chunk) in uv_bytes.as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(chunk, &UV_BYTES, "UV pair {i} mismatch: {chunk:02x?}");
     }
 }

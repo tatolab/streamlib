@@ -187,9 +187,8 @@ impl ConsumerVulkanTexture {
                 mem_requirements.memory_type_bits,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )
-            .map_err(|e| {
+            .inspect_err(|_| {
                 unsafe { device.destroy_image(image, None) };
-                e
             })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
@@ -404,9 +403,8 @@ impl ConsumerVulkanTexture {
                 mem_requirements.memory_type_bits,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )
-            .map_err(|e| {
+            .inspect_err(|_| {
                 unsafe { device.destroy_image(image, None) };
-                e
             })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {

@@ -202,12 +202,17 @@ fn sample_from_surface() {
     // A=255/255. The probe FBO stores RGBA8 in memory byte order
     // [R, G, B, A] — so glReadPixels gives bytes
     // [64, 128, 191, 255]. Tolerate ±6 LSB.
-    let mismatch = probe_pixels.chunks_exact(4).enumerate().find(|(_, px)| {
-        (px[0] as i32 - 64).abs() > 6
-            || (px[1] as i32 - 128).abs() > 6
-            || (px[2] as i32 - 191).abs() > 6
-            || (px[3] as i32 - 255).abs() > 6
-    });
+    let mismatch = probe_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .find(|(_, px)| {
+            (px[0] as i32 - 64).abs() > 6
+                || (px[1] as i32 - 128).abs() > 6
+                || (px[2] as i32 - 191).abs() > 6
+                || (px[3] as i32 - 255).abs() > 6
+        });
     assert!(
         mismatch.is_none(),
         "GL sample saw unexpected pixel: {mismatch:?}"

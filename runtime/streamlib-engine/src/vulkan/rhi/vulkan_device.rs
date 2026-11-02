@@ -734,38 +734,38 @@ impl HostVulkanDevice {
                     .build(),
             );
         }
-        if let Some(ve_family) = video_encode_queue_family_index {
-            if !requested_families.contains(&ve_family) {
-                requested_families.push(ve_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(ve_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(ve_family) = video_encode_queue_family_index
+            && !requested_families.contains(&ve_family)
+        {
+            requested_families.push(ve_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(ve_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
-        if let Some(vd_family) = video_decode_queue_family_index {
-            if !requested_families.contains(&vd_family) {
-                requested_families.push(vd_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(vd_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(vd_family) = video_decode_queue_family_index
+            && !requested_families.contains(&vd_family)
+        {
+            requested_families.push(vd_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(vd_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
-        if let Some(cq_family) = compute_queue_family_index {
-            if !requested_families.contains(&cq_family) {
-                requested_families.push(cq_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(cq_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(cq_family) = compute_queue_family_index
+            && !requested_families.contains(&cq_family)
+        {
+            requested_families.push(cq_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(cq_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
 
         // Device extensions
