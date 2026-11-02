@@ -24,7 +24,7 @@ features = ["pyo3/extension-module"]
 
 [tool.pyright]
 include = ["python", "streams"]
-extraPaths = ["python"]
+extraPaths = ["python", "../tatolab-camera/python", "../tatolab-compositor/python"]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."
