@@ -8,6 +8,7 @@
 //! for both H.264 and H.265.
 
 pub(crate) mod decoded_picture_display_window;
+pub mod exported_nv12_dma_buf_ring;
 mod h264;
 mod h265;
 mod session;
@@ -107,11 +108,15 @@ pub struct SimpleDecoder {
     // Persistent staging buffer for decoded frame readback (avoids per-frame alloc)
     readback_staging: Option<(vk::Buffer, vma::Allocation, u64, *mut u8)>,
 
+    // The exported buffers pictures are copied into under
+    // `DecodedPictureDelivery::Nv12InAnExportedDmaBuf`.
+    exported_nv12_dma_buf_ring: exported_nv12_dma_buf_ring::ExportedNv12DmaBufRing,
+
     // Deferred readback: metadata for the frame whose GPU decode is in flight.
     // Drained at the start of the next handle_h265_slice call (or flush).
     pending_frame: Option<PendingFrame>,
 
-    // NV12→RGBA GPU compute converter (created when config.rgba_output is true)
+    // NV12→RGBA GPU compute converter (created under `DecodedPictureDelivery::ReadBackRgba`)
     nv12_converter: Option<crate::nv12_to_rgb::Nv12ToRgbConverter>,
     // RGBA staging buffer for readback after GPU conversion
     rgba_staging: Option<(vk::Buffer, vma::Allocation, u64, *mut u8)>,
@@ -138,6 +143,8 @@ struct PendingFrame {
     poc: i32,
     setup_slot: usize,
     _setup_image: vk::Image,
+    /// The exported buffer the picture was copied into, when it was.
+    exported_nv12_ring_slot_index: Option<usize>,
 }
 
 // SAFETY: Vulkan handles are only accessed through &mut self methods.
@@ -206,6 +213,8 @@ impl SimpleDecoder {
         };
 
         info!(codec = ?config.codec, "SimpleDecoder created (external device)");
+        let exported_nv12_dma_buf_ring =
+            exported_nv12_dma_buf_ring::ExportedNv12DmaBufRing::new(device.clone());
 
         Ok(Self {
             device,
@@ -238,6 +247,7 @@ impl SimpleDecoder {
             h265_parser: None,
             h265_dpb_to_slot: [-1i32; HEVC_DPB_SIZE],
             readback_staging: None,
+            exported_nv12_dma_buf_ring,
             pending_frame: None,
             nv12_converter: None,
             rgba_staging: None,
@@ -628,6 +638,39 @@ impl SimpleDecoder {
     // Private: Staging buffer management
     // ------------------------------------------------------------------
 
+    /// The buffer the next decode copies its NV12 picture into and, when it is
+    /// an exported one, its ring slot — or no buffer when the RGBA converter
+    /// samples the DPB slot itself.
+    fn staging_buffer_for_the_next_picture(
+        &mut self,
+        coded_width: u32,
+        coded_height: u32,
+    ) -> Result<(Option<StagingBuffer>, Option<usize>), VideoError> {
+        match self.config.decoded_picture_delivery {
+            DecodedPictureDelivery::ReadBackRgba => Ok((None, None)),
+            DecodedPictureDelivery::ReadBackNv12 => {
+                self.ensure_readback_staging(coded_width, coded_height)?;
+                let &(buffer, _, _, _) = self.readback_staging.as_ref().ok_or_else(|| {
+                    VideoError::BitstreamError("No readback staging buffer available".into())
+                })?;
+                Ok((Some(StagingBuffer { buffer }), None))
+            }
+            DecodedPictureDelivery::Nv12InAnExportedDmaBuf => {
+                // SAFETY: the decode before this one was waited for when it
+                // was drained, so no decode writes the ring.
+                let (buffer, slot_index) = unsafe {
+                    self.exported_nv12_dma_buf_ring.next_buffer_for_a_picture(
+                        self.codec_device.instance(),
+                        self.codec_device.physical_device(),
+                        coded_width,
+                        coded_height,
+                    )?
+                };
+                Ok((Some(StagingBuffer { buffer }), Some(slot_index)))
+            }
+        }
+    }
+
     /// Ensure the persistent readback staging buffer is large enough for the
     /// given frame dimensions. Allocates or grows as needed.
     fn ensure_readback_staging(&mut self, width: u32, height: u32) -> Result<(), VideoError> {
@@ -843,6 +886,30 @@ impl SimpleDecoder {
                 picture_order_count: pending.poc,
                 is_rgba: true,
                 decoded_picture_color_vui: pending.decoded_picture_color_vui,
+                exported_nv12: None,
+            }));
+        }
+
+        if let Some(slot_index) = pending.exported_nv12_ring_slot_index {
+            let display_window = pending.display_window;
+            let exported_nv12 = self
+                .exported_nv12_dma_buf_ring
+                .picture_in_slot(slot_index, display_window.origin_x, display_window.origin_y)
+                .ok_or_else(|| {
+                    VideoError::BitstreamError(format!(
+                        "exported NV12 ring slot {slot_index} was reallocated before its picture \
+                         was handed out"
+                    ))
+                })?;
+            return Ok(Some(SimpleDecodedFrame {
+                data: Vec::new(),
+                width: display_window.width,
+                height: display_window.height,
+                decode_order: pending.decode_order,
+                picture_order_count: pending.poc,
+                is_rgba: false,
+                decoded_picture_color_vui: pending.decoded_picture_color_vui,
+                exported_nv12: Some(exported_nv12),
             }));
         }
 
@@ -863,6 +930,7 @@ impl SimpleDecoder {
             picture_order_count: pending.poc,
             is_rgba: false,
             decoded_picture_color_vui: pending.decoded_picture_color_vui,
+            exported_nv12: None,
         }))
     }
 

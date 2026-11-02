@@ -34,6 +34,26 @@ pub fn write_hang_legacy_container_media_frame(
     Some(())
 }
 
+/// The Annex-B access unit a media frame carries behind its varint
+/// timestamp, refused by name when the bytes end inside the varint.
+pub fn annex_b_access_unit_of_a_hang_legacy_container_media_frame(
+    media_frame_bytes: &[u8],
+) -> Result<&[u8], String> {
+    let varint_bytes = match media_frame_bytes.first() {
+        Some(first_byte) => 1usize << (first_byte >> 6),
+        None => {
+            return Err("an empty message is not a media frame".to_owned());
+        }
+    };
+    media_frame_bytes.get(varint_bytes..).ok_or_else(|| {
+        format!(
+            "a {}-byte message ends inside its {varint_bytes}-byte QUIC varint timestamp, so it \
+             is not a media frame",
+            media_frame_bytes.len()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +96,28 @@ mod tests {
             write_hang_legacy_container_media_frame(&mut media_frame, -1, &[0xAB]),
             None
         );
+    }
+
+    #[test]
+    fn a_written_media_frame_reads_back_to_its_access_unit() {
+        for (_, microseconds) in RFC_9000_SAMPLE_VARINTS {
+            let mut media_frame = Vec::new();
+            write_hang_legacy_container_media_frame(
+                &mut media_frame,
+                (microseconds * 1_000) as i64,
+                &[0, 0, 1, 0x65],
+            )
+            .unwrap();
+            assert_eq!(
+                annex_b_access_unit_of_a_hang_legacy_container_media_frame(&media_frame),
+                Ok(&[0, 0, 1, 0x65][..])
+            );
+        }
+    }
+
+    #[test]
+    fn a_message_ending_inside_its_varint_is_refused() {
+        assert!(annex_b_access_unit_of_a_hang_legacy_container_media_frame(&[0x9d, 0x7f]).is_err());
+        assert!(annex_b_access_unit_of_a_hang_legacy_container_media_frame(&[]).is_err());
     }
 }
