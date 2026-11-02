@@ -4474,11 +4474,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Produce a [`GpuContextFullAccess`] view of the same underlying context.
-    ///
-    /// In #323 this becomes private and only reachable through
-    /// `escalate(|full| …)`; today it is `pub(crate)` so the runtime and
-    /// processor setup paths can still reach the full surface without a
-    /// compile-time barrier.
+    #[cfg(test)]
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
         GpuContextFullAccess::counting_one_offs_against_the_node(
             self.host_inner().clone(),
@@ -6053,7 +6049,7 @@ mod tests {
     ///
     /// Mental-revert: if `create_opaque_fd_export_buffer` built the
     /// `StorageBuffer` with a zeroed `byte_size_cached` (the silent
-    /// all-zero borrow hazard — `docs/learnings/cdylib-make-borrow-cached-fields.md`),
+    /// all-zero cached size),
     /// the `byte_size() == BYTES` assertion below fails immediately —
     /// with no panic, no export error, just a wrong cached POD. GPU-gated:
     /// skips when no device is present (CI is GPU-free).

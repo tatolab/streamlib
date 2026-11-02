@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-webrtc"
-version = "0.68.7"
+version = "0.68.8"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
@@ -10,8 +10,8 @@ license = "BUSL-1.1"
 publish = false
 
 # `_native` is the module `tatolab.webrtc.processors` imports. cdylib only:
-# nothing links this crate as a Rust library, and the CPython ABI is the one
-# binary boundary an extension is allowed to cross.
+# nothing links this crate as a Rust library. It crosses the CPython ABI and,
+# for the player's port writes, the module host table.
 [lib]
 name = "_native"
 crate-type = ["cdylib"]
@@ -20,6 +20,11 @@ crate-type = ["cdylib"]
 # abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
 # CPython 3.10 and every later GIL-enabled release.
 pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+
+# The module host table the player's reading thread writes its node's ports
+# through, with no Python attached. The one engine-facing dependency a module
+# carries, and it links no engine.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.0.0", features = ["pyo3"] }
 
 # 0.17.2, not the 0.20 line: at 0.20 webrtc-rs was rewritten onto a sans-IO
 # core with a different API — a builder, an event-handler trait, and `rtc` as a

@@ -14,9 +14,7 @@ from typing import final
 # pyo3 builds this from what the module registers, so the stub has to carry it
 # too or stubtest reports the module as under-described.
 __all__ = [
-    "PlayedOpusPacket",
-    "PlayedVideoAccessUnit",
-    "WhepSession",
+    "WhepPlayerThread",
     "WhipSession",
     "monotonic_now_ns",
 ]
@@ -74,84 +72,30 @@ class WhipSession:
     def is_connected(self) -> bool: ...
 
 @final
-class WhepSession:
-    """One WHEP playing session, draining into an assembled-media queue."""
+class WhepPlayerThread:
+    """One WHEP playing session on a thread of this wheel's Rust, writing
+    `encoded_video` and `encoded_audio` through a module host table.
+
+    The thread connects, reconnects with backoff when the session ends, states
+    each port's catalog entry before the first frame it describes and again
+    when the stream changes, and holds no Python while it runs.
+    """
 
     def __new__(
-        cls, endpoint_url: str, bearer_token: str | None = None
-    ) -> WhepSession: ...
-    def connect(self) -> None:
-        """Connect and begin draining. Called from the processor's own thread."""
+        cls,
+        module_host_table: object,
+        endpoint_url: str,
+        bearer_token: str | None = None,
+    ) -> WhepPlayerThread:
+        """Start the thread on the ports `module_host_table` lends.
 
-    def next_media(
-        self, timeout_ms: int
-    ) -> "PlayedVideoAccessUnit | PlayedOpusPacket | None":
-        """The next assembled item, or `None` if none arrived in `timeout_ms`.
-
-        The timeout is what lets a reading thread notice it has been asked to
-        stop without waiting on a stream that may never send again.
+        `module_host_table` is what `ctx.open_module_host_table(output_ports=
+        ["encoded_video", "encoded_audio"])` returns.
         """
 
-    def close(self) -> None:
-        """Close the peer connection and DELETE the session, both bounded."""
+    def stop_and_join(self, timeout_seconds: float) -> bool:
+        """Ask the thread to stop and wait up to `timeout_seconds` for it.
 
-    @property
-    def is_connected(self) -> bool: ...
-
-@final
-class PlayedVideoAccessUnit:
-    """One access unit off a WHEP stream, described by the stream itself."""
-
-    @property
-    def media_frame(self) -> bytes:
-        """The Annex-B access unit, start codes included, behind the QUIC
-        varint of `timestamp_ns` in microseconds — hang's legacy container."""
-
-    @property
-    def is_sync_point(self) -> bool: ...
-    @property
-    def codec(self) -> str:
-        """`avc1.PPCCLL`, spelled from the profile, constraint flags and level
-        of the latest SPS the stream carried."""
-
-    @property
-    def coded_width(self) -> int:
-        """Width before the conformance crop, from the latest SPS — the
-        codec-aligned extent a catalog entry's `codedWidth` means and
-        `H264Encoder` writes."""
-
-    @property
-    def coded_height(self) -> int: ...
-    @property
-    def timestamp_ns(self) -> int:
-        """Monotonic, anchored at the stream's first packet and advanced by the
-        RTP clock — so jitter on the wire does not become jitter in the stamps."""
-
-@final
-class PlayedOpusPacket:
-    """One Opus packet off a WHEP stream, described by the stream itself."""
-
-    @property
-    def media_frame(self) -> bytes:
-        """The Opus packet behind the QUIC varint of `timestamp_ns` in
-        microseconds — hang's legacy container."""
-
-    @property
-    def channels(self) -> int:
-        """The stream's declared output channel count, constant for its life.
-
-        From the answer's `sprop-stereo`, falling back to the first packet's
-        TOC when the answer states no Opus fmtp. Not the rtpmap, which RFC 7587
-        §7 fixes at 2 for every Opus stream ever negotiated; and not the TOC per
-        packet, which codes a frame rather than declaring a stream — it flips
-        when an encoder codes a mono frame inside a stereo stream.
+        False when it is still inside a connect; it closes its session itself
+        when that connect returns.
         """
-
-    @property
-    def opus_identification_header_hex(self) -> str:
-        """The stream's `OpusHead` (RFC 7845 §5.1), hex-encoded: `channels`,
-        mapping family 0, and a pre-skip of 0 because RTP states no encoder
-        lookahead."""
-
-    @property
-    def timestamp_ns(self) -> int: ...

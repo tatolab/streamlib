@@ -4,8 +4,9 @@
 //! Asking a stream's own interpreter what its node types declare.
 //!
 //! The runtime process never imports a node's module. It starts the same
-//! command a processor interpreter is, with `--describe` and the import paths,
-//! and reads the one JSON document the bootstrap prints on its standard output.
+//! command a processor interpreter is, with `--describe` and the import paths
+//! or with `--describe-installed-modules`, and reads the one JSON document the
+//! bootstrap prints on its standard output.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -31,7 +32,9 @@ use crate::core::child_process_lifetime::{
 };
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
-use crate::core::processors::{DynGeneratedProcessor, NodeTypesOneStreamResolves};
+use crate::core::processors::{
+    DynGeneratedProcessor, InstalledModuleOfANodeType, NodeTypesOneStreamResolves,
+};
 use crate::core::runtime::StreamEnvironment;
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
@@ -41,8 +44,16 @@ use crate::iceoryx2::{
 /// type it was asked for is refused.
 pub(crate) const PROCESSOR_INTERPRETER_DESCRIBE_BOUND: Duration = Duration::from_secs(60);
 
+/// How long a describe of the installed modules may run. Shorter than a named
+/// type's bound: no graph node waits on it, yet every load does.
+pub(crate) const INSTALLED_MODULES_DESCRIBE_BOUND: Duration = Duration::from_secs(15);
+
 /// The bootstrap argument that asks for a describe rather than a processor.
 const DESCRIBE_ARGUMENT: &str = "--describe";
+
+/// The bootstrap argument that asks for a describe of every class installed
+/// distributions declare in the `tatolab.nodes` entry-point group.
+const DESCRIBE_INSTALLED_MODULES_ARGUMENT: &str = "--describe-installed-modules";
 
 /// The variables that name one processor to the interpreter hosting it, none
 /// of which a describe carries.
@@ -72,6 +83,24 @@ const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: usize = 16 * 1024 * 1024;
 struct ProcessorInterpreterDescribeDocument {
     described_node_types: Vec<serde_json::Value>,
     refused_node_types: Vec<NodeTypeTheDescribeRefused>,
+    #[serde(default)]
+    installed_modules: Vec<NodeClassAnInstalledDistributionDeclares>,
+}
+
+/// One `tatolab.nodes` entry point an installed-modules describe found.
+#[derive(serde::Deserialize)]
+struct NodeClassAnInstalledDistributionDeclares {
+    import_path: String,
+    entry_point: String,
+    distribution: String,
+    distribution_version: String,
+}
+
+/// What a describe of the installed modules found: each class it described
+/// with the distribution declaring it, and each it refused with the reason.
+pub(crate) struct NodeTypesTheInstalledModulesDeclare {
+    pub(crate) described: Vec<(PythonProcessorDeclaration, InstalledModuleOfANodeType)>,
+    pub(crate) refused: Vec<(String, InstalledModuleOfANodeType, String)>,
 }
 
 /// One type a describe refused, with the reason the bootstrap gave for it.
@@ -109,13 +138,38 @@ pub(crate) fn processor_interpreter_describe_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
+    processor_interpreter_describe_command_with_arguments(
+        std::iter::once(DESCRIBE_ARGUMENT)
+            .chain(import_paths.iter().map(ProcessorClassImportPath::as_str)),
+        stream_environment,
+        lend_directory,
+    )
+}
+
+/// The command that describes every class installed distributions declare in
+/// `tatolab.nodes`, in `stream_environment`.
+pub(crate) fn processor_interpreter_describe_installed_modules_command(
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+) -> Result<Command> {
+    processor_interpreter_describe_command_with_arguments(
+        [DESCRIBE_INSTALLED_MODULES_ARGUMENT],
+        stream_environment,
+        lend_directory,
+    )
+}
+
+fn processor_interpreter_describe_command_with_arguments<'a>(
+    describe_arguments: impl IntoIterator<Item = &'a str>,
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+) -> Result<Command> {
     let mut command = processor_interpreter_bootstrap_command(stream_environment, lend_directory)?;
     // A pipe this process holds open for the describe's whole life: the
     // bootstrap reads its end-of-file as the app gone, which is the only
     // parent-death signal a describe has where `PR_SET_PDEATHSIG` does not exist.
     command
-        .arg(DESCRIBE_ARGUMENT)
-        .args(import_paths.iter().map(ProcessorClassImportPath::as_str))
+        .args(describe_arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -215,6 +269,89 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         refusal,
     };
     let interpreter = stream_environment.interpreter.display();
+    let (describe_document, quoted_standard_error) = run_a_describe_reading_its_document(
+        || processor_interpreter_describe_command(import_paths, stream_environment, lend_directory),
+        stream_environment,
+        describe_bound,
+        the_stream_the_describe_belongs_to,
+        is_interrupted_by_the_host,
+        &refuse_every_requested_type,
+    )?;
+
+    let refused_node_types: Vec<(ProcessorClassImportPath, &str)> = import_paths
+        .iter()
+        .filter_map(|import_path| {
+            describe_document
+                .refused_node_types
+                .iter()
+                .find(|refused| refused.import_path == import_path.as_str())
+                .map(|refused| (import_path.clone(), refused.refusal.trim_end()))
+        })
+        .collect();
+    if !refused_node_types.is_empty() {
+        let refusal = match refused_node_types.as_slice() {
+            [(_, the_only_refusal)] => {
+                format!("the stream's interpreter `{interpreter}` refused it: {the_only_refusal}")
+            }
+            several_refused_node_types => format!(
+                "the stream's interpreter `{interpreter}` refused them:\n{}",
+                several_refused_node_types
+                    .iter()
+                    .map(|(import_path, refusal)| format!("`{}`: {refusal}", import_path.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
+        return Err(Error::NodeTypesNotDescribed {
+            node_types: refused_node_types
+                .into_iter()
+                .map(|(import_path, _)| import_path)
+                .collect(),
+            refusal,
+        });
+    }
+
+    import_paths
+        .iter()
+        .map(|import_path| {
+            let refuse_this_type = |refusal: String| Error::NodeTypesNotDescribed {
+                node_types: vec![import_path.clone()],
+                refusal,
+            };
+            let described_node_type = describe_document
+                .described_node_types
+                .iter()
+                .find(|described| {
+                    described.get("import_path").and_then(|path| path.as_str())
+                        == Some(import_path.as_str())
+                })
+                .ok_or_else(|| {
+                    refuse_this_type(format!(
+                        "the stream's interpreter `{interpreter}` neither described nor \
+                         refused it. {quoted_standard_error}"
+                    ))
+                })?;
+            PythonProcessorDeclaration::read_from_described_node_type(
+                described_node_type,
+                import_path,
+            )
+            .map_err(refuse_this_type)
+        })
+        .collect()
+}
+
+/// Start the describe `describe_command` builds, bounded by `describe_bound`
+/// and cut short by the stream's shutdown or the host's interrupt, and read
+/// the document it printed, every failure refused through `refuse`.
+fn run_a_describe_reading_its_document(
+    describe_command: impl FnOnce() -> Result<Command>,
+    stream_environment: &StreamEnvironment,
+    describe_bound: Duration,
+    the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+    refuse_every_requested_type: &dyn Fn(String) -> Error,
+) -> Result<(ProcessorInterpreterDescribeDocument, String)> {
+    let interpreter = stream_environment.interpreter.display();
     if is_interrupted_by_the_host() {
         return Err(refuse_every_requested_type(
             DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL.to_string(),
@@ -222,8 +359,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     }
 
     let mut command =
-        processor_interpreter_describe_command(import_paths, stream_environment, lend_directory)
-            .map_err(|refusal| refuse_every_requested_type(refusal.to_string()))?;
+        describe_command().map_err(|refusal| refuse_every_requested_type(refusal.to_string()))?;
     let mut child =
         spawn_outside_every_iceoryx2_listener_bind(&mut command).map_err(|spawn_failure| {
             refuse_every_requested_type(format!(
@@ -330,67 +466,138 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
             )));
         }
     };
+    Ok((describe_document, quoted_standard_error))
+}
 
-    let refused_node_types: Vec<(ProcessorClassImportPath, &str)> = import_paths
-        .iter()
-        .filter_map(|import_path| {
-            describe_document
-                .refused_node_types
-                .iter()
-                .find(|refused| refused.import_path == import_path.as_str())
-                .map(|refused| (import_path.clone(), refused.refusal.trim_end()))
-        })
-        .collect();
-    if !refused_node_types.is_empty() {
-        let refusal = match refused_node_types.as_slice() {
-            [(_, the_only_refusal)] => {
-                format!("the stream's interpreter `{interpreter}` refused it: {the_only_refusal}")
-            }
-            several_refused_node_types => format!(
-                "the stream's interpreter `{interpreter}` refused them:\n{}",
-                several_refused_node_types
-                    .iter()
-                    .map(|(import_path, refusal)| format!("`{}`: {refusal}", import_path.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
-        };
-        return Err(Error::NodeTypesNotDescribed {
-            node_types: refused_node_types
-                .into_iter()
-                .map(|(import_path, _)| import_path)
-                .collect(),
-            refusal,
-        });
-    }
-
-    import_paths
-        .iter()
-        .map(|import_path| {
-            let refuse_this_type = |refusal: String| Error::NodeTypesNotDescribed {
-                node_types: vec![import_path.clone()],
-                refusal,
-            };
-            let described_node_type = describe_document
-                .described_node_types
-                .iter()
-                .find(|described| {
-                    described.get("import_path").and_then(|path| path.as_str())
-                        == Some(import_path.as_str())
-                })
-                .ok_or_else(|| {
-                    refuse_this_type(format!(
-                        "the stream's interpreter `{interpreter}` neither described nor \
-                         refused it. {quoted_standard_error}"
-                    ))
-                })?;
-            PythonProcessorDeclaration::read_from_described_node_type(
-                described_node_type,
-                import_path,
+/// Describe every class installed distributions declare in `tatolab.nodes`, in
+/// one start of the stream's interpreter, bounded and cut short like
+/// [`describe_node_types_in_a_processor_interpreter_within`].
+pub(crate) fn describe_the_node_types_installed_modules_declare_within(
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+    describe_bound: Duration,
+    the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> Result<NodeTypesTheInstalledModulesDeclare> {
+    let refuse_the_installed_modules = |refusal: String| Error::Runtime(refusal);
+    let (describe_document, _) = run_a_describe_reading_its_document(
+        || {
+            processor_interpreter_describe_installed_modules_command(
+                stream_environment,
+                lend_directory,
             )
-            .map_err(refuse_this_type)
-        })
-        .collect()
+        },
+        stream_environment,
+        describe_bound,
+        the_stream_the_describe_belongs_to,
+        is_interrupted_by_the_host,
+        &refuse_the_installed_modules,
+    )?;
+    let mut node_types_the_installed_modules_declare = NodeTypesTheInstalledModulesDeclare {
+        described: Vec::new(),
+        refused: Vec::new(),
+    };
+    for declared in describe_document.installed_modules {
+        let installed_module = InstalledModuleOfANodeType {
+            distribution: declared.distribution,
+            distribution_version: declared.distribution_version,
+            entry_point: declared.entry_point,
+        };
+        let refused = describe_document
+            .refused_node_types
+            .iter()
+            .find(|refused| refused.import_path == declared.import_path);
+        if let Some(refused) = refused {
+            node_types_the_installed_modules_declare.refused.push((
+                declared.import_path,
+                installed_module,
+                refused.refusal.trim_end().to_string(),
+            ));
+            continue;
+        }
+        let read_declaration = ProcessorClassImportPath::new(&declared.import_path)
+            .map_err(|not_an_import_path| not_an_import_path.to_string())
+            .and_then(|import_path| {
+                let described_node_type = describe_document
+                    .described_node_types
+                    .iter()
+                    .find(|described| {
+                        described.get("import_path").and_then(|path| path.as_str())
+                            == Some(import_path.as_str())
+                    })
+                    .ok_or_else(|| "the describe neither described nor refused it".to_string())?;
+                PythonProcessorDeclaration::read_from_described_node_type(
+                    described_node_type,
+                    &import_path,
+                )
+            });
+        match read_declaration {
+            Ok(declaration) => node_types_the_installed_modules_declare
+                .described
+                .push((declaration, installed_module)),
+            Err(refusal) => node_types_the_installed_modules_declare.refused.push((
+                declared.import_path,
+                installed_module,
+                refusal,
+            )),
+        }
+    }
+    Ok(node_types_the_installed_modules_declare)
+}
+
+/// Register every class installed distributions declare into
+/// `node_types_of_the_stream`, each recorded under the distribution declaring
+/// it. A class a natively compiled type already holds is skipped, and one the
+/// stream already described keeps its registration and gains the record.
+pub(crate) fn register_the_node_types_installed_modules_declare(
+    node_types_of_the_stream: &NodeTypesOneStreamResolves,
+    node_types_the_installed_modules_declare: NodeTypesTheInstalledModulesDeclare,
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+    the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
+) -> Vec<ProcessorClassImportPath> {
+    for (import_path, installed_module, refusal) in node_types_the_installed_modules_declare.refused
+    {
+        tracing::warn!(
+            processor_class_import_path = import_path.as_str(),
+            distribution = installed_module.distribution.as_str(),
+            "an installed module's node type was not described, so the stream cannot add it: \
+             {refusal}"
+        );
+    }
+    let mut registered = Vec::new();
+    for (declaration, installed_module) in node_types_the_installed_modules_declare.described {
+        let node_type = declaration.descriptor.processor_class_import_path.clone();
+        if node_types_of_the_stream.is_a_natively_compiled_node_type(&node_type) {
+            tracing::warn!(
+                processor_class_import_path = node_type.as_str(),
+                distribution = installed_module.distribution.as_str(),
+                "an installed module declares a node type a natively compiled one already holds, \
+                 so it is left out"
+            );
+            continue;
+        }
+        if !node_types_of_the_stream.was_described_in_this_streams_processor_interpreter(&node_type)
+        {
+            if let Err(refusal) = register_the_described_node_type(
+                node_types_of_the_stream,
+                declaration,
+                stream_environment,
+                lend_directory,
+                the_stream_its_helpers_belong_to,
+            ) {
+                tracing::warn!(
+                    processor_class_import_path = node_type.as_str(),
+                    distribution = installed_module.distribution.as_str(),
+                    "an installed module's node type was refused: {refusal}"
+                );
+                continue;
+            }
+            registered.push(node_type.clone());
+        }
+        node_types_of_the_stream.record_the_installed_module_declaring(node_type, installed_module);
+    }
+    registered
 }
 
 #[cfg(test)]

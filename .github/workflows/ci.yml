@@ -285,11 +285,11 @@ jobs:
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
-          -p streamlib-python-wheel
+          -p streamlib-python-wheel -p tatolab-module-sdk
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track -p streamlib-relay-track-reader
-          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,tatolab-module-sdk/pyo3
           --lib --bins --tests
 
       - name: Save the compile-fail tests' build
@@ -411,6 +411,7 @@ jobs:
           workspaces: |
             . -> target
             packages/streamlib-webrtc -> target
+            packages/tatolab-microphone -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
@@ -580,6 +581,31 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+      - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-microphone
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-microphone formatting, crate tests, clippy and types"
+        working-directory: packages/tatolab-microphone
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uvx pyright@1.1.411
+
+      # The runner has no audio device, so the node captures the null
+      # backend's silence through the same exported interface a device uses.
+      - name: "Extension: tatolab-microphone stubs and tests"
+        working-directory: packages/tatolab-microphone
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.microphone._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
+
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
       - name: Cancel the rest of the run
@@ -660,6 +686,7 @@ jobs:
           # refused naming the floor and the rest of it loads.
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
+          cargo test --locked -p tatolab-module-sdk --features pyo3
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local \
             -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
@@ -822,6 +849,7 @@ jobs:
           workspaces: |
             . -> target
             packages/streamlib-webrtc -> target
+            packages/tatolab-microphone -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache the local relay build
@@ -918,6 +946,29 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-microphone
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-microphone crate tests and clippy"
+        working-directory: packages/tatolab-microphone
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+
+      - name: "Extension: tatolab-microphone stubs and tests"
+        working-directory: packages/tatolab-microphone
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.microphone._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
 
       # The stream package on this floor, with nothing of the runtime installed.
       - name: Stream suite

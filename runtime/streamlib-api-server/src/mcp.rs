@@ -3168,7 +3168,7 @@ pub(crate) mod tests {
         assert_eq!(entry["inputs"][0]["delivery_profile"], "newest");
         assert_eq!(
             after["streams"],
-            json!([{ "stream": STUB_STREAM_ID, "nodes": [] }]),
+            json!([{ "stream": STUB_STREAM_ID, "nodes": [], "installed": [] }]),
             "each loaded stream lists the types its own interpreter described"
         );
     }

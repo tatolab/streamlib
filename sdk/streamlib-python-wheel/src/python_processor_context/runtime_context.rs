@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyCapsule, PyDict};
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_module_host_table::module_host_table_capsule_lending;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 use super::gpu_context::{PythonGpuContextFullAccess, PythonGpuContextLimitedAccess};
@@ -33,6 +34,11 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     /// This helper's own record of what its parent last announced, shared with
     /// the limited-access view derived from this one.
     pause_state_announced_by_parent: Arc<AtomicBool>,
+    link_data_access: Py<PythonProcessorLinkDataAccess>,
+    escalate_request_to_parent: Option<Py<PyAny>>,
+    /// Set once the parent asks the node to stop, before its `stop` runs, and
+    /// read by the native code a module host table was lent to.
+    stop_requested_by_parent: Arc<AtomicBool>,
 }
 
 /// The context a helper process hands its own node's privileged hooks.
@@ -110,6 +116,10 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
             },
         )?,
         pause_state_announced_by_parent: Arc::new(AtomicBool::new(false)),
+        link_data_access,
+        escalate_request_to_parent: escalate_request_to_parent
+            .map(|requester| requester.clone().unbind()),
+        stop_requested_by_parent: Arc::new(AtomicBool::new(false)),
     })
 }
 
@@ -139,6 +149,35 @@ pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
             &full_access_context.pause_state_announced_by_parent,
         ),
     }
+}
+
+/// Record on a helper's context whether the parent has asked the node to stop,
+/// so native code its module host table was lent to winds down.
+#[pyfunction]
+pub(crate) fn note_stop_request_from_parent_on_runtime_context(
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+    stop_requested: bool,
+) {
+    full_access_context
+        .get()
+        .stop_requested_by_parent
+        .store(stop_requested, Ordering::Release);
+}
+
+/// Record on a helper's context the execution mode the parent runs the node
+/// in, refusing a mode that drives `process()` from inputs lent to native code.
+#[pyfunction]
+pub(crate) fn note_execution_mode_from_parent_on_runtime_context(
+    python: Python<'_>,
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+    execution_mode: &str,
+) -> PyResult<()> {
+    full_access_context
+        .get()
+        .link_data_access
+        .bind(python)
+        .get()
+        .note_whether_the_runtime_drives_process_from_inputs(execution_mode != "manual")
 }
 
 /// Record on a helper's context the pause state the parent just announced, so
@@ -206,6 +245,35 @@ impl PythonRuntimeContextFullAccess {
     /// Whether processing should proceed (not paused).
     fn should_process(&self) -> bool {
         !self.pause_state_announced_by_parent.load(Ordering::Relaxed)
+    }
+
+    /// Lend `output_ports` and `input_ports` to the node's native code, and
+    /// hand back the module host table it reaches them through, as a capsule
+    /// `tatolab-module-sdk` reads.
+    ///
+    /// Python's own writes to a lent output port, and reads of a lent input
+    /// port, are refused by name from here on.
+    #[pyo3(signature = (*, output_ports = Vec::new(), input_ports = Vec::new()))]
+    fn open_module_host_table<'py>(
+        &self,
+        python: Python<'py>,
+        output_ports: Vec<String>,
+        input_ports: Vec<String>,
+    ) -> PyResult<Bound<'py, PyCapsule>> {
+        let data_plane = self
+            .link_data_access
+            .get()
+            .lend_ports_to_native_code(&input_ports, &output_ports)?;
+        module_host_table_capsule_lending(
+            python,
+            data_plane,
+            &self.processor_id,
+            &self.runtime_id,
+            self.escalate_request_to_parent
+                .as_ref()
+                .map(|requester| requester.clone_ref(python)),
+            Arc::clone(&self.stop_requested_by_parent),
+        )
     }
 }
 

@@ -215,16 +215,6 @@ struct HostCompiledRustTypeRegistration {
     config_taken_check: NodeConfigTakenCheckFn,
 }
 
-/// Everything the registry held for one processor type, removed by
-/// [`ProcessorInstanceFactory::unregister_processor_types`] and held so a
-/// refused `remove_module` can reinstate the registration exactly.
-pub(crate) struct UnregisteredProcessorTypeRecord {
-    processor_type: ProcessorClassImportPath,
-    registration: Option<HostCompiledRustTypeRegistration>,
-    port_info: Option<(Vec<PortInfo>, Vec<PortInfo>)>,
-    descriptor: Option<ProcessorDescriptor>,
-}
-
 /// The natively compiled node types, registered once for the machine.
 ///
 /// Keyed on the import path of the class each processor is — the same string
@@ -406,63 +396,6 @@ impl ProcessorInstanceFactory {
         );
 
         Ok(())
-    }
-
-    /// Remove every registry entry for the given processor types across
-    /// all four maps (`registrations`, `port_info`, `descriptors`, plus a
-    /// rebuild of the port-schema universe). Returns the removed entries
-    /// so a refused `remove_module` can reinstate them exactly via
-    /// [`Self::reinstate_unregistered_processor_types`]. Idents with no
-    /// entry are skipped.
-    pub(crate) fn unregister_processor_types(
-        &self,
-        processor_class_import_paths: &[ProcessorClassImportPath],
-    ) -> Vec<UnregisteredProcessorTypeRecord> {
-        let mut removed = Vec::new();
-        for import_path in processor_class_import_paths {
-            let registration = self.registrations.write().remove(import_path);
-            let port_info = self.port_info.write().remove(import_path);
-            let descriptor = self.descriptors.write().remove(import_path);
-            if registration.is_none() && port_info.is_none() && descriptor.is_none() {
-                continue;
-            }
-            removed.push(UnregisteredProcessorTypeRecord {
-                processor_type: import_path.clone(),
-                registration,
-                port_info,
-                descriptor,
-            });
-        }
-        removed
-    }
-
-    /// Reinstate entries previously removed by
-    /// [`Self::unregister_processor_types`] — the restore half of
-    /// `remove_module`'s remove-then-check-then-restore in-use check.
-    pub(crate) fn reinstate_unregistered_processor_types(
-        &self,
-        unregistered: Vec<UnregisteredProcessorTypeRecord>,
-    ) {
-        if unregistered.is_empty() {
-            return;
-        }
-        for record in unregistered {
-            if let Some(registration) = record.registration {
-                self.registrations
-                    .write()
-                    .insert(record.processor_type.clone(), registration);
-            }
-            if let Some(port_info) = record.port_info {
-                self.port_info
-                    .write()
-                    .insert(record.processor_type.clone(), port_info);
-            }
-            if let Some(descriptor) = record.descriptor {
-                self.descriptors
-                    .write()
-                    .insert(record.processor_type.clone(), descriptor);
-            }
-        }
     }
 
     /// Record a built-in this floor compiles out, so a graph naming it is
