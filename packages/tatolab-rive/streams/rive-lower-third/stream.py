@@ -21,7 +21,9 @@ from tatolab.rive import RiveSource
 
 RIV_PATH = "lower_third.riv"
 TITLE_PROPERTY_PATH = "Name"
-ENTRANCE_TRIGGER_PATH = "IN"
+# The sample lower third's state machine reaches its entrance ("In") from its
+# first state only when both triggers fire in the same message.
+ENTRANCE_TRIGGER_PATHS = ["IN", "OUT"]
 
 
 @stream
@@ -35,7 +37,7 @@ def main(stream_builder: StreamBuilder) -> None:
         LowerThirdTitleTicker,
         config={
             "property_path": TITLE_PROPERTY_PATH,
-            "entrance_trigger_path": ENTRANCE_TRIGGER_PATH,
+            "entrance_trigger_paths": ENTRANCE_TRIGGER_PATHS,
         },
     )
     encoder = stream_builder.add(H264Encoder)
