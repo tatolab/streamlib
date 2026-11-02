@@ -29,7 +29,10 @@ Linux only for now. Frames cross the CPU once per paint; zero-copy is next.
 ## Build it
 
 The wheel ships the CEF runtime, so building it needs CEF's binary
-distribution, the one `cef-dll-sys` links against:
+distribution, the one `cef-dll-sys` links against. `export-cef-dir`, which
+fetches it for `cef-dll-sys`, leaves out the distribution's `LICENSE.txt`; copy
+it into `$CEF_PATH` from the official `cef_binary_*_linux64_minimal` archive,
+because the wheel and its notices both reproduce it:
 
 ```bash
 export CEF_PATH=/path/to/cef_binary_linux64   # the extracted distribution holding libcef.so

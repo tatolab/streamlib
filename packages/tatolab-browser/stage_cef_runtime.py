@@ -37,6 +37,12 @@ def cef_distribution_directory(cef_path: Path) -> Path:
 
 
 def stage(cef_directory: Path, subprocess_executable: Path) -> None:
+    for required_name in RUNTIME_FILE_NAMES:
+        if not (cef_directory / required_name).is_file():
+            raise SystemExit(
+                f"no {required_name} in {cef_directory}; the wheel ships CEF only with it "
+                "(export-cef-dir leaves LICENSE.txt out: copy it from the official archive)"
+            )
     if STAGED_RUNTIME_DIRECTORY.exists():
         shutil.rmtree(STAGED_RUNTIME_DIRECTORY)
     (STAGED_RUNTIME_DIRECTORY / "locales").mkdir(parents=True)
