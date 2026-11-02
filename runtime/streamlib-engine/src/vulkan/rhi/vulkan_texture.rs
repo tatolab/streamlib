@@ -1873,7 +1873,7 @@ mod tests {
         if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
             return None;
         }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+        Some(unsafe { file_status.assume_init() }.st_ino)
     }
 
     /// The device-side half of the lookup's fd contract. A 4 KB buffer's
@@ -2285,7 +2285,7 @@ mod tests {
         use crate::vulkan::rhi::HostVulkanBuffer;
         let mut pixel_buffers = Vec::new();
         for i in 0..4 {
-            let buf = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (4 as u64))
+            let buf = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * 4_u64)
                 .unwrap_or_else(|e| panic!("pixel buffer [{i}] creation failed: {e}"));
             assert!(!buf.mapped_ptr().is_null());
             pixel_buffers.push(buf);

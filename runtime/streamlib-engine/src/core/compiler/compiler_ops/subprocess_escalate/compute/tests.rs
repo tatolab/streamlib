@@ -218,8 +218,7 @@ fn supplied(
 fn plan_error(supplied: &[EscalateRequestRunComputeKernelBinding]) -> String {
     let declared = blur_kernel_bindings();
     let err = plan_supplied_compute_bindings(supplied, &declared)
-        .err()
-        .expect("expected the plan to be refused");
+        .expect_err("expected the plan to be refused");
     format!("{err}")
 }
 
@@ -412,8 +411,7 @@ fn a_uniform_buffer_binding_is_refused_naming_its_kind() {
         ),
     ]);
     let message = plan_supplied_compute_bindings(&entries, &declared)
-        .err()
-        .expect("a uniform buffer is refused")
+        .expect_err("a uniform buffer is refused")
         .to_string();
     assert!(
         message.contains("`fit_parameters` is uniform_buffer, which a dispatch cannot bind"),

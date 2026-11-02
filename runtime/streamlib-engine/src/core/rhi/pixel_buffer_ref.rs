@@ -109,7 +109,7 @@ impl PixelBufferRef {
     pub fn plane_size(&self, plane_index: u32) -> u64 {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            self.inner.plane_size(plane_index) as u64
+            self.inner.plane_size(plane_index)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {

@@ -8513,10 +8513,7 @@ mod tests {
         assert_eq!(removed.kind, StreamActionKind::Remove);
         assert_eq!(removed.state, StreamActionState::Done, "{removed:?}");
         assert!(camera.has_ended());
-        assert!(
-            the_current_record_in(state_directory.path(), &camera.stream_id().to_string())
-                .is_none()
-        );
+        assert!(the_current_record_in(state_directory.path(), camera.stream_id()).is_none());
         assert!(the_current_record_in(state_directory.path(), &mic.stream_id).is_none());
         assert!(the_current_record_in(state_directory.path(), &preview.stream_id).is_some());
         assert!(runner.ids_of_the_loaded_streams().is_empty());

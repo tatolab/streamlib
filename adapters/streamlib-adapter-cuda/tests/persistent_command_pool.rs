@@ -11,8 +11,8 @@
 //! once per host-pipeline frame. The fix introduced
 //! `AdapterPersistentSubmitContext` — a single pool + command buffer
 //! + completion fence reset and reused across every submit. This
-//! test locks that invariant: after N>1 submits the adapter's
-//! `submit_pool_create_count()` must stay at 1.
+//!   test locks that invariant: after N>1 submits the adapter's
+//!   `submit_pool_create_count()` must stay at 1.
 //!
 //! The submit only exercises Vulkan — no CUDA. So the test runs on
 //! any Linux box with a Vulkan device + the OPAQUE_FD pool (the cuda

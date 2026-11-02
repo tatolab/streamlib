@@ -17,7 +17,7 @@
 //!        counted texture registered under it until the handle drops.
 //!      - `full.register_texture_with_layout(...)` (per #906 exit
 //!        criterion #4).
-//!      If any FullAccess method regresses, this test fails.
+//!        If any FullAccess method regresses, this test fails.
 //!   3. Leaving the scope releases the gate and runs `wait_device_idle`.
 //!
 //! Output format:

@@ -55,7 +55,7 @@ impl UniformBuffer {
     }
 
     pub(crate) fn from_arc_into_raw(inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>) -> Self {
-        let byte_size = inner.size() as u64;
+        let byte_size = inner.size();
         let mapped_ptr = inner.mapped_ptr();
         let handle = Arc::into_raw(inner) as *const c_void;
         Self {

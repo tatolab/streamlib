@@ -10,32 +10,32 @@
 //!      integration test reads).
 //!   2. `start()` —
 //!      a. Construct a [`ComputeKernelDescriptor`] for the
-//!         embedded "output[i] = input[i] * 2" SPIR-V shader and
-//!         create the kernel through
-//!         `gpu_full_access().create_compute_kernel(...)` (already
-//!         covered by EscalateSmokeTest but re-exercised here for
-//!         completeness — the kernel return must be valid for the rest
-//!         of this test).
+//!      embedded "output[i] = input[i] * 2" SPIR-V shader and
+//!      create the kernel through
+//!      `gpu_full_access().create_compute_kernel(...)` (already
+//!      covered by EscalateSmokeTest but re-exercised here for
+//!      completeness — the kernel return must be valid for the rest
+//!      of this test).
 //!      b. Acquire input + output `StorageBuffer` handles via
-//!         `gpu_limited_access().acquire_storage_buffer(...)` with a
-//!         byte-shaped `TensorStorageBufferLayout`.
-//!         HOST_VISIBLE allocations, persistently-mapped pointer
-//!         cached on the handle.
+//!      `gpu_limited_access().acquire_storage_buffer(...)` with a
+//!      byte-shaped `TensorStorageBufferLayout`.
+//!      HOST_VISIBLE allocations, persistently-mapped pointer
+//!      cached on the handle.
 //!      c. Populate input through `mapped_ptr()` with `[1, 2, 3,
 //!         ..., element_count]`. Pure CPU writes through the
-//!         persistently-mapped pointer returned at acquire time.
+//!      persistently-mapped pointer returned at acquire time.
 //!      d. Bind input + output through
-//!         `kernel.set_storage_buffer_storage(...)`.
+//!      `kernel.set_storage_buffer_storage(...)`.
 //!      e. Stage push constants via
-//!         `kernel.set_push_constants_value(&[element_count])`.
+//!      `kernel.set_push_constants_value(&[element_count])`.
 //!      f. Dispatch the kernel via
-//!         `kernel.dispatch(group_count, 1, 1)`.
+//!      `kernel.dispatch(group_count, 1, 1)`.
 //!      g. Read the output buffer back via its `mapped_ptr()` and
-//!         compare each element to the CPU reference (`input[i] *
+//!      compare each element to the CPU reference (`input[i] *
 //!         2`). Any mismatch is a hard fail.
 //!      h. Write `OK\n<element_count>` or `ERR:<message>` to the
-//!         configured `output_path` so the integration test can
-//!         assert the round-trip succeeded.
+//!      configured `output_path` so the integration test can
+//!      assert the round-trip succeeded.
 //!   3. `teardown()` — nothing; the kernel + storage buffers drop
 //!      naturally via their handle Drop impls.
 //!

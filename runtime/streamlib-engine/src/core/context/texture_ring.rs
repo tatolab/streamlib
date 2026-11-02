@@ -922,7 +922,7 @@ mod tests {
             "expected UUID v4 canonical 36-byte form"
         );
         assert_eq!(
-            slot.surface_id().as_bytes().len(),
+            slot.surface_id().len(),
             slot.surface_id_len as usize,
             "accessor length must match the cached length field"
         );

@@ -1913,7 +1913,7 @@ mod tests {
     /// - `MAX_SCM_RIGHTS_FDS = MAX_DMA_BUF_PLANES + 1 = 5` — the wire-level
     ///   cap that leaves a slot for an optional timeline-semaphore fd
     ///   alongside the plane fds.
-    /// Sentinel: `MAX_SCM_RIGHTS_FDS + 1 = 6` is "one over the cap."
+    ///   Sentinel: `MAX_SCM_RIGHTS_FDS + 1 = 6` is "one over the cap."
     #[test]
     fn oversize_fd_vec_rejected() {
         let state = SurfaceShareState::new();

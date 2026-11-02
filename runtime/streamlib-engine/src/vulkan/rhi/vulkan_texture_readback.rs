@@ -1038,8 +1038,7 @@ mod tests {
         .expect("readback");
         let err = readback
             .submit(&texture, TextureSourceLayout::General)
-            .err()
-            .expect("expected mismatch");
+            .expect_err("expected mismatch");
         assert!(matches!(
             err,
             TextureReadbackError::DescriptorMismatch { .. }
@@ -1058,8 +1057,7 @@ mod tests {
         .expect("readback");
         let err = readback
             .submit(&texture, TextureSourceLayout::General)
-            .err()
-            .expect("expected mismatch");
+            .expect_err("expected mismatch");
         assert!(matches!(
             err,
             TextureReadbackError::DescriptorMismatch { .. }
@@ -1096,8 +1094,7 @@ mod tests {
             .expect("first");
         let err = readback
             .submit(&texture, TextureSourceLayout::General)
-            .err()
-            .expect("expected in-flight");
+            .expect_err("expected in-flight");
         assert!(matches!(err, TextureReadbackError::InFlight { .. }));
         // Drain so Drop doesn't have to wait on a half-recorded submit.
         let _ = readback.wait_and_read(ticket, u64::MAX).expect("drain");
@@ -1141,7 +1138,7 @@ mod tests {
             .submit(&texture, TextureSourceLayout::General)
             .expect("submit");
         // rb2 doesn't own this ticket — should reject.
-        let err = rb2.try_read(ticket).err().expect("expected foreign");
+        let err = rb2.try_read(ticket).expect_err("expected foreign");
         assert!(matches!(err, TextureReadbackError::ForeignTicket { .. }));
         let _ = rb1.wait_and_read(ticket, u64::MAX).expect("drain");
     }
@@ -1173,8 +1170,7 @@ mod tests {
         };
         let err = readback
             .try_read(ticket)
-            .err()
-            .expect("expected no submission");
+            .expect_err("expected no submission");
         assert!(matches!(err, TextureReadbackError::NoSubmission { .. }));
     }
 

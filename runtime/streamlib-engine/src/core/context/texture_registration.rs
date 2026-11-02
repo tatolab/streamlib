@@ -253,7 +253,7 @@ mod tests {
         // Final value is one of the written layouts — atomic guarantees no torn reads.
         let final_layout = reg.current_layout();
         assert!(
-            layouts.iter().any(|&l| l == final_layout),
+            layouts.contains(&final_layout),
             "final layout {:?} is not one of the written values",
             final_layout
         );

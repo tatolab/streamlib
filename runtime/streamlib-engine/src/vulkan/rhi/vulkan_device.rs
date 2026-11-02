@@ -4738,7 +4738,7 @@ mod tests {
         if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
             return None;
         }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+        Some(unsafe { file_status.assume_init() }.st_ino)
     }
 
     /// The one exit of the import that is ours to close: no memory type

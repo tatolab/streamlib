@@ -254,7 +254,7 @@ impl EglRuntime {
     /// [`Self::lock_make_current`] / [`OwnedMakeCurrentGuard::new`] to
     /// detect same-thread reentrance and skip the lock + make-current
     /// + release dance that would otherwise deadlock or tear down the
-    /// outer holder's context state.
+    ///   outer holder's context state.
     ///
     /// **Invariant load-bearing for the reentrance fast-path.** This
     /// shortcut is sound only because *every path in the streamlib
