@@ -10,7 +10,12 @@ use std::ptr::NonNull;
 
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
-use tatolab_module_sdk::module_host_table_abi::ModuleHostTableUtf8;
+use tatolab_module_sdk::module_host_table_abi::{
+    MODULE_HOST_TABLE_STATUS_REFUSED, ModuleHostTableAudioCaptureStreamRequest,
+    ModuleHostTableAudioStreamFormat, ModuleHostTableAudioStreamHandle,
+    ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableErrorMessage, ModuleHostTableStatus,
+    ModuleHostTableUtf8,
+};
 use tatolab_module_sdk::{MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHost, ModuleHostTable};
 
 unsafe extern "C" fn do_nothing(_node_host: *mut c_void) {}
@@ -78,6 +83,33 @@ unsafe extern "C" fn no_capabilities(_: *mut c_void) -> ModuleHostTableUtf8 {
     ModuleHostTableUtf8::of("{}")
 }
 
+unsafe extern "C" fn refuse_audio_capture_open(
+    _: *mut c_void,
+    _: *const ModuleHostTableAudioCaptureStreamRequest,
+    _: *mut ModuleHostTableAudioStreamHandle,
+    _: *mut ModuleHostTableAudioStreamFormat,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_audio_capture_start(
+    _: *mut c_void,
+    _: ModuleHostTableAudioStreamHandle,
+    _: ModuleHostTableCapturedAudioBlockCallback,
+    _: *mut c_void,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_audio_capture_verb(
+    _: *mut c_void,
+    _: ModuleHostTableAudioStreamHandle,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn close_nothing(_: *mut c_void, _: ModuleHostTableAudioStreamHandle) {}
+
 fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
     let table = Box::leak(Box::new(ModuleHostTable {
         abi_major: 1,
@@ -97,6 +129,11 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         monotonic_now_ns: zero_clock,
         log: drop_log,
         host_capabilities_json: no_capabilities,
+        audio_capture_stream_open: refuse_audio_capture_open,
+        audio_capture_stream_start: refuse_audio_capture_start,
+        audio_capture_stream_stop: refuse_audio_capture_verb,
+        audio_capture_stream_liveness: refuse_audio_capture_verb,
+        audio_capture_stream_close: close_nothing,
     }));
     NonNull::from(table).cast()
 }
@@ -107,14 +144,14 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(0),
+                leaked_table_of_minor(1),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 0));
+        assert_eq!(module_host.module_host_table_version(), (1, 1));
     });
 }
 
@@ -122,7 +159,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(0), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(python, leaked_table_of_minor(1), c"numpy.core._ARRAY_API")
         }
         .unwrap();
         let refusal =

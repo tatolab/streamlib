@@ -6,7 +6,9 @@
 //! the node's Python reaches its ports through.
 //!
 //! Every verb but the catalog entry's runs with no Python attached, from any
-//! thread. The engine never calls into a module; a module calls in here.
+//! thread. The engine never calls into a module; a module calls in here, and
+//! the audio capture streams it opens call its callback from their device
+//! thread.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -15,6 +17,7 @@ use std::time::Duration;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDict};
+use streamlib::sdk::context::CaptureDeviceAccessPrompting;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
@@ -33,6 +36,13 @@ use tatolab_module_sdk::module_host_table_abi::{
 use crate::python_bag_conversion::json_value_to_python_object;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
+
+use audio_capture_streams::{
+    AudioCaptureStreamsOpenedForOneNode, audio_capture_stream_close, audio_capture_stream_liveness,
+    audio_capture_stream_open, audio_capture_stream_start, audio_capture_stream_stop,
+};
+
+mod audio_capture_streams;
 
 /// The `tracing` target a module's records are emitted under in this helper;
 /// the module's own target rides as the `module_target` field.
@@ -53,6 +63,7 @@ struct ModuleHostOfOneNode {
     escalate_request_to_parent: Option<Py<PyAny>>,
     stop_requested_by_parent: Arc<AtomicBool>,
     host_capabilities_json: String,
+    audio_capture_streams: AudioCaptureStreamsOpenedForOneNode,
 }
 
 /// The capsule `ctx.open_module_host_table(...)` returns: a table over the
@@ -95,6 +106,7 @@ fn module_host_of_one_node(
     escalate_request_to_parent: Option<Py<PyAny>>,
     stop_requested_by_parent: Arc<AtomicBool>,
 ) -> Arc<ModuleHostOfOneNode> {
+    let capture_device_access_prompting = CaptureDeviceAccessPrompting::of_this_helper_process();
     let host_capabilities_json = serde_json::json!({
         "module_host_table": {
             "major": MODULE_HOST_TABLE_ABI_MAJOR,
@@ -106,6 +118,7 @@ fn module_host_of_one_node(
         "runtime_id": runtime_id,
         "lent_input_ports": data_plane.lent_input_port_names,
         "lent_output_ports": data_plane.lent_output_port_names,
+        "capture_device_access_prompting": capture_device_access_prompting.as_environment_value(),
     })
     .to_string();
     Arc::new_cyclic(
@@ -128,6 +141,11 @@ fn module_host_of_one_node(
                 monotonic_now_ns,
                 log,
                 host_capabilities_json: host_capabilities_json_of,
+                audio_capture_stream_open,
+                audio_capture_stream_start,
+                audio_capture_stream_stop,
+                audio_capture_stream_liveness,
+                audio_capture_stream_close,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -137,6 +155,9 @@ fn module_host_of_one_node(
             escalate_request_to_parent,
             stop_requested_by_parent,
             host_capabilities_json,
+            audio_capture_streams: AudioCaptureStreamsOpenedForOneNode::under(
+                capture_device_access_prompting,
+            ),
         },
     )
 }

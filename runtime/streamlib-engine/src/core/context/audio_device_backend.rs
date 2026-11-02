@@ -60,6 +60,76 @@ impl AudioStreamFormat {
     }
 }
 
+/// The format a caller asks a stream for; each `None` takes what the device
+/// opened in.
+///
+/// The arms open in the device's own format, so a request is honoured when the
+/// device opened in it and refused by name otherwise — never converted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RequestedAudioStreamFormat {
+    /// Sample rate in hertz.
+    pub sample_rate: Option<u32>,
+    /// Channel count every payload is interleaved by.
+    pub channels: Option<u32>,
+    /// How the scalars in a payload are encoded.
+    pub sample_format: Option<AudioSampleFormat>,
+}
+
+impl RequestedAudioStreamFormat {
+    /// Why a stream opened in `opened` does not meet this request, or `None`
+    /// when it does.
+    pub fn refusal_of(&self, opened: AudioStreamFormat) -> Option<String> {
+        let mut unmet = Vec::new();
+        if let Some(sample_rate) = self.sample_rate
+            && sample_rate != opened.sample_rate
+        {
+            unmet.push(format!(
+                "{sample_rate} Hz was requested and the device opened at {} Hz",
+                opened.sample_rate
+            ));
+        }
+        if let Some(channels) = self.channels
+            && channels != opened.channels
+        {
+            unmet.push(format!(
+                "{channels} channel(s) were requested and the device opened with {}",
+                opened.channels
+            ));
+        }
+        if let Some(sample_format) = self.sample_format
+            && sample_format != opened.sample_format
+        {
+            unmet.push(format!(
+                "{sample_format:?} samples were requested and the device opened with {:?}",
+                opened.sample_format
+            ));
+        }
+        (!unmet.is_empty()).then(|| unmet.join("; "))
+    }
+}
+
+/// Open a capture stream on `backend` and refuse it, by name, unless it opened
+/// in the format `requested` asks for.
+pub fn open_capture_stream_in_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+    requested: RequestedAudioStreamFormat,
+) -> Result<Box<dyn AudioCaptureStream>> {
+    let capture_stream = backend.open_capture_stream(request)?;
+    match requested.refusal_of(capture_stream.stream_format()) {
+        None => Ok(capture_stream),
+        Some(refusal) => Err(crate::core::Error::Configuration(format!(
+            "the {} capture stream on {} cannot be opened in the requested format: {refusal}. \
+             Omit what the device cannot give, and read the stream's format once it opens.",
+            backend.backend_name(),
+            request.device_id.as_deref().map_or_else(
+                || "the default device".to_string(),
+                |id| format!("device '{id}'")
+            ),
+        ))),
+    }
+}
+
 /// One block of samples as a device delivered it, borrowed for the length of
 /// the hand-off — a callee that keeps the samples copies them.
 #[derive(Debug, Clone, Copy)]
@@ -440,6 +510,64 @@ mod tests {
             SilentNullAudioDeviceBackend.backend_name(),
             "silent-null",
             "the arm the walk falls through to"
+        );
+    }
+
+    fn a_request_for_silence(
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    ) -> AudioDeviceStreamRequest {
+        AudioDeviceStreamRequest {
+            device_id: None,
+            deviceless_pacing_clock: Arc::new(
+                crate::core::context::SoftwareAudioClock::with_defaults(),
+            ),
+            capture_device_access_prompting,
+        }
+    }
+
+    #[test]
+    fn a_request_the_opened_stream_meets_opens_it() {
+        let capture_stream = open_capture_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor),
+            RequestedAudioStreamFormat {
+                sample_rate: Some(48_000),
+                channels: Some(1),
+                sample_format: Some(AudioSampleFormat::F32),
+            },
+        )
+        .expect("the null stream opens at the pacing clock's rate, mono, f32");
+        assert_eq!(capture_stream.stream_format().sample_rate, 48_000);
+    }
+
+    #[test]
+    fn a_request_the_opened_stream_misses_is_refused_naming_each_field_it_missed() {
+        let refusal = open_capture_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(CaptureDeviceAccessPrompting::MayAskTheUser),
+            RequestedAudioStreamFormat {
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                sample_format: None,
+            },
+        )
+        .err()
+        .expect("a mono 48 kHz stream does not meet a stereo 44.1 kHz request")
+        .to_string();
+        assert!(refusal.contains("44100 Hz was requested"), "{refusal}");
+        assert!(refusal.contains("2 channel(s) were requested"), "{refusal}");
+        assert!(refusal.contains("silent-null"), "{refusal}");
+    }
+
+    #[test]
+    fn an_empty_request_takes_whatever_the_device_opened_in() {
+        assert_eq!(
+            RequestedAudioStreamFormat::default().refusal_of(AudioStreamFormat {
+                sample_rate: 44_100,
+                channels: 6,
+                sample_format: AudioSampleFormat::I16,
+            }),
+            None
         );
     }
 

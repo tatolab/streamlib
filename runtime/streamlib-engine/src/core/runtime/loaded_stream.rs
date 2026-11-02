@@ -22,11 +22,9 @@ use super::{
 };
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
 use crate::core::compiler::{Compiler, PendingOperation};
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-use crate::core::context::SoftwareAudioClock;
 use crate::core::context::{
-    AudioClockConfig, CaptureDeviceAccessPrompting, GpuContext,
-    LoadedStreamARuntimeContextBelongsTo, RuntimeContext, SharedAudioClock, TimeContext,
+    CaptureDeviceAccessPrompting, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
+    TimeContext, platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
@@ -447,7 +445,7 @@ impl LoadedStreamInThisRuntime {
             })?;
 
         let time = Arc::new(TimeContext::new());
-        let audio_clock = an_audio_clock_for_one_stream();
+        let audio_clock = platform_audio_clock_for_one_stream();
 
         // The context holds this stream as its runtime operations; the cycle
         // is broken when `stop()` clears the context.
@@ -1208,39 +1206,4 @@ pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &
         .copied()
         .or_else(|| panic_payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("a panic that carried no message")
-}
-
-/// An audio clock for one stream, platform-specific for best precision. It
-/// paces deviceless audio only, so whatever needs it is what starts it.
-fn an_audio_clock_for_one_stream() -> SharedAudioClock {
-    let audio_clock_config = AudioClockConfig::default();
-    #[cfg(target_os = "macos")]
-    {
-        tracing::info!(
-            "[start] Creating CoreAudioClock (GCD): {}Hz, {} samples/tick",
-            audio_clock_config.sample_rate,
-            audio_clock_config.buffer_size
-        );
-        Arc::new(crate::apple::CoreAudioClock::new(audio_clock_config))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        tracing::info!(
-            "[start] Creating LinuxTimerFdAudioClock: {}Hz, {} samples/tick",
-            audio_clock_config.sample_rate,
-            audio_clock_config.buffer_size
-        );
-        Arc::new(crate::linux::LinuxTimerFdAudioClock::new(
-            audio_clock_config,
-        ))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        tracing::info!(
-            "[start] Creating SoftwareAudioClock: {}Hz, {} samples/tick",
-            audio_clock_config.sample_rate,
-            audio_clock_config.buffer_size
-        );
-        Arc::new(SoftwareAudioClock::new(audio_clock_config))
-    }
 }
