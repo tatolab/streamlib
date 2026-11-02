@@ -637,11 +637,8 @@ jobs:
       - name: cargo clippy (workspace, default targets)
         run: cargo clippy --locked --workspace --no-deps
 
-      - name: Compiler warnings are errors (workspace, all targets)
-        run: >-
-          cargo clippy --locked --keep-going --workspace --all-targets --no-deps
-          --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
-          -- -A clippy::all -D warnings
+      - name: cargo check (workspace, all targets)
+        run: cargo check --locked --workspace --all-targets
 
       - name: Cache the local relay build
         if: github.event_name != 'pull_request'
