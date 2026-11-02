@@ -30,6 +30,11 @@ CAMERA_DEVICE_PATH: str | None = None
 
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
+# The artboard is fit inside the source's frame, so a frame of the sample
+# artboard's aspect (500x114) holds the card edge to edge.
+LOWER_THIRD_WIDTH = 1000
+LOWER_THIRD_HEIGHT = 228
+LOWER_THIRD_MARGIN = 80
 
 # Absolute, because the source's process does not run in this folder.
 RIV_PATH = str(Path(__file__).resolve().parent / "lower_third.riv")
@@ -50,8 +55,8 @@ def main(stream_builder: StreamBuilder) -> None:
         RiveSource,
         config={
             "riv_path": RIV_PATH,
-            "width": CANVAS_WIDTH,
-            "height": CANVAS_HEIGHT,
+            "width": LOWER_THIRD_WIDTH,
+            "height": LOWER_THIRD_HEIGHT,
             "frame_rate": 60,
         },
     )
@@ -64,7 +69,18 @@ def main(stream_builder: StreamBuilder) -> None:
     )
     compositor = stream_builder.add(
         AlphaOverCompositor,
-        config={"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT, "layers": [{}, {}]},
+        config={
+            "width": CANVAS_WIDTH,
+            "height": CANVAS_HEIGHT,
+            "layers": [
+                {},
+                {
+                    "x": LOWER_THIRD_MARGIN,
+                    "y": CANVAS_HEIGHT - LOWER_THIRD_HEIGHT - LOWER_THIRD_MARGIN,
+                    "opacity": 1.0,
+                },
+            ],
+        },
     )
     encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(ticker.output("data"), rive.input("data"))
