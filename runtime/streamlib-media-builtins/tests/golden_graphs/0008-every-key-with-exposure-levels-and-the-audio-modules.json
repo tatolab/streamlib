@@ -132,7 +132,7 @@
     {
       "id": "golden09",
       "name": "microphonesource",
-      "type": "tatolab.stream:MicrophoneSource",
+      "type": "tatolab.microphone:MicrophoneSource",
       "config": {
         "device_id": "default"
       },
@@ -179,7 +179,7 @@
     {
       "id": "golden12",
       "name": "speakersink",
-      "type": "tatolab.stream:SpeakerSink",
+      "type": "tatolab.speaker:SpeakerSink",
       "config": {
         "device_id": "default"
       },
@@ -325,11 +325,13 @@
   "exposed": [
     {
       "node": "camerasource",
-      "port": "video"
+      "port": "video",
+      "level": "private"
     },
     {
       "node": "h264encoder",
-      "port": "encoded_video"
+      "port": "encoded_video",
+      "level": "public"
     }
   ],
   "extensions": [],

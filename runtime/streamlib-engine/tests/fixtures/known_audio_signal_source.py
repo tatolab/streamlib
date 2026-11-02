@@ -12,9 +12,9 @@ quantisation sits between the reference and what is played.
 
 The format is the fixture sink's — PipeWire's null sink, or a Mac's built-in
 speakers: 48 kHz stereo `f32`. It is stated rather than
-discovered so the measurement stays about the transport: `SpeakerSink` now
-declares `audio_window = match_device`, so a mismatch would be resampled into
-the device's format instead of failing — and a comparison against the reference
+discovered so the measurement stays about the transport: `SpeakerSink`'s port
+declares a 48 kHz stereo `f32` window, so a mismatch would be resampled into
+that format instead of failing — and a comparison against the reference
 would then be measuring the resampler rather than the path under test.
 
 Paced to stay a bounded lead ahead of the monotonic clock rather than published
