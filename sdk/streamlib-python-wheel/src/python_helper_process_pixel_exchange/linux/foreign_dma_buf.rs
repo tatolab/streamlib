@@ -189,6 +189,7 @@ impl HelperProcessGpuExchangeClient {
                 allocation_byte_size,
                 planes,
             )?;
+            self.record_a_foreign_adoption(&adopted_surface_id);
             // The debt exists from the moment the service registered: if the
             // checkout below fails, this drops on the error path and removes
             // the entry instead of stranding the service's fd dup.

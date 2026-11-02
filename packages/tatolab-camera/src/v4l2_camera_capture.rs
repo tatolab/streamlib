@@ -290,8 +290,17 @@ impl ZeroCopyCaptureLoop {
         let mut frames_published_in_total = 0u64;
         let mut first_refusal_logged = false;
         while !self.stop_requested.load(Ordering::Acquire) && !self.module_host.stop_requested() {
-            if !self.wait_for_a_filled_buffer() {
-                continue;
+            match self.wait_for_a_filled_buffer() {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(device_failure) => {
+                    self.module_host.log(
+                        ModuleHostLogLevel::Error,
+                        CAMERA_LOG_TARGET,
+                        &format!("the camera's stream failed: {device_failure}"),
+                    );
+                    break;
+                }
             }
             let filled = match dequeue_a_filled_buffer(&self.device) {
                 Ok(filled) => filled,
@@ -367,7 +376,10 @@ impl ZeroCopyCaptureLoop {
         }
     }
 
-    fn wait_for_a_filled_buffer(&self) -> bool {
+    /// Whether a filled buffer waits to be dequeued, `false` on a timeout or
+    /// an interrupted wait, and an error once the device reports a failure or
+    /// a hangup, which no later wait recovers from.
+    fn wait_for_a_filled_buffer(&self) -> Result<bool, String> {
         let mut readable = libc::pollfd {
             fd: self.device.handle().fd(),
             events: libc::POLLIN,
@@ -375,7 +387,20 @@ impl ZeroCopyCaptureLoop {
         };
         // SAFETY: one pollfd on the stack, for the length of the call.
         let ready = unsafe { libc::poll(&mut readable, 1, FILLED_BUFFER_WAIT_TIMEOUT_MS) };
-        ready > 0 && readable.revents & libc::POLLIN != 0
+        if ready < 0 {
+            let poll_failure = std::io::Error::last_os_error();
+            return match poll_failure.kind() {
+                std::io::ErrorKind::Interrupted => Ok(false),
+                _ => Err(format!("waiting on the device failed: {poll_failure}")),
+            };
+        }
+        if ready > 0 && readable.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(format!(
+                "the device reported poll events {:#x}",
+                readable.revents
+            ));
+        }
+        Ok(ready > 0 && readable.revents & libc::POLLIN != 0)
     }
 
     fn publish_one_frame(

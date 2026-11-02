@@ -42,8 +42,8 @@ struct SurfaceColorConversionSource {
     planes: PixelPlanesWithinOneAllocation,
 }
 
-/// One caller's conversions: the sources it has named, a converter per source
-/// format, and the recorder they dispatch on.
+/// One caller's conversions: the surface-share sources it has named, a
+/// converter per source format, and the recorder they dispatch on.
 ///
 /// Owned by one helper's escalate registry, so the converters' staged bindings
 /// are never shared with another node's conversions, and what a helper
@@ -68,15 +68,30 @@ impl SurfaceColorConversionSession {
         destination_surface_id: &str,
         source_color: &H273ColorVui,
     ) -> Result<(String, TextureRegistration)> {
-        if !self.sources_by_surface_id.contains_key(source_surface_id) {
-            let resolved = resolve_color_conversion_source(gpu, source_surface_id)?;
-            self.sources_by_surface_id
-                .insert(source_surface_id.to_string(), resolved);
-        }
-        let Some(source) = self.sources_by_surface_id.get_mut(source_surface_id) else {
-            return Err(Error::GpuError(format!(
-                "surface {source_surface_id} was resolved and is gone"
-            )));
+        gpu.refuse_a_retired_frame_id(source_surface_id)?;
+        let mut pooled_frame_source_of_this_conversion;
+        let source = match pooled_frame_held_in_this_process(gpu, source_surface_id)? {
+            Some(pooled_frame_source) => {
+                pooled_frame_source_of_this_conversion = pooled_frame_source;
+                &mut pooled_frame_source_of_this_conversion
+            }
+            None => {
+                if !self.sources_by_surface_id.contains_key(source_surface_id) {
+                    let resolved = resolve_color_conversion_source_through_the_surface_store(
+                        gpu,
+                        source_surface_id,
+                    )?;
+                    self.sources_by_surface_id
+                        .insert(source_surface_id.to_string(), resolved);
+                }
+                self.sources_by_surface_id
+                    .get_mut(source_surface_id)
+                    .ok_or_else(|| {
+                        Error::GpuError(format!(
+                            "surface {source_surface_id} was resolved and is gone"
+                        ))
+                    })?
+            }
         };
         let destination = resolve_color_conversion_destination(gpu, destination_surface_id)?;
         let destination_texture = destination.texture();
@@ -251,6 +266,12 @@ impl SurfaceColorConversionSession {
         Ok(())
     }
 
+    /// Whether this session keeps a resolved source for `surface_id`.
+    #[cfg(test)]
+    pub(crate) fn keeps_a_source_for(&self, surface_id: &str) -> bool {
+        self.sources_by_surface_id.contains_key(surface_id)
+    }
+
     /// Forget what this session resolved for `surface_id`, answering whether
     /// it held anything.
     pub(crate) fn forget_source(&mut self, surface_id: &str) -> bool {
@@ -258,14 +279,13 @@ impl SurfaceColorConversionSession {
     }
 }
 
-/// The pixel buffer `surface_id` names, with its format, extent and layout:
-/// this process's own pooled buffer when it holds one, else the surface-share
-/// registration's.
-fn resolve_color_conversion_source(
+/// The pooled frame `surface_id` names in this process, with its format,
+/// extent and tight layout — resolved per conversion, since a frame id names
+/// one generation of a slot the pool hands back once it is read.
+fn pooled_frame_held_in_this_process(
     gpu: &GpuContext,
     surface_id: &str,
-) -> Result<SurfaceColorConversionSource> {
-    gpu.refuse_a_retired_frame_id(surface_id)?;
+) -> Result<Option<SurfaceColorConversionSource>> {
     if let Some(pixel_buffer) = gpu.pooled_backing_held_in_this_process(surface_id)
         && pixel_buffer.width != 0
     {
@@ -281,15 +301,15 @@ fn resolve_color_conversion_source(
             tight.plane_strides_bytes().to_vec(),
             false,
         )?;
-        return Ok(SurfaceColorConversionSource {
+        return Ok(Some(SurfaceColorConversionSource {
             pixels: SurfaceColorConversionSourcePixels::ImportedPixelBuffer(pixel_buffer),
             pixel_format,
             width,
             height,
             planes,
-        });
+        }));
     }
-    resolve_color_conversion_source_through_the_surface_store(gpu, surface_id)
+    Ok(None)
 }
 
 /// The surface-share registration's pixels: imported into the device, or —

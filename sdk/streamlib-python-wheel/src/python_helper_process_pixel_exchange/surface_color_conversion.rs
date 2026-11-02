@@ -16,9 +16,9 @@ impl HelperProcessGpuExchangeClient {
     /// Have the engine convert one YCbCr pixel buffer into an RGBA texture
     /// with its colour converter, returning once the conversion has retired.
     ///
-    /// The parent resolves the source once and keeps it for this helper's
-    /// later conversions, so this client remembers each source it named and
-    /// owes the parent a release when that source goes away.
+    /// The parent resolves an adopted source once and keeps it for this
+    /// helper's later conversions, so this client marks each adoption it
+    /// names and owes the parent a release when that adoption goes away.
     pub(crate) fn convert_surface_into(
         &self,
         python: Python<'_>,
@@ -40,26 +40,38 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("source_surface_id", source_surface_id)?;
         op.set_item("destination_surface_id", destination_surface_id)?;
         op.set_item("source_color", source_color)?;
-        self.color_conversion_sources_the_parent_resolved
+        if let Some(named_by_a_conversion) = self
+            .foreign_adoptions_and_whether_a_conversion_named_them
             .lock()
-            .insert(source_surface_id.to_string());
+            .get_mut(source_surface_id)
+        {
+            *named_by_a_conversion = true;
+        }
         escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         Ok(())
     }
 
-    /// Hand the parent the release a conversion source it resolved for this
-    /// helper is owed, once `surface_id` is going away; nothing when no
+    /// Record that this helper adopted the foreign DMA-BUF `surface_id`.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn record_a_foreign_adoption(&self, surface_id: &str) {
+        self.foreign_adoptions_and_whether_a_conversion_named_them
+            .lock()
+            .insert(surface_id.to_string(), false);
+    }
+
+    /// Forget the adoption `surface_id`, handing the parent the release of
+    /// the conversion source it resolved for it; nothing more when no
     /// conversion ever named it.
     pub(crate) fn release_the_color_conversion_source_the_parent_resolved(
         &self,
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<()> {
-        if !self
-            .color_conversion_sources_the_parent_resolved
+        let named_by_a_conversion = self
+            .foreign_adoptions_and_whether_a_conversion_named_them
             .lock()
-            .remove(surface_id)
-        {
+            .remove(surface_id);
+        if named_by_a_conversion != Some(true) {
             return Ok(());
         }
         hand_a_release_handle_to_the_release_worker(

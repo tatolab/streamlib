@@ -237,15 +237,22 @@ fn a_pooled_yuyv_frame_converts_into_an_rgba_texture() {
     };
     let (source_id, _pooled) = a_pooled_yuyv_frame(&gpu);
     let destination_id = a_storage_texture(&gpu, PIXEL_WIDTH, storage_and_copy_usage());
+    let registry = EscalateHandleRegistry::new();
 
     convert_through_the_escalate_op(
         &gpu,
-        &EscalateHandleRegistry::new(),
+        &registry,
         &source_id,
         &destination_id,
         bt709_limited(),
     )
     .expect("YUYV → RGBA");
+    assert!(
+        !registry
+            .surface_color_conversion_session()
+            .keeps_a_source_for(&source_id),
+        "a pooled frame is resolved per conversion, so its slot goes back to the pool"
+    );
 
     assert_white_left_and_black_right(&read_registered_texture(&gpu, &destination_id));
     assert_eq!(

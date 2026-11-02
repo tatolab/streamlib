@@ -634,9 +634,12 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// answer — so no two doors disagree about one frame.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
-    /// The surfaces a `convert_surface_into` named as its source, each of
-    /// which the parent resolved and holds until this helper releases it.
-    color_conversion_sources_the_parent_resolved: Mutex<std::collections::HashSet<String>>,
+    /// Each foreign DMA-BUF this helper adopted, with whether a
+    /// `convert_surface_into` named it as its source — the parent then holds
+    /// what it resolved until the adoption's release says to drop it. Every
+    /// other source is a surface whose own release already tells the parent.
+    foreign_adoptions_and_whether_a_conversion_named_them:
+        Mutex<std::collections::HashMap<String, bool>>,
 }
 
 impl HelperProcessGpuExchangeClient {
@@ -702,8 +705,8 @@ impl HelperProcessGpuExchangeClient {
             cpu_readback_exports_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             write_back_answers_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
-            color_conversion_sources_the_parent_resolved: Mutex::new(
-                std::collections::HashSet::new(),
+            foreign_adoptions_and_whether_a_conversion_named_them: Mutex::new(
+                std::collections::HashMap::new(),
             ),
         }
     }

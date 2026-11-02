@@ -207,7 +207,7 @@ fn h273_byte_of_axis_name(
         .ok_or_else(|| {
             let known_names: Vec<&str> = names.iter().map(|(known_name, _)| *known_name).collect();
             crate::core::Error::Configuration(format!(
-                "{name:?} is not a {axis} ColorInfo names; it names one of {}",
+                "{name:?} is not a {axis} name ColorInfo knows; the {axis} names are {}",
                 known_names.join(", ")
             ))
         })
@@ -229,7 +229,7 @@ impl H273ColorVui {
             Some("limited") => Some(false),
             Some(other) => {
                 return Err(crate::core::Error::Configuration(format!(
-                    "{other:?} is not a range ColorInfo names; it names full or limited"
+                    "{other:?} is not a range name ColorInfo knows; the range names are full and limited"
                 )));
             }
         };
