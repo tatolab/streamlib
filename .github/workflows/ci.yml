@@ -417,6 +417,7 @@ jobs:
             clang
             glslang-tools
             spirv-tools
+            uuid-dev
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

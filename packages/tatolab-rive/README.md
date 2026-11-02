@@ -24,7 +24,7 @@ Linux only for now.
 `build.rs` fetches rive-runtime at a pinned revision and builds it with
 rive-runtime's own `build/build_rive.sh`, together with the C++ bridge in
 `native/`. It needs `git`, `ninja`, `clang`, `make`, `python3`,
-`glslangValidator` and `spirv-opt` on `PATH`. Set
+`glslangValidator` and `spirv-opt` on `PATH`, and libuuid headers (`uuid-dev`) for premake. Set
 `TATOLAB_RIVE_RUNTIME_DIRECTORY` to build against a checkout of your own.
 
 ## Run it
