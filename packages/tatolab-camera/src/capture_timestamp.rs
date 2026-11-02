@@ -4,6 +4,7 @@
 //! When a captured frame was taken, on the clock the runtime stamps every message with.
 
 /// Nanoseconds on `CLOCK_MONOTONIC`, the clock `tatolab.stream.clock.monotonic_now_ns` reads on Linux.
+#[cfg(target_os = "linux")]
 pub fn monotonic_now_ns() -> i64 {
     let mut timespec = libc::timespec {
         tv_sec: 0,
@@ -11,6 +12,22 @@ pub fn monotonic_now_ns() -> i64 {
     };
     // SAFETY: `timespec` is a valid stack slot and `CLOCK_MONOTONIC` always exists on Linux.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };
+    timespec
+        .tv_sec
+        .saturating_mul(1_000_000_000)
+        .saturating_add(timespec.tv_nsec)
+}
+
+/// Nanoseconds on `CLOCK_UPTIME_RAW` — `mach_absolute_time` in nanoseconds —
+/// the clock `tatolab.stream.clock.monotonic_now_ns` reads on macOS.
+#[cfg(target_os = "macos")]
+pub fn monotonic_now_ns() -> i64 {
+    let mut timespec = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `timespec` is a valid stack slot and `CLOCK_UPTIME_RAW` always exists on macOS.
+    unsafe { libc::clock_gettime(libc::CLOCK_UPTIME_RAW, &mut timespec) };
     timespec
         .tv_sec
         .saturating_mul(1_000_000_000)
@@ -38,7 +55,22 @@ impl ResolvedCaptureTimestamp {
     }
 }
 
-/// Resolve a buffer's `flags` and `timestamp` against the dequeue instant.
+/// Resolve a device's stamp on the monotonic clock, `None` when it gave none
+/// on that clock, against the dequeue instant.
+pub fn resolve_a_monotonic_device_stamp(
+    device_stamp_ns: Option<i64>,
+    dequeue_instant_ns: i64,
+) -> ResolvedCaptureTimestamp {
+    match device_stamp_ns {
+        None => ResolvedCaptureTimestamp::DequeueInstant(dequeue_instant_ns),
+        Some(device_stamp_ns) if device_stamp_ns > dequeue_instant_ns => {
+            ResolvedCaptureTimestamp::ClampedToDequeue(dequeue_instant_ns)
+        }
+        Some(device_stamp_ns) => ResolvedCaptureTimestamp::FromTheDevice(device_stamp_ns),
+    }
+}
+
+/// Resolve a V4L2 buffer's `flags` and `timestamp` against the dequeue instant.
 ///
 /// Only `V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC` names the machine's monotonic clock.
 pub fn resolve_capture_timestamp(
@@ -49,16 +81,14 @@ pub fn resolve_capture_timestamp(
 ) -> ResolvedCaptureTimestamp {
     const V4L2_BUF_FLAG_TIMESTAMP_MASK: u32 = 0x0000_e000;
     const V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC: u32 = 0x0000_2000;
-    if buffer_flags & V4L2_BUF_FLAG_TIMESTAMP_MASK != V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC {
-        return ResolvedCaptureTimestamp::DequeueInstant(dequeue_instant_ns);
-    }
-    let device_stamp_ns = timestamp_seconds
-        .saturating_mul(1_000_000_000)
-        .saturating_add(timestamp_microseconds.saturating_mul(1_000));
-    if device_stamp_ns > dequeue_instant_ns {
-        return ResolvedCaptureTimestamp::ClampedToDequeue(dequeue_instant_ns);
-    }
-    ResolvedCaptureTimestamp::FromTheDevice(device_stamp_ns)
+    let device_stamp_ns = (buffer_flags & V4L2_BUF_FLAG_TIMESTAMP_MASK
+        == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC)
+        .then(|| {
+            timestamp_seconds
+                .saturating_mul(1_000_000_000)
+                .saturating_add(timestamp_microseconds.saturating_mul(1_000))
+        });
+    resolve_a_monotonic_device_stamp(device_stamp_ns, dequeue_instant_ns)
 }
 
 #[cfg(test)]

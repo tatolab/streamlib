@@ -5,7 +5,6 @@
 //! adopted once through the module host table, and converted on the GPU into
 //! the node's output texture from a thread this wheel owns.
 
-use std::fmt;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,11 +21,16 @@ use v4l::v4l_sys::{v4l2_buffer, v4l2_exportbuffer, v4l2_requestbuffers};
 use v4l::v4l2;
 use v4l::video::Capture;
 
-use crate::capture_timestamp::{monotonic_now_ns, resolve_capture_timestamp};
-use crate::v4l2_colour_description::{
-    CapturedFrameColourDescription, V4l2CaptureFormatColourFields,
-    matrix_name_or_the_players_fallback,
+use crate::camera_frame_publication::{
+    CAMERA_LOG_TARGET, CONVERTED_FRAME_POOL_KEY, CONVERTED_FRAME_TEXTURE_FORMAT,
+    CONVERTED_FRAME_TEXTURE_USAGE, CameraCaptureRefusal, CaptureLoopReportingWindow,
+    FRAMES_BETWEEN_REPORTS,
 };
+use crate::capture_timestamp::{monotonic_now_ns, resolve_capture_timestamp};
+use crate::captured_frame_colour_description::{
+    CapturedFrameColourDescription, matrix_name_or_the_players_fallback,
+};
+use crate::v4l2_colour_description::V4l2CaptureFormatColourFields;
 use crate::video_frame_record::PublishedVideoFrame;
 
 /// How many driver buffers rotate: one being filled, one being converted, and
@@ -36,29 +40,6 @@ const V4L2_DRIVER_BUFFER_COUNT: u32 = 4;
 /// How long one wait for a filled buffer lasts before the capture thread looks
 /// at its stop flags again.
 const FILLED_BUFFER_WAIT_TIMEOUT_MS: i32 = 200;
-
-/// The node output pool the converted frames rotate through.
-const CONVERTED_FRAME_POOL_KEY: &str = "camera_converted_frames";
-const CONVERTED_FRAME_TEXTURE_FORMAT: &str = "rgba8_unorm";
-const CONVERTED_FRAME_TEXTURE_USAGE: [&str; 2] = ["storage_binding", "texture_binding"];
-
-/// Frames between two reports of the capture loop's counts and latency.
-const FRAMES_BETWEEN_REPORTS: u64 = 600;
-
-/// The log target this module's records carry.
-const CAMERA_LOG_TARGET: &str = "tatolab_camera";
-
-/// Why a camera could not be opened, or why its capture ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CameraCaptureRefusal(pub String);
-
-impl fmt::Display for CameraCaptureRefusal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for CameraCaptureRefusal {}
 
 /// The byte layout of one captured frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,36 +231,6 @@ impl V4l2ZeroCopyCameraCapture {
 impl Drop for V4l2ZeroCopyCameraCapture {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-
-/// The counts and the capture-to-publish latency one reporting window saw.
-#[derive(Debug, Default)]
-struct CaptureLoopReportingWindow {
-    frames_published: u64,
-    frames_dropped: u64,
-    capture_to_publish_ns: Vec<i64>,
-}
-
-impl CaptureLoopReportingWindow {
-    fn summary(&mut self) -> String {
-        self.capture_to_publish_ns.sort_unstable();
-        let percentile = |fraction: f64| -> f64 {
-            if self.capture_to_publish_ns.is_empty() {
-                return 0.0;
-            }
-            let index = ((self.capture_to_publish_ns.len() - 1) as f64 * fraction).round();
-            self.capture_to_publish_ns[index as usize] as f64 / 1_000_000.0
-        };
-        format!(
-            "frames_published={} frames_dropped={} capture_to_publish_ms p50={:.2} p95={:.2} \
-             p99={:.2}",
-            self.frames_published,
-            self.frames_dropped,
-            percentile(0.5),
-            percentile(0.95),
-            percentile(0.99)
-        )
     }
 }
 
