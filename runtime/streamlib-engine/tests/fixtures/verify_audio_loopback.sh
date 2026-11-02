@@ -39,8 +39,8 @@
 # be asked at all is an error, before anything starts.
 #
 # The fixture starts the runtime unit's `tatolabd` and loads the stream into it
-# with `tatolab run` (see fixture_runtime_unit.sh), so it refuses to run while
-# another runtime holds the machine.
+# as a project of its own with `tatolab run --dir` (see fixture_runtime_unit.sh),
+# so it refuses to run while another runtime holds the machine.
 #
 # Usage:
 #   ./verify_audio_loopback.sh [--count N]
@@ -104,12 +104,14 @@ if [ "$PLATFORM" != Darwin ] && ! "$HERE/virtual_audio_device.sh" check >&2; the
     exit 77
 fi
 
-STREAM_NAME="audio_loopback_fixture"
+PROJECT_DIR="$OUTPUT_DIR/audio-loopback"
+write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/audio_loopback_stream.py" \
+    known_signal_played_and_captured_back audio_loopback_fixture "$FIXTURE_VENV_DIRECTORY"
+STREAM_ID="$(stream_id_of_the_fixture_project_stream "$PROJECT_DIR" audio_loopback_fixture)"
 # The runtime's output — the engine's log mirror, the stream's records among
 # it — with `tatolab run`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
 STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
-STREAM_RUN_PID=""
 SHARED_TAP_HOLDER_PID=""
 # Bounded, so a stop that hangs still lets the next cleanup step run.
 stop_and_wait_for() {
@@ -125,7 +127,7 @@ stop_and_wait_for() {
 # The stream and its runtime first, so the microphone has let go of the shared
 # aggregate before it is destroyed.
 stop_everything_this_run_started() {
-    stop_and_wait_for "$STREAM_RUN_PID"
+    remove_the_fixture_projects
     stop_the_fixture_runtime 30
     stop_and_wait_for "$SHARED_TAP_HOLDER_PID"
     "$HERE/virtual_audio_device.sh" stop >&2
@@ -242,14 +244,10 @@ if [ "$RUNTIME_START_STATUS" -ne 0 ]; then
     echo "ERROR: the fixture could not start its runtime" >&2
     exit 1
 fi
-echo "loading the loopback stream as $STREAM_NAME" >&2
-"$TATOLAB_EXECUTABLE" run --dir "$HERE" --name "$STREAM_NAME" audio_loopback_stream.py \
-    >"$STREAM_RUN_LOG" 2>&1 &
-STREAM_RUN_PID=$!
-
+echo "loading the loopback stream as $STREAM_ID" >&2
 # Polled rather than slept: the stream compiles and the engine brings up a GPU
 # context and an iceoryx2 node, and a fixed sleep is either flaky or slow.
-if ! wait_until_the_stream_is_running "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
+if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_ID" "$STREAM_RUN_LOG"; then
     echo "ERROR: the loopback stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -40 "$STREAM_RUN_LOG" >&2
     tail -40 "$NODE_LOG" >&2
@@ -267,7 +265,7 @@ first_node_log_line_matching() {
             printf '%s\n' "$line"
             return 0
         fi
-        kill -0 "$STREAM_RUN_PID" 2>/dev/null || return 1
+        the_stream_is_loaded "$STREAM_ID" || return 1
         sleep 0.5
     done
     return 1
@@ -335,7 +333,7 @@ fi
 # First verdict: the block-level contract on the microphone's own port —
 # cadence, timestamp continuity, and a frame the engine did not re-stamp.
 if ! "$HERE/verify_audio_channel.sh" microphonesource \
-    --stream "$STREAM_NAME" --count "$BAG_COUNT" --port audio \
+    --stream "$STREAM_ID" --count "$BAG_COUNT" --port audio \
     --expect-the-track-stamped-with-the-block >&2; then
     echo "ERROR: the microphone's channel failed its block-level contract" >&2
     exit 1
@@ -348,7 +346,7 @@ for _ in $(seq 120); do
     if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then
         break
     fi
-    if ! kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
+    if ! the_stream_is_loaded "$STREAM_ID"; then
         echo "ERROR: the loopback stream was unloaded before writing its capture" >&2
         tail -40 "$NODE_LOG" >&2
         exit 1

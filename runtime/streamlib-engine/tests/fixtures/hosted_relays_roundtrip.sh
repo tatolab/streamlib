@@ -57,7 +57,6 @@
 #   READ_WAIT_SECONDS         how long a read back waits for its objects (default 60)
 #   CATALOG_WAIT_SECONDS      how long it waits for the catalog to list the track
 #                             (default 30)
-#   RUN_SECONDS               the sender's budget (default 240)
 #   TOLERANCE                 abs per-bar channel drift bound (default 0.05)
 #
 # It measures whatever engine the runtime unit's `tatolabd` carries — rebuild
@@ -78,14 +77,12 @@ ARMS="${ARMS:-cloudflare moqpro}"
 OBJECT_COUNT="${OBJECT_COUNT:-20}"
 JOIN_DEADLINE_SECONDS="${JOIN_DEADLINE_SECONDS:-60}"
 READ_WAIT_SECONDS="${READ_WAIT_SECONDS:-60}"
-RUN_SECONDS="${RUN_SECONDS:-240}"
 TOLERANCE="${TOLERANCE:-0.05}"
 # How long a read of the private track at a hosted relay is given to find it.
 PRIVATE_TRACK_READ_WAIT_SECONDS=15
 # How long a read back waits for the broadcast's catalog to list the track.
 CATALOG_WAIT_SECONDS="${CATALOG_WAIT_SECONDS:-30}"
 
-SENDER_STREAM_NAME="hosted_relays_sender"
 PUBLIC_TRACK="encoder/encoded_video"
 PRIVATE_TRACK="private_encoder/encoded_video"
 
@@ -184,24 +181,13 @@ SENDER_RUN_LOG_FILE="$OUTPUT_DIR/sender_run.log"
 # secrets' fallback file.
 RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-hosted-relays-runtime-state-XXXXXX")"
 
-SENDER_RUN_PID=""
-SENDER_RUN_NEEDED_SIGKILL=0
-stop_the_sender() {
-    [ -n "$SENDER_RUN_PID" ] || return 0
-    if kill -0 "$SENDER_RUN_PID" 2>/dev/null; then
-        kill -TERM "$SENDER_RUN_PID" 2>/dev/null || true
-        for _ in $(seq 1 50); do
-            kill -0 "$SENDER_RUN_PID" 2>/dev/null || break
-            sleep 0.2
-        done
-        if kill -0 "$SENDER_RUN_PID" 2>/dev/null; then
-            SENDER_RUN_NEEDED_SIGKILL=1
-            kill -9 "$SENDER_RUN_PID" 2>/dev/null || true
-        fi
-    fi
-    wait "$SENDER_RUN_PID" 2>/dev/null || true
-    SENDER_RUN_PID=""
-}
+# Beside the state directory and removed with it, so the credential scan of
+# the output directory never walks the venv its `.venv` links to.
+SENDER_PROJECT_DIR="$RUNTIME_STATE_HOME/hosted-relays-sender"
+write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/hosted_relays_roundtrip_stream.py" \
+    the_test_pattern_encoded_with_one_port_public_and_one_private hosted_relays_sender \
+    "$FIXTURE_VENV_DIRECTORY"
+SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" hosted_relays_sender)"
 # Every credential this run holds, the signing key's private material among
 # them, looked for in every file under the output directory. Read from the
 # environment, so no credential is an argument of the scan.
@@ -243,7 +229,7 @@ if found:
 }
 forget_the_relays_and_stop() {
     local exit_status=$?
-    stop_the_sender
+    remove_the_fixture_projects
     local arm
     for arm in "${!ARM_RELAY_ID[@]}"; do
         "$TATOLAB_EXECUTABLE" relay rm "${ARM_RELAY_ID[$arm]}" >/dev/null 2>&1 || true
@@ -279,7 +265,7 @@ grep -q "no OS secret store answers" "$LOG_FILE" \
 
 MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" \
     || fail "the runtime's loopback listing did not name the machine"
-SENDER_BROADCAST="$MACHINE_NAME/$SENDER_STREAM_NAME.hang"
+SENDER_BROADCAST="$MACHINE_NAME/$SENDER_STREAM_ID.hang"
 
 # ── Each hosted relay, added and joined ──────────────────────────────
 # Prints the relay id `tatolab relay add <adapter>` gives the settings the
@@ -315,19 +301,12 @@ done
 "$TATOLAB_EXECUTABLE" relays > "$OUTPUT_DIR/relays_after_adding.txt" 2>&1 || true
 
 # ── The sender ───────────────────────────────────────────────────────
-timeout --kill-after=5 "$RUN_SECONDS" \
-    "$TATOLAB_EXECUTABLE" run \
-        --dir "$SCRIPT_DIR" \
-        --name "$SENDER_STREAM_NAME" \
-        "hosted_relays_roundtrip_stream.py:the_test_pattern_encoded_with_one_port_public_and_one_private" \
-    > "$SENDER_RUN_LOG_FILE" 2>&1 &
-SENDER_RUN_PID=$!
-if ! wait_until_the_stream_is_running "$SENDER_STREAM_NAME" "$SENDER_RUN_PID" 60; then
+if ! start_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"; then
     tail -30 "$SENDER_RUN_LOG_FILE" >&2
     tail -30 "$LOG_FILE" >&2
     fail "the sender never ran — it never answered over the local API socket with every node Running"
 fi
-say "Running:           $SENDER_STREAM_NAME, broadcast $SENDER_BROADCAST"
+say "Running:           $SENDER_STREAM_ID, broadcast $SENDER_BROADCAST"
 
 # The positive control: the private track is written, and reads at loopback.
 if ! read_the_track_at_the_local_relay "$SENDER_BROADCAST" "$PRIVATE_TRACK" 3 \
@@ -449,9 +428,9 @@ for arm in "${ARMS_TO_RUN[@]}"; do
     prove_the_arm "$arm"
 done
 
-stop_the_sender
-[ "$SENDER_RUN_NEEDED_SIGKILL" -eq 0 ] \
-    || fail "the sender did not exit on SIGTERM and needed SIGKILL — a hung teardown, not a slow exit"
+remove_the_fixture_projects
+[ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" -eq 0 ] \
+    || fail "the sender was still loaded 10 s after its project's removal — a hung teardown, not a slow unload"
 for arm in "${!ARM_RELAY_ID[@]}"; do
     "$TATOLAB_EXECUTABLE" relay rm "${ARM_RELAY_ID[$arm]}" >/dev/null 2>&1 \
         || say "$arm: ${ARM_RELAY_ID[$arm]} was not removed"

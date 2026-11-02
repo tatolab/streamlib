@@ -18,13 +18,14 @@
 #
 # A fixture starts its own `tatolabd`, which takes the machine's real runtime
 # lock and serves this user's local API socket, so it refuses to run while
-# another runtime holds the machine. It loads its stream with `tatolab run
-# --name`, addresses it by that name, and stops the run and then the runtime.
+# another runtime holds the machine. It writes each stream it runs as a project
+# of one stream, loads it with `tatolab run --dir`, addresses it by the stream
+# id the runtime gives it, and removes the project and then stops the runtime.
 #
-# The fixture venv is `<this directory>/.venv`, because `tatolab run --dir`
-# has the runtime compile a stream in its project's `.venv`. It holds
-# `tatolab-stream` from this checkout, editable, and numpy, which the fixture
-# nodes import; never the runtime, which a processor interpreter borrows from
+# The fixture venv is `<this directory>/.venv`, which a fixture project's
+# `.venv` links to, because the runtime compiles a stream in its project's
+# `.venv`. It holds `tatolab-stream` from this checkout, editable, and numpy,
+# which the fixture nodes import; never the runtime, which a processor interpreter borrows from
 # the lend. It is made with uv the first time a driver needs it; delete the
 # directory to have it made again. To use a venv prepared elsewhere instead,
 # name it with STREAMLIB_FIXTURE_VENV: it is checked the same way and
@@ -303,7 +304,7 @@ the_fixture_runtime_stopped_cleanly() {
     return 1
 }
 
-# Whether `graph --stream <stream name>` answers with every node `Running`: a
+# Whether `graph --stream <stream id>` answers with every node `Running`: a
 # stream answers from its load, while its nodes are still `Pending`, and runs
 # only once it has started.
 the_stream_is_running() {
@@ -320,19 +321,32 @@ sys.exit(0 if nodes and all(
 '
 }
 
-# Polls until the stream <stream name> is running, while <loading pid> — the
-# `tatolab run` loading it — lives, for up to <seconds> (default 60). Returns 1
-# when the pid ends or the budget runs out first.
+# Polls until the stream <stream id> is running, for up to <seconds> (default
+# 60). Returns 1 when the budget runs out first.
 wait_until_the_stream_is_running() {
-    local stream_name="$1" loading_pid="$2" answer_budget_seconds="${3:-60}"
+    local stream_id="$1" answer_budget_seconds="${2:-60}"
     for _ in $(seq 1 $(( answer_budget_seconds * 2 ))); do
-        kill -0 "$loading_pid" 2>/dev/null || return 1
-        if the_stream_is_running "$stream_name"; then
+        if the_stream_is_running "$stream_id"; then
             return 0
         fi
         sleep 0.5
     done
     return 1
+}
+
+# Whether the runtime holds <stream id> loaded: its machine-wide graph names it.
+the_stream_is_loaded() {
+    "$TATOLAB_EXECUTABLE" graph 2>/dev/null | "$FIXTURE_PYTHON" -c '
+import json, sys
+try:
+    machine_wide_graph = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if any(
+    loaded_stream.get("stream") == sys.argv[1]
+    for loaded_stream in machine_wide_graph.get("streams", [])
+) else 1)
+' "$1"
 }
 
 # Prints the name of the one stream the runtime at the local API socket holds,
@@ -369,46 +383,134 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
     return 1
 }
 
-FIXTURE_STREAM_RUN_PIDS=()
-FIXTURE_STREAM_RUN_NEEDED_SIGKILL=0
+# Writes at <project directory> a project of one stream, the way a user's
+# project is laid out: a `stream.py` whose one `@stream`, <stream function name>,
+# builds its graph by calling <graph function> of <module file>; that module and
+# every module beside it linked in, so a node it imports resolves in its
+# processor interpreter as it does beside it; a `pyproject.toml`; and `.venv`
+# linked to <venv directory>, the venv the runtime compiles the stream in.
+write_a_one_stream_fixture_project() {
+    local project_directory="$1" module_file="$2" graph_function="$3"
+    local stream_function_name="$4" venv_directory="$5"
+    local module_directory module_name module_beside
+    module_directory="$(cd "$(dirname "$module_file")" && pwd)"
+    module_name="$(basename "$module_file" .py)"
+    mkdir -p "$project_directory"
+    for module_beside in "$module_directory"/*.py; do
+        [ "$(basename "$module_beside")" = stream.py ] && continue
+        ln -sfn "$module_beside" "$project_directory/$(basename "$module_beside")"
+    done
+    ln -sfn "$venv_directory" "$project_directory/.venv"
+    cat >"$project_directory/pyproject.toml" <<TOML
+[project]
+name = "$(basename "$project_directory")"
+version = "0.0.0"
+requires-python = ">=3.10"
+TOML
+    cat >"$project_directory/stream.py" <<PYTHON
+from tatolab.stream import StreamBuilder, stream
 
-# Loads <stream file:function> of the project at <directory> as <stream name>
-# with `tatolab run`, in the background for at most <seconds>, its output in
-# <run log>, and returns once the stream is running; 1 when it never runs.
-start_the_fixture_stream_run() {
-    local project_directory="$1" stream_reference="$2" stream_name="$3"
-    local run_log_file="$4" run_budget_seconds="$5"
-    timeout --kill-after=5 "$run_budget_seconds" \
-        "$TATOLAB_EXECUTABLE" run --dir "$project_directory" \
-            --name "$stream_name" "$stream_reference" \
-        >"$run_log_file" 2>&1 &
-    FIXTURE_STREAM_RUN_PIDS+=("$!")
-    wait_until_the_stream_is_running "$stream_name" "$!" 60
+from $module_name import $graph_function
+
+
+@stream
+def $stream_function_name(stream_builder: StreamBuilder) -> None:
+    $graph_function(stream_builder)
+PYTHON
 }
 
-# SIGTERM to every run `start_the_fixture_stream_run` started, so each graph
-# tears down the way a real stop does — `timeout` passes it on, and `tatolab
-# run` stops its stream, which the runtime unloads before the run exits. A run
-# still alive 10 s later is a hung teardown, not a slow exit: it is killed and
-# FIXTURE_STREAM_RUN_NEEDED_SIGKILL set to 1, so the kill never launders it into
-# a pass.
-stop_the_fixture_stream_runs() {
-    local stream_run_pid
-    for stream_run_pid in "${FIXTURE_STREAM_RUN_PIDS[@]}"; do
-        kill -0 "$stream_run_pid" 2>/dev/null || continue
-        kill -TERM "$stream_run_pid" 2>/dev/null || true
+# Prints the stream id the runtime loads <stream function name> of the
+# `stream.py` at <project directory> under: `<folder>-<function>-<hash>`, the
+# folder and the function each cast as an exposed name, a part casting to
+# nothing left out, the two cut to share what 63 characters leave beside the
+# hash, and six hex digits of SHA-256 over `<project directory, resolved>\n
+# stream:<function>`. The rule is `StreamLocation::stream_id`'s.
+stream_id_of_the_fixture_project_stream() {
+    "$FIXTURE_PYTHON" -c '
+import hashlib, pathlib, sys
+from tatolab.stream._exposed_name_cast import (
+    EXPOSED_NAME_MAXIMUM_LENGTH,
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
+STREAM_ID_HASH_HEX_DIGITS = 6
+project_directory = pathlib.Path(sys.argv[1]).resolve()
+stream_function_name = sys.argv[2]
+location_hash = hashlib.sha256(
+    f"{project_directory}\nstream:{stream_function_name}".encode()
+).hexdigest()[:STREAM_ID_HASH_HEX_DIGITS]
+cast_parts = []
+for part in (project_directory.name, stream_function_name):
+    try:
+        cast_parts.append(cast_exposed_name_to_url_safe(part))
+    except ExposedNameCastsToNothingError:
+        continue
+characters_left = EXPOSED_NAME_MAXIMUM_LENGTH - STREAM_ID_HASH_HEX_DIGITS - len(cast_parts)
+if sum(map(len, cast_parts)) > characters_left:
+    if len(cast_parts) == 1:
+        shares = [characters_left]
+    else:
+        first_even_share = characters_left // 2
+        second_even_share = characters_left - first_even_share
+        first_length, second_length = map(len, cast_parts)
+        if first_length <= first_even_share:
+            shares = [first_length, characters_left - first_length]
+        elif second_length <= second_even_share:
+            shares = [characters_left - second_length, second_length]
+        else:
+            shares = [first_even_share, second_even_share]
+    cast_parts = [
+        cut_part
+        for cut_part in (part[:share].rstrip("-") for part, share in zip(cast_parts, shares))
+        if cut_part
+    ]
+print("-".join([*cast_parts, location_hash]))
+' "$1" "$2"
+}
+
+FIXTURE_PROJECT_DIRECTORIES=()
+FIXTURE_PROJECT_STREAM_IDS=()
+FIXTURE_PROJECT_REMOVAL_TIMED_OUT=0
+
+# Queues a load of the project at <project directory> with `tatolab run --dir`,
+# its output in <run log>, and returns once its stream <stream id> runs; 1 when
+# the load is refused or the stream has not run within 60 s, with the runtime's
+# stream listing and the project's log appended to <run log>.
+start_the_fixture_project() {
+    local project_directory="$1" stream_id="$2" run_log_file="$3"
+    FIXTURE_PROJECT_DIRECTORIES+=("$project_directory")
+    FIXTURE_PROJECT_STREAM_IDS+=("$stream_id")
+    if "$TATOLAB_EXECUTABLE" run --dir "$project_directory" >"$run_log_file" 2>&1 \
+        && wait_until_the_stream_is_running "$stream_id" 60; then
+        return 0
+    fi
+    {
+        "$TATOLAB_EXECUTABLE" streams
+        "$TATOLAB_EXECUTABLE" logs --dir "$project_directory"
+    } >>"$run_log_file" 2>&1
+    return 1
+}
+
+# Queues `tatolab rm --dir` of every project `start_the_fixture_project`
+# loaded, so each graph tears down the way a user's removal tears it down, and
+# waits up to 10 s for each stream to unload. A stream still loaded then is a
+# hung teardown, not a slow unload: FIXTURE_PROJECT_REMOVAL_TIMED_OUT is set to
+# 1, so the runtime's stop taking it down never launders it into a pass.
+remove_the_fixture_projects() {
+    local project_directory stream_id
+    for project_directory in "${FIXTURE_PROJECT_DIRECTORIES[@]}"; do
+        "$TATOLAB_EXECUTABLE" rm --dir "$project_directory" >/dev/null 2>&1 || true
+    done
+    for stream_id in "${FIXTURE_PROJECT_STREAM_IDS[@]}"; do
         for _ in $(seq 1 50); do
-            kill -0 "$stream_run_pid" 2>/dev/null || break
+            the_stream_is_loaded "$stream_id" || continue 2
             sleep 0.2
         done
-        if kill -0 "$stream_run_pid" 2>/dev/null; then
-            # shellcheck disable=SC2034  # read by the driver that sourced this file
-            FIXTURE_STREAM_RUN_NEEDED_SIGKILL=1
-            kill -9 "$stream_run_pid" 2>/dev/null || true
-        fi
-        wait "$stream_run_pid" 2>/dev/null || true
+        # shellcheck disable=SC2034  # read by the driver that sourced this file
+        FIXTURE_PROJECT_REMOVAL_TIMED_OUT=1
     done
-    FIXTURE_STREAM_RUN_PIDS=()
+    FIXTURE_PROJECT_DIRECTORIES=()
+    FIXTURE_PROJECT_STREAM_IDS=()
 }
 
 # Prints how many messages <node>'s output <port> in <stream> has written, off
