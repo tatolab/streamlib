@@ -16,6 +16,8 @@ dependencies = [
     # imports them from these distributions, as any stream would.
     "tatolab-microphone",
     "tatolab-speaker",
+    # The compositor module's pixel tests run here, on this suite's runtime.
+    "tatolab-compositor",
     "pytest>=7.0",
     "numpy>=2.1",
     # The official MCP Python SDK, whose streamable-HTTP client drives a
@@ -46,6 +48,7 @@ package = false
 tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
 tatolab-microphone = { path = "../../packages/tatolab-microphone" }
 tatolab-speaker = { path = "../../packages/tatolab-speaker" }
+tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = true }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's

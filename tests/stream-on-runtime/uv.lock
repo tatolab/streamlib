@@ -1795,6 +1795,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "tatolab-compositor" },
     { name = "tatolab-microphone" },
     { name = "tatolab-speaker" },
     { name = "tatolab-stream" },
@@ -1813,6 +1814,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "ruff", specifier = "==0.16.9" },
+    { name = "tatolab-compositor", editable = "../../packages/tatolab-compositor" },
     { name = "tatolab-microphone", directory = "../../packages/tatolab-microphone" },
     { name = "tatolab-speaker", directory = "../../packages/tatolab-speaker" },
     { name = "tatolab-stream", editable = "../../sdk/tatolab-stream" },
@@ -1835,6 +1837,20 @@ sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
 ]
+
+[[package]]
+name = "tatolab-compositor"
+version = "0.1.0"
+source = { editable = "../../packages/tatolab-compositor" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest", specifier = ">=7.0" }]
 
 [[package]]
 name = "tatolab-microphone"

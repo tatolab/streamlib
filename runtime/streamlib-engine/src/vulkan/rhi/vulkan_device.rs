@@ -88,7 +88,6 @@ pub struct HostVulkanDevice {
     queue_family_index: u32,
     transfer_queue_family_index: u32,
     transfer_queue: vk::Queue,
-    #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
     /// Whether the device is `VK_PHYSICAL_DEVICE_TYPE_CPU` — a software
@@ -2869,7 +2868,6 @@ impl HostVulkanDevice {
     }
 
     /// Get the device name.
-    #[allow(dead_code)]
     pub fn name(&self) -> String {
         self.device_name.clone()
     }
@@ -2880,13 +2878,11 @@ impl HostVulkanDevice {
     }
 
     /// Get the Vulkan instance.
-    #[allow(dead_code)]
     pub fn instance(&self) -> &vulkanalia::Instance {
         &self.vulkan_instance.instance
     }
 
     /// Get the Vulkan physical device.
-    #[allow(dead_code)]
     pub fn physical_device(&self) -> vk::PhysicalDevice {
         self.physical_device
     }
@@ -2897,19 +2893,16 @@ impl HostVulkanDevice {
     }
 
     /// Get the graphics queue.
-    #[allow(dead_code)]
     pub fn queue(&self) -> vk::Queue {
         self.queue
     }
 
     /// Get the graphics queue family index.
-    #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
     }
 
     /// Get the dedicated transfer queue family index (falls back to graphics queue).
-    #[allow(dead_code)]
     pub fn transfer_queue_family_index(&self) -> u32 {
         self.transfer_queue_family_index
     }
@@ -2960,49 +2953,41 @@ impl HostVulkanDevice {
     }
 
     /// Whether Vulkan Video encode extensions are available.
-    #[allow(dead_code)]
     pub fn supports_video_encode(&self) -> bool {
         self.supports_video_encode
     }
 
     /// Get the video encode queue family index (if available).
-    #[allow(dead_code)]
     pub fn video_encode_queue_family_index(&self) -> Option<u32> {
         self.video_encode_queue_family_index
     }
 
     /// Get the video encode queue (if available).
-    #[allow(dead_code)]
     pub fn video_encode_queue(&self) -> Option<vk::Queue> {
         self.video_encode_queue
     }
 
     /// Whether this device supports Vulkan Video decode.
-    #[allow(dead_code)]
     pub fn supports_video_decode(&self) -> bool {
         self.supports_video_decode
     }
 
     /// Get the video decode queue family index (if available).
-    #[allow(dead_code)]
     pub fn video_decode_queue_family_index(&self) -> Option<u32> {
         self.video_decode_queue_family_index
     }
 
     /// Get the video decode queue (if available).
-    #[allow(dead_code)]
     pub fn video_decode_queue(&self) -> Option<vk::Queue> {
         self.video_decode_queue
     }
 
     /// Get the dedicated compute queue family index (if available).
-    #[allow(dead_code)]
     pub fn compute_queue_family_index(&self) -> Option<u32> {
         self.compute_queue_family_index
     }
 
     /// Get the dedicated compute queue (if available).
-    #[allow(dead_code)]
     pub fn compute_queue(&self) -> Option<vk::Queue> {
         self.compute_queue
     }

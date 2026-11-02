@@ -21,10 +21,8 @@ use tokio::sync::watch;
 #[serde(deny_unknown_fields)]
 struct SecretHoldingTestRelaySettings {
     /// The secret the tests look for everywhere it must not be.
-    #[allow(dead_code)]
     token: RelaySecretSetting<RelaySecretEnteredAsString>,
     #[serde(default)]
-    #[allow(dead_code)]
     label: Option<String>,
 }
 

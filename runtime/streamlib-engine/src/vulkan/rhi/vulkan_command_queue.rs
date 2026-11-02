@@ -81,7 +81,6 @@ impl VulkanCommandQueue {
     }
 
     /// Get the underlying Vulkan queue.
-    #[allow(dead_code)]
     pub fn queue(&self) -> vk::Queue {
         self.queue
     }
