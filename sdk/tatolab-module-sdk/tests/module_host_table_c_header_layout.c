@@ -66,7 +66,8 @@ _Static_assert(offsetof(ModuleHostTable, output_texture_acquire_from_node_output
 _Static_assert(offsetof(ModuleHostTable, surface_convert_into) == POINTER_SLOT(21), "ModuleHostTable.surface_convert_into");
 _Static_assert(offsetof(ModuleHostTable, surface_id) == POINTER_SLOT(22), "ModuleHostTable.surface_id");
 _Static_assert(offsetof(ModuleHostTable, surface_release) == POINTER_SLOT(23), "ModuleHostTable.surface_release");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(24), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, surface_write_from_host_memory) == POINTER_SLOT(24), "ModuleHostTable.surface_write_from_host_memory");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(25), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -82,8 +83,11 @@ _Static_assert(offsetof(ModuleHostTableNodeOutputTextureRequest, width) == 6 * P
 _Static_assert(sizeof(ModuleHostTableNodeOutputTextureRequest) == 6 * POINTER + 16, "ModuleHostTableNodeOutputTextureRequest size");
 _Static_assert(offsetof(ModuleHostTableColorInfo, matrix) == 4 * POINTER, "ModuleHostTableColorInfo.matrix");
 _Static_assert(sizeof(ModuleHostTableColorInfo) == 8 * POINTER, "ModuleHostTableColorInfo size");
+_Static_assert(offsetof(ModuleHostTableHostMemoryPixels, width) == 4 * POINTER, "ModuleHostTableHostMemoryPixels.width");
+_Static_assert(offsetof(ModuleHostTableHostMemoryPixels, row_stride_bytes) == 4 * POINTER + 8, "ModuleHostTableHostMemoryPixels.row_stride_bytes");
+_Static_assert(sizeof(ModuleHostTableHostMemoryPixels) == 4 * POINTER + 16, "ModuleHostTableHostMemoryPixels size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 2, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 3, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");
