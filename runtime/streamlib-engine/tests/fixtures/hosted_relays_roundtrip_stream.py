@@ -6,8 +6,8 @@
 `encoder`'s port is public, so the publisher puts it at every relay the
 machine has joined, the hosted ones among them; `private_encoder`'s is
 private, so it is at the local relay's loopback listener alone.
-`hosted_relays_roundtrip.sh` loads it with `tatolab run --name
-hosted_relays_sender` and reads both tracks back off each hosted relay.
+`hosted_relays_roundtrip.sh` loads it as a project of its own with `tatolab
+run --dir` and reads both tracks back off each hosted relay.
 """
 
 import tatolab.stream

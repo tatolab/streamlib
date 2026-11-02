@@ -45,7 +45,6 @@
 #                         measured (default 20)
 #   DECODED_FRAMES_FLOOR — frames the receiver's decoder must have written
 #                         (default 10)
-#   RUN_SECONDS        — rig budget (default 90)
 #   TOLERANCE          — abs per-bar channel drift bound on [0,1] scale
 #                         (default 0.05; the bug-injection negative test must
 #                         drift further than this on at least one channel for
@@ -82,15 +81,10 @@ CODEC="${2:-h264}"
 
 OBJECT_COUNT="${OBJECT_COUNT:-20}"
 DECODED_FRAMES_FLOOR="${DECODED_FRAMES_FLOOR:-10}"
-RUN_SECONDS="${RUN_SECONDS:-90}"
 TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
 
-# The names the two streams are loaded under; the receiver builds the sender's
-# broadcast from SENDER_STREAM_NAME, so the two are one name.
-SENDER_STREAM_NAME="codec_roundtrip_sender"
-RECEIVER_STREAM_NAME="codec_roundtrip_receiver"
 SENDER_ENCODED_TRACK="encoder/encoded_video"
 
 # ── Prerequisites ────────────────────────────────────────────────────
@@ -124,6 +118,7 @@ require_the_runtime_unit
 require_the_fixture_venv
 
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 ENCODED_TRACK_DIR="$OUTPUT_DIR/encoded_track"
 MEASURED_DIR="$OUTPUT_DIR/measured"
 # The runtime's output — the engine's log mirror, every stream's records among
@@ -133,7 +128,7 @@ SENDER_RUN_LOG_FILE="$OUTPUT_DIR/sender_run.log"
 RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"
 
 stop_the_streams_and_the_runtime() {
-    stop_the_fixture_stream_runs
+    remove_the_fixture_projects
     stop_the_fixture_runtime
 }
 trap stop_the_streams_and_the_runtime EXIT
@@ -152,38 +147,50 @@ if ! cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1; the
 fi
 
 # ── Run ──────────────────────────────────────────────────────────────
-# A stream takes no argv, so the codec travels in the runtime's environment,
-# which each stream's compile and its processor interpreters inherit.
+# Each stream is a project of its own, so the sender runs before the receiver
+# subscribes to its broadcast.
+SENDER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-sender"
+RECEIVER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-receiver"
+write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
+    test_pattern_through_the_encoder_exposing_its_encoded_port codec_roundtrip_sender \
+    "$FIXTURE_VENV_DIRECTORY"
+write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
+    the_senders_encoded_track_through_the_decoder codec_roundtrip_receiver \
+    "$FIXTURE_VENV_DIRECTORY"
+SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" codec_roundtrip_sender)"
+RECEIVER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$RECEIVER_PROJECT_DIR" codec_roundtrip_receiver)"
+
+# A stream takes no argv, so the codec and the sender's stream id travel in the
+# runtime's environment, which each stream's compile and its processor
+# interpreters inherit.
 export RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}"
 if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
+        STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID="$SENDER_STREAM_ID" \
         start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
     echo "[test-pattern-color] FAIL: the fixture could not start its runtime" >&2
     exit 1
 fi
 
-run_the_fixture_stream() {
-    local stream_name="$1" stream_function="$2" run_log_file="$3"
-    if ! start_the_fixture_stream_run "$SCRIPT_DIR" "codec_roundtrip_stream.py:$stream_function" \
-            "$stream_name" "$run_log_file" "$RUN_SECONDS"; then
-        echo "[test-pattern-color] FAIL: the stream $stream_name never ran — it never answered over" \
+run_the_fixture_project() {
+    local project_directory="$1" stream_id="$2" run_log_file="$3"
+    if ! start_the_fixture_project "$project_directory" "$stream_id" "$run_log_file"; then
+        echo "[test-pattern-color] FAIL: the stream $stream_id never ran — it never answered over" \
             "the local API socket with every node Running" >&2
         tail -30 "$run_log_file" >&2
         tail -30 "$LOG_FILE" >&2
         exit 1
     fi
-    echo "[test-pattern-color] Running:           $stream_name"
+    echo "[test-pattern-color] Running:           $stream_id"
 }
-run_the_fixture_stream "$SENDER_STREAM_NAME" \
-    test_pattern_through_the_encoder_exposing_its_encoded_port "$SENDER_RUN_LOG_FILE"
-run_the_fixture_stream "$RECEIVER_STREAM_NAME" \
-    the_senders_encoded_track_through_the_decoder "$RECEIVER_RUN_LOG_FILE"
+run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"
+run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_STREAM_ID" "$RECEIVER_RUN_LOG_FILE"
 
 MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" || {
     echo "[test-pattern-color] FAIL: the runtime's loopback listing at $LOOPBACK_HTTP_LISTING_URL" \
         "did not name the machine" >&2
     exit 1
 }
-SENDER_BROADCAST="$MACHINE_NAME/$SENDER_STREAM_NAME.hang"
+SENDER_BROADCAST="$MACHINE_NAME/$SENDER_STREAM_ID.hang"
 echo "[test-pattern-color] Reading:           $SENDER_ENCODED_TRACK of $SENDER_BROADCAST"
 
 if ! read_the_track_at_the_local_relay "$SENDER_BROADCAST" "$SENDER_ENCODED_TRACK" \
@@ -207,7 +214,7 @@ fi
 RECEIVER_DECODED_FRAMES=0
 for _ in $(seq 1 60); do
     RECEIVER_DECODED_FRAMES="$(written_messages_of_the_output_port \
-        "$RECEIVER_STREAM_NAME" decoder video)" || RECEIVER_DECODED_FRAMES=0
+        "$RECEIVER_STREAM_ID" decoder video)" || RECEIVER_DECODED_FRAMES=0
     [ "$RECEIVER_DECODED_FRAMES" -ge "$DECODED_FRAMES_FLOOR" ] && break
     sleep 0.5
 done
@@ -220,10 +227,10 @@ if [ "$RECEIVER_DECODED_FRAMES" -lt "$DECODED_FRAMES_FLOOR" ]; then
     exit 1
 fi
 
-stop_the_fixture_stream_runs
-if [ "$FIXTURE_STREAM_RUN_NEEDED_SIGKILL" -eq 1 ]; then
-    echo "[test-pattern-color] FAIL: a stream run did not exit on SIGTERM and needed SIGKILL." \
-         "A teardown that hangs is the shutdown race class, not a slow exit." >&2
+remove_the_fixture_projects
+if [ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" -eq 1 ]; then
+    echo "[test-pattern-color] FAIL: a stream was still loaded 10 s after its project's removal." \
+         "A teardown that hangs is the shutdown race class, not a slow unload." >&2
     tail -30 "$LOG_FILE" >&2
     exit 1
 fi
