@@ -18,8 +18,8 @@ This matches the model every comparable system has converged on
 Workers, VST3 plugin sandbox, WebGPU/wgpu-core).
 
 One tier is the exception: a codec module owns its device. Its helper
-creates an `OwnedVulkanVideoEncodeDevice` (`streamlib-consumer-rhi`) on the
-runtime's GPU with a Vulkan Video encode queue and an allocator of its own,
+creates an `OwnedVulkanVideoCodecDevice` (`streamlib-consumer-rhi`) on the
+runtime's GPU with a Vulkan Video encode or decode queue and an allocator of its own,
 and `streamlib-vulkan-video` allocates the codec's sessions, reference
 pictures and bitstream buffers there and submits on it. Frames still cross by
 import. A fault in the video engine then ends that helper and never the
@@ -154,7 +154,7 @@ consumer-rhi through one of the four wired adapters.
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 | HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanBuffer`) |
 | OPAQUE_FD VkBuffer import (cuda) | **Carve-out** | Same crate (`ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index`, binding the memory type index the registration states). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF |
-| Vulkan Video encode on a codec module's own device | **Owned-device tier** | `OwnedVulkanVideoEncodeDevice` (`streamlib-consumer-rhi`) plus `streamlib-vulkan-video`, the one encoder the engine also records on its own device through the same crate |
+| Vulkan Video encode and decode on a codec module's own device | **Owned-device tier** | `OwnedVulkanVideoCodecDevice` (`streamlib-consumer-rhi`) plus `streamlib-vulkan-video`, the one encoder and decoder the engine also records on its own device through the same crate |
 | OPAQUE_FD VkImage import (cuda, image path) | **Carve-out** | Same crate (`ConsumerVulkanTexture::from_opaque_fd`, binding the memory type index the registration states). Image-flavored sibling of the VkBuffer entry; tiling fixed `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier (OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is invalid on NVIDIA), any single-plane format, rebuilt with the registration's `vk_image_usage`; CUDA maps only the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for the texture / surface-object backing — the tiled-image zero-copy path that's complementary to `cudaExternalMemoryGetMappedBuffer`'s flat-tensor / DLPack path |
 
 ## Layered architecture

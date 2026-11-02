@@ -10,6 +10,8 @@
 //! the audio capture streams it opens call its callback from their device
 //! thread.
 
+mod module_host_surface_verbs;
+
 use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,9 +31,15 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_LOG_LEVEL_WARN, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
-    ModuleHostTableBytes, ModuleHostTableErrorMessage, ModuleHostTablePortHandle,
-    ModuleHostTableReadMessage, ModuleHostTableStatus, ModuleHostTableUtf8,
+    ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
+    ModuleHostTableErrorMessage, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableStatus,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
+
+use self::module_host_surface_verbs::SurfacesLentToNativeCode;
+use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
+use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 use crate::python_bag_conversion::json_value_to_python_object;
 use crate::python_logging::monotonic_clock_now_ns;
@@ -64,6 +72,7 @@ struct ModuleHostOfOneNode {
     stop_requested_by_parent: Arc<AtomicBool>,
     host_capabilities_json: String,
     audio_capture_streams: AudioCaptureStreamsOpenedForOneNode,
+    surfaces_lent_to_native_code: SurfacesLentToNativeCode,
 }
 
 /// The capsule `ctx.open_module_host_table(...)` returns: a table over the
@@ -75,6 +84,7 @@ pub(crate) fn module_host_table_capsule_lending<'py>(
     runtime_id: &str,
     escalate_request_to_parent: Option<Py<PyAny>>,
     stop_requested_by_parent: Arc<AtomicBool>,
+    surface_share_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 ) -> PyResult<Bound<'py, PyCapsule>> {
     let module_host = module_host_of_one_node(
         data_plane,
@@ -82,6 +92,10 @@ pub(crate) fn module_host_table_capsule_lending<'py>(
         runtime_id,
         escalate_request_to_parent,
         stop_requested_by_parent,
+        SurfacesLentToNativeCode::new(
+            HelperProcessNativeEscalateChannel::of_this_helper_process(),
+            surface_share_client,
+        ),
     );
     let module_host_table =
         std::ptr::NonNull::from(&module_host.module_host_table).cast::<c_void>();
@@ -105,6 +119,7 @@ fn module_host_of_one_node(
     runtime_id: &str,
     escalate_request_to_parent: Option<Py<PyAny>>,
     stop_requested_by_parent: Arc<AtomicBool>,
+    surfaces_lent_to_native_code: SurfacesLentToNativeCode,
 ) -> Arc<ModuleHostOfOneNode> {
     let capture_device_access_prompting = CaptureDeviceAccessPrompting::of_this_helper_process();
     let host_capabilities_json = serde_json::json!({
@@ -146,6 +161,11 @@ fn module_host_of_one_node(
                 audio_capture_stream_stop,
                 audio_capture_stream_liveness,
                 audio_capture_stream_close,
+                surface_import_dma_buf,
+                output_texture_acquire_from_node_output_pool,
+                surface_convert_into,
+                surface_id,
+                surface_release,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -158,6 +178,7 @@ fn module_host_of_one_node(
             audio_capture_streams: AudioCaptureStreamsOpenedForOneNode::under(
                 capture_device_access_prompting,
             ),
+            surfaces_lent_to_native_code,
         },
     )
 }
@@ -588,3 +609,97 @@ unsafe extern "C" fn host_capabilities_json_of(node_host: *mut c_void) -> Module
 
 #[cfg(test)]
 mod tests;
+
+unsafe extern "C" fn surface_import_dma_buf(
+    node_host: *mut c_void,
+    dma_buf_import: *const ModuleHostTableDmaBufImport,
+    imported_surface: *mut ModuleHostTableSurfaceHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a retained node host and live pointers.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(dma_buf_import) = (unsafe { dma_buf_import.as_ref() }) else {
+        return unsafe { refuse(error_message, "no DMA-BUF import was handed") };
+    };
+    let Some(imported_surface) = (unsafe { imported_surface.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the imported surface") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .import_dma_buf(dma_buf_import)
+    {
+        Ok(handle) => {
+            *imported_surface = handle;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn output_texture_acquire_from_node_output_pool(
+    node_host: *mut c_void,
+    request: *const ModuleHostTableNodeOutputTextureRequest,
+    acquired_surface: *mut ModuleHostTableSurfaceHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: as in `surface_import_dma_buf`.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return unsafe { refuse(error_message, "no texture request was handed") };
+    };
+    let Some(acquired_surface) = (unsafe { acquired_surface.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the acquired surface") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .acquire_texture_from_node_output_pool(request)
+    {
+        Ok(handle) => {
+            *acquired_surface = handle;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_convert_into(
+    node_host: *mut c_void,
+    source: ModuleHostTableSurfaceHandle,
+    destination: ModuleHostTableSurfaceHandle,
+    source_color: *const ModuleHostTableColorInfo,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: as in `surface_import_dma_buf`.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(source_color) = (unsafe { source_color.as_ref() }) else {
+        return unsafe { refuse(error_message, "no source colour description was handed") };
+    };
+    match node_host.surfaces_lent_to_native_code.convert_surface_into(
+        source,
+        destination,
+        source_color,
+    ) {
+        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_id(
+    node_host: *mut c_void,
+    surface: ModuleHostTableSurfaceHandle,
+) -> ModuleHostTableUtf8 {
+    // SAFETY: the SDK hands a retained node host.
+    unsafe { node_host_of(node_host) }
+        .surfaces_lent_to_native_code
+        .surface_id_view(surface)
+}
+
+unsafe extern "C" fn surface_release(
+    node_host: *mut c_void,
+    surface: ModuleHostTableSurfaceHandle,
+) {
+    // SAFETY: the SDK hands a retained node host.
+    unsafe { node_host_of(node_host) }
+        .surfaces_lent_to_native_code
+        .release(surface);
+}

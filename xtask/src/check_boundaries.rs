@@ -313,13 +313,12 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi for import + bind",
     },
-    // Vulkan Video encode — the RHI's codec tier, minted on the engine's
-    // device or on the owned device a codec module encodes on. Decode stays
-    // under the engine-vulkan PathPrefix entry above.
+    // Vulkan Video encode and decode — the RHI's codec tier, minted on the
+    // engine's device or on the owned device a codec module codes on.
     AllowEntry {
         path: "runtime/streamlib-vulkan-video/",
         kind: AllowKind::PathPrefix,
-        rationale: "Vulkan Video encode tier of the RHI, over any VulkanVideoCodecDevice",
+        rationale: "Vulkan Video codec tier of the RHI, over any VulkanVideoCodecDevice",
     },
     //
     // GpuContext is the wrapper layer between processors and the RHI;
@@ -464,7 +463,7 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "runtime/streamlib-vulkan-video/",
         kind: AllowKind::PathPrefix,
-        rationale: "Vulkan Video encode tier of the RHI",
+        rationale: "Vulkan Video codec tier of the RHI",
     },
     //
     // Subprocess cdylibs are intentionally NOT allowlisted post-#572 —
@@ -589,13 +588,13 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "consumer-rhi import-side carve-out chains ImportMemoryFdInfoKHR",
     },
-    // The Vulkan Video encode tier builds its RGB → NV12 compute pipeline on
-    // whichever device it encodes on — the engine's, or a codec module's
-    // owned device, where no engine kernel exists.
+    // The Vulkan Video codec tier builds its RGB → NV12 and NV12 → RGBA
+    // compute pipelines on whichever device it codes on — the engine's, or a
+    // codec module's owned device, where no engine kernel exists.
     AllowEntry {
         path: "runtime/streamlib-vulkan-video/",
         kind: AllowKind::PathPrefix,
-        rationale: "Vulkan Video encode tier of the RHI builds its own conversion pipeline",
+        rationale: "Vulkan Video codec tier of the RHI builds its own conversion pipelines",
     },
     //
     // Subprocess cdylibs are NOT allowlisted post-#572 — their entire

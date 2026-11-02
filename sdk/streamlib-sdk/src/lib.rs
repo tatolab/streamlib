@@ -100,7 +100,7 @@ pub mod sdk {
     /// Annex-B access units, the parameter sets they carry, and the codec
     /// strings those sets spell.
     pub mod video_bitstream {
-        pub use streamlib_engine::core::annex_b_access_unit::{
+        pub use streamlib_video_bitstream::annex_b_access_unit::{
             ParameterSetsFromAnnexBAccessUnit, parameter_sets_of_annex_b_access_unit,
         };
     }

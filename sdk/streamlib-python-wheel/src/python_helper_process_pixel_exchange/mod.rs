@@ -56,6 +56,7 @@ mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod surface_color_conversion;
 mod surface_copy;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,6 +72,7 @@ pub(crate) use linux::{
     CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
     HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
     HelperForeignSurfaceUnregisterDebt, OpaqueFdAllocationExportDescription,
+    foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
@@ -632,6 +634,13 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// answer — so no two doors disagree about one frame.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
+    /// Each foreign DMA-BUF this helper adopted, with whether a
+    /// `convert_surface_into` named it as its source — the parent then holds
+    /// what it resolved until the adoption's release says to drop it. Every
+    /// other source is a surface whose own release already tells the parent.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    foreign_adoptions_and_whether_a_conversion_named_them:
+        Mutex<std::collections::HashMap<String, bool>>,
 }
 
 impl HelperProcessGpuExchangeClient {
@@ -697,6 +706,9 @@ impl HelperProcessGpuExchangeClient {
             cpu_readback_exports_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             write_back_answers_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
+            foreign_adoptions_and_whether_a_conversion_named_them: Mutex::new(
+                std::collections::HashMap::new(),
+            ),
         }
     }
 

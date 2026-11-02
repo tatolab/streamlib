@@ -31,6 +31,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "copy_device_export_staging_back_to_surface")]
     CopyDeviceExportStagingBackToSurface(EscalateRequestCopyDeviceExportStagingBackToSurface),
 
+    #[serde(rename = "convert_surface_into")]
+    ConvertSurfaceInto(EscalateRequestConvertSurfaceInto),
+
     #[serde(rename = "copy_surface_to_surface")]
     CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface),
 
@@ -87,6 +90,49 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
+}
+
+/// Convert a YCbCr pixel buffer into an RGBA texture through the engine's
+/// colour converter, matrix and range only, keeping the source's transfer
+/// curve. The host records, submits and waits before it answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestConvertSurfaceInto {
+    /// An `rgba8_unorm` texture allocated with `storage_binding` usage, of
+    /// the source's extent.
+    pub(crate) destination_surface_id: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The source's colour, as `ColorInfo` axis names; an absent axis is
+    /// unspecified and takes the engine's default for a YCbCr source.
+    pub(crate) source_color: EscalateRequestColorInfoAxisNames,
+
+    /// A pixel buffer in `nv12_video_range`, `nv12_full_range` or `yuyv422`,
+    /// laid out as its registration states.
+    pub(crate) source_surface_id: String,
+}
+
+/// A `ColorInfo` as its four axis names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestColorInfoAxisNames {
+    /// `bt709`, `smpte170m`, …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) matrix: Option<String>,
+
+    /// `bt709`, `bt2020`, …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) primaries: Option<String>,
+
+    /// `full` or `limited`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) range: Option<String>,
+
+    /// `bt709`, `srgb`, …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) transfer: Option<String>,
 }
 
 /// Copy one surface's pixels into another, same format and extent. The host
