@@ -4,8 +4,8 @@
 //! The module host table a Tatolab module's native half reaches its node
 //! through: the node's lent ports, its log, the engine's monotonic clock, its
 //! stop flag, the host's capabilities, the engine's audio capture devices, and
-//! surface import, output textures and colour conversion, from any thread,
-//! without Python.
+//! surface import, output textures, colour conversion and host-memory pixel
+//! writes, from any thread, without Python.
 //!
 //! The lent `tatolab.runtime` builds the table; a node's Python half opens it
 //! with `ctx.open_module_host_table(output_ports=[...], input_ports=[...])` and
@@ -22,9 +22,10 @@ pub mod module_host_table_abi;
 pub mod module_host_tracing;
 
 pub use module_host::{
-    ModuleHost, ModuleHostColorInfo, ModuleHostError, ModuleHostForeignDmaBuf, ModuleHostInputPort,
-    ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort,
-    ModuleHostReadMessage, ModuleHostSurface, refuse_a_module_host_table_this_module_cannot_read,
+    ModuleHost, ModuleHostColorInfo, ModuleHostError, ModuleHostForeignDmaBuf,
+    ModuleHostHostMemoryPixels, ModuleHostInputPort, ModuleHostLogLevel,
+    ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort, ModuleHostReadMessage,
+    ModuleHostSurface, refuse_a_module_host_table_this_module_cannot_read,
 };
 pub use module_host_audio_capture::{
     ModuleHostAudioCaptureStream, ModuleHostAudioCaptureStreamLiveness,

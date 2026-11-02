@@ -13,8 +13,8 @@
 //! Every verb is callable from any thread the module owns and never takes
 //! Python's GIL, except [`ModuleHostTable::output_port_set_catalog_entry`],
 //! which attaches to the interpreter for its round trip to the parent. The
-//! surface verbs minor 2 adds reach the parent over the helper's native escalate
-//! channel, with no interpreter on either end.
+//! surface verbs minors 2 and 3 add reach the parent over the helper's native
+//! escalate channel, with no interpreter on either end.
 
 use std::ffi::{CStr, c_void};
 
@@ -23,7 +23,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 2;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 3;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -154,6 +154,22 @@ pub struct ModuleHostTableColorInfo {
     pub transfer: ModuleHostTableUtf8,
     pub matrix: ModuleHostTableUtf8,
     pub range: ModuleHostTableUtf8,
+}
+
+/// Pixels in the caller's memory, `height` rows of `width` pixels each,
+/// `row_stride_bytes` apart; the bytes stay the caller's for the length of
+/// the call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableHostMemoryPixels {
+    /// The first byte of the first row; at least
+    /// `row_stride_bytes × (height − 1) + width × 4` bytes long.
+    pub pixels: ModuleHostTableBytes,
+    /// A pixel format wire name: `bgra32` or `rgba32`.
+    pub pixel_format: ModuleHostTableUtf8,
+    pub width: u32,
+    pub height: u32,
+    pub row_stride_bytes: u64,
 }
 
 /// The caller's buffer a refused verb writes its message into.
@@ -396,6 +412,16 @@ pub struct ModuleHostTable {
     /// texture's slot stays the pool's.
     pub surface_release:
         unsafe extern "C" fn(node_host: *mut c_void, surface: ModuleHostTableSurfaceHandle),
+    /// Minor 3: write CPU pixels over every pixel of an output-pool texture of
+    /// the same extent, swapping channel order between `bgra32` and `rgba32`
+    /// where the texture's differs, and return once the texture's next reader
+    /// sees them.
+    pub surface_write_from_host_memory: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        destination: ModuleHostTableSurfaceHandle,
+        host_memory_pixels: *const ModuleHostTableHostMemoryPixels,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTableUtf8 {
@@ -657,7 +683,42 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_in_order.into_iter().enumerate() {
             assert_eq!(offset, 16 + (19 + slot) * POINTER, "pointer slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 24 * POINTER);
+    }
+
+    /// Minor 3 appends its host-memory write after the minor 2 surface verbs.
+    #[test]
+    fn the_v1_3_table_appends_its_host_memory_write_after_every_v1_2_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, surface_write_from_host_memory),
+            16 + 24 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 25 * POINTER);
+    }
+
+    #[test]
+    fn host_memory_pixels_put_their_views_then_their_geometry() {
+        assert_eq!(offset_of!(ModuleHostTableHostMemoryPixels, pixels), 0);
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, pixel_format),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, width),
+            4 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, height),
+            4 * POINTER + 4
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, row_stride_bytes),
+            4 * POINTER + 8
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableHostMemoryPixels>(),
+            4 * POINTER + 16
+        );
+        assert_eq!(align_of::<ModuleHostTableHostMemoryPixels>(), 8);
     }
 
     #[test]

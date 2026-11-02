@@ -412,6 +412,7 @@ jobs:
             . -> target
             packages/streamlib-webrtc -> target
             packages/tatolab-camera -> target
+            packages/tatolab-browser -> target
             packages/tatolab-microphone -> target
             packages/streamlib-h264 -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -595,6 +596,19 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
           .venv/bin/python -m mypy.stubtest tatolab.camera._native
+          uvx pyright@1.1.411
+
+      # The browser wheel links CEF, which CI does not download: `cef/dox`
+      # compiles the bindings unlinked, so CI holds its pure logic, lints and
+      # types; its rendering runs in the rig.
+      - name: "Browser: formatting, crate tests, clippy and types"
+        working-directory: packages/tatolab-browser
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --workspace --features cef/dox
+          cargo clippy --locked --workspace --all-targets --features cef/dox -- -D warnings
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           uvx pyright@1.1.411
 
       - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"

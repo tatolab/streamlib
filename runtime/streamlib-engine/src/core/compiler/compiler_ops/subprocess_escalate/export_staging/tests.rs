@@ -274,6 +274,58 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     );
 }
 
+/// `whole_buffer_to_image` through the seam publishes a staging written in
+/// full with no read first — where `buffer_to_image` is refused. Pins the
+/// direction mapping. GPU-gated: skips when no device is present.
+#[test]
+fn the_seam_uploads_a_whole_staging_without_a_read_in() {
+    const UPLOAD: u8 = 0x2d;
+    let Some(gpu) = gpu_or_skip("the_seam_uploads_a_whole_staging_without_a_read_in") else {
+        return;
+    };
+    let (pool_id, pooled_backing) = gpu
+        .acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)
+        .expect("acquire a pool-only frame");
+    let surface_id = pool_id.to_string();
+    let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+    let registry = EscalateHandleRegistry::new();
+
+    let staging = gpu
+        .surface_export_staging(
+            &surface_id,
+            crate::core::context::SurfaceExportStagingResidency::HostVisible,
+        )
+        .expect("the staging the upload writes");
+    let mapped = staging.staging_buffer().mapped_ptr();
+    assert!(!mapped.is_null(), "a host-visible staging must be mapped");
+    unsafe { std::ptr::write_bytes(mapped, UPLOAD, staging.staging_byte_size() as usize) };
+
+    let uploaded = handle_escalate_op(
+        &sandbox,
+        &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+            request_id: "req-upload".into(),
+            surface_id: surface_id.clone(),
+            direction: EscalateRequestRunCpuReadbackCopyDirection::WholeBufferToImage,
+        }),
+    )
+    .expect("run_cpu_readback_copy always produces a response");
+    assert!(
+        matches!(uploaded, EscalateResponse::Ok(_)),
+        "an upload needs no read-in, got {uploaded:?}"
+    );
+
+    let plane = pooled_backing.plane_base_address(0);
+    let backing =
+        unsafe { std::slice::from_raw_parts(plane, pooled_backing.plane_size(0) as usize) };
+    assert!(
+        backing.iter().all(|byte| *byte == UPLOAD),
+        "the upload must reach the pooled backing; first mismatch at {:?}",
+        backing.iter().position(|byte| *byte != UPLOAD)
+    );
+}
+
 /// The open op names itself, not its device-export twin — the two
 /// share one handler and differ only by residency, so a swapped
 /// mapping would surface here as the wrong op in the message.

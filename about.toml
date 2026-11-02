@@ -67,3 +67,9 @@ private = { ignore = true }
 # same choice, and the notices must reproduce the arm we actually took.
 [r-efi]
 accepted = ["MIT"]
+
+# `libbz2-rs-sys` is under bzip2's own permissive licence. It reaches only
+# `tatolab-browser`'s closure, as a build dependency that unpacks the CEF
+# archive, and is accepted for that crate alone.
+[libbz2-rs-sys]
+accepted = ["bzip2-1.0.6"]

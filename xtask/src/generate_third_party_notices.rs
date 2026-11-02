@@ -641,7 +641,27 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
                     &projects_compiled_in,
                 )?);
             }
-            projects_compiled_in.len()
+            let cef_notice_appended =
+                extension_lockfile_resolves(&project_root, CEF_BINDINGS_CRATE_NAME)?;
+            if cef_notice_appended {
+                let cef_binary_distribution_root = std::env::var_os(
+                    CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE,
+                )
+                .map(PathBuf::from)
+                .with_context(|| {
+                    format!(
+                        "{} resolves `{CEF_BINDINGS_CRATE_NAME}`, so its wheel ships CEF: set \
+                             {CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE} to the extracted CEF \
+                             binary distribution whose licence it reproduces",
+                        project_root.display()
+                    )
+                })?;
+                notices.push('\n');
+                notices.push_str(&render_the_cef_binary_distributions_notice(
+                    &cef_binary_distribution_root,
+                )?);
+            }
+            projects_compiled_in.len() + usize::from(cef_notice_appended)
         }
     };
 
@@ -913,17 +933,67 @@ fn render_the_appendix_cargo_about_cannot_produce(
 /// Vulkan-Headers it includes into whatever links it.
 const VULKANALIA_VMA_FORK_CRATE_NAME: &str = "tatolab-vulkanalia-vma";
 
+/// The crate whose build script links the CEF binary distribution an
+/// extension then ships beside its own library.
+const CEF_BINDINGS_CRATE_NAME: &str = "cef-dll-sys";
+
+/// Where the extracted CEF binary distribution is found, as `cef-dll-sys`'s
+/// own build reads it.
+const CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE: &str = "CEF_PATH";
+
+/// The licence file at the root of every CEF binary distribution.
+const CEF_LICENCE_FILE_NAME: &str = "LICENSE.txt";
+
+/// The file at the root of every CEF binary distribution listing Chromium's
+/// own third-party licences, which the extension's wheel ships beside CEF.
+const CHROMIUM_CREDITS_FILE_NAME: &str = "CREDITS.html";
+
+/// Whether the extension's own lockfile resolves `package_name`.
+fn extension_lockfile_resolves(extension_project_root: &Path, package_name: &str) -> Result<bool> {
+    let lockfile_path = extension_project_root.join("Cargo.lock");
+    let lockfile = std::fs::read_to_string(&lockfile_path)
+        .with_context(|| format!("reading {}", lockfile_path.display()))?;
+    let package_name_line = format!("name = \"{package_name}\"");
+    Ok(lockfile
+        .lines()
+        .any(|line| line.trim() == package_name_line))
+}
+
+/// CEF's own licence, read from the binary distribution the wheel ships, and
+/// where Chromium's component licences ride in the wheel beside it.
+fn render_the_cef_binary_distributions_notice(
+    cef_binary_distribution_root: &Path,
+) -> Result<String> {
+    let licence_path = cef_binary_distribution_root.join(CEF_LICENCE_FILE_NAME);
+    let licence_text = read_notice_file(&licence_path, "Chromium Embedded Framework")?;
+    let credits_path = cef_binary_distribution_root.join(CHROMIUM_CREDITS_FILE_NAME);
+    anyhow::ensure!(
+        credits_path.is_file(),
+        "{} is missing, so the wheel would ship Chromium without its credits",
+        credits_path.display()
+    );
+    Ok(format!(
+        "## Chromium Embedded Framework and Chromium (BSD-3-Clause)\n\
+         \n\
+         The wheel ships CEF's binary distribution, which is Chromium. CEF's own\n\
+         licence follows. Chromium's and every component it builds in are listed,\n\
+         each with its licence, in `{CHROMIUM_CREDITS_FILE_NAME}`, which ships beside\n\
+         CEF in the wheel's `tatolab/browser/cef/` directory.\n\
+         \n\
+         Upstream: <https://github.com/chromiumembedded/cef>\n\
+         \n\
+         {}",
+        fenced_licence_text_block(&licence_text).context("fencing the CEF licence")?,
+    ))
+}
+
 /// The vendored projects an extension's own lockfile shows it compiles in:
 /// the VMA fork's trees when it resolves `tatolab-vulkanalia-vma`.
 fn projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
     extension_project_root: &Path,
 ) -> Result<Vec<&'static ProjectWhoseNoticeCargoAboutCannotProduce>> {
-    let lockfile_path = extension_project_root.join("Cargo.lock");
-    let lockfile = std::fs::read_to_string(&lockfile_path)
-        .with_context(|| format!("reading {}", lockfile_path.display()))?;
-    let resolves_the_vma_fork = lockfile
-        .lines()
-        .any(|line| line.trim() == format!("name = \"{VULKANALIA_VMA_FORK_CRATE_NAME}\""));
+    let resolves_the_vma_fork =
+        extension_lockfile_resolves(extension_project_root, VULKANALIA_VMA_FORK_CRATE_NAME)?;
     Ok(PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
         .iter()
         .filter(|project| {
@@ -1237,6 +1307,52 @@ mod tests {
             .expect("read lockfile")
             .is_empty()
         );
+    }
+
+    #[test]
+    fn an_extension_resolving_the_cef_bindings_is_told_apart_from_one_that_does_not() {
+        let browser_root = extension_root_whose_lockfile_resolves(&["pyo3", "cef-dll-sys"]);
+        let camera_root = extension_root_whose_lockfile_resolves(&["pyo3", "v4l"]);
+        assert!(extension_lockfile_resolves(browser_root.path(), CEF_BINDINGS_CRATE_NAME).unwrap());
+        assert!(!extension_lockfile_resolves(camera_root.path(), CEF_BINDINGS_CRATE_NAME).unwrap());
+    }
+
+    #[test]
+    fn the_cef_notice_reproduces_the_distributions_licence_and_names_chromiums_credits() {
+        let cef_binary_distribution = TempDir::new().expect("tempdir");
+        fs::write(
+            cef_binary_distribution.path().join(CEF_LICENCE_FILE_NAME),
+            "Copyright (c) 2008 Marshall A. Greenblatt.\n",
+        )
+        .expect("write licence");
+        fs::write(
+            cef_binary_distribution
+                .path()
+                .join(CHROMIUM_CREDITS_FILE_NAME),
+            "<html/>",
+        )
+        .expect("write credits");
+
+        let notice = render_the_cef_binary_distributions_notice(cef_binary_distribution.path())
+            .expect("render");
+
+        assert!(notice.contains("Marshall A. Greenblatt"));
+        assert!(notice.contains(CHROMIUM_CREDITS_FILE_NAME));
+    }
+
+    #[test]
+    fn a_cef_distribution_without_chromiums_credits_is_refused() {
+        let cef_binary_distribution = TempDir::new().expect("tempdir");
+        fs::write(
+            cef_binary_distribution.path().join(CEF_LICENCE_FILE_NAME),
+            "Copyright (c) 2008 Marshall A. Greenblatt.\n",
+        )
+        .expect("write licence");
+
+        let refusal =
+            render_the_cef_binary_distributions_notice(cef_binary_distribution.path()).unwrap_err();
+
+        assert!(refusal.to_string().contains(CHROMIUM_CREDITS_FILE_NAME));
     }
 
     #[test]
