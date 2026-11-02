@@ -428,6 +428,7 @@ jobs:
             packages/streamlib-webrtc -> target
             packages/tatolab-camera -> target
             packages/tatolab-microphone -> target
+            packages/tatolab-speaker -> target
             packages/streamlib-h264 -> target
             packages/streamlib-h265 -> target
             packages/tatolab-rive -> target
@@ -628,6 +629,16 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.rive._native
           uvx pyright@1.1.411
 
+      # Pure Python; its pixel tests ran in the integration suite above, whose
+      # venv installs it.
+      - name: "Compositor: GPU-free tests and types"
+        working-directory: packages/tatolab-compositor
+        run: |
+          uv venv --python 3.10 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
+          .venv/bin/python -m pytest tests -v
+          uvx pyright@1.1.411
+
       - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
         working-directory: packages/tatolab-microphone
         run: |
@@ -650,6 +661,31 @@ jobs:
         working-directory: packages/tatolab-microphone
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.microphone._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
+
+      - name: "Extension: build tatolab-speaker into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-speaker
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-speaker formatting, crate tests, clippy and types"
+        working-directory: packages/tatolab-speaker
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uvx pyright@1.1.411
+
+      # The runner has no audio device, so the node plays into the null
+      # backend through the same exported interface a device uses.
+      - name: "Extension: tatolab-speaker stubs and tests"
+        working-directory: packages/tatolab-speaker
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.speaker._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v
 
@@ -947,6 +983,7 @@ jobs:
             . -> target
             packages/streamlib-webrtc -> target
             packages/tatolab-microphone -> target
+            packages/tatolab-speaker -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache the local relay build
@@ -1064,6 +1101,29 @@ jobs:
         working-directory: packages/tatolab-microphone
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.microphone._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
+
+      - name: "Extension: build tatolab-speaker into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-speaker
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-speaker crate tests and clippy"
+        working-directory: packages/tatolab-speaker
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+
+      - name: "Extension: tatolab-speaker stubs and tests"
+        working-directory: packages/tatolab-speaker
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.speaker._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v
 

@@ -49,7 +49,7 @@ pub use audio_device_backend::{
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     RequestedAudioStreamFormat, SharedAudioDeviceBackend, open_capture_stream_in_requested_format,
-    probe_audio_device_backend,
+    open_playback_stream_in_requested_format, probe_audio_device_backend,
 };
 pub use capture_device_access_prompting::{
     CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,

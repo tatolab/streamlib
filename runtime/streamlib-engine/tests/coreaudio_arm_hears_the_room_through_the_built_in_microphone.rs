@@ -22,7 +22,7 @@ use std::time::Duration;
 use streamlib_engine::apple_coreaudio_audio_tier::CoreAudioStreamDirection;
 use streamlib_engine::core::context::{
     AudioClockConfig, AudioDeviceStreamRequest, AudioSampleFormat, CaptureDeviceAccessPrompting,
-    CapturedAudioBlockFromDevice, SoftwareAudioClock,
+    CapturedAudioBlockFromDevice, RequestedAudioStreamFormat, SoftwareAudioClock,
 };
 
 #[path = "support/coreaudio_audio_tier.rs"]
@@ -65,6 +65,7 @@ fn the_built_in_microphone_carries_more_than_digital_silence() {
                 48_000, 512,
             ))),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat::default(),
         })
         .expect("the built-in microphone opens by its UID");
     let capture_format = capture_stream.stream_format();

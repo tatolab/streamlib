@@ -23,7 +23,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 2;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 3;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -236,6 +236,55 @@ pub type ModuleHostTableCapturedAudioBlockCallback = unsafe extern "C" fn(
     captured_block: *const ModuleHostTableCapturedAudioBlock,
 );
 
+/// What a module asks the host to open a playback stream on. Minor 3.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableAudioPlaybackStreamRequest {
+    /// The backend-named device; empty takes the backend's default.
+    pub device_id: ModuleHostTableUtf8,
+    /// The format every block handed to the stream is in; the host converts it
+    /// to the device's, and refuses the open where it cannot.
+    pub requested_format: ModuleHostTableAudioStreamFormat,
+    /// Always zero; keeps the struct's size a multiple of 8 on every target.
+    pub reserved: u32,
+}
+
+/// What a playback stream opened in. Minor 3.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableOpenedAudioPlaybackStream {
+    /// The format every block handed to the stream must be in.
+    pub stream_format: ModuleHostTableAudioStreamFormat,
+    /// Per-channel samples the device asks for in one cycle; `0` where the
+    /// backend does not report its device's period.
+    pub device_period_in_per_channel_samples: u32,
+}
+
+/// One block a playback device asks for, borrowed for the length of the
+/// callback it is handed to.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableAudioBlockRequestedByDevice {
+    /// The device's buffer, to be filled whole with interleaved little-endian
+    /// scalars in the stream's format; whatever is left unwritten plays as
+    /// whatever was there.
+    pub interleaved_sample_bytes_to_fill: *mut u8,
+    /// The buffer's length in bytes.
+    pub interleaved_sample_byte_count: usize,
+    /// Per-channel samples the buffer has room for.
+    pub sample_count: u32,
+    /// Always zero; keeps the struct's size a multiple of 8 on every target.
+    pub reserved: u32,
+}
+
+/// What a playback stream calls each time its device needs samples, on the
+/// host's device thread. It must not block, and must not call a verb on the
+/// stream asking.
+pub type ModuleHostTableAudioBlockRequestedByDeviceCallback = unsafe extern "C" fn(
+    callback_context: *mut c_void,
+    requested_block: *const ModuleHostTableAudioBlockRequestedByDevice,
+);
+
 /// The verbs a node's native code reaches its node through, and the node host
 /// they act on. Every verb's first argument is [`ModuleHostTable::node_host`].
 #[repr(C)]
@@ -396,6 +445,45 @@ pub struct ModuleHostTable {
     /// texture's slot stays the pool's.
     pub surface_release:
         unsafe extern "C" fn(node_host: *mut c_void, surface: ModuleHostTableSurfaceHandle),
+    /// Open a playback stream through the engine's audio device backend in the
+    /// requested format, and write the format and device period it opened
+    /// with. Minor 3.
+    pub audio_playback_stream_open: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        request: *const ModuleHostTableAudioPlaybackStreamRequest,
+        opened_stream: *mut ModuleHostTableAudioStreamHandle,
+        opened_playback_stream: *mut ModuleHostTableOpenedAudioPlaybackStream,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Begin calling `fill_callback` with `callback_context` each time the
+    /// device needs samples, replacing any callback an earlier call installed.
+    /// The replaced callback is not called once this returns. Minor 3.
+    pub audio_playback_stream_start: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        fill_callback: ModuleHostTableAudioBlockRequestedByDeviceCallback,
+        callback_context: *mut c_void,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Stop asking; the callback is not called again once this returns.
+    /// Minor 3.
+    pub audio_playback_stream_stop: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// [`MODULE_HOST_TABLE_STATUS_OK`] while the device serves the stream;
+    /// [`MODULE_HOST_TABLE_STATUS_ENDED`], with the failure written, once it
+    /// stopped. Minor 3.
+    pub audio_playback_stream_liveness: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Stop asking and close the stream; its handle names nothing after.
+    /// Minor 3.
+    pub audio_playback_stream_close:
+        unsafe extern "C" fn(node_host: *mut c_void, stream: ModuleHostTableAudioStreamHandle),
 }
 
 impl ModuleHostTableUtf8 {
@@ -602,7 +690,94 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_appended_at_minor_1.into_iter().enumerate() {
             assert_eq!(offset, 16 + (14 + slot) * POINTER, "minor 1 slot {slot}");
         }
+    }
+
+    /// Minor 3 appends its audio playback verbs after every v1.2 field.
+    #[test]
+    fn the_v1_3_table_appends_its_audio_playback_verbs_after_every_v1_2_field() {
+        let pointer_slots_appended_at_minor_3 = [
+            offset_of!(ModuleHostTable, audio_playback_stream_open),
+            offset_of!(ModuleHostTable, audio_playback_stream_start),
+            offset_of!(ModuleHostTable, audio_playback_stream_stop),
+            offset_of!(ModuleHostTable, audio_playback_stream_liveness),
+            offset_of!(ModuleHostTable, audio_playback_stream_close),
+        ];
+        for (slot, offset) in pointer_slots_appended_at_minor_3.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (24 + slot) * POINTER, "minor 3 slot {slot}");
+        }
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 29 * POINTER);
         assert_eq!(align_of::<ModuleHostTable>(), 8);
+    }
+
+    #[test]
+    fn a_playback_request_is_the_device_id_then_the_format() {
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioPlaybackStreamRequest, device_id),
+            0
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioPlaybackStreamRequest, requested_format),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioPlaybackStreamRequest, reserved),
+            2 * POINTER + 12
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableAudioPlaybackStreamRequest>(),
+            2 * POINTER + 16
+        );
+        assert_eq!(
+            align_of::<ModuleHostTableAudioPlaybackStreamRequest>(),
+            POINTER
+        );
+    }
+
+    #[test]
+    fn an_opened_playback_stream_is_its_format_then_its_device_period() {
+        assert_eq!(
+            offset_of!(ModuleHostTableOpenedAudioPlaybackStream, stream_format),
+            0
+        );
+        assert_eq!(
+            offset_of!(
+                ModuleHostTableOpenedAudioPlaybackStream,
+                device_period_in_per_channel_samples
+            ),
+            12
+        );
+        assert_eq!(size_of::<ModuleHostTableOpenedAudioPlaybackStream>(), 16);
+        assert_eq!(align_of::<ModuleHostTableOpenedAudioPlaybackStream>(), 4);
+    }
+
+    #[test]
+    fn a_block_requested_by_a_device_lays_out_on_8_byte_fields() {
+        assert_eq!(
+            offset_of!(
+                ModuleHostTableAudioBlockRequestedByDevice,
+                interleaved_sample_bytes_to_fill
+            ),
+            0
+        );
+        assert_eq!(
+            offset_of!(
+                ModuleHostTableAudioBlockRequestedByDevice,
+                interleaved_sample_byte_count
+            ),
+            POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioBlockRequestedByDevice, sample_count),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioBlockRequestedByDevice, reserved),
+            2 * POINTER + 4
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableAudioBlockRequestedByDevice>(),
+            2 * POINTER + 8
+        );
     }
 
     #[test]
@@ -657,7 +832,6 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_in_order.into_iter().enumerate() {
             assert_eq!(offset, 16 + (19 + slot) * POINTER, "pointer slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 24 * POINTER);
     }
 
     #[test]

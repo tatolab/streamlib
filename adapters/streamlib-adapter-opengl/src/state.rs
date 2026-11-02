@@ -6,10 +6,7 @@
 //! enforces at the API level.
 
 use khronos_egl as egl;
-use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
-
-#[allow(dead_code)] // referenced via SurfaceState; kept private to the adapter
-type EglImage = egl::Image;
+use streamlib_surface_adapter::SurfaceRegistration;
 
 /// Inputs the host hands to
 /// [`crate::OpenGlSurfaceAdapter::register_host_surface`].
@@ -53,8 +50,6 @@ pub struct HostSurfaceRegistration {
 /// it through to the read view so the consumer's GLSL knows which
 /// sampler type to use.
 pub(crate) struct SurfaceState {
-    #[allow(dead_code)] // tracing / debug only
-    pub(crate) surface_id: SurfaceId,
     pub(crate) image: egl::Image,
     pub(crate) texture: u32,
     pub(crate) target: u32,

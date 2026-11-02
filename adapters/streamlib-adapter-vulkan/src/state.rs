@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
-use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::SurfaceRegistration;
 
 /// Inputs handed to [`crate::VulkanSurfaceAdapter::register_host_surface`].
 ///
@@ -52,8 +52,6 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
 /// the underlying Vulkan timeline semaphore supports (u64);
 /// `WriteContended` is a fast pre-check before the timeline wait.
 pub(crate) struct SurfaceState<P: DevicePrivilege> {
-    #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
-    pub(crate) surface_id: SurfaceId,
     pub(crate) texture: Arc<P::Texture>,
     /// `produce_done` timeline — see
     /// [`HostSurfaceRegistration::produce_done`].

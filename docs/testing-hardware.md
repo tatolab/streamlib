@@ -204,12 +204,7 @@ instead (it implies `hardware-tests`), and is run by someone at the machine:
 ```bash
 cargo test -p streamlib-engine --features audible-hardware-tests \
   --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
-cargo test -p streamlib-media-builtins --features audible-hardware-tests \
-  --test speaker_sink_matches_its_device -- --test-threads=1
 ```
-
-The second is gated on a Mac only, where the CoreAudio arm plays it through the
-default output; on Linux it is not gated.
 
 ### Microphone access for the CoreAudio capture tests
 

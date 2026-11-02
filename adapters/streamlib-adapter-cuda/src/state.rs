@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
-use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::SurfaceRegistration;
 
 /// Buffer-flavored registration — handed to
 /// [`crate::CudaSurfaceAdapter::register_host_surface`].
@@ -119,8 +119,6 @@ pub(crate) enum SurfaceResource<P: DevicePrivilege> {
 /// `end_*_access` stay sequenced — the trait's `&self` shape is
 /// satisfied by interior mutability.
 pub(crate) struct SurfaceState<P: DevicePrivilege> {
-    #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
-    pub(crate) surface_id: SurfaceId,
     pub(crate) resource: SurfaceResource<P>,
     /// `produce_done` timeline — see
     /// [`HostSurfaceRegistration::produce_done`].
@@ -128,13 +126,6 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     /// `consume_done` timeline — see
     /// [`HostSurfaceRegistration::consume_done`].
     pub(crate) consume_done: Arc<P::TimelineSemaphore>,
-    /// Vulkan image layout the resource is in. Load-bearing for image
-    /// surfaces (consumed by the cross-process release shim that
-    /// composes `VulkanSurfaceAdapter::release_to_foreign`); ignored on
-    /// the buffer path.
-    #[allow(dead_code)]
-    // consumed by the cross-process release shim (see HostImageSurfaceRegistration::initial_layout)
-    pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
     /// Per-process monotonic signal counter. This adapter instance only

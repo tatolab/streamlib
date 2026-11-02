@@ -278,12 +278,17 @@ fn sample_external_oes_through_surface(
 /// `[64, 128, 191, 255]`). Tolerates ±6 LSB to absorb sampler /
 /// format-conversion rounding.
 fn assert_probe_pixels_match_clear_color(probe_pixels: &[u8]) {
-    let mismatch = probe_pixels.chunks_exact(4).enumerate().find(|(_, px)| {
-        (px[0] as i32 - 64).abs() > 6
-            || (px[1] as i32 - 128).abs() > 6
-            || (px[2] as i32 - 191).abs() > 6
-            || (px[3] as i32 - 255).abs() > 6
-    });
+    let mismatch = probe_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .find(|(_, px)| {
+            (px[0] as i32 - 64).abs() > 6
+                || (px[1] as i32 - 128).abs() > 6
+                || (px[2] as i32 - 191).abs() > 6
+                || (px[3] as i32 - 255).abs() > 6
+        });
     assert!(
         mismatch.is_none(),
         "GL EXTERNAL_OES sample saw unexpected pixel: {mismatch:?}"

@@ -134,6 +134,15 @@ VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop\` this wheel into it"
 
+# The streams capture and play through the microphone and speaker modules,
+# built from this checkout into that venv when it cannot import them.
+if ! "$VENV_PYTHON" -c 'import tatolab.microphone, tatolab.speaker' >/dev/null 2>&1; then
+    say "building tatolab-microphone and tatolab-speaker into $PACKAGE_DIR/.venv"
+    VIRTUAL_ENV="$PACKAGE_DIR/.venv" uv pip install --quiet \
+        "$REPO_ROOT/packages/tatolab-microphone" "$REPO_ROOT/packages/tatolab-speaker" >&2 \
+        || cannot_run "the audio modules did not build into $PACKAGE_DIR/.venv"
+fi
+
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
 # would be measured and reported as a PASS for code that is not in the tree.
 if ! IMPORT_FAILURE="$("$VENV_PYTHON" -c '

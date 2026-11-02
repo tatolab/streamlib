@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use streamlib_engine::core::context::{
     AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
-    SoftwareAudioClock,
+    RequestedAudioStreamFormat, SoftwareAudioClock,
 };
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
@@ -52,6 +52,7 @@ fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
                 48_000, 512,
             ))),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat::default(),
         })
         .ok()?;
     Some(backend)

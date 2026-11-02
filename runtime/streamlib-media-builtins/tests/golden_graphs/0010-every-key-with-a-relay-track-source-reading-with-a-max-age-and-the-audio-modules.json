@@ -132,7 +132,7 @@
     {
       "id": "golden09",
       "name": "microphonesource",
-      "type": "tatolab.stream:MicrophoneSource",
+      "type": "tatolab.microphone:MicrophoneSource",
       "config": {
         "device_id": "default"
       },
@@ -179,7 +179,7 @@
     {
       "id": "golden12",
       "name": "speakersink",
-      "type": "tatolab.stream:SpeakerSink",
+      "type": "tatolab.speaker:SpeakerSink",
       "config": {
         "device_id": "default"
       },
@@ -199,7 +199,8 @@
       "config": {
         "relay_url": "http://127.0.0.1:4443",
         "broadcast": "golden-desk/camera-rig.hang",
-        "track": "camerasource/video"
+        "track": "camerasource/video",
+        "max_age": 40
       },
       "config_checksum": 0,
       "ports": {

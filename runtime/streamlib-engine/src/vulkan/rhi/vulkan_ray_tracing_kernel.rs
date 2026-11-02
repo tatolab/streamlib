@@ -146,7 +146,9 @@ impl VulkanRayTracingKernelInner {
         for stage in descriptor.stages {
             let spirv: Vec<u32> = stage
                 .spv
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
@@ -186,7 +188,7 @@ impl VulkanRayTracingKernelInner {
 
         // Group create infos (one per declared group).
         let group_infos: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
-            descriptor.groups.iter().map(|g| group_to_vk(g)).collect();
+            descriptor.groups.iter().map(group_to_vk).collect();
 
         // Descriptor-set layout + pool + set (one set, mirrors compute kernel's shape).
         let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
@@ -1746,9 +1748,8 @@ fn upload_bytes_to_buffer(
 
     let queue = vulkan_device.queue();
     let queue_family = vulkan_device.queue_family_index();
-    let command_pool = create_command_pool(device, queue_family).map_err(|e| {
+    let command_pool = create_command_pool(device, queue_family).inspect_err(|_e| {
         unsafe { allocator.destroy_buffer(staging_buffer, staging_allocation) };
-        e
     })?;
     let cmd = match allocate_command_buffer(device, command_pool) {
         Ok(c) => c,

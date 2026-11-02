@@ -13,12 +13,18 @@
 # `bin/tatolab`, `bin/tatolabd` and `lib/tatolab/lend/` — at
 # `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else `<repository>/target/tatolab-runtime`.
 # A driver measures that unit, so rebuild it before a run that should see an
-# edit to the engine. A unit built with `--machine-directories-under-a-test-root`
-# is the integration suite's, and is refused.
+# edit to the engine.
 #
-# A fixture starts its own `tatolabd`, which takes the machine's real runtime
+# A fixture starts its own `tatolabd`. From a unit built with plain
+# `cargo xtask build-runtime`, that runtime takes the machine's real runtime
 # lock and serves this user's local API socket, so it refuses to run while
-# another runtime holds the machine. It writes each stream it runs as a project
+# another runtime holds the machine. From a unit built with
+# `--machine-directories-under-a-test-root`, each start gets a scratch
+# TATOLAB_TEST_MACHINE_ROOT for its lock, state and local API socket, and its
+# local relay and loopback listing take the test ports below, so it runs beside
+# the machine's runtime without touching it. The devices are the machine's
+# either way: an exclusive one (a camera, a microphone, a speaker) still takes
+# one run at a time. It writes each stream it runs as a project
 # of one stream, loads it with `tatolab run --dir`, addresses it by the stream
 # id the runtime gives it, and removes the project and then stops the runtime.
 #
@@ -45,6 +51,18 @@ FIXTURE_PYTHON="$FIXTURE_VENV_DIRECTORY/bin/python"
 # TATOLAB_TEST_MACHINE_ROOT.
 TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER="$RUNTIME_UNIT_DIRECTORY/machine-directories-under-a-test-root"
 
+# Whether the runtime unit runs its machine directories under a test root.
+the_runtime_unit_runs_under_a_test_machine_root() {
+    [ -e "$TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER" ]
+}
+
+# The ports a test-root unit's runtime serves its local relay and loopback
+# listing on: never the machine runtime's 4443, 4445 and 4446. Override them
+# when another session's runtime holds these.
+FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT="${STREAMLIB_FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT:-14443}"
+FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT="${STREAMLIB_FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT:-14445}"
+FIXTURE_TEST_LOOPBACK_HTTP_PORT="${STREAMLIB_FIXTURE_TEST_LOOPBACK_HTTP_PORT:-14446}"
+
 # Exits 77, naming what is missing, unless the runtime unit can start a stream.
 require_the_runtime_unit() {
     local runtime_unit_member
@@ -58,12 +76,6 @@ require_the_runtime_unit() {
     if [ ! -f "$RUNTIME_UNIT_LEND_DIRECTORY/tatolab/runtime/__init__.py" ]; then
         echo "SKIP: the runtime unit at $RUNTIME_UNIT_DIRECTORY has no lend — rebuild it with" \
             "\`cargo xtask build-runtime\`" >&2
-        exit 77
-    fi
-    if [ -e "$TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER" ]; then
-        echo "SKIP: the runtime unit at $RUNTIME_UNIT_DIRECTORY is the integration suite's" \
-            "(it carries $TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER), whose binaries run only under a" \
-            "test machine root — rebuild it with \`cargo xtask build-runtime\`" >&2
         exit 77
     fi
 }
@@ -112,6 +124,21 @@ sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
     fi
 }
 
+# Builds the microphone and speaker modules from this checkout into the fixture
+# venv when it cannot import them, exiting 1 when they do not build. A fixture
+# stream that captures or plays imports them, as any stream would.
+require_the_audio_modules_in_the_fixture_venv() {
+    if "$FIXTURE_PYTHON" -c 'import tatolab.microphone, tatolab.speaker' >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "building tatolab-microphone and tatolab-speaker into $FIXTURE_VENV_DIRECTORY" >&2
+    if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet \
+        "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-microphone" \
+        "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-speaker" >&2; then
+        echo "ERROR: the audio modules did not build into $FIXTURE_VENV_DIRECTORY" >&2
+        exit 1
+    fi
+}
 
 # Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`,
 # `expose`).
@@ -119,10 +146,15 @@ tatolab_observation_verb() {
     "$TATOLAB_EXECUTABLE" "$@"
 }
 
-# The machine's local relay at its loopback listener, which serves every
-# private and public port; and the runtime's loopback HTTP listing.
-LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:4443"
-LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:4446/"
+# The fixture runtime's local relay at its loopback listener, which serves
+# every private and public port; and its loopback HTTP listing.
+if the_runtime_unit_runs_under_a_test_machine_root; then
+    LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:$FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT"
+    LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:$FIXTURE_TEST_LOOPBACK_HTTP_PORT/"
+else
+    LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:4443"
+    LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:4446/"
+fi
 TATOLAB_READ_TRACK_EXECUTABLE="$FIXTURE_REPOSITORY_ROOT/target/release/tatolab-read-track"
 
 # Builds `tatolab-read-track` from this checkout, exiting 1 when it does not
@@ -174,14 +206,19 @@ read_the_track_at_the_local_relay() {
         --count "$object_count" --out "$dump_directory"
 }
 
-# Whether a runtime answers at this user's local API socket now.
+# Whether a runtime answers at the local API socket the fixture's `tatolab`
+# reaches now: this user's, or the current test machine root's.
 a_runtime_answers_at_the_local_api_socket() {
     "$TATOLAB_EXECUTABLE" streams >/dev/null 2>&1
 }
 
 # Returns 1, saying so, when a runtime already answers at this user's local
-# API socket: a Rust rig serves that socket itself, and refuses it held.
+# API socket: a Rust rig serves that socket itself, and refuses it held. A
+# test-root unit's runtime serves a socket of its own, so it never refuses.
 refuse_while_a_runtime_answers_at_the_local_api_socket() {
+    if the_runtime_unit_runs_under_a_test_machine_root; then
+        return 0
+    fi
     if a_runtime_answers_at_the_local_api_socket; then
         echo "REFUSED: a runtime already answers at this user's local API socket; stop it" \
             "(Ctrl-C in its terminal) and run the fixture again — a fixture starts its own:" >&2
@@ -191,6 +228,10 @@ refuse_while_a_runtime_answers_at_the_local_api_socket() {
 }
 
 FIXTURE_RUNTIME_PID=""
+# The scratch TATOLAB_TEST_MACHINE_ROOT of the running fixture runtime, when
+# the unit is a test-root unit; exported as TATOLAB_TEST_MACHINE_ROOT while it
+# runs, so every `tatolab` verb reaches it.
+FIXTURE_TEST_MACHINE_ROOT=""
 # How the fixture's runtime ended: never-started, stopped-cleanly,
 # needed-sigkill or already-gone, with its exit status beside it.
 FIXTURE_RUNTIME_STOP_OUTCOME="never-started"
@@ -206,17 +247,29 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 # Its state directory sits under <state home>: XDG_STATE_HOME names it on
 # Linux, and HOME on macOS, where the state directory is `$HOME/Library/
 # Application Support/Tatolab`. So it re-loads none of this user's recorded streams
-# and leaves its own log beside the fixture's evidence. The runtime directory
-# and the lock read neither variable, so the local API socket stays where
-# `tatolab` looks. It takes the machine's real runtime lock: when another
-# runtime holds the machine, `tatolabd` refuses naming the holder, and this
-# returns 1 having printed that refusal.
+# and leaves its own log beside the fixture's evidence. From a plain unit, the
+# runtime directory and the lock read neither variable, so the local API socket
+# stays where `tatolab` looks, and it takes the machine's real runtime lock:
+# when another runtime holds the machine, `tatolabd` refuses naming the holder,
+# and this returns 1 having printed that refusal. From a test-root unit, it
+# runs under a fresh FIXTURE_TEST_MACHINE_ROOT, which the stop removes.
 start_the_fixture_runtime() {
     local runtime_log_file="$1" runtime_state_home="$2"
     local a_runtime_answered_before_the_start=0 runtime_exit_status
     local -a state_directory_environment=("XDG_STATE_HOME=$runtime_state_home")
     if [ "$(uname -s)" = Darwin ]; then
         state_directory_environment+=("HOME=$runtime_state_home")
+    fi
+    if the_runtime_unit_runs_under_a_test_machine_root; then
+        # Short and under /tmp: the local API socket's path must stay under
+        # 104 bytes.
+        FIXTURE_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-fx-XXXXXX)"
+        export TATOLAB_TEST_MACHINE_ROOT="$FIXTURE_TEST_MACHINE_ROOT"
+        state_directory_environment+=(
+            "TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT=$FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT"
+            "TATOLAB_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT=$FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT"
+            "TATOLAB_TEST_LOOPBACK_HTTP_PORT=$FIXTURE_TEST_LOOPBACK_HTTP_PORT"
+        )
     fi
     if a_runtime_answers_at_the_local_api_socket; then
         a_runtime_answered_before_the_start=1
@@ -233,6 +286,7 @@ start_the_fixture_runtime() {
             FIXTURE_RUNTIME_PID=""
             FIXTURE_RUNTIME_STOP_OUTCOME="already-gone"
             FIXTURE_RUNTIME_EXIT_STATUS="$runtime_exit_status"
+            remove_the_fixture_test_machine_root
             echo "REFUSED: the fixture's runtime $TATOLABD_EXECUTABLE exited" \
                 "$runtime_exit_status before it served its local API:" >&2
             tail -20 "$runtime_log_file" >&2
@@ -261,7 +315,10 @@ start_the_fixture_runtime() {
 # FIXTURE_RUNTIME_EXIT_STATUS; a second call leaves them as the first set them.
 stop_the_fixture_runtime() {
     local stop_budget_seconds="${1:-15}"
-    [ -n "$FIXTURE_RUNTIME_PID" ] || return 0
+    if [ -z "$FIXTURE_RUNTIME_PID" ]; then
+        remove_the_fixture_test_machine_root
+        return 0
+    fi
     if ! kill -0 "$FIXTURE_RUNTIME_PID" 2>/dev/null; then
         FIXTURE_RUNTIME_STOP_OUTCOME="already-gone"
     else
@@ -280,6 +337,16 @@ stop_the_fixture_runtime() {
     FIXTURE_RUNTIME_EXIT_STATUS=0
     wait "$FIXTURE_RUNTIME_PID" 2>/dev/null || FIXTURE_RUNTIME_EXIT_STATUS=$?
     FIXTURE_RUNTIME_PID=""
+    remove_the_fixture_test_machine_root
+}
+
+# Removes the scratch test machine root of a fixture runtime that has exited,
+# and stops exporting it.
+remove_the_fixture_test_machine_root() {
+    [ -n "$FIXTURE_TEST_MACHINE_ROOT" ] || return 0
+    rm -rf "$FIXTURE_TEST_MACHINE_ROOT"
+    FIXTURE_TEST_MACHINE_ROOT=""
+    unset TATOLAB_TEST_MACHINE_ROOT
 }
 
 # Returns 0 when the fixture's runtime stopped cleanly — it took the SIGINT and

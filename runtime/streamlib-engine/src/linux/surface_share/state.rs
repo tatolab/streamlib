@@ -466,20 +466,20 @@ impl SurfaceShareState {
     pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
         let surface_id = pool_slot_key_of_surface_id(surface_id);
         let mut surfaces = self.inner.surfaces.write();
-        if let Some(metadata) = surfaces.get(surface_id) {
-            if metadata.runtime_id == runtime_id {
-                for fd in &metadata.dma_buf_fds {
-                    unsafe { libc::close(*fd) };
-                }
-                if let Some(fd) = metadata.produce_done_fd {
-                    unsafe { libc::close(fd) };
-                }
-                if let Some(fd) = metadata.consume_done_fd {
-                    unsafe { libc::close(fd) };
-                }
-                surfaces.remove(surface_id);
-                return true;
+        if let Some(metadata) = surfaces.get(surface_id)
+            && metadata.runtime_id == runtime_id
+        {
+            for fd in &metadata.dma_buf_fds {
+                unsafe { libc::close(*fd) };
             }
+            if let Some(fd) = metadata.produce_done_fd {
+                unsafe { libc::close(fd) };
+            }
+            if let Some(fd) = metadata.consume_done_fd {
+                unsafe { libc::close(fd) };
+            }
+            surfaces.remove(surface_id);
+            return true;
         }
         false
     }

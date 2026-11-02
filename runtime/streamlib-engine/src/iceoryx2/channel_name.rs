@@ -160,7 +160,7 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
     // across the `/`. The author-supplied port chunk rides through whole.
     let processor_budget = MAX_CHANNEL_NAME_BYTES
         .checked_sub(sep_len + source_output.len())
-        .filter(|budget| *budget >= CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1)
+        .filter(|budget| *budget > CHANNEL_NAME_HASH_SUFFIX_HEX_LEN)
         .ok_or_else(|| Error::ChannelNameTooLong {
             name: source_output.to_string(),
             len: source_output.len(),

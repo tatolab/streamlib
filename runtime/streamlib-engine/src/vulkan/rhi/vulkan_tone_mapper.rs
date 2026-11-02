@@ -148,12 +148,11 @@ impl VulkanToneMapper {
         // frames downstream.
         if let (Some(src_image), Some(dst_image)) =
             (src_host_texture.image(), dst_host_texture.image())
+            && src_image == dst_image
         {
-            if src_image == dst_image {
-                return Err(Error::Configuration(
+            return Err(Error::Configuration(
                     "VulkanToneMapper::apply_with_layouts: src and dst must be distinct VkImages (in-place tone-map is not supported)".into(),
                 ));
-            }
         }
 
         let src_final_layout = src_host_texture.terminal_layout_for_shader_read_access();

@@ -10,116 +10,8 @@ use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
 use crate::core::{Error, Result};
 
-/// Vulkan semaphore wrapper for synchronization.
-#[allow(dead_code)]
-pub struct VulkanSemaphore {
-    device: vulkanalia::Device,
-    semaphore: vk::Semaphore,
-}
-
-#[allow(dead_code)]
-impl VulkanSemaphore {
-    /// Create a new Vulkan semaphore.
-    pub fn new(device: &vulkanalia::Device) -> Result<Self> {
-        let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
-
-        let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {e}")))?;
-
-        Ok(Self {
-            device: device.clone(),
-            semaphore,
-        })
-    }
-
-    /// Get the underlying Vulkan semaphore handle.
-    pub fn semaphore(&self) -> vk::Semaphore {
-        self.semaphore
-    }
-}
-
-impl Drop for VulkanSemaphore {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_semaphore(self.semaphore, None);
-        }
-    }
-}
-
-// VulkanSemaphore is Send + Sync because Vulkan handles are thread-safe
-unsafe impl Send for VulkanSemaphore {}
-unsafe impl Sync for VulkanSemaphore {}
-
-/// Vulkan fence wrapper for CPU-GPU synchronization.
-#[allow(dead_code)]
-pub struct VulkanFence {
-    device: vulkanalia::Device,
-    fence: vk::Fence,
-}
-
-#[allow(dead_code)]
-impl VulkanFence {
-    /// Create a new Vulkan fence.
-    ///
-    /// # Arguments
-    /// * `device` - The Vulkan device
-    /// * `signaled` - Whether to create the fence in signaled state
-    pub fn new(device: &vulkanalia::Device, signaled: bool) -> Result<Self> {
-        let flags = if signaled {
-            vk::FenceCreateFlags::SIGNALED
-        } else {
-            vk::FenceCreateFlags::empty()
-        };
-
-        let fence_info = vk::FenceCreateInfo::builder().flags(flags).build();
-
-        let fence = unsafe { device.create_fence(&fence_info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create fence: {e}")))?;
-
-        Ok(Self {
-            device: device.clone(),
-            fence,
-        })
-    }
-
-    /// Wait for the fence to be signaled.
-    ///
-    /// # Arguments
-    /// * `timeout_ns` - Timeout in nanoseconds (u64::MAX for no timeout)
-    pub fn wait(&self, timeout_ns: u64) -> Result<()> {
-        unsafe { self.device.wait_for_fences(&[self.fence], true, timeout_ns) }
-            .map(|_| ())
-            .map_err(|e| Error::GpuError(format!("Failed to wait for fence: {e}")))
-    }
-
-    /// Reset the fence to unsignaled state.
-    pub fn reset(&self) -> Result<()> {
-        unsafe { self.device.reset_fences(&[self.fence]) }
-            .map(|_| ())
-            .map_err(|e| Error::GpuError(format!("Failed to reset fence: {e}")))
-    }
-
-    /// Get the underlying Vulkan fence handle.
-    pub fn fence(&self) -> vk::Fence {
-        self.fence
-    }
-}
-
-impl Drop for VulkanFence {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_fence(self.fence, None);
-        }
-    }
-}
-
-// VulkanFence is Send + Sync because Vulkan handles are thread-safe
-unsafe impl Send for VulkanFence {}
-unsafe impl Sync for VulkanFence {}
-
 /// Vulkan **timeline** semaphore wrapper.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-#[allow(dead_code)]
 ///
 /// Timeline semaphores carry a monotonically-increasing 64-bit counter.
 /// Submitters wait on a value and signal a higher value; the wait
@@ -488,25 +380,6 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
-    #[test]
-    fn test_semaphore_creation() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping test - Vulkan not available");
-                return;
-            }
-        };
-
-        let semaphore = VulkanSemaphore::new(device.device());
-        assert!(semaphore.is_ok(), "Semaphore creation should succeed");
-        println!("Vulkan semaphore created successfully");
-    }
-
     /// `vkWaitSemaphores` reports timeout as `VK_TIMEOUT` — a *positive*
     /// success code — so a wrapper that only checks `Err` silently converts
     /// a timed-out wait into `Ok`. Mental-revert: with the `SuccessCode::
@@ -674,38 +547,5 @@ mod tests {
                 .contains("no Metal shared-event export was declared"),
             "the refusal names the missing declaration: {refusal}"
         );
-    }
-
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
-    #[test]
-    fn test_fence_creation() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping test - Vulkan not available");
-                return;
-            }
-        };
-
-        // Test unsignaled fence
-        let fence = VulkanFence::new(device.device(), false);
-        assert!(fence.is_ok(), "Fence creation should succeed");
-
-        // Test signaled fence
-        let signaled_fence = VulkanFence::new(device.device(), true);
-        assert!(
-            signaled_fence.is_ok(),
-            "Signaled fence creation should succeed"
-        );
-
-        // Wait on signaled fence should return immediately
-        let fence = signaled_fence.unwrap();
-        let result = fence.wait(0);
-        assert!(result.is_ok(), "Wait on signaled fence should succeed");
-
-        println!("Vulkan fence tests passed");
     }
 }

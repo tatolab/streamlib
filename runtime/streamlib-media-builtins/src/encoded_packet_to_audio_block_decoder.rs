@@ -527,7 +527,9 @@ mod tests {
     fn read_block_samples(block: &AudioBlock) -> Vec<f32> {
         block
             .interleaved_sample_bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
             .collect()
     }

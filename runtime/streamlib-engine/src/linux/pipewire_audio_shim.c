@@ -25,14 +25,10 @@
 // call to the exported `pw_log_logt`. Diagnostics here go into the caller's
 // `failure_text` buffer, and the Rust side emits them through `tracing`.
 
-/// The device's own sample rate and channel count are what a stream settles on
-/// in either direction: rate and channel conversion belong to the read-side
-/// window stage at a consuming port, which converts to what that port declared,
-/// so asking PipeWire to convert either one would convert toward nothing
-/// declared. Only the scalar encoding is pinned, and it is pinned little-endian
+/// The scalar encoding a stream asked for none is pinned to: little-endian
 /// rather than host-endian because `AudioBlock.samples` is little-endian by
 /// wire contract.
-#define STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT SPA_AUDIO_FORMAT_F32_LE
+#define STREAMLIB_PIPEWIRE_DEFAULT_SAMPLE_FORMAT SPA_AUDIO_FORMAT_F32_LE
 
 /// How long `open` waits for PipeWire to settle a format before giving up. A
 /// session that has not answered in this long is not going to, and the caller
@@ -542,6 +538,33 @@ uint32_t streamlib_pipewire_stream_properties(struct StreamLibPipeWireStreamProp
 /// — and that lock is what makes installing and retiring a hand-off safe
 /// against a callback that is already running.
 ///
+/// The EnumFormat a stream offers PipeWire: the requested scalar encoding, and
+/// the requested rate and channel count wherever they are named, which the
+/// stream's adapter converts the device's to. One or two channels are given
+/// their positions so a stereo request plays as left and right.
+static struct spa_audio_info_raw spa_audio_info_raw_requested_by(
+    const struct StreamLibPipeWireRequestedAudioFormat *requested_format)
+{
+    struct spa_audio_info_raw requested_audio_info = {
+        .format = STREAMLIB_PIPEWIRE_DEFAULT_SAMPLE_FORMAT,
+    };
+    if (requested_format == NULL)
+        return requested_audio_info;
+    if (requested_format->sample_format == STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE)
+        requested_audio_info.format = SPA_AUDIO_FORMAT_S16_LE;
+    requested_audio_info.rate = requested_format->sample_rate;
+    requested_audio_info.channels = requested_format->channels;
+    if (requested_format->channels == 1) {
+        requested_audio_info.position[0] = SPA_AUDIO_CHANNEL_MONO;
+    } else if (requested_format->channels == 2) {
+        requested_audio_info.position[0] = SPA_AUDIO_CHANNEL_FL;
+        requested_audio_info.position[1] = SPA_AUDIO_CHANNEL_FR;
+    } else if (requested_format->channels > 2) {
+        requested_audio_info.flags = SPA_AUDIO_FLAG_UNPOSITIONED;
+    }
+    return requested_audio_info;
+}
+
 /// `PW_STREAM_FLAG_DONT_RECONNECT` is what makes a named device authoritative:
 /// `PW_STREAM_FLAG_AUTOCONNECT` alone treats a target it cannot resolve as
 /// licence to link the session default instead, and reaching a device other
@@ -564,6 +587,7 @@ static int connect_audio_stream(struct StreamLibPipeWireAudioStream *audio_strea
 struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     const void *const *entry_points, enum StreamLibPipeWireStreamDirection direction,
     const char *device_id_or_null,
+    const struct StreamLibPipeWireRequestedAudioFormat *requested_format,
     struct StreamLibPipeWireNegotiatedAudioFormat *negotiated_format_out, char *failure_text,
     size_t failure_text_capacity)
 {
@@ -577,9 +601,7 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     char open_failure_reason[192];
     uint8_t pod_storage[STREAMLIB_PIPEWIRE_POD_BUILDER_CAPACITY];
     struct spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(pod_storage, sizeof(pod_storage));
-    struct spa_audio_info_raw requested_format = {
-        .format = STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT,
-    };
+    struct spa_audio_info_raw requested_audio_info = spa_audio_info_raw_requested_by(requested_format);
     struct StreamLibPipeWireStreamProperty composed_properties[
         STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
     struct spa_dict_item property_items[STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
@@ -615,7 +637,8 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
         goto fail;
     }
 
-    params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &requested_format);
+    params[0] =
+        spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &requested_audio_info);
 
     property_count = streamlib_pipewire_stream_properties(
         composed_properties, STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES, direction,

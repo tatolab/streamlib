@@ -38,6 +38,14 @@
           "type": "toml",
           "path": "packages/tatolab-microphone/pyproject.toml",
           "jsonpath": "$.project.version"
+        },        {
+          "type": "toml",
+          "path": "packages/tatolab-speaker/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },        {
+          "type": "toml",
+          "path": "packages/tatolab-speaker/pyproject.toml",
+          "jsonpath": "$.project.version"
         },
         {
           "type": "toml",

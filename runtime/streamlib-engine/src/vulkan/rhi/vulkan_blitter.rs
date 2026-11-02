@@ -17,8 +17,6 @@ pub struct VulkanBlitter {
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
-    #[allow(dead_code)]
-    queue_family_index: u32,
     command_pool: vk::CommandPool,
 }
 
@@ -42,7 +40,6 @@ impl VulkanBlitter {
             vulkan_device: Arc::clone(vulkan_device),
             device: device.clone(),
             queue,
-            queue_family_index,
             command_pool,
         })
     }
@@ -137,9 +134,8 @@ impl RhiBlitter for VulkanBlitter {
 
             self.vulkan_device
                 .submit_to_queue(self.queue, &[submit], vk::Fence::null())
-                .map_err(|e| {
+                .inspect_err(|_e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
-                    e
                 })?;
 
             let wait_semaphores = [timeline_semaphore];

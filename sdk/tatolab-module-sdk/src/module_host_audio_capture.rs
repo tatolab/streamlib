@@ -34,14 +34,14 @@ impl ModuleHostAudioSampleFormat {
         }
     }
 
-    fn as_module_host_table_sample_format(self) -> u32 {
+    pub(crate) fn as_module_host_table_sample_format(self) -> u32 {
         match self {
             Self::F32 => MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32,
             Self::I16 => MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16,
         }
     }
 
-    fn of_module_host_table_sample_format(sample_format: u32) -> Option<Self> {
+    pub(crate) fn of_module_host_table_sample_format(sample_format: u32) -> Option<Self> {
         match sample_format {
             MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32 => Some(Self::F32),
             MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16 => Some(Self::I16),
