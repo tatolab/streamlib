@@ -7,6 +7,7 @@ The pixels are proven on a runtime by the integration suite's
 `test_alpha_over_compositor.py`.
 """
 
+import importlib.metadata
 import struct
 
 import pytest
@@ -88,3 +89,17 @@ def test_the_kernel_samples_every_layer_and_writes_one_composite():
         assert f"placements.layers[{index}]" in kernel_glsl
     assert f"binding = {ALPHA_OVER_LAYER_COUNT}, rgba8) uniform writeonly image2D" in kernel_glsl
     assert "above + below * (1.0 - above.a)" in kernel_glsl
+
+
+def test_the_installed_entry_point_names_the_class_by_its_own_import_path():
+    """A node is identified by `module:qualname`, so a catalog entry naming it any
+    other way cannot be described."""
+    (entry_point,) = [
+        entry_point
+        for entry_point in importlib.metadata.entry_points(group="tatolab.nodes")
+        if entry_point.name == "AlphaOverCompositor"
+    ]
+
+    assert entry_point.value == (
+        f"{AlphaOverCompositor.__module__}:{AlphaOverCompositor.__qualname__}"
+    )
