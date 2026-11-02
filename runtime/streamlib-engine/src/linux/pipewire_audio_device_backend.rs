@@ -20,6 +20,9 @@ use crate::core::context::{
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
+use crate::linux::thread_priority::{
+    apply_realtime_priority_to_thread_of_this_process, thread_of_this_process_is_realtime,
+};
 
 mod audio_shim {
     use std::ffi::{c_char, c_int, c_void};
@@ -293,7 +296,55 @@ impl PipeWireAudioDeviceBackend {
             _entry_points: Arc::clone(&self.entry_points),
             audio_stream: opened,
         };
+        ask_for_realtime_on_every_pipewire_audio_thread_of_this_process();
         Ok((opened, stream_format_of(negotiated_format)?))
+    }
+}
+
+/// Kernel thread names (cut to 15 bytes) of the threads an audio stream's
+/// samples cross in this process: the shim's thread loop, which runs every
+/// `process` callback, and PipeWire's data loop, which feeds it.
+const PIPEWIRE_AUDIO_THREAD_NAMES: [&str; 2] = ["streamlib-audio", "pw-data-loop"];
+
+/// Ask for realtime scheduling on each PipeWire audio thread of this process
+/// that is not realtime yet.
+///
+/// PipeWire's default client config loads no realtime module, so a client's
+/// threads stay on `SCHED_OTHER` unless the client asks.
+fn ask_for_realtime_on_every_pipewire_audio_thread_of_this_process() {
+    let Ok(threads_of_this_process) = std::fs::read_dir("/proc/self/task") else {
+        return;
+    };
+    for thread_entry in threads_of_this_process.flatten() {
+        let Some(thread_id) = thread_entry
+            .file_name()
+            .to_str()
+            .and_then(|thread_id| thread_id.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Ok(thread_name) = std::fs::read_to_string(thread_entry.path().join("comm")) else {
+            continue;
+        };
+        let thread_name = thread_name.trim_end();
+        if !PIPEWIRE_AUDIO_THREAD_NAMES.contains(&thread_name)
+            || thread_of_this_process_is_realtime(thread_id)
+        {
+            continue;
+        }
+        match apply_realtime_priority_to_thread_of_this_process(thread_id) {
+            Ok(()) => tracing::info!(
+                thread_id,
+                thread_name,
+                "PipeWire audio thread scheduled realtime"
+            ),
+            Err(refusal) => tracing::debug!(
+                thread_id,
+                thread_name,
+                %refusal,
+                "PipeWire audio thread stays best-effort: realtime scheduling was refused"
+            ),
+        }
     }
 }
 
@@ -610,6 +661,28 @@ impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asking_for_realtime_on_a_pipewire_audio_thread_leaves_it_running_when_refused() {
+        let (asked_sender, asked_receiver) = std::sync::mpsc::channel::<()>();
+        let (thread_id_sender, thread_id_receiver) = std::sync::mpsc::channel::<u64>();
+        let audio_thread = std::thread::Builder::new()
+            .name("streamlib-audio".to_string())
+            .spawn(move || {
+                // SAFETY: `SYS_gettid` takes no arguments and cannot fail.
+                let thread_id = unsafe { libc::syscall(libc::SYS_gettid) } as u64;
+                thread_id_sender.send(thread_id).unwrap();
+                asked_receiver.recv().unwrap();
+            })
+            .unwrap();
+        thread_id_receiver.recv().unwrap();
+
+        ask_for_realtime_on_every_pipewire_audio_thread_of_this_process();
+
+        assert!(!audio_thread.is_finished());
+        asked_sender.send(()).unwrap();
+        audio_thread.join().unwrap();
+    }
 
     const RATE_48K_NUMERATOR: u32 = 1;
     const RATE_48K_DENOMINATOR: u32 = 48_000;
