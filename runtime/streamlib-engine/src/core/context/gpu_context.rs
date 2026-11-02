@@ -2840,6 +2840,34 @@ impl GpuContext {
         }
     }
 
+    /// Import the first `readable_byte_len` bytes of a caller-owned mapped
+    /// range for GPU reads, taking the imported tier when the driver allows
+    /// it and host-visible staging otherwise. See
+    /// [`HostMappingReadByGpu`](crate::vulkan::rhi::HostMappingReadByGpu) for
+    /// the per-read protocol.
+    ///
+    /// # Safety
+    ///
+    /// All `mapped_byte_len` bytes must stay mapped and readable until the
+    /// returned value drops.
+    #[cfg(target_os = "linux")]
+    pub(crate) unsafe fn import_host_mapping_for_gpu_reads(
+        &self,
+        host_range_ptr: *const u8,
+        mapped_byte_len: usize,
+        readable_byte_len: usize,
+    ) -> Result<crate::vulkan::rhi::HostMappingReadByGpu> {
+        // SAFETY: the caller upholds this method's own contract.
+        unsafe {
+            crate::vulkan::rhi::HostMappingReadByGpu::import_for_gpu_reads(
+                &self.device.inner,
+                host_range_ptr,
+                mapped_byte_len,
+                readable_byte_len,
+            )
+        }
+    }
+
     /// Build a [`crate::vulkan::rhi::VulkanOffscreenCompositor`] for
     /// `attachment_format`.
     ///

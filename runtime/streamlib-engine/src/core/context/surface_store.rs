@@ -547,6 +547,67 @@ fn refusal_of_a_registration_answer(operation: &str, answer: &serde_json::Value)
     Ok(())
 }
 
+/// The format, extent and plane layout a `lookup` reply states for an
+/// allocation of `allocation_byte_size` bytes — a tight layout when it states
+/// none.
+#[cfg(target_os = "linux")]
+fn pixel_format_extent_and_planes_of_lookup_reply(
+    surface_id: &str,
+    response: &serde_json::Value,
+    allocation_byte_size: u64,
+) -> Result<(
+    crate::core::rhi::PixelFormat,
+    u32,
+    u32,
+    crate::core::rhi::PixelPlanesWithinOneAllocation,
+)> {
+    use crate::core::rhi::{PixelFormat, PixelPlanesWithinOneAllocation};
+    let stated_u32 = |key: &str| {
+        response
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0)
+    };
+    let width = stated_u32("width");
+    let height = stated_u32("height");
+    let pixel_format = PixelFormat::parse_wire_name(
+        response
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown"),
+    )
+    .map_err(|unknown_format| {
+        Error::Configuration(format!("lookup of '{surface_id}': {unknown_format}"))
+    })?;
+    let stated = match PixelPlanesWithinOneAllocation::from_surface_share_fields(response)? {
+        Some(stated) => stated,
+        None => PixelPlanesWithinOneAllocation::tightly_packed(pixel_format, width, height)?,
+    };
+    let planes = PixelPlanesWithinOneAllocation::new(
+        pixel_format,
+        width,
+        height,
+        allocation_byte_size,
+        stated.plane_offsets_bytes().to_vec(),
+        stated.plane_strides_bytes().to_vec(),
+        stated.written_by_a_foreign_device(),
+    )?;
+    Ok((pixel_format, width, height, planes))
+}
+
+/// A looked-up DMA-BUF registration, not imported: its fd and what its
+/// registration says its pixels are.
+#[cfg(target_os = "linux")]
+pub(crate) struct DmaBufRegistrationWithItsPlaneLayout {
+    pub(crate) dma_buf_fd: OwnedFd,
+    pub(crate) allocation_byte_size: u64,
+    pub(crate) pixel_format: PixelFormat,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) planes: crate::core::rhi::PixelPlanesWithinOneAllocation,
+}
+
 /// A looked-up pixel buffer and what its registration says its pixels are.
 #[cfg(target_os = "linux")]
 pub(crate) struct PixelBufferWithItsPlaneLayout {
@@ -859,6 +920,42 @@ impl SurfaceStoreInner {
             "check_in",
             &request,
             exported_planes.plane_fds,
+        )?;
+        if let Some(refusal) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(Error::Configuration(format!("check_in: {refusal}")));
+        }
+        surface_id_of_check_in_answer(&response)
+    }
+
+    /// Register `foreign_dma_buf_fd` the way a helper adopts a foreign
+    /// device's buffer: one DMA-BUF holding every plane, at the stated layout.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn check_in_a_foreign_dma_buf_fd_with_a_pixel_plane_layout(
+        &self,
+        foreign_dma_buf_fd: OwnedFd,
+        allocation_byte_size: u64,
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        planes: &crate::core::rhi::PixelPlanesWithinOneAllocation,
+    ) -> Result<String> {
+        let mut request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.runtime_id,
+            "width": width,
+            "height": height,
+            "format": pixel_format.wire_name(),
+            "resource_type": "pixel_buffer",
+            "handle_type": SURFACE_HANDLE_TYPE_DMA_BUF,
+            "plane_sizes": [allocation_byte_size],
+            "plane_offsets": [0u64],
+            "plane_strides": [planes.plane_strides_bytes()[0]],
+        });
+        planes.write_surface_share_fields(&mut request);
+        let response = self.send_surface_share_request_owning_fds(
+            "check_in",
+            &request,
+            vec![foreign_dma_buf_fd],
         )?;
         if let Some(refusal) = response.get("error").and_then(serde_json::Value::as_str) {
             return Err(Error::Configuration(format!("check_in: {refusal}")));
@@ -1301,6 +1398,78 @@ impl SurfaceStoreInner {
         &self,
         surface_id: &str,
     ) -> Result<PixelBufferWithItsPlaneLayout> {
+        let (response, reply_fds) = self.lookup_reply_and_its_fds(surface_id)?;
+        let pixel_buffer =
+            pixel_buffer_imported_from_surface_share_reply("lookup", &response, reply_fds)?;
+        let (pixel_format, width, height, planes) = pixel_format_extent_and_planes_of_lookup_reply(
+            surface_id,
+            &response,
+            pixel_buffer.plane_size(0),
+        )?;
+        Ok(PixelBufferWithItsPlaneLayout {
+            pixel_buffer,
+            pixel_format,
+            width,
+            height,
+            planes,
+        })
+    }
+
+    /// Look up a single-plane DMA-BUF registration and hand back its fd with
+    /// the format, extent and plane layout it states, importing nothing — for
+    /// a caller that reaches the pixels some other way than a Vulkan import.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn lookup_dma_buf_registration_without_importing_it(
+        &self,
+        surface_id: &str,
+    ) -> Result<DmaBufRegistrationWithItsPlaneLayout> {
+        let (response, reply_fds) = self.lookup_reply_and_its_fds(surface_id)?;
+        if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(Error::Configuration(format!("lookup: {error}")));
+        }
+        let handle_type = response
+            .get("handle_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF);
+        if handle_type != SURFACE_HANDLE_TYPE_DMA_BUF {
+            return Err(Error::Configuration(format!(
+                "lookup of '{surface_id}': registered as {handle_type:?}, not a DMA-BUF"
+            )));
+        }
+        let mut plane_fds = plane_fds_of_reply("lookup", &response, reply_fds)?;
+        if plane_fds.len() != 1 {
+            return Err(Error::Configuration(format!(
+                "lookup of '{surface_id}': {} plane fds, where one DMA-BUF holds every plane",
+                plane_fds.len()
+            )));
+        }
+        let allocation_byte_size = plane_sizes_of_reply(&response, 1)[0];
+        if allocation_byte_size == 0 {
+            return Err(Error::Configuration(format!(
+                "lookup of '{surface_id}': the registration states no allocation size"
+            )));
+        }
+        let (pixel_format, width, height, planes) = pixel_format_extent_and_planes_of_lookup_reply(
+            surface_id,
+            &response,
+            allocation_byte_size,
+        )?;
+        Ok(DmaBufRegistrationWithItsPlaneLayout {
+            dma_buf_fd: plane_fds.remove(0),
+            allocation_byte_size,
+            pixel_format,
+            width,
+            height,
+            planes,
+        })
+    }
+
+    /// One `lookup` round trip, with the fds the reply carried adopted.
+    #[cfg(target_os = "linux")]
+    fn lookup_reply_and_its_fds(
+        &self,
+        surface_id: &str,
+    ) -> Result<(serde_json::Value, Vec<OwnedFd>)> {
         let request = serde_json::json!({
             "op": "lookup",
             "surface_id": surface_id,
@@ -1316,51 +1485,7 @@ impl SurfaceStoreInner {
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         )
         .map_err(|e| Error::Configuration(format!("Unix socket lookup failed: {}", e)))?;
-        drop(connection);
-        let pixel_buffer = pixel_buffer_imported_from_surface_share_reply(
-            "lookup",
-            &response,
-            adopt_reply_fds(received_fds),
-        )?;
-        let stated_u32 = |key: &str| {
-            response
-                .get(key)
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or(0)
-        };
-        let width = stated_u32("width");
-        let height = stated_u32("height");
-        let pixel_format = PixelFormat::parse_wire_name(
-            response
-                .get("format")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown"),
-        )
-        .map_err(|unknown_format| {
-            Error::Configuration(format!("lookup of '{surface_id}': {unknown_format}"))
-        })?;
-        use crate::core::rhi::PixelPlanesWithinOneAllocation;
-        let stated = match PixelPlanesWithinOneAllocation::from_surface_share_fields(&response)? {
-            Some(stated) => stated,
-            None => PixelPlanesWithinOneAllocation::tightly_packed(pixel_format, width, height)?,
-        };
-        let planes = PixelPlanesWithinOneAllocation::new(
-            pixel_format,
-            width,
-            height,
-            pixel_buffer.plane_size(0),
-            stated.plane_offsets_bytes().to_vec(),
-            stated.plane_strides_bytes().to_vec(),
-            stated.written_by_a_foreign_device(),
-        )?;
-        Ok(PixelBufferWithItsPlaneLayout {
-            pixel_buffer,
-            pixel_format,
-            width,
-            height,
-            planes,
-        })
+        Ok((response, adopt_reply_fds(received_fds)))
     }
 
     /// Lookup a buffer from the surface-share service via Unix socket.
@@ -2494,6 +2619,22 @@ impl SurfaceStore {
             .lookup_pixel_buffer_with_its_plane_layout(surface_id)
     }
 
+    /// See [`SurfaceStoreInner::lookup_dma_buf_registration_without_importing_it`].
+    #[cfg(target_os = "linux")]
+    pub(crate) fn lookup_dma_buf_registration_without_importing_it(
+        &self,
+        surface_id: &str,
+    ) -> Result<DmaBufRegistrationWithItsPlaneLayout> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::lookup_dma_buf_registration_without_importing_it: null handle"
+                    .into(),
+            ));
+        }
+        self.host_inner()
+            .lookup_dma_buf_registration_without_importing_it(surface_id)
+    }
+
     /// See [`SurfaceStoreInner::check_in_with_a_pixel_plane_layout`].
     #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn check_in_with_a_pixel_plane_layout(
@@ -2511,6 +2652,28 @@ impl SurfaceStore {
             height,
             planes,
         )
+    }
+
+    /// See [`SurfaceStoreInner::check_in_a_foreign_dma_buf_fd_with_a_pixel_plane_layout`].
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn check_in_a_foreign_dma_buf_fd_with_a_pixel_plane_layout(
+        &self,
+        foreign_dma_buf_fd: OwnedFd,
+        allocation_byte_size: u64,
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        planes: &crate::core::rhi::PixelPlanesWithinOneAllocation,
+    ) -> Result<String> {
+        self.host_inner()
+            .check_in_a_foreign_dma_buf_fd_with_a_pixel_plane_layout(
+                foreign_dma_buf_fd,
+                allocation_byte_size,
+                pixel_format,
+                width,
+                height,
+                planes,
+            )
     }
 
     /// Release a checked-out surface by its surface_id.

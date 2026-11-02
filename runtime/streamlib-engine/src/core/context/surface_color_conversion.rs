@@ -18,11 +18,24 @@ use crate::vulkan::rhi::{
     COLOR_CONVERTER_WORKGROUP_SIZE, RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
 
-/// A conversion source resolved once and read on every later conversion: the
-/// imported allocation, what its registration says its pixels are, and the
-/// layout the converter reads them through.
+/// Where a conversion source's pixels reach the GPU from.
+enum SurfaceColorConversionSourcePixels {
+    /// The allocation itself, imported into the device.
+    ImportedPixelBuffer(PixelBuffer),
+    /// A foreign device's DMA-BUF the device cannot import, mapped into this
+    /// process and read by the GPU in place or through one staged copy.
+    #[cfg(target_os = "linux")]
+    ForeignDmaBufReadThroughAHostMapping {
+        host_mapping_read_by_gpu: crate::vulkan::rhi::HostMappingReadByGpu,
+        dma_buf_mapping: crate::linux::dma_buf_mapped_for_cpu_reads::DmaBufMappedForCpuReads,
+    },
+}
+
+/// A conversion source resolved once and read on every later conversion: its
+/// pixels, what its registration says they are, and the layout the converter
+/// reads them through.
 struct SurfaceColorConversionSource {
-    pixel_buffer: PixelBuffer,
+    pixels: SurfaceColorConversionSourcePixels,
     pixel_format: PixelFormat,
     width: u32,
     height: u32,
@@ -60,7 +73,11 @@ impl SurfaceColorConversionSession {
             self.sources_by_surface_id
                 .insert(source_surface_id.to_string(), resolved);
         }
-        let source = &self.sources_by_surface_id[source_surface_id];
+        let Some(source) = self.sources_by_surface_id.get_mut(source_surface_id) else {
+            return Err(Error::GpuError(format!(
+                "surface {source_surface_id} was resolved and is gone"
+            )));
+        };
         let destination = resolve_color_conversion_destination(gpu, destination_surface_id)?;
         let destination_texture = destination.texture();
         if (destination_texture.width(), destination_texture.height())
@@ -90,13 +107,45 @@ impl SurfaceColorConversionSession {
                 .entry(source.pixel_format)
                 .or_insert(gpu.create_color_converter(source.pixel_format, PixelFormat::Rgba32)?),
         };
-        let kernel = color_converter.prepare_buffer_to_image_pixel(
-            &source.pixel_buffer,
-            source_layout,
-            destination_texture,
-            &resolved_color,
-            resolved_color.transfer,
-        )?;
+        let kernel = match &source.pixels {
+            SurfaceColorConversionSourcePixels::ImportedPixelBuffer(pixel_buffer) => {
+                color_converter.prepare_buffer_to_image_pixel(
+                    pixel_buffer,
+                    source_layout,
+                    destination_texture,
+                    &resolved_color,
+                    resolved_color.transfer,
+                )?
+            }
+            #[cfg(target_os = "linux")]
+            SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
+                host_mapping_read_by_gpu,
+                ..
+            } => color_converter.prepare_buffer_to_image_storage(
+                host_mapping_read_by_gpu.storage_buffer(),
+                source_layout,
+                destination_texture,
+                &resolved_color,
+                resolved_color.transfer,
+            )?,
+        };
+        #[cfg(target_os = "linux")]
+        if let SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
+            host_mapping_read_by_gpu,
+            dma_buf_mapping,
+        } = &mut source.pixels
+        {
+            dma_buf_mapping.begin_reads()?;
+            host_mapping_read_by_gpu.stage_from_host();
+        }
+        #[cfg(target_os = "linux")]
+        let _reads_through_the_dma_buf_mapping = match &source.pixels {
+            SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
+                dma_buf_mapping,
+                ..
+            } => Some(ReadsThroughADmaBufMappingThatEndOnDrop { dma_buf_mapping }),
+            SurfaceColorConversionSourcePixels::ImportedPixelBuffer(_) => None,
+        };
 
         let recorder = match self.conversion_recorder.as_mut() {
             Some(recorder) => recorder,
@@ -119,22 +168,39 @@ impl SurfaceColorConversionSession {
             // submission, so the read is made available from nothing; a buffer
             // the GPU or the CPU filled is ordered by the wide barrier every
             // read of an unknown producer takes.
-            if source.planes.written_by_a_foreign_device() {
-                recorder.record_buffer_barrier(
-                    &source.pixel_buffer,
-                    VulkanStage::NONE,
-                    VulkanStage::COMPUTE_SHADER,
-                    VulkanAccess::NONE,
-                    VulkanAccess::SHADER_READ,
-                )?;
-            } else {
-                recorder.record_buffer_barrier(
-                    &source.pixel_buffer,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanStage::COMPUTE_SHADER,
-                    VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::SHADER_READ,
-                )?;
+            match &source.pixels {
+                SurfaceColorConversionSourcePixels::ImportedPixelBuffer(pixel_buffer) => {
+                    if source.planes.written_by_a_foreign_device() {
+                        recorder.record_buffer_barrier(
+                            pixel_buffer,
+                            VulkanStage::NONE,
+                            VulkanStage::COMPUTE_SHADER,
+                            VulkanAccess::NONE,
+                            VulkanAccess::SHADER_READ,
+                        )?;
+                    } else {
+                        recorder.record_buffer_barrier(
+                            pixel_buffer,
+                            VulkanStage::ALL_COMMANDS,
+                            VulkanStage::COMPUTE_SHADER,
+                            VulkanAccess::MEMORY_WRITE,
+                            VulkanAccess::SHADER_READ,
+                        )?;
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
+                    host_mapping_read_by_gpu,
+                    ..
+                } => {
+                    recorder.record_buffer_barrier(
+                        host_mapping_read_by_gpu.storage_buffer(),
+                        VulkanStage::HOST,
+                        VulkanStage::COMPUTE_SHADER,
+                        VulkanAccess::HOST_WRITE,
+                        VulkanAccess::SHADER_READ,
+                    )?;
+                }
             }
             recorder.record_dispatch(
                 &kernel,
@@ -160,6 +226,29 @@ impl SurfaceColorConversionSession {
         destination.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         recorder.wait_for_completion()?;
         Ok((destination_surface_id.to_string(), destination))
+    }
+
+    /// Resolve `surface_id` as a foreign device's DMA-BUF read through a host
+    /// mapping, the way a device that cannot import the buffer resolves it.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn resolve_a_foreign_dma_buf_through_a_host_mapping(
+        &mut self,
+        gpu: &GpuContext,
+        surface_id: &str,
+    ) -> Result<()> {
+        let store = gpu
+            .surface_store()
+            .ok_or_else(|| Error::Configuration("no surface-share service is connected".into()))?;
+        let registration = store.lookup_dma_buf_registration_without_importing_it(surface_id)?;
+        let resolved = foreign_dma_buf_read_through_a_host_mapping(
+            gpu,
+            surface_id,
+            registration,
+            "a test resolves it so",
+        )?;
+        self.sources_by_surface_id
+            .insert(surface_id.to_string(), resolved);
+        Ok(())
     }
 
     /// Forget what this session resolved for `surface_id`, answering whether
@@ -193,7 +282,7 @@ fn resolve_color_conversion_source(
             false,
         )?;
         return Ok(SurfaceColorConversionSource {
-            pixel_buffer,
+            pixels: SurfaceColorConversionSourcePixels::ImportedPixelBuffer(pixel_buffer),
             pixel_format,
             width,
             height,
@@ -203,6 +292,9 @@ fn resolve_color_conversion_source(
     resolve_color_conversion_source_through_the_surface_store(gpu, surface_id)
 }
 
+/// The surface-share registration's pixels: imported into the device, or —
+/// for a foreign device's DMA-BUF the device cannot import — mapped into this
+/// process and read by the GPU through that mapping.
 #[cfg(target_os = "linux")]
 fn resolve_color_conversion_source_through_the_surface_store(
     gpu: &GpuContext,
@@ -214,14 +306,97 @@ fn resolve_color_conversion_source_through_the_surface_store(
              service is connected to look it up"
         ))
     })?;
-    let looked_up = store.lookup_pixel_buffer_with_its_plane_layout(surface_id)?;
+    if !gpu.gpu_capabilities().supports_cross_device_dma_buf_probe
+        && let Ok(registration) = store.lookup_dma_buf_registration_without_importing_it(surface_id)
+        && registration.planes.written_by_a_foreign_device()
+    {
+        return foreign_dma_buf_read_through_a_host_mapping(
+            gpu,
+            surface_id,
+            registration,
+            "this device's driver is blocklisted for cross-device DMA-BUF imports",
+        );
+    }
+    match store.lookup_pixel_buffer_with_its_plane_layout(surface_id) {
+        Ok(looked_up) => Ok(SurfaceColorConversionSource {
+            pixels: SurfaceColorConversionSourcePixels::ImportedPixelBuffer(looked_up.pixel_buffer),
+            pixel_format: looked_up.pixel_format,
+            width: looked_up.width,
+            height: looked_up.height,
+            planes: looked_up.planes,
+        }),
+        Err(import_failure) => {
+            match store.lookup_dma_buf_registration_without_importing_it(surface_id) {
+                Ok(registration) if registration.planes.written_by_a_foreign_device() => {
+                    foreign_dma_buf_read_through_a_host_mapping(
+                        gpu,
+                        surface_id,
+                        registration,
+                        &import_failure.to_string(),
+                    )
+                }
+                _ => Err(import_failure),
+            }
+        }
+    }
+}
+
+/// Map a foreign device's DMA-BUF `registration` read-only and import the
+/// mapping for GPU reads, logging once why the buffer itself was not
+/// imported and which tier the mapping took.
+#[cfg(target_os = "linux")]
+fn foreign_dma_buf_read_through_a_host_mapping(
+    gpu: &GpuContext,
+    surface_id: &str,
+    registration: crate::core::context::surface_store::DmaBufRegistrationWithItsPlaneLayout,
+    why_the_dma_buf_is_not_imported: &str,
+) -> Result<SurfaceColorConversionSource> {
+    use crate::linux::dma_buf_mapped_for_cpu_reads::DmaBufMappedForCpuReads;
+    let dma_buf_mapping =
+        DmaBufMappedForCpuReads::map(registration.dma_buf_fd, registration.allocation_byte_size)?;
+    // SAFETY: the mapping moves into the source beside the import and is
+    // dropped after it, so it outlives every read the import serves.
+    let host_mapping_read_by_gpu = unsafe {
+        gpu.import_host_mapping_for_gpu_reads(
+            dma_buf_mapping.mapped_ptr(),
+            dma_buf_mapping.mapped_byte_len(),
+            dma_buf_mapping.allocation_byte_size(),
+        )
+    }?;
+    tracing::info!(
+        surface_id,
+        tier = host_mapping_read_by_gpu.tier().as_str(),
+        why_the_dma_buf_is_not_imported,
+        host_pointer_import_refusal = ?host_mapping_read_by_gpu.fallback_reason(),
+        "a foreign device's DMA-BUF reaches the colour converter through a host mapping"
+    );
     Ok(SurfaceColorConversionSource {
-        pixel_buffer: looked_up.pixel_buffer,
-        pixel_format: looked_up.pixel_format,
-        width: looked_up.width,
-        height: looked_up.height,
-        planes: looked_up.planes,
+        pixels: SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
+            host_mapping_read_by_gpu,
+            dma_buf_mapping,
+        },
+        pixel_format: registration.pixel_format,
+        width: registration.width,
+        height: registration.height,
+        planes: registration.planes,
     })
+}
+
+/// One conversion's read of a DMA-BUF through its mapping, already begun
+/// with the exporter's read sync, and ended when this drops — after the
+/// conversion was waited for, or on the path that abandoned it.
+#[cfg(target_os = "linux")]
+struct ReadsThroughADmaBufMappingThatEndOnDrop<'mapping> {
+    dma_buf_mapping: &'mapping crate::linux::dma_buf_mapped_for_cpu_reads::DmaBufMappedForCpuReads,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ReadsThroughADmaBufMappingThatEndOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Err(sync_failure) = self.dma_buf_mapping.end_reads() {
+            tracing::warn!("ending a read through a DMA-BUF mapping failed: {sync_failure}");
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

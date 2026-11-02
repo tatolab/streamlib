@@ -453,3 +453,76 @@ fn an_unknown_color_name_is_refused_before_any_gpu_work() {
     .expect_err("tv is not a range name");
     assert!(refusal.contains("\"tv\""), "{refusal}");
 }
+
+/// A memfd holding `bytes`, standing in for a foreign device's DMA-BUF: the
+/// host mapping reaches it through the same `mmap`.
+#[cfg(target_os = "linux")]
+fn a_foreign_allocation_holding(bytes: &[u8]) -> std::os::fd::OwnedFd {
+    use std::os::fd::FromRawFd as _;
+    // SAFETY: a fresh memfd this test owns.
+    let fd = unsafe { libc::memfd_create(c"foreign_dma_buf_stand_in".as_ptr(), 0) };
+    assert!(fd >= 0, "memfd_create");
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+    assert_eq!(written as usize, bytes.len(), "fill the stand-in");
+    owned
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_foreign_dma_buf_read_through_a_host_mapping_converts_through_its_padded_layout() {
+    let Some(gpu) = gpu_or_skip(
+        "a_foreign_dma_buf_read_through_a_host_mapping_converts_through_its_padded_layout",
+    ) else {
+        return;
+    };
+    let service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let luma_row_pitch = 2 * PIXEL_WIDTH as usize;
+    let chroma_offset = luma_row_pitch * PIXEL_HEIGHT as usize + 64;
+    let allocation_byte_size = chroma_offset + luma_row_pitch * (PIXEL_HEIGHT as usize / 2) + 100;
+    let planes = PixelPlanesWithinOneAllocation::new(
+        PixelFormat::Nv12VideoRange,
+        PIXEL_WIDTH,
+        PIXEL_HEIGHT,
+        allocation_byte_size as u64,
+        vec![0, chroma_offset as u64],
+        vec![luma_row_pitch as u64; 2],
+        true,
+    )
+    .expect("the padded layout fits the allocation");
+    let source_id = gpu
+        .surface_store()
+        .expect("the service's store is installed")
+        .check_in_a_foreign_dma_buf_fd_with_a_pixel_plane_layout(
+            a_foreign_allocation_holding(&nv12_bytes(
+                allocation_byte_size,
+                luma_row_pitch,
+                chroma_offset,
+            )),
+            allocation_byte_size as u64,
+            PixelFormat::Nv12VideoRange,
+            PIXEL_WIDTH,
+            PIXEL_HEIGHT,
+            &planes,
+        )
+        .expect("the service adopts the foreign fd with its layout");
+    let destination_id = a_storage_texture(&gpu, PIXEL_WIDTH, storage_and_copy_usage());
+    let registry = EscalateHandleRegistry::new();
+    registry
+        .surface_color_conversion_session()
+        .resolve_a_foreign_dma_buf_through_a_host_mapping(&gpu, &source_id)
+        .expect("the foreign allocation maps and imports for GPU reads");
+
+    for conversion in ["first", "second"] {
+        convert_through_the_escalate_op(
+            &gpu,
+            &registry,
+            &source_id,
+            &destination_id,
+            bt709_limited(),
+        )
+        .unwrap_or_else(|refusal| panic!("the {conversion} conversion is refused: {refusal}"));
+        assert_white_left_and_black_right(&read_registered_texture(&gpu, &destination_id));
+    }
+    service.stop();
+}

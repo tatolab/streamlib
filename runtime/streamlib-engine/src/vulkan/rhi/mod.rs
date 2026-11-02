@@ -149,6 +149,11 @@ mod vulkan_host_mapping_imported_as_buffer;
 pub use vulkan_host_mapping_imported_as_buffer::{HostMappingTier, HostMappingWrittenByGpu};
 
 #[cfg(target_os = "linux")]
+mod vulkan_host_mapping_read_by_gpu;
+#[cfg(target_os = "linux")]
+pub use vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;
+
+#[cfg(target_os = "linux")]
 mod vulkan_video_session;
 #[cfg(target_os = "linux")]
 pub use vulkan_video_session::{
