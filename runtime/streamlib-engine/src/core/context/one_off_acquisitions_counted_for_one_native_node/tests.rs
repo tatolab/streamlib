@@ -37,7 +37,7 @@ fn every_one_off_of_one_texture_shape_the_node_may_hold(
 #[test]
 fn a_native_nodes_seventeenth_held_one_off_of_one_shape_is_refused_by_name_before_it_allocates() {
     let node = OneOffAcquisitionsCountedForOneNativeNode::new();
-    let held = every_one_off_of_one_texture_shape_the_node_may_hold(&node);
+    let _held = every_one_off_of_one_texture_shape_the_node_may_hold(&node);
     assert_eq!(
         node.held_count_of_shape(&a_1280x720_rgba8_unorm_texture()),
         16

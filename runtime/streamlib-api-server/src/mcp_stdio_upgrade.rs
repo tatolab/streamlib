@@ -174,9 +174,7 @@ pub(crate) mod tests {
         ClientCapabilities, Implementation, ProtocolVersion, ReadResourceRequestParams,
         RequestMetaObject, SubscriptionFilter,
     };
-    use rmcp::service::{
-        ClientLifecycleMode, ClientServiceExt, RunningService, ServiceExt, SubscriptionEnd,
-    };
+    use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService, SubscriptionEnd};
     use serde_json::{Value, json};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
