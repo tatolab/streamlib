@@ -113,7 +113,7 @@ stop_everything() {
 }
 trap stop_everything EXIT
 
-if ! RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info,_native=info}" \
+if ! RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info,_native=info,tatolab_module=info}" \
         start_the_fixture_runtime "$LOG_FILE" "$RUNTIME_STATE_HOME"; then
     fail "could not start the runtime the streams run on"
 fi
