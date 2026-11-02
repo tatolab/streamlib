@@ -5,7 +5,9 @@
 //! session's first sync point states, set ahead of the media frame it
 //! describes, and a refused write dropping to the next sync point.
 
-use crate::h264_codec_string::avc1_codec_string_of_the_sequence_parameter_set;
+use streamlib_video_bitstream::VideoCodecElementaryStream;
+use streamlib_video_bitstream::annex_b_access_unit::parameter_sets_of_annex_b_access_unit;
+
 use crate::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
 
 /// The catalog section a video entry is stated in.
@@ -27,7 +29,7 @@ pub trait EncodedVideoOutputPort {
 
 /// One access unit the encoder completed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncodedH264AccessUnit {
+pub struct EncodedVideoAccessUnit {
     pub annex_b_access_unit_bytes: Vec<u8>,
     pub is_sync_point: bool,
 }
@@ -43,8 +45,9 @@ pub struct EncodedVideoPublicationOutcome {
 }
 
 /// The publication state of one `encoded_video` port across sessions.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EncodedVideoPublication {
+    elementary_stream: VideoCodecElementaryStream,
     video_entry_on_the_port: Option<String>,
     video_entry_derived_for_this_session: bool,
     dropping_access_units_until_the_next_sync_point: bool,
@@ -53,6 +56,18 @@ pub struct EncodedVideoPublication {
 }
 
 impl EncodedVideoPublication {
+    /// The publication of a port carrying `elementary_stream` access units.
+    pub fn new(elementary_stream: VideoCodecElementaryStream) -> Self {
+        Self {
+            elementary_stream,
+            video_entry_on_the_port: None,
+            video_entry_derived_for_this_session: false,
+            dropping_access_units_until_the_next_sync_point: false,
+            media_frame_scratch: Vec::new(),
+            access_units_dropped_after_a_refusal: 0,
+        }
+    }
+
     /// A new session was minted; its first sync point states the entry again.
     pub fn session_minted(&mut self) {
         self.video_entry_derived_for_this_session = false;
@@ -68,7 +83,7 @@ impl EncodedVideoPublication {
     pub fn publish(
         &mut self,
         output_port: &dyn EncodedVideoOutputPort,
-        access_units: &[EncodedH264AccessUnit],
+        access_units: &[EncodedVideoAccessUnit],
         timestamp_ns: i64,
         (coded_width, coded_height): (u32, u32),
     ) -> EncodedVideoPublicationOutcome {
@@ -135,7 +150,7 @@ impl EncodedVideoPublication {
 
     fn video_entry_from_the_first_sync_point_of_this_session(
         &mut self,
-        access_units: &[EncodedH264AccessUnit],
+        access_units: &[EncodedVideoAccessUnit],
         coded_width: u32,
         coded_height: u32,
     ) -> Option<String> {
@@ -146,9 +161,11 @@ impl EncodedVideoPublication {
             .iter()
             .find(|access_unit| access_unit.is_sync_point)?;
         self.video_entry_derived_for_this_session = true;
-        let codec = avc1_codec_string_of_the_sequence_parameter_set(
+        let codec = parameter_sets_of_annex_b_access_unit(
             &first_sync_point.annex_b_access_unit_bytes,
-        )?;
+            self.elementary_stream,
+        )
+        .codec_string_of_the_sequence_parameter_set(self.elementary_stream)?;
         Some(format!(
             "{{\"codec\":\"{codec}\",\"codedWidth\":{coded_width},\"codedHeight\":{coded_height}}}"
         ))
@@ -195,15 +212,15 @@ mod tests {
         }
     }
 
-    fn sync_point() -> EncodedH264AccessUnit {
-        EncodedH264AccessUnit {
+    fn sync_point() -> EncodedVideoAccessUnit {
+        EncodedVideoAccessUnit {
             annex_b_access_unit_bytes: vec![0, 0, 0, 1, 0x67, 0x64, 0x00, 0x1F, 0, 0, 1, 0x65],
             is_sync_point: true,
         }
     }
 
-    fn predicted() -> EncodedH264AccessUnit {
-        EncodedH264AccessUnit {
+    fn predicted() -> EncodedVideoAccessUnit {
+        EncodedVideoAccessUnit {
             annex_b_access_unit_bytes: vec![0, 0, 0, 1, 0x41, 0x9A],
             is_sync_point: false,
         }
@@ -212,7 +229,7 @@ mod tests {
     #[test]
     fn the_first_sync_point_states_the_entry_once_before_its_media_frame() {
         let port = RecordingOutputPort::default();
-        let mut publication = EncodedVideoPublication::default();
+        let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
         publication.publish(&port, &[sync_point()], 1_000_000, (1280, 720));
         publication.publish(&port, &[predicted()], 2_000_000, (1280, 720));
@@ -234,7 +251,7 @@ mod tests {
     #[test]
     fn a_re_minted_session_with_a_new_extent_states_a_new_entry() {
         let port = RecordingOutputPort::default();
-        let mut publication = EncodedVideoPublication::default();
+        let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
         publication.publish(&port, &[sync_point()], 0, (1280, 720));
         publication.session_minted();
@@ -246,7 +263,7 @@ mod tests {
     #[test]
     fn a_refused_write_drops_to_the_next_sync_point_and_asks_for_one() {
         let port = RecordingOutputPort::default();
-        let mut publication = EncodedVideoPublication::default();
+        let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
         publication.publish(&port, &[sync_point()], 0, (1280, 720));
 
         *port.refuse_writes.borrow_mut() = true;
@@ -267,7 +284,7 @@ mod tests {
     #[test]
     fn a_refused_catalog_entry_drops_the_frame_and_is_stated_at_the_next_sync_point() {
         let port = RecordingOutputPort::default();
-        let mut publication = EncodedVideoPublication::default();
+        let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
         *port.refuse_catalog_entries.borrow_mut() = true;
         let refused = publication.publish(&port, &[sync_point()], 0, (1280, 720));
@@ -278,5 +295,34 @@ mod tests {
         assert_eq!(port.catalog_entries.borrow().len(), 1);
         let stamps: Vec<i64> = port.writes.borrow().iter().map(|write| write.1).collect();
         assert_eq!(stamps, [1]);
+    }
+
+    #[test]
+    fn an_h265_port_states_the_hvc1_string_its_first_sync_point_spells() {
+        let port = RecordingOutputPort::default();
+        let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H265);
+        let h265_sync_point = EncodedVideoAccessUnit {
+            annex_b_access_unit_bytes: [
+                &[0, 0, 0, 1][..],
+                &[
+                    0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03,
+                    0x00, 0x00, 0x03, 0x00, 0x5D, 0xA0,
+                ],
+                &[0, 0, 1, 0x26, 0x01, 0xAF],
+            ]
+            .concat(),
+            is_sync_point: true,
+        };
+
+        publication.publish(&port, &[h265_sync_point], 0, (1920, 1088));
+
+        assert_eq!(
+            *port.catalog_entries.borrow(),
+            [(
+                "video".to_owned(),
+                "{\"codec\":\"hvc1.1.6.L93.90\",\"codedWidth\":1920,\"codedHeight\":1088}"
+                    .to_owned()
+            )]
+        );
     }
 }
