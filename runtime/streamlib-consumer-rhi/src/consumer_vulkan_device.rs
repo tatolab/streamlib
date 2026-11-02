@@ -1510,7 +1510,7 @@ mod tests {
         match consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(d) => Some(Arc::new(d)),
             Err(e) => {
-                println!("Skipping test — ConsumerVulkanDevice unavailable: {e}");
+                tracing::warn!("skipping — ConsumerVulkanDevice unavailable: {e}");
                 None
             }
         }

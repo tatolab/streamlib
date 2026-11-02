@@ -1251,7 +1251,6 @@ impl std::fmt::Debug for RhiCommandRecorder {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn rhi_command_recorder_is_send_sync() {
@@ -1271,7 +1270,7 @@ mod layout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, PixelFormat};
+    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer};
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {

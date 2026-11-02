@@ -26,7 +26,7 @@ use streamlib::sdk::engine::host_rhi::{
     HostMarker, HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::error::Error;
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_cpu_readback::{
     CpuReadbackContext, CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
     InProcessCpuReadbackCopyTrigger, VulkanLayout,
@@ -180,7 +180,6 @@ impl HostFixture {
             let plane_w = surface_format.plane_width(width, plane_idx);
             let plane_h = surface_format.plane_height(height, plane_idx);
             let plane_bpp = surface_format.plane_bytes_per_pixel(plane_idx);
-            let pf = staging_pixel_format_for(surface_format, plane_idx);
             let pb = HostVulkanBuffer::new(
                 self.adapter.device(),
                 (plane_w as u64) * (plane_h as u64) * (plane_bpp as u64),
@@ -221,21 +220,5 @@ impl HostFixture {
             SurfaceTransportHandle::empty(),
             SurfaceSyncState::default(),
         ))
-    }
-}
-
-/// Pixel format used to label staging-buffer allocations. The adapter
-/// drives copy geometry from `SurfaceFormat`'s plane functions, so
-/// the staging `PixelFormat` is bookkeeping only — pick something
-/// that matches the byte layout for clarity.
-fn staging_pixel_format_for(format: SurfaceFormat, plane: u32) -> PixelFormat {
-    match (format, plane) {
-        (SurfaceFormat::Bgra8, 0) => PixelFormat::Bgra32,
-        (SurfaceFormat::Rgba8, 0) => PixelFormat::Rgba32,
-        // NV12 plane 0 (Y) is one-byte-per-texel; plane 1 (UV) is two.
-        // Neither maps cleanly to a CV pixel format constant, so use
-        // `Gray8` which the adapter ignores.
-        (SurfaceFormat::Nv12, _) => PixelFormat::Gray8,
-        _ => PixelFormat::Unknown,
     }
 }

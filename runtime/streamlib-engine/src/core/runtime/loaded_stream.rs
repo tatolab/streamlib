@@ -54,7 +54,7 @@ impl LoadedStreamTag {
     pub fn next_in_this_process() -> Result<Self> {
         static NEXT_LOADED_STREAM_TAG: AtomicU32 = AtomicU32::new(1);
         NEXT_LOADED_STREAM_TAG
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |tag| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |tag| {
                 tag.checked_add(1)
             })
             .ok()
