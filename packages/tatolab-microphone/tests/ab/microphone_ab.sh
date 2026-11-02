@@ -3,28 +3,25 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # The microphone A/B: the built-in `MicrophoneSource` and this wheel's
-# `MicrophoneProofSource`, each into the same `AudioBlockArrivalRecorder`, one
+# `tatolab.microphone.MicrophoneSource`, each into the same `AudioBlockArrivalRecorder`, one
 # after the other on the same device, each on a runtime this script starts and
 # stops itself, under the same CPU stress. `audio_block_arrival_report.py`
 # scores the two recordings against the ticket's bar.
 #
-# The built-in opens the audio backend's default source; the proof opens the
-# ALSA PCM `PROOF_PCM_NAME` (default `default`, which on a PipeWire machine is
-# PipeWire's default source through its ALSA plugin), so both capture the same
-# device. Name a device for both with BUILT_IN_DEVICE_ID and PROOF_PCM_NAME.
+# Both open the audio backend's default source unless named: BUILT_IN_DEVICE_ID
+# for the built-in, MODULE_DEVICE_ID for the module, both backend device ids.
 #
 # Usage:
-#   packages/streamlib-microphone-proof/tests/ab/microphone_ab.sh [output_dir]
+#   packages/tatolab-microphone/tests/ab/microphone_ab.sh [output_dir]
 #
 # Environment:
 #   RUN_SECONDS               each arm's measured length (default 600)
 #   CPU_STRESS_PROCESSES      busy processes beside both arms (default: nproc)
-#   PROOF_GIL_CHURN_THREADS   pure-Python threads in the proof's interpreter (default 0)
-#   PROOF_PCM_NAME            ALSA PCM the proof opens (default `default`)
+#   MODULE_DEVICE_ID          backend device id the module opens (default: the default source)
 #   BUILT_IN_DEVICE_ID        backend device id the built-in opens (default: the default source)
 #   WARMUP_SECONDS            discarded at the start of each recording (default 2)
 #
-# Exit codes: 0 = the proof meets the bar, 1 = it misses or a run failed, 77 = cannot run.
+# Exit codes: 0 = the module meets the bar, 1 = it misses or a run failed, 77 = cannot run.
 
 set -uo pipefail
 
@@ -36,8 +33,7 @@ ENGINE_FIXTURES="$REPO_ROOT/runtime/streamlib-engine/tests/fixtures"
 OUTPUT_DIR="${1:-/tmp/streamlib-microphone-ab-$(date +%s)}"
 RUN_SECONDS="${RUN_SECONDS:-600}"
 CPU_STRESS_PROCESSES="${CPU_STRESS_PROCESSES:-$(nproc)}"
-PROOF_GIL_CHURN_THREADS="${PROOF_GIL_CHURN_THREADS:-0}"
-PROOF_PCM_NAME="${PROOF_PCM_NAME:-default}"
+MODULE_DEVICE_ID="${MODULE_DEVICE_ID:-}"
 BUILT_IN_DEVICE_ID="${BUILT_IN_DEVICE_ID:-}"
 WARMUP_SECONDS="${WARMUP_SECONDS:-2}"
 
@@ -55,7 +51,7 @@ refuse_while_a_runtime_answers_at_the_local_api_socket \
 VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop --release\` this wheel into it"
-"$VENV_PYTHON" -c 'import tatolab.stream, tatolab.microphone_proof' 2>/dev/null \
+"$VENV_PYTHON" -c 'import tatolab.stream, tatolab.microphone' 2>/dev/null \
     || cannot_run "the venv cannot import this wheel beside tatolab-stream; rebuild with \`maturin develop --release\`"
 
 mkdir -p "$OUTPUT_DIR"
@@ -80,7 +76,7 @@ stop_the_cpu_stress() {
 
 RUNTIME_STATE_HOME=""
 stop_everything() {
-    stop_the_fixture_stream_runs
+    remove_the_fixture_projects
     stop_the_fixture_runtime
     stop_the_cpu_stress
     [ -z "$RUNTIME_STATE_HOME" ] || rm -rf "$RUNTIME_STATE_HOME"
@@ -95,8 +91,7 @@ trap stop_everything EXIT
     echo "commit: $(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"
     echo "run_seconds: $RUN_SECONDS"
     echo "cpu_stress_processes: $CPU_STRESS_PROCESSES"
-    echo "proof_gil_churn_threads: $PROOF_GIL_CHURN_THREADS"
-    echo "proof_pcm_name: $PROOF_PCM_NAME"
+    echo "module_device_id: ${MODULE_DEVICE_ID:-<backend default>}"
     echo "built_in_device_id: ${BUILT_IN_DEVICE_ID:-<backend default>}"
     if command -v pactl >/dev/null; then
         echo "default_source: $(pactl get-default-source 2>/dev/null)"
@@ -108,55 +103,59 @@ trap stop_everything EXIT
 cat "$OUTPUT_DIR/rig.txt"
 
 # `tatolab run` loads every `@stream` of a project's `stream.py`, so each arm is
-# its own project: a copy of `<arm>_arm/` beside the evidence, its `.venv` this
-# wheel's.
+# its own project: a copy of `<arm>_arm/` and the recorder beside the evidence,
+# its `.venv` this wheel's.
 run_one_arm() {
-    local arm="$1"
+    local arm="$1" stream_function_name="$2"
     local recording="$OUTPUT_DIR/$arm.csv"
     local arm_project_directory="$OUTPUT_DIR/$arm.project"
     rm -rf "$arm_project_directory"
     cp -r "$SCRIPT_DIR/${arm}_arm" "$arm_project_directory"
+    cp "$SCRIPT_DIR/audio_block_arrival_recorder.py" "$arm_project_directory/"
     ln -s "$PACKAGE_DIR/.venv" "$arm_project_directory/.venv"
+    cat >"$arm_project_directory/pyproject.toml" <<TOML
+[project]
+name = "microphone-ab-$arm"
+version = "0.0.0"
+requires-python = ">=3.10"
+TOML
+    local arm_stream_id
+    arm_stream_id="$(stream_id_of_the_fixture_project_stream "$arm_project_directory" "$stream_function_name")" \
+        || fail "arm $arm: could not derive its stream id"
     RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-microphone-ab-state-XXXXXX")"
     say "Arm $arm: starting the runtime"
     STREAMLIB_MICROPHONE_AB_RECORDING_PATH="$recording" \
     STREAMLIB_MICROPHONE_AB_BUILT_IN_DEVICE_ID="$BUILT_IN_DEVICE_ID" \
-    STREAMLIB_MICROPHONE_AB_PROOF_PCM_NAME="$PROOF_PCM_NAME" \
-    STREAMLIB_MICROPHONE_AB_PROOF_GIL_CHURN_THREADS="$PROOF_GIL_CHURN_THREADS" \
+    STREAMLIB_MICROPHONE_AB_MODULE_DEVICE_ID="$MODULE_DEVICE_ID" \
     RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         start_the_fixture_runtime "$OUTPUT_DIR/$arm.runtime.log" "$RUNTIME_STATE_HOME" \
         || fail "arm $arm: the runtime did not start"
     start_the_cpu_stress
-    local arm_stream_id
-    if ! "$TATOLAB_EXECUTABLE" run --dir "$arm_project_directory" >"$OUTPUT_DIR/$arm.run.log" 2>&1 \
-        || ! arm_stream_id="$(name_of_the_stream_a_rig_serves_once_it_runs "$FIXTURE_RUNTIME_PID" 120)"; then
+    if ! start_the_fixture_project "$arm_project_directory" "$arm_stream_id" "$OUTPUT_DIR/$arm.run.log"; then
         tail -40 "$OUTPUT_DIR/$arm.run.log" >&2
         tail -40 "$OUTPUT_DIR/$arm.runtime.log" >&2
         fail "arm $arm: the stream never ran"
     fi
     say "Arm $arm: stream $arm_stream_id running for ${RUN_SECONDS}s under $CPU_STRESS_PROCESSES stress processes"
     sleep "$(( RUN_SECONDS + WARMUP_SECONDS ))"
-    "$TATOLAB_EXECUTABLE" stop "$arm_stream_id" >>"$OUTPUT_DIR/$arm.run.log" 2>&1
-    for _ in $(seq 1 30); do
-        the_stream_is_running "$arm_stream_id" || break
-        sleep 1
-    done
+    remove_the_fixture_projects
+    [ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" = 0 ] || say "Arm $arm: the stream did not unload within 10 s"
     stop_the_cpu_stress
     stop_the_fixture_runtime 15
     rm -rf "$RUNTIME_STATE_HOME"
     RUNTIME_STATE_HOME=""
     [ -s "$recording" ] || fail "arm $arm recorded nothing"
     say "Arm $arm: $(( $(wc -l < "$recording") - 1 )) blocks recorded"
-    grep -hE "MicrophoneSource: (capture stream opened|teardown)|MicrophoneProofSource: (opened|capturing|first block written|stopped)|audio device backend chain probed" \
+    grep -hE "MicrophoneSource: (capture stream opened|teardown)|audio device backend chain probed" \
         "$OUTPUT_DIR/$arm.runtime.log" "$OUTPUT_DIR/$arm.run.log" 2>/dev/null \
         | tee "$OUTPUT_DIR/$arm.source_report.txt"
 }
 
-run_one_arm built_in
-run_one_arm proof
+run_one_arm built_in built_in_microphone_into_the_recorder
+run_one_arm module module_microphone_into_the_recorder
 
 "$VENV_PYTHON" "$SCRIPT_DIR/audio_block_arrival_report.py" \
-    "$OUTPUT_DIR/built_in.csv" "$OUTPUT_DIR/proof.csv" \
+    "$OUTPUT_DIR/built_in.csv" "$OUTPUT_DIR/module.csv" \
     --warmup-seconds "$WARMUP_SECONDS" \
     --markdown "$OUTPUT_DIR/report.md" --json "$OUTPUT_DIR/report.json"
 REPORT_EXIT=$?

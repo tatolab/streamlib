@@ -47,7 +47,7 @@ include = ["python", "tests"]
 # The helper-side tests import `tatolab.runtime`, which no venv of a package
 # holds — they borrow it from the runtime unit's lend — so pyright reads it from
 # the engine's own source and stub in this checkout.
-extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
+extraPaths = ["python", "tests/ab", "../../sdk/streamlib-python-wheel/python"]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."
