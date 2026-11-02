@@ -21,7 +21,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 0;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 1;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -35,6 +35,8 @@ pub const MODULE_HOST_TABLE_STATUS_OK: ModuleHostTableStatus = 0;
 pub const MODULE_HOST_TABLE_STATUS_EMPTY: ModuleHostTableStatus = 1;
 /// A wait elapsed with no input port holding a message.
 pub const MODULE_HOST_TABLE_STATUS_TIMED_OUT: ModuleHostTableStatus = 2;
+/// The stream the verb asked about has ended; the error message says why.
+pub const MODULE_HOST_TABLE_STATUS_ENDED: ModuleHostTableStatus = 3;
 /// The verb was refused; the error message says why.
 pub const MODULE_HOST_TABLE_STATUS_REFUSED: ModuleHostTableStatus = -1;
 
@@ -51,6 +53,14 @@ pub const MODULE_HOST_TABLE_LOG_LEVEL_INFO: u32 = 3;
 pub const MODULE_HOST_TABLE_LOG_LEVEL_DEBUG: u32 = 4;
 /// The [`ModuleHostTable::log`] level of a per-step trace.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_TRACE: u32 = 5;
+
+/// A requested [`ModuleHostTableAudioStreamFormat::sample_format`] that takes
+/// whatever the device opened in; never the format of an opened stream.
+pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY: u32 = 0;
+/// 32-bit little-endian float scalars.
+pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32: u32 = 1;
+/// 16-bit little-endian signed integer scalars.
+pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16: u32 = 2;
 
 /// How many bytes of a refusal's message the caller's buffer holds; a longer
 /// message is cut at a UTF-8 boundary.
@@ -108,6 +118,61 @@ pub struct ModuleHostTableReadMessage {
     pub lost_since_last_read: u64,
     pub host_owned_message: *mut c_void,
 }
+
+/// An audio stream's rate, channel count and scalar encoding. In a request,
+/// a zero field takes whatever the device opened in.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableAudioStreamFormat {
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// One of the `MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_*` values.
+    pub sample_format: u32,
+}
+
+/// What a module asks the host to open a capture stream on.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableAudioCaptureStreamRequest {
+    /// The backend-named device; empty takes the backend's default.
+    pub device_id: ModuleHostTableUtf8,
+    /// The format the stream must open in; a device that opens in another is
+    /// refused, never converted.
+    pub requested_format: ModuleHostTableAudioStreamFormat,
+    /// Always zero; keeps the struct's size a multiple of 8 on every target.
+    pub reserved: u32,
+}
+
+/// An audio stream the host opened for the module, valid until it is closed;
+/// `0` names no stream.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableAudioStreamHandle {
+    pub value: u64,
+}
+
+/// One block a capture device delivered, borrowed for the length of the
+/// callback it is handed to.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableCapturedAudioBlock {
+    /// Interleaved little-endian scalars in the stream's format.
+    pub interleaved_sample_bytes: ModuleHostTableBytes,
+    /// Per-channel samples: the bytes hold `sample_count × channels` scalars.
+    pub sample_count: u32,
+    /// Always zero; keeps the next field 8-aligned on every target.
+    pub reserved: u32,
+    /// The monotonic instant of the block's first sample as the device timed
+    /// it, never the instant of delivery.
+    pub first_sample_timestamp_ns: i64,
+}
+
+/// What a capture stream calls with each block, on the host's device thread.
+/// It must not block, and must not call a verb on the stream delivering it.
+pub type ModuleHostTableCapturedAudioBlockCallback = unsafe extern "C" fn(
+    callback_context: *mut c_void,
+    captured_block: *const ModuleHostTableCapturedAudioBlock,
+);
 
 /// The verbs a node's native code reaches its node through, and the node host
 /// they act on. Every verb's first argument is [`ModuleHostTable::node_host`].
@@ -194,6 +259,45 @@ pub struct ModuleHostTable {
     /// What the host offers, as one JSON object; valid while the node host is
     /// retained.
     pub host_capabilities_json: unsafe extern "C" fn(node_host: *mut c_void) -> ModuleHostTableUtf8,
+    /// Open a capture stream through the engine's audio device backend, under
+    /// the stream's capture-prompting policy, and write the format it opened in.
+    /// Minor 1.
+    pub audio_capture_stream_open: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        request: *const ModuleHostTableAudioCaptureStreamRequest,
+        opened_stream: *mut ModuleHostTableAudioStreamHandle,
+        opened_format: *mut ModuleHostTableAudioStreamFormat,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Begin calling `block_callback` with `callback_context` for every block
+    /// the stream captures, replacing any callback an earlier call installed.
+    /// The replaced callback is not called once this returns. Minor 1.
+    pub audio_capture_stream_start: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        block_callback: ModuleHostTableCapturedAudioBlockCallback,
+        callback_context: *mut c_void,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Stop delivering; the callback is not called again once this returns.
+    /// Minor 1.
+    pub audio_capture_stream_stop: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// [`MODULE_HOST_TABLE_STATUS_OK`] while the device serves the stream;
+    /// [`MODULE_HOST_TABLE_STATUS_ENDED`], with the failure written, once it
+    /// stopped. Minor 1.
+    pub audio_capture_stream_liveness: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        stream: ModuleHostTableAudioStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Stop delivering and close the stream; its handle names nothing after.
+    /// Minor 1.
+    pub audio_capture_stream_close:
+        unsafe extern "C" fn(node_host: *mut c_void, stream: ModuleHostTableAudioStreamHandle),
 }
 
 impl ModuleHostTableUtf8 {
@@ -385,7 +489,88 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_in_order.into_iter().enumerate() {
             assert_eq!(offset, 16 + slot * POINTER, "pointer slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 14 * POINTER);
+    }
+
+    /// Minor 1 appends its audio capture verbs after every v1.0 field.
+    #[test]
+    fn the_v1_1_table_appends_its_audio_capture_verbs_after_every_v1_0_field() {
+        let pointer_slots_appended_at_minor_1 = [
+            offset_of!(ModuleHostTable, audio_capture_stream_open),
+            offset_of!(ModuleHostTable, audio_capture_stream_start),
+            offset_of!(ModuleHostTable, audio_capture_stream_stop),
+            offset_of!(ModuleHostTable, audio_capture_stream_liveness),
+            offset_of!(ModuleHostTable, audio_capture_stream_close),
+        ];
+        for (slot, offset) in pointer_slots_appended_at_minor_1.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (14 + slot) * POINTER, "minor 1 slot {slot}");
+        }
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 19 * POINTER);
         assert_eq!(align_of::<ModuleHostTable>(), 8);
+    }
+
+    #[test]
+    fn an_audio_stream_format_is_three_u32s() {
+        assert_eq!(offset_of!(ModuleHostTableAudioStreamFormat, sample_rate), 0);
+        assert_eq!(offset_of!(ModuleHostTableAudioStreamFormat, channels), 4);
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioStreamFormat, sample_format),
+            8
+        );
+        assert_eq!(size_of::<ModuleHostTableAudioStreamFormat>(), 12);
+        assert_eq!(align_of::<ModuleHostTableAudioStreamFormat>(), 4);
+    }
+
+    #[test]
+    fn a_capture_request_is_the_device_id_then_the_format() {
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioCaptureStreamRequest, device_id),
+            0
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioCaptureStreamRequest, requested_format),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableAudioCaptureStreamRequest, reserved),
+            2 * POINTER + 12
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableAudioCaptureStreamRequest>(),
+            2 * POINTER + 16
+        );
+        assert_eq!(
+            align_of::<ModuleHostTableAudioCaptureStreamRequest>(),
+            POINTER
+        );
+    }
+
+    #[test]
+    fn an_audio_stream_handle_is_one_u64() {
+        assert_eq!(size_of::<ModuleHostTableAudioStreamHandle>(), 8);
+        assert_eq!(align_of::<ModuleHostTableAudioStreamHandle>(), 8);
+    }
+
+    #[test]
+    fn a_captured_block_lays_out_on_8_byte_fields() {
+        assert_eq!(
+            offset_of!(ModuleHostTableCapturedAudioBlock, interleaved_sample_bytes),
+            0
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableCapturedAudioBlock, sample_count),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableCapturedAudioBlock, reserved),
+            2 * POINTER + 4
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableCapturedAudioBlock, first_sample_timestamp_ns),
+            2 * POINTER + 8
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableCapturedAudioBlock>(),
+            2 * POINTER + 16
+        );
     }
 }
