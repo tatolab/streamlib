@@ -98,6 +98,15 @@ struct StreamLibPipeWireChunkExtent streamlib_pipewire_clamped_chunk_extent(uint
                                                                            uint32_t chunk_size,
                                                                            uint32_t data_maxsize);
 
+/// What a stream is asked to open in. A zero rate or channel count takes the
+/// device's own; PipeWire's adapter converts to whatever is named.
+struct StreamLibPipeWireRequestedAudioFormat {
+    uint32_t sample_rate;
+    uint32_t channels;
+    /// One of [`enum StreamLibPipeWireSampleFormat`].
+    uint32_t sample_format;
+};
+
 /// What one stream settled on, fixed for its lifetime.
 struct StreamLibPipeWireNegotiatedAudioFormat {
     uint32_t sample_rate;
@@ -161,8 +170,8 @@ typedef void (*StreamLibPipeWireStreamFailureHandOff)(void *hand_off_context, co
 /// One opened stream in either direction, owned by the shim.
 struct StreamLibPipeWireAudioStream;
 
-/// Open and negotiate a stream in `direction`, blocking until PipeWire settles
-/// the format or the attempt fails.
+/// Open and negotiate a stream in `direction` toward `requested_format`,
+/// blocking until PipeWire settles the format or the attempt fails.
 ///
 /// `device_id_or_null` names a PipeWire target object; NULL takes the session's
 /// default endpoint for that direction. Returns NULL with `failure_text` filled
@@ -173,6 +182,7 @@ struct StreamLibPipeWireAudioStream;
 struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     const void *const *entry_points, enum StreamLibPipeWireStreamDirection direction,
     const char *device_id_or_null,
+    const struct StreamLibPipeWireRequestedAudioFormat *requested_format,
     struct StreamLibPipeWireNegotiatedAudioFormat *negotiated_format_out, char *failure_text,
     size_t failure_text_capacity);
 

@@ -67,7 +67,7 @@ impl ModuleCapturedAudioBlockCallback {
     }
 }
 
-fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(super) fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -93,8 +93,8 @@ impl AudioCaptureStreamsOpenedForOneNode {
                 device_id: device_id.clone(),
                 deviceless_pacing_clock: Arc::clone(&deviceless_pacing_clock),
                 capture_device_access_prompting: self.capture_device_access_prompting,
+                requested_format: requested_stream_format,
             },
-            requested_stream_format,
         )
         .map_err(|refusal| refusal.to_string())?;
         let stream_format = capture_stream.stream_format();
@@ -173,7 +173,7 @@ impl Drop for AudioCaptureStreamOpenedForAModule {
     }
 }
 
-fn requested_audio_stream_format_of(
+pub(super) fn requested_audio_stream_format_of(
     requested_format: ModuleHostTableAudioStreamFormat,
 ) -> Result<RequestedAudioStreamFormat, String> {
     let sample_format = match requested_format.sample_format {
@@ -193,7 +193,7 @@ fn requested_audio_stream_format_of(
     })
 }
 
-fn module_host_table_audio_stream_format_of(
+pub(super) fn module_host_table_audio_stream_format_of(
     stream_format: AudioStreamFormat,
 ) -> ModuleHostTableAudioStreamFormat {
     ModuleHostTableAudioStreamFormat {

@@ -76,7 +76,7 @@ AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
 """The engine-side spelling for a contract resolved at `setup()` from a device
 stream — reachable here only so [`node.input`] can recognise and refuse it.
 
-It is on no public surface: a native built-in like `SpeakerSink` declares it in
+It is on no public surface: only a native node declares it, in
 Rust, where a node opens the device stream that settles it. A Python node
 never holds one.
 """

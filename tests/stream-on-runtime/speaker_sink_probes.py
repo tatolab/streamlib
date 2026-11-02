@@ -4,7 +4,7 @@
 """A probe that says when enough audio has flowed to judge a playback run by.
 
 It hangs off the same microphone output the speaker reads, so it is a second
-consumer rather than a stage between the two built-ins — the samples the
+consumer rather than a stage between the two nodes — the samples the
 speaker plays never enter an interpreter.
 
 The count is what makes the run long enough to mean something. A speaker's

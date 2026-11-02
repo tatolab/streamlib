@@ -3,7 +3,7 @@
 
 """The `@stream` functions `test_audio_window_stage.py` runs from the suite project."""
 
-import tatolab.stream
+from tatolab.microphone import MicrophoneSource
 from tatolab.stream import StreamBuilder, stream
 
 from audio_window_probes import (
@@ -16,7 +16,7 @@ from audio_window_probes import (
 
 
 def _microphone_into(stream_builder: StreamBuilder, probe_class: type) -> None:
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    microphone = stream_builder.add(MicrophoneSource)
     probe = stream_builder.add(probe_class)
     stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 

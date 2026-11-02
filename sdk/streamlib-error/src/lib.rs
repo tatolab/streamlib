@@ -140,6 +140,16 @@ pub enum Error {
         floors_it_runs_on: String,
     },
 
+    #[error(
+        "`{node_type}` is no longer a built-in node: it is `{module_node_type}`, a node \
+         `pip install {module_distribution}` gives the stream"
+    )]
+    BuiltInNodeTypeMovedToAModule {
+        node_type: ProcessorClassImportPath,
+        module_node_type: ProcessorClassImportPath,
+        module_distribution: String,
+    },
+
     #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]
     NodeConfigRefused {
         node_name: String,

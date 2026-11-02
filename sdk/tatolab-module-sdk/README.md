@@ -38,6 +38,18 @@ without a copy:
   converter;
 - read the surface id a message names a surface by, and release it.
 
+Version 1.3 adds playback through the same backend:
+
+- open a playback stream on a named device or the default in the format the
+  module plays (a rate, channel count or sample format left out takes the
+  device's own); the backend converts it to the device's, and a format it
+  cannot open the stream in is refused by name;
+- read the format it opened in and the device's period, where the backend
+  reports one;
+- start and stop asking a callback on the backend's device thread to fill each
+  device buffer;
+- read whether the device still serves the stream, and close it.
+
 Every verb is callable from any thread with no Python attached. The table carries
 plain data, opaque handles and borrowed fds only. No engine or GPU object
 crosses it, and
@@ -82,6 +94,24 @@ let mut capture_stream =
     module_host.open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())?;
 capture_stream.start_delivering_to(Box::new(move |captured_block| {
     queue.push(captured_block.interleaved_sample_bytes.to_vec());
+}))?;
+```
+
+A playback stream asks a closure for each device buffer; the closure must
+not block either, so a module fills it from a queue a thread of its own keeps
+topped up, and writes silence for whatever the queue does not hold:
+
+```rust
+let mut playback_stream = module_host.open_audio_playback_stream(
+    &ModuleHostAudioPlaybackStreamRequest {
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        sample_format: Some(ModuleHostAudioSampleFormat::F32),
+        ..ModuleHostAudioPlaybackStreamRequest::default()
+    },
+)?;
+playback_stream.start_requesting_from(Box::new(move |requested_block| {
+    queue.fill_or_write_silence(requested_block.interleaved_sample_bytes_to_fill);
 }))?;
 ```
 
