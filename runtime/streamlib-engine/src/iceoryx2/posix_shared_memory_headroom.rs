@@ -109,7 +109,7 @@ fn free_bytes_on_the_filesystem_holding(path: &Path) -> Option<u64> {
         0 => filesystem_statistics.f_bsize,
         fundamental_block_bytes => fundamental_block_bytes,
     };
-    (block_bytes as u64).checked_mul(filesystem_statistics.f_bavail as u64)
+    block_bytes.checked_mul(filesystem_statistics.f_bavail)
 }
 
 #[cfg(test)]

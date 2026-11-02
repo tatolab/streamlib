@@ -74,7 +74,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
 /// CUDA-mappable subset (`Rgba8Unorm`, `Rgba16Float`, `Rgba32Float`).
 /// The CUDA cdylib imports this image via `cudaImportExternalMemory`
 /// + `cudaExternalMemoryGetMappedMipmappedArray` and constructs
-/// `cudaTextureObject_t` / `cudaSurfaceObject_t` handles per acquire.
+///   `cudaTextureObject_t` / `cudaSurfaceObject_t` handles per acquire.
 pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
     /// OPAQUE_FD-exportable image — the resource CUDA imports as a
     /// tiled mipmapped array. Host- or consumer-flavored per `P`.

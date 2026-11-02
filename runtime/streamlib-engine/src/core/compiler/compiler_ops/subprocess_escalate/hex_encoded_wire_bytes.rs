@@ -54,13 +54,13 @@ mod tests {
 
     #[test]
     fn decode_hex_rejects_odd_length() {
-        let err = decode_hex("abc").err().expect("expected odd-length error");
+        let err = decode_hex("abc").expect_err("expected odd-length error");
         assert!(err.contains("even-length"), "got: {err}");
     }
 
     #[test]
     fn decode_hex_rejects_non_hex_character() {
-        let err = decode_hex("abxy").err().expect("expected non-hex error");
+        let err = decode_hex("abxy").expect_err("expected non-hex error");
         assert!(err.contains("non-hex"), "got: {err}");
     }
 }

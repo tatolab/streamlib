@@ -397,8 +397,7 @@ mod tests {
             )],
             &reflected,
         )
-        .err()
-        .expect("an undeclared name must be refused");
+        .expect_err("an undeclared name must be refused");
         let msg = format!("{err}");
         assert!(msg.contains("`sharpen_amount`"), "{msg}");
         assert!(
@@ -418,8 +417,7 @@ mod tests {
             ],
             &reflected,
         )
-        .err()
-        .expect("a kind disagreement must be refused");
+        .expect_err("a kind disagreement must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("`in0`") && msg.contains("StorageImage") && msg.contains("StorageBuffer"),
@@ -437,8 +435,7 @@ mod tests {
             ],
             &reflected,
         )
-        .err()
-        .expect("a partial declaration must be refused");
+        .expect_err("a partial declaration must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("`out_buf`") && msg.contains("undeclared"),
@@ -454,8 +451,7 @@ mod tests {
         // construction, rather than confusingly at first dispatch.
         let stripped = strip_every_debug_name_from_spirv_module(blend_spv(2));
         let err = derive_bindings_from_spirv(&stripped)
-            .err()
-            .expect("a name-stripped blob must be refused");
+            .expect_err("a name-stripped blob must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("carries no name") && msg.contains("glslc -g"),
@@ -535,9 +531,7 @@ mod tests {
 
     #[test]
     fn rejects_truncated_spirv() {
-        let err = derive_bindings_from_spirv(&[0u8; 7])
-            .err()
-            .expect("expected failure");
+        let err = derive_bindings_from_spirv(&[0u8; 7]).expect_err("expected failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("Failed to reflect SPIR-V"),
