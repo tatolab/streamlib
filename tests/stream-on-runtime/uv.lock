@@ -1838,7 +1838,7 @@ wheels = [
 
 [[package]]
 name = "tatolab-microphone"
-version = "0.68.11"
+version = "0.68.12"
 source = { directory = "../../packages/tatolab-microphone" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1849,7 +1849,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-speaker"
-version = "0.68.11"
+version = "0.68.12"
 source = { directory = "../../packages/tatolab-speaker" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1860,7 +1860,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-stream"
-version = "0.68.11"
+version = "0.68.12"
 source = { editable = "../../sdk/tatolab-stream" }
 dependencies = [
     { name = "msgpack" },
