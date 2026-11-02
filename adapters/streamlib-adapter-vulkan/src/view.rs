@@ -83,7 +83,6 @@ mod _assert_vulkan_read_view_not_cpu_readable {
         fn some_item() {}
     }
     impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-    #[allow(dead_code)]
     struct Invalid;
     impl<T: ?Sized + CpuReadable> AmbiguousIfImpl<Invalid> for T {}
 

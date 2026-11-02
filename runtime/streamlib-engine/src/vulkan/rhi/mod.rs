@@ -40,7 +40,6 @@ pub(crate) use vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSna
 #[allow(unused_imports)]
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
 #[allow(unused_imports)]
-pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_texture::HostVulkanTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_upload_resources::HostVulkanUploadResources;

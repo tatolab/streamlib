@@ -17,9 +17,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::consumer_vulkan_device::refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index;
-use crate::{
-    ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages, VulkanTextureLike,
-};
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, VulkanTextureLike};
 
 /// Convert RHI [`TextureFormat`] to the matching `vk::Format`.
 fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
@@ -32,31 +30,6 @@ fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
         TextureFormat::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
         TextureFormat::Nv12 => vk::Format::G8_B8R8_2PLANE_420_UNORM,
     }
-}
-
-/// Convert RHI [`TextureUsages`] to Vulkan usage flags.
-#[allow(dead_code)] // Reserved for caller-supplied usage on future import constructors.
-fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
-    let mut flags = vk::ImageUsageFlags::empty();
-    if usage.contains(TextureUsages::COPY_SRC) {
-        flags |= vk::ImageUsageFlags::TRANSFER_SRC;
-    }
-    if usage.contains(TextureUsages::COPY_DST) {
-        flags |= vk::ImageUsageFlags::TRANSFER_DST;
-    }
-    if usage.contains(TextureUsages::TEXTURE_BINDING) {
-        flags |= vk::ImageUsageFlags::SAMPLED;
-    }
-    if usage.contains(TextureUsages::STORAGE_BINDING) {
-        flags |= vk::ImageUsageFlags::STORAGE;
-    }
-    if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
-        flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
-    }
-    if flags.is_empty() {
-        flags = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC;
-    }
-    flags
 }
 
 /// Consumer-side Vulkan texture. See module docs.
