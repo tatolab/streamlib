@@ -147,7 +147,7 @@ run_one_arm() {
     RUNTIME_STATE_HOME=""
     [ -s "$recording" ] || fail "arm $arm recorded nothing"
     say "Arm $arm: $(( $(wc -l < "$recording") - 1 )) blocks recorded"
-    grep -hE "MicrophoneSource: (capture stream opened|teardown)|MicrophoneProofSource: (opened|capturing|stopped)|audio device backend chain probed" \
+    grep -hE "MicrophoneSource: (capture stream opened|teardown)|MicrophoneProofSource: (opened|capturing|first block written|stopped)|audio device backend chain probed" \
         "$OUTPUT_DIR/$arm.runtime.log" "$OUTPUT_DIR/$arm.run.log" 2>/dev/null \
         | tee "$OUTPUT_DIR/$arm.source_report.txt"
 }

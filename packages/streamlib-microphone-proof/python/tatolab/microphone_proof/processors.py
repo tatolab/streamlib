@@ -160,6 +160,13 @@ class MicrophoneProofSource:
                     log.error(f"MicrophoneProofSource: writing a block failed: {write_failure}")
                 continue
             self._written_blocks += 1
+            if self._written_blocks == 1:
+                # Said here rather than at stop, which a helper's teardown can outrun.
+                log.info(
+                    f"MicrophoneProofSource: first block written, device_thread_priority="
+                    f"{capture.device_thread_priority!r} drain_thread_priority="
+                    f"{self._drain_thread_priority!r}"
+                )
 
     def _churn_the_gil_until_stopped(self) -> None:
         while not self._stop.is_set():
