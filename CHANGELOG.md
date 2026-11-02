@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.8](https://github.com/tatolab/streamlib/compare/v0.68.7...v0.68.8) (2026-11-02)
+
+
+### Features
+
+* ship the microphone as a module over the engine's exported audio device ([#3061](https://github.com/tatolab/streamlib/issues/3061)) ([c251bac](https://github.com/tatolab/streamlib/commit/c251bac6e66df2278a88dfddb53aa5fdb29ad43d))
+
 ## [0.68.7](https://github.com/tatolab/streamlib/compare/v0.68.6...v0.68.7) (2026-11-01)
 
 
