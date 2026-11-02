@@ -57,12 +57,6 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
-    # `option-ext`, reached through `dirs` in the Linux closure. MPL-2.0 is
-    # file-level copyleft: the obligation attaches to MPL-licensed files that
-    # have been modified, and we neither modify nor vendor them. Allowed on
-    # that reading, and named here so the reading is visible rather than
-    # inferred from the identifier's presence.
-    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
