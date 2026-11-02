@@ -22,6 +22,7 @@ any device opens, and the identities are read off `tatolabd`'s own log.
 
 from __future__ import annotations
 
+import importlib.metadata
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -112,14 +113,22 @@ MakeTatolabProject = Callable[..., Path]
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
+#: What this suite's venv lists under `tatolab.nodes`. Every stream started from the
+#: venv describes these into the stream beside its own classes.
+NODE_TYPES_INSTALLED_MODULES_DECLARE = frozenset(
+    entry_point.value for entry_point in importlib.metadata.entry_points(group="tatolab.nodes")
+)
+
+
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
-    """Every identity the engine derived for the stream's Python node types, off
-    its own registration records, in order."""
+    """Every identity the engine derived for the stream's own Python node types, off
+    its own registration records, in order; installed modules' types are left out."""
     return [
         found.group(1)
         for line in stderr_text.splitlines()
         if PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
         and (found := DERIVED_IDENTITY_PATTERN.search(line))
+        and found.group(1) not in NODE_TYPES_INSTALLED_MODULES_DECLARE
     ]
 
 
