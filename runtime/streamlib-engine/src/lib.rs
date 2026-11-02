@@ -16,7 +16,6 @@ extern crate self as streamlib;
 
 // Re-export crossbeam_channel for macro-generated code
 pub use crossbeam_channel;
-pub use inventory;
 pub use schemars;
 pub use serde_json;
 
@@ -303,7 +302,6 @@ pub mod sdk {
 
     pub use crate::crossbeam_channel;
     pub use crate::iceoryx2;
-    pub use crate::inventory;
     pub use crate::logging;
     pub use crate::schemars;
     pub use crate::serde_json;
