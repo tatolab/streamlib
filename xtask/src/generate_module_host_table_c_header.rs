@@ -82,21 +82,11 @@ pub fn render_module_host_table_c_header(abi_source: &str) -> Result<String> {
                 writeln!(declarations, "#define {} {value}\n", item.ident)?;
             }
             syn::Item::Type(item) if is_public(&item.vis) => {
-                declarations.push_str(&render_doc_comment(&item.attrs, ""));
-                if let syn::Type::BareFn(_) = item.ty.as_ref() {
-                    let declarator = render_c_declaration(&item.ty, &item.ident.to_string())
-                        .with_context(|| format!("type {}", item.ident))?;
-                    writeln!(declarations, "typedef {declarator};\n")?;
-                    continue;
-                }
                 let scalar_name = item.ty.to_token_stream().to_string();
                 let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
-                    format!(
-                        "type {}: only a scalar or an `extern \"C\"` function pointer alias \
-                         renders to C",
-                        item.ident
-                    )
+                    format!("type {}: only a scalar alias renders to C", item.ident)
                 })?;
+                declarations.push_str(&render_doc_comment(&item.attrs, ""));
                 writeln!(declarations, "typedef {c_type} {};\n", item.ident)?;
                 type_alias_scalar_names.insert(item.ident.to_string(), scalar_name);
             }
@@ -394,34 +384,6 @@ mod tests {
         );
         assert!(
             header.contains("    void (*log)(void *node_host, const uint8_t *target);\n"),
-            "{header}"
-        );
-    }
-
-    #[test]
-    fn a_function_pointer_alias_renders_as_a_c_function_pointer_typedef() {
-        let header = render_module_host_table_c_header(
-            r#"
-            pub type ModuleHostTableCallback = unsafe extern "C" fn(
-                callback_context: *mut c_void,
-                block: *const ModuleHostTableBlock,
-            );
-            #[repr(C)]
-            pub struct ModuleHostTable {
-                pub on_block: ModuleHostTableCallback,
-            }
-            "#,
-        )
-        .unwrap();
-        assert!(
-            header.contains(
-                "typedef void (*ModuleHostTableCallback)(void *callback_context, \
-                 const ModuleHostTableBlock *block);\n"
-            ),
-            "{header}"
-        );
-        assert!(
-            header.contains("    ModuleHostTableCallback on_block;\n"),
             "{header}"
         );
     }
