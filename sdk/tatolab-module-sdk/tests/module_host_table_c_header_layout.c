@@ -37,6 +37,27 @@ _Static_assert(offsetof(ModuleHostTableReadMessage, lost_since_last_read) == 2 *
 _Static_assert(offsetof(ModuleHostTableReadMessage, host_owned_message) == 2 * POINTER + 24, "ModuleHostTableReadMessage.host_owned_message");
 _Static_assert(sizeof(ModuleHostTableReadMessage) == 3 * POINTER + 24, "ModuleHostTableReadMessage size");
 
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, sample_rate) == 0, "ModuleHostTableAudioStreamFormat.sample_rate");
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, channels) == 4, "ModuleHostTableAudioStreamFormat.channels");
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, sample_format) == 8, "ModuleHostTableAudioStreamFormat.sample_format");
+_Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
+_Static_assert(alignof(ModuleHostTableAudioStreamFormat) == 4, "ModuleHostTableAudioStreamFormat align");
+
+_Static_assert(offsetof(ModuleHostTableAudioCaptureStreamRequest, device_id) == 0, "ModuleHostTableAudioCaptureStreamRequest.device_id");
+_Static_assert(offsetof(ModuleHostTableAudioCaptureStreamRequest, requested_format) == 2 * POINTER, "ModuleHostTableAudioCaptureStreamRequest.requested_format");
+_Static_assert(offsetof(ModuleHostTableAudioCaptureStreamRequest, reserved) == 2 * POINTER + 12, "ModuleHostTableAudioCaptureStreamRequest.reserved");
+_Static_assert(sizeof(ModuleHostTableAudioCaptureStreamRequest) == 2 * POINTER + 16, "ModuleHostTableAudioCaptureStreamRequest size");
+_Static_assert(alignof(ModuleHostTableAudioCaptureStreamRequest) == POINTER, "ModuleHostTableAudioCaptureStreamRequest align");
+
+_Static_assert(sizeof(ModuleHostTableAudioStreamHandle) == 8, "ModuleHostTableAudioStreamHandle size");
+_Static_assert(alignof(ModuleHostTableAudioStreamHandle) == 8, "ModuleHostTableAudioStreamHandle align");
+
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, interleaved_sample_bytes) == 0, "ModuleHostTableCapturedAudioBlock.interleaved_sample_bytes");
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, sample_count) == 2 * POINTER, "ModuleHostTableCapturedAudioBlock.sample_count");
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, reserved) == 2 * POINTER + 4, "ModuleHostTableCapturedAudioBlock.reserved");
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, first_sample_timestamp_ns) == 2 * POINTER + 8, "ModuleHostTableCapturedAudioBlock.first_sample_timestamp_ns");
+_Static_assert(sizeof(ModuleHostTableCapturedAudioBlock) == 2 * POINTER + 16, "ModuleHostTableCapturedAudioBlock size");
+
 #define POINTER_SLOT(slot) (16 + (slot) * POINTER)
 
 _Static_assert(offsetof(ModuleHostTable, abi_major) == 0, "ModuleHostTable.abi_major");
@@ -56,7 +77,12 @@ _Static_assert(offsetof(ModuleHostTable, stop_requested) == POINTER_SLOT(10), "M
 _Static_assert(offsetof(ModuleHostTable, monotonic_now_ns) == POINTER_SLOT(11), "ModuleHostTable.monotonic_now_ns");
 _Static_assert(offsetof(ModuleHostTable, log) == POINTER_SLOT(12), "ModuleHostTable.log");
 _Static_assert(offsetof(ModuleHostTable, host_capabilities_json) == POINTER_SLOT(13), "ModuleHostTable.host_capabilities_json");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(14), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, audio_capture_stream_open) == POINTER_SLOT(14), "ModuleHostTable.audio_capture_stream_open");
+_Static_assert(offsetof(ModuleHostTable, audio_capture_stream_start) == POINTER_SLOT(15), "ModuleHostTable.audio_capture_stream_start");
+_Static_assert(offsetof(ModuleHostTable, audio_capture_stream_stop) == POINTER_SLOT(16), "ModuleHostTable.audio_capture_stream_stop");
+_Static_assert(offsetof(ModuleHostTable, audio_capture_stream_liveness) == POINTER_SLOT(17), "ModuleHostTable.audio_capture_stream_liveness");
+_Static_assert(offsetof(ModuleHostTable, audio_capture_stream_close) == POINTER_SLOT(18), "ModuleHostTable.audio_capture_stream_close");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(19), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");

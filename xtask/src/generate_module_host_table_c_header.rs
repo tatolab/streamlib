@@ -82,13 +82,24 @@ pub fn render_module_host_table_c_header(abi_source: &str) -> Result<String> {
                 writeln!(declarations, "#define {} {value}\n", item.ident)?;
             }
             syn::Item::Type(item) if is_public(&item.vis) => {
+                let alias_name = item.ident.to_string();
                 let scalar_name = item.ty.to_token_stream().to_string();
-                let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
-                    format!("type {}: only a scalar alias renders to C", item.ident)
-                })?;
+                let typedef_declaration = match item.ty.as_ref() {
+                    syn::Type::BareFn(_) => render_c_declaration(&item.ty, &alias_name)
+                        .with_context(|| format!("type {alias_name}"))?,
+                    _ => {
+                        let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
+                            format!(
+                                "type {alias_name}: only a scalar or `extern \"C\"` function \
+                                 pointer alias renders to C"
+                            )
+                        })?;
+                        type_alias_scalar_names.insert(alias_name.clone(), scalar_name);
+                        format!("{c_type} {alias_name}")
+                    }
+                };
                 declarations.push_str(&render_doc_comment(&item.attrs, ""));
-                writeln!(declarations, "typedef {c_type} {};\n", item.ident)?;
-                type_alias_scalar_names.insert(item.ident.to_string(), scalar_name);
+                writeln!(declarations, "typedef {typedef_declaration};\n")?;
             }
             syn::Item::Struct(item) if is_public(&item.vis) => {
                 if !is_repr_c(&item.attrs) {
@@ -414,6 +425,34 @@ mod tests {
                 "missing {expected:?} in\n{header}"
             );
         }
+    }
+
+    #[test]
+    fn a_function_pointer_alias_renders_as_a_c_function_pointer_typedef() {
+        let header = render_module_host_table_c_header(
+            r#"
+            pub type ModuleHostTableBlockCallback = unsafe extern "C" fn(
+                callback_context: *mut c_void,
+                block: *const ModuleHostTableBlock,
+            );
+            #[repr(C)]
+            pub struct ModuleHostTable {
+                pub start: unsafe extern "C" fn(callback: ModuleHostTableBlockCallback) -> i32,
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(
+            header.contains(
+                "typedef void (*ModuleHostTableBlockCallback)(void *callback_context, \
+                 const ModuleHostTableBlock *block);\n"
+            ),
+            "{header}"
+        );
+        assert!(
+            header.contains("    int32_t (*start)(ModuleHostTableBlockCallback callback);\n"),
+            "{header}"
+        );
     }
 
     #[test]
