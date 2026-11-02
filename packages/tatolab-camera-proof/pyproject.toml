@@ -1,0 +1,30 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-camera-proof"
+version = "0.1.0"
+description = "A Linux camera node built from a scaffolded project on today's public surface: V4L2 capture, CPU upload, a GLSL conversion kernel."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+license-files = ["LICENSE"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+# A minimum, never an exact pin, as a third party's package depends on it.
+# numpy is the CPU door into an uploaded pixel buffer.
+dependencies = ["tatolab-stream>=0.68.7", "numpy>=2.1"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.camera_proof._native"
+features = ["pyo3/extension-module"]
+
+[tool.pyright]
+include = ["python", "streams"]
+extraPaths = ["python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = "none"
