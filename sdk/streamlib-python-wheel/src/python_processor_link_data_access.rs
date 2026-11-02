@@ -63,6 +63,22 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// refused.
     declared_input_ports: parking_lot::Mutex<HashSet<String>>,
     declared_output_ports: parking_lot::Mutex<HashSet<String>>,
+    /// The ports Python lent to the node's native code through its module host
+    /// table; Python's own reads and writes of them are refused by name.
+    input_ports_lent_to_native_code: parking_lot::Mutex<HashSet<String>>,
+    output_ports_lent_to_native_code: parking_lot::Mutex<HashSet<String>>,
+    /// Whether the runtime drives `process()` from this node's inputs, which
+    /// would race native code waiting on a lent input for the same wakeups.
+    runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool,
+}
+
+/// The data plane a module host table reaches a helper's lent ports through.
+pub(crate) struct HelperProcessDataPlaneLentToNativeCode {
+    pub(crate) input_mailboxes: Arc<InputMailboxesInner>,
+    pub(crate) output_writer: Arc<OutputWriterInner>,
+    /// Lent port names, each cast the way `@node` casts it.
+    pub(crate) lent_input_port_names: Vec<String>,
+    pub(crate) lent_output_port_names: Vec<String>,
 }
 
 impl PythonProcessorLinkDataAccess {
@@ -74,7 +90,142 @@ impl PythonProcessorLinkDataAccess {
             loss_count_board_writer: OnceLock::new(),
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
+            input_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
+            output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
+            runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Record whether the runtime drives `process()` from this node's inputs,
+    /// refusing it when an input is already lent to native code.
+    pub(crate) fn note_whether_the_runtime_drives_process_from_inputs(
+        &self,
+        runtime_drives_process_from_inputs: bool,
+    ) -> PyResult<()> {
+        if runtime_drives_process_from_inputs {
+            let lent_input_ports = self.input_ports_lent_to_native_code.lock();
+            if !lent_input_ports.is_empty() {
+                let mut lent: Vec<&String> = lent_input_ports.iter().collect();
+                lent.sort();
+                return Err(PyValueError::new_err(format!(
+                    "input ports {lent:?} are lent to native code, so the runtime cannot drive \
+                     this node's `process()` from its inputs. A node that lends an input is \
+                     declared `execution=\"manual\"`"
+                )));
+            }
+        }
+        self.runtime_drives_process_from_inputs.store(
+            runtime_drives_process_from_inputs,
+            std::sync::atomic::Ordering::Release,
+        );
+        Ok(())
+    }
+
+    /// Lend `input_port_names` and `output_port_names` to the node's native
+    /// code, refusing a name the class never declared or one already lent.
+    pub(crate) fn lend_ports_to_native_code(
+        &self,
+        input_port_names: &[String],
+        output_port_names: &[String],
+    ) -> PyResult<HelperProcessDataPlaneLentToNativeCode> {
+        let (Some(input_mailboxes), Some(output_writer)) =
+            (self.input_mailboxes.get(), self.output_writer.get())
+        else {
+            return Err(not_a_helper_process_data_plane_error());
+        };
+        if !input_port_names.is_empty()
+            && self
+                .runtime_drives_process_from_inputs
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(PyValueError::new_err(format!(
+                "input ports {input_port_names:?} cannot be lent to native code: the runtime \
+                 drives this node's `process()` from its inputs. A node that lends an input \
+                 is declared `execution=\"manual\"`"
+            )));
+        }
+        let lent_input_port_names = Self::cast_and_check_ports_to_lend(
+            "input",
+            input_port_names,
+            &self.declared_input_ports,
+            &self.input_ports_lent_to_native_code,
+        )?;
+        let lent_output_port_names = Self::cast_and_check_ports_to_lend(
+            "output",
+            output_port_names,
+            &self.declared_output_ports,
+            &self.output_ports_lent_to_native_code,
+        )?;
+        self.input_ports_lent_to_native_code
+            .lock()
+            .extend(lent_input_port_names.iter().cloned());
+        self.output_ports_lent_to_native_code
+            .lock()
+            .extend(lent_output_port_names.iter().cloned());
+        Ok(HelperProcessDataPlaneLentToNativeCode {
+            input_mailboxes: Arc::clone(input_mailboxes),
+            output_writer: Arc::clone(output_writer),
+            lent_input_port_names,
+            lent_output_port_names,
+        })
+    }
+
+    fn cast_and_check_ports_to_lend(
+        direction: &str,
+        port_names: &[String],
+        declared_ports: &parking_lot::Mutex<HashSet<String>>,
+        ports_already_lent: &parking_lot::Mutex<HashSet<String>>,
+    ) -> PyResult<Vec<String>> {
+        let declared_ports = declared_ports.lock();
+        let ports_already_lent = ports_already_lent.lock();
+        let mut lent_port_names: Vec<String> = Vec::with_capacity(port_names.len());
+        for port_name in port_names {
+            let port_name = declared_port_name_the_spelling_names(port_name)?.into_owned();
+            if !declared_ports.contains(&port_name) {
+                let mut declared: Vec<&String> = declared_ports.iter().collect();
+                declared.sort();
+                return Err(PyValueError::new_err(format!(
+                    "{direction} port {port_name:?} cannot be lent to native code: the node \
+                     declares no such port (it declares {declared:?})"
+                )));
+            }
+            if ports_already_lent.contains(&port_name) || lent_port_names.contains(&port_name) {
+                return Err(PyValueError::new_err(format!(
+                    "{direction} port {port_name:?} is already lent to native code; a port is \
+                     lent once"
+                )));
+            }
+            lent_port_names.push(port_name);
+        }
+        Ok(lent_port_names)
+    }
+
+    fn refuse_a_python_read_of_a_port_lent_to_native_code(&self, port_name: &str) -> PyResult<()> {
+        if self
+            .input_ports_lent_to_native_code
+            .lock()
+            .contains(port_name)
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "input port {port_name:?} is lent to this node's native code through its module \
+                 host table, so Python does not read it"
+            )));
+        }
+        Ok(())
+    }
+
+    fn refuse_a_python_write_to_a_port_lent_to_native_code(&self, port_name: &str) -> PyResult<()> {
+        if self
+            .output_ports_lent_to_native_code
+            .lock()
+            .contains(port_name)
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "output port {port_name:?} is lent to this node's native code through its module \
+                 host table, so Python does not write it"
+            )));
+        }
+        Ok(())
     }
 
     /// A helper process's own data plane over an iceoryx2 node it already opened.
@@ -94,6 +245,7 @@ impl PythonProcessorLinkDataAccess {
         &self,
         port_name: &str,
     ) -> PyResult<Option<&Arc<InputMailboxesInner>>> {
+        self.refuse_a_python_read_of_a_port_lent_to_native_code(port_name)?;
         match self.input_mailboxes.get() {
             Some(input_mailboxes) if input_mailboxes.has_port(port_name) => {
                 Ok(Some(input_mailboxes))
@@ -107,6 +259,7 @@ impl PythonProcessorLinkDataAccess {
     /// port no link has reached yet, whose messages go nowhere rather than
     /// raising.
     fn output_writer_reaching(&self, port_name: &str) -> PyResult<Option<&Arc<OutputWriterInner>>> {
+        self.refuse_a_python_write_to_a_port_lent_to_native_code(port_name)?;
         match self.output_writer.get() {
             Some(output_writer) if output_writer.has_port(port_name) => Ok(Some(output_writer)),
             _ if self.declared_output_ports.lock().contains(port_name) => Ok(None),
@@ -432,7 +585,7 @@ impl PythonProcessorLinkDataAccess {
         output_port_wiring_generation = None,
     ))]
     #[allow(clippy::too_many_arguments)]
-    fn wire_output_link(
+    pub(crate) fn wire_output_link(
         &self,
         python: Python<'_>,
         port_name: &str,
@@ -543,7 +696,7 @@ impl PythonProcessorLinkDataAccess {
         wiring_generation = None,
     ))]
     #[allow(clippy::too_many_arguments)]
-    fn wire_input_link(
+    pub(crate) fn wire_input_link(
         &self,
         python: Python<'_>,
         port_name: &str,
@@ -763,7 +916,11 @@ impl PythonProcessorLinkDataAccess {
     /// running graph before its connects, or one whose last link was taken
     /// away — reads as empty and drops what is written to it; only a name the
     /// class never declared is refused.
-    fn declare_ports(&self, input_port_names: Vec<String>, output_port_names: Vec<String>) {
+    pub(crate) fn declare_ports(
+        &self,
+        input_port_names: Vec<String>,
+        output_port_names: Vec<String>,
+    ) {
         self.declared_input_ports.lock().extend(input_port_names);
         self.declared_output_ports.lock().extend(output_port_names);
     }

@@ -18,17 +18,6 @@ pub struct CompileResult {
     pub configs_updated: usize,
 }
 
-impl CompileResult {
-    /// Check if any changes were made.
-    pub fn has_changes(&self) -> bool {
-        self.processors_created > 0
-            || self.processors_removed > 0
-            || self.links_wired > 0
-            || self.links_unwired > 0
-            || self.configs_updated > 0
-    }
-}
-
 impl fmt::Display for CompileResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -40,22 +29,5 @@ impl fmt::Display for CompileResult {
             self.links_unwired,
             self.configs_updated
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compile_result_has_changes() {
-        let empty = CompileResult::default();
-        assert!(!empty.has_changes());
-
-        let with_processor = CompileResult {
-            processors_created: 1,
-            ..Default::default()
-        };
-        assert!(with_processor.has_changes());
     }
 }

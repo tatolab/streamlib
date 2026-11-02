@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-processor-schema"
-description = "Processor schema types and YAML parser shared between the streamlib runtime and streamlib-macros"
+description = "Processor schema types shared between the streamlib runtime and streamlib-macros"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,7 +13,6 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }  # used by schemars for enum_values literals
-serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }  # NFKD + combining-mark test the exposed-name cast drops accents with
 schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor types

@@ -21,7 +21,8 @@ use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{
     GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse,
-    NodeTypesDescribedInOneStreamOutput, ProcessorDescriptorOutput, RegistryResponse,
+    NodeTypeAnInstalledModuleDeclaresOutput, NodeTypesDescribedInOneStreamOutput,
+    ProcessorDescriptorOutput, RegistryResponse,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
@@ -229,9 +230,23 @@ pub(crate) fn machine_wide_registry_response(
                 let described = operations_on_the_loaded_streams
                     .node_types_described_in_the_interpreter_of_the_stream_a_call_names(&stream_id)
                     .ok()?;
+                let installed = operations_on_the_loaded_streams
+                    .node_types_installed_modules_declare_in_the_stream_a_call_names(&stream_id)
+                    .ok()?;
                 Some(NodeTypesDescribedInOneStreamOutput {
                     stream: stream_id,
                     nodes: node_catalog_response(&described).nodes,
+                    installed: installed
+                        .iter()
+                        .map(|(descriptor, installed_module)| {
+                            NodeTypeAnInstalledModuleDeclaresOutput {
+                                distribution: installed_module.distribution.clone(),
+                                distribution_version: installed_module.distribution_version.clone(),
+                                entry_point: installed_module.entry_point.clone(),
+                                node: ProcessorDescriptorOutput::from(descriptor),
+                            }
+                        })
+                        .collect(),
                 })
             })
             .collect(),

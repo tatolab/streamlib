@@ -49,7 +49,9 @@ pub(crate) use link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDat
 pub(crate) use runtime_context::{
     PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
     limited_access_view_of_runtime_context_for_helper_process,
+    note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
+    note_stop_request_from_parent_on_runtime_context,
     open_runtime_context_full_access_for_helper_process,
 };
 

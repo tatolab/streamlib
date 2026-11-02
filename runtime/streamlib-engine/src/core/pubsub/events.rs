@@ -398,10 +398,6 @@ pub enum RuntimeEvent {
     RuntimeDidRegisterProcessorType {
         processor_type: ProcessorClassImportPath,
     },
-    /// Emitted when a processor type is unregistered from the factory (`remove_module`).
-    RuntimeDidUnregisterProcessorType {
-        processor_type: ProcessorClassImportPath,
-    },
 }
 
 /// Keyboard, mouse and window input.

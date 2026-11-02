@@ -15,22 +15,6 @@ pub enum CompilePhase {
 }
 
 impl CompilePhase {
-    /// All phases in execution order.
-    pub const ALL: [CompilePhase; 3] = [
-        CompilePhase::Prepare,
-        CompilePhase::Spawn,
-        CompilePhase::Wire,
-    ];
-
-    /// Get the next phase, if any.
-    pub fn next(self) -> Option<Self> {
-        match self {
-            Self::Prepare => Some(Self::Spawn),
-            Self::Spawn => Some(Self::Wire),
-            Self::Wire => None,
-        }
-    }
-
     /// Get the phase number (1-3).
     pub fn number(self) -> u8 {
         match self {

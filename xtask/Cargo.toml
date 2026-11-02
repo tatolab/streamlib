@@ -47,5 +47,7 @@ png = "0.17"
 # semantics (respects #[cfg(test)], #[allow(clippy::disallowed_macros)], and
 # file-level #![allow(...)]) without having to compile the workspace.
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+# Renders a refused type back to source for a gate's message.
+quote = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 
