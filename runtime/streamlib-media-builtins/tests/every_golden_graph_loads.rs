@@ -24,20 +24,20 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0001-every-key-and-every-built-in.json",
-        "bbf52c5c6cf8108ef1c901978abe070b34e1d12764462ccb1df79cda23052cc1",
+        "0007-every-key-every-built-in-and-the-audio-modules.json",
+        "e2e6453c94924f295659816097ce19339dbcf08cd0bbcbcd14c8031396976ff0",
     ),
     (
-        "0002-every-key-with-exposure-levels.json",
-        "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
+        "0008-every-key-with-exposure-levels-and-the-audio-modules.json",
+        "6cb63e1baac4b2bee9b88aba9874c3d5c21c44b261b490544f8e8d8db8e10236",
     ),
     (
-        "0005-every-key-with-a-relay-track-source-by-broadcast-and-track.json",
-        "039aa23c351db3716ea6a69dd1c1530d241c1d01560e7732f9d7af2d6c8c7b49",
+        "0009-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-modules.json",
+        "f19cd3829b22a12d06f2413caca15176f8bca3d483d5112b3184b3fcdcb5bfc2",
     ),
     (
-        "0006-every-key-with-a-relay-track-source-reading-with-a-max-age.json",
-        "8aee6ba720db7cca8babdd83cd1f078ece78a1fba7671b5a132923a14041cc2e",
+        "0010-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-modules.json",
+        "1ded07edfd5dbfc7eef8e2d289c7ee68bb9f9320da841f3bf578450a02a01d65",
     ),
 ];
 
@@ -114,23 +114,54 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .map(drop)
 }
 
-/// A golden naming a built-in this floor compiles out is refused for it,
-/// naming the floor, and loads whole once those nodes are taken out — which is
-/// as much of it as this floor can run.
+/// The names of the nodes in `graph_document` whose type a module declares:
+/// each runs in its own helper process from an installed distribution, which a
+/// runtime with no interpreter cannot describe.
+fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
+    graph_document["nodes"]
+        .as_array()
+        .expect("a graph holds nodes")
+        .iter()
+        .filter(|node| {
+            !ProcessorClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+                .expect("a type names a class")
+                .names_a_built_in_node()
+        })
+        .map(|node| {
+            node["name"]
+                .as_str()
+                .expect("a node has a name")
+                .to_string()
+        })
+        .collect()
+}
+
+/// A golden reads whole; with its module nodes taken out it loads on a runtime
+/// with no interpreter. A built-in this floor compiles out is refused for it,
+/// naming the floor, and the rest loads once those nodes are taken out too —
+/// which is as much of it as this floor can run.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
 
     for path in golden_graph_paths() {
-        let graph_document = golden_graph_document(&path);
-        let graph = GraphSnapshot::from_graph_document(graph_document.clone())
+        let recorded_graph_document = golden_graph_document(&path);
+        GraphSnapshot::from_graph_document(recorded_graph_document.clone())
             .unwrap_or_else(|refusal| panic!("{path:?} no longer reads: {refusal}"));
+        let graph_document = without_the_nodes(
+            &recorded_graph_document,
+            &module_node_names_in(&recorded_graph_document),
+        );
+        let graph =
+            GraphSnapshot::from_graph_document(graph_document.clone()).unwrap_or_else(|refusal| {
+                panic!("{path:?} without its module nodes no longer reads: {refusal}")
+            });
         let node_names_compiled_out_here: BTreeSet<String> = graph
             .nodes
             .iter()
             .filter(|node| {
                 PROCESSOR_REGISTRY
-                    .refuse_a_built_in_node_type_absent_on_this_floor(&node.processor_type)
+                    .refuse_a_built_in_node_type_this_runtime_lacks(&node.processor_type)
                     .is_err()
             })
             .map(|node| node.name.clone())
@@ -157,6 +188,36 @@ fn every_golden_graph_loads_on_this_floor() {
         load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
             panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
         });
+    }
+}
+
+/// A golden names each audio module by the type its distribution declares,
+/// never by the built-in type it replaced.
+#[test]
+fn the_golden_graphs_name_the_audio_modules_by_their_module_types() {
+    register_media_builtin_processor_types();
+    for path in golden_graph_paths() {
+        let node_types = node_types_in(&golden_graph_document(&path));
+        for module_node_type in [
+            "tatolab.microphone:MicrophoneSource",
+            "tatolab.speaker:SpeakerSink",
+        ] {
+            assert!(
+                node_types
+                    .iter()
+                    .any(|node_type| node_type.as_str() == module_node_type),
+                "{path:?} does not name {module_node_type}"
+            );
+        }
+        for node_type in &node_types {
+            assert!(
+                !matches!(
+                    PROCESSOR_REGISTRY.refuse_a_built_in_node_type_this_runtime_lacks(node_type),
+                    Err(Error::BuiltInNodeTypeMovedToAModule { .. })
+                ),
+                "{path:?} names {node_type}, which moved to a module"
+            );
+        }
     }
 }
 

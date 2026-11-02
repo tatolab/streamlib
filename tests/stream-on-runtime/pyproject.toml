@@ -12,6 +12,10 @@ version = "0"
 requires-python = ">=3.10"
 dependencies = [
     "tatolab-stream",
+    # The audio nodes are modules: a fixture stream that captures or plays
+    # imports them from these distributions, as any stream would.
+    "tatolab-microphone",
+    "tatolab-speaker",
     "pytest>=7.0",
     "numpy>=2.1",
     # The official MCP Python SDK, whose streamable-HTTP client drives a
@@ -40,6 +44,8 @@ package = false
 
 [tool.uv.sources]
 tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
+tatolab-microphone = { path = "../../packages/tatolab-microphone" }
+tatolab-speaker = { path = "../../packages/tatolab-speaker" }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's

@@ -230,8 +230,21 @@ pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
-    /// Each built-in compiled out on this floor, with the floors it runs on.
-    built_in_node_types_absent_on_this_floor: RwLock<HashMap<ProcessorClassImportPath, String>>,
+    /// Each built-in node type this runtime does not have, with why.
+    built_in_node_types_this_runtime_lacks:
+        RwLock<HashMap<ProcessorClassImportPath, WhyThisRuntimeLacksABuiltInNodeType>>,
+}
+
+/// Why a built-in node type a graph may name is not one this runtime has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WhyThisRuntimeLacksABuiltInNodeType {
+    CompiledOutOnThisFloor {
+        floors_it_runs_on: String,
+    },
+    MovedToAModule {
+        module_node_type: ProcessorClassImportPath,
+        module_distribution: String,
+    },
 }
 
 /// The machine's registry of natively compiled node types.
@@ -254,7 +267,7 @@ impl ProcessorInstanceFactory {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
-            built_in_node_types_absent_on_this_floor: RwLock::new(HashMap::new()),
+            built_in_node_types_this_runtime_lacks: RwLock::new(HashMap::new()),
         }
     }
 
@@ -405,40 +418,72 @@ impl ProcessorInstanceFactory {
         node_type: ProcessorClassImportPath,
         floors_it_runs_on: impl Into<String>,
     ) {
-        self.built_in_node_types_absent_on_this_floor
-            .write()
-            .insert(node_type, floors_it_runs_on.into());
+        self.built_in_node_types_this_runtime_lacks.write().insert(
+            node_type,
+            WhyThisRuntimeLacksABuiltInNodeType::CompiledOutOnThisFloor {
+                floors_it_runs_on: floors_it_runs_on.into(),
+            },
+        );
     }
 
-    /// Refuse a built-in this floor compiles out, naming this floor and the
-    /// floors it runs on.
-    pub fn refuse_a_built_in_node_type_absent_on_this_floor(
+    /// Record a built-in that left the runtime for a module, so a graph naming
+    /// it is refused naming the module's node type and the distribution to
+    /// install.
+    pub fn register_built_in_node_type_moved_to_a_module(
+        &self,
+        node_type: ProcessorClassImportPath,
+        module_node_type: ProcessorClassImportPath,
+        module_distribution: impl Into<String>,
+    ) {
+        self.built_in_node_types_this_runtime_lacks.write().insert(
+            node_type,
+            WhyThisRuntimeLacksABuiltInNodeType::MovedToAModule {
+                module_node_type,
+                module_distribution: module_distribution.into(),
+            },
+        );
+    }
+
+    /// Refuse a built-in this runtime does not have: one this floor compiles
+    /// out, naming the floors it runs on, or one that moved to a module,
+    /// naming the module.
+    pub fn refuse_a_built_in_node_type_this_runtime_lacks(
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Result<()> {
         match self
-            .built_in_node_types_absent_on_this_floor
+            .built_in_node_types_this_runtime_lacks
             .read()
             .get(node_type)
         {
-            Some(floors_it_runs_on) => Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
+            Some(WhyThisRuntimeLacksABuiltInNodeType::CompiledOutOnThisFloor {
+                floors_it_runs_on,
+            }) => Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
                 node_type: node_type.clone(),
                 this_floor: this_floors_name().to_string(),
                 floors_it_runs_on: floors_it_runs_on.clone(),
+            }),
+            Some(WhyThisRuntimeLacksABuiltInNodeType::MovedToAModule {
+                module_node_type,
+                module_distribution,
+            }) => Err(Error::BuiltInNodeTypeMovedToAModule {
+                node_type: node_type.clone(),
+                module_node_type: module_node_type.clone(),
+                module_distribution: module_distribution.clone(),
             }),
             None => Ok(()),
         }
     }
 
     /// Refuse a node this runtime cannot add before anything is added: a
-    /// built-in this floor compiles out, or a config its type would not take.
+    /// built-in this runtime lacks, or a config its type would not take.
     pub fn refuse_a_node_this_runtime_cannot_add(
         &self,
         node_name: &str,
         node_type: &ProcessorClassImportPath,
         config: &serde_json::Value,
     ) -> Result<()> {
-        self.refuse_a_built_in_node_type_absent_on_this_floor(node_type)?;
+        self.refuse_a_built_in_node_type_this_runtime_lacks(node_type)?;
         self.refuse_a_config_the_node_type_does_not_take(node_name, node_type, config)
     }
 
@@ -997,13 +1042,46 @@ mod tests {
             .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
 
         assert!(matches!(
-            factory.refuse_a_built_in_node_type_absent_on_this_floor(&compiled_out_here),
+            factory.refuse_a_built_in_node_type_this_runtime_lacks(&compiled_out_here),
             Err(Error::BuiltInNodeTypeAbsentOnThisFloor { .. })
         ));
         factory
-            .refuse_a_built_in_node_type_absent_on_this_floor(&class_import_path(
+            .refuse_a_built_in_node_type_this_runtime_lacks(&class_import_path(
                 "tatolab.stream:CameraSource",
             ))
             .unwrap();
+    }
+
+    #[test]
+    fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
+        let factory = ProcessorInstanceFactory::new();
+        let moved_out = class_import_path("tatolab.stream:MovedOut");
+        let module_node_type = class_import_path("tatolab.moved:MovedOut");
+        factory.register_built_in_node_type_moved_to_a_module(
+            moved_out.clone(),
+            module_node_type.clone(),
+            "tatolab-moved",
+        );
+
+        let refusal = factory
+            .refuse_a_node_this_runtime_cannot_add("moved", &moved_out, &serde_json::json!({}))
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &refusal,
+                Error::BuiltInNodeTypeMovedToAModule {
+                    node_type,
+                    module_node_type: refused_naming,
+                    module_distribution,
+                } if *node_type == moved_out
+                    && *refused_naming == module_node_type
+                    && module_distribution == "tatolab-moved"
+            ),
+            "{refusal:?}"
+        );
+        let message = refusal.to_string();
+        assert!(message.contains("`tatolab.moved:MovedOut`"), "{message}");
+        assert!(message.contains("tatolab-moved"), "{message}");
     }
 }

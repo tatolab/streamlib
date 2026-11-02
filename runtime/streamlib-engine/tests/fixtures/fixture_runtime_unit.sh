@@ -112,6 +112,21 @@ sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
     fi
 }
 
+# Builds the microphone and speaker modules from this checkout into the fixture
+# venv when it cannot import them, exiting 1 when they do not build. A fixture
+# stream that captures or plays imports them, as any stream would.
+require_the_audio_modules_in_the_fixture_venv() {
+    if "$FIXTURE_PYTHON" -c 'import tatolab.microphone, tatolab.speaker' >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "building tatolab-microphone and tatolab-speaker into $FIXTURE_VENV_DIRECTORY" >&2
+    if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet \
+        "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-microphone" \
+        "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-speaker" >&2; then
+        echo "ERROR: the audio modules did not build into $FIXTURE_VENV_DIRECTORY" >&2
+        exit 1
+    fi
+}
 
 # Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`,
 # `expose`).

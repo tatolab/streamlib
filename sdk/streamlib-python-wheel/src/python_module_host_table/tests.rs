@@ -358,7 +358,7 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 1})
+        serde_json::json!({"major": 1, "minor": 2})
     );
     assert_eq!(capabilities["node_id"], "source-node");
     assert_eq!(
@@ -544,6 +544,112 @@ fn a_closed_capture_streams_handle_names_nothing() {
     );
     let (next_handle, _stream_format) = audio_capture_streams
         .open("microphone", None, Default::default())
+        .unwrap();
+    assert_ne!(next_handle, handle, "a handle is never reused");
+}
+
+/// The format the playback tests ask for: what the speaker module plays.
+const PLAYBACK_REQUEST_AT_48_KHZ_STEREO_F32:
+    tatolab_module_sdk::ModuleHostAudioPlaybackStreamRequest<'static> =
+    tatolab_module_sdk::ModuleHostAudioPlaybackStreamRequest {
+        device_id: None,
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        sample_format: Some(tatolab_module_sdk::ModuleHostAudioSampleFormat::F32),
+    };
+
+/// Whichever arm this machine probes opens the stream in the format the module
+/// asked for, and asks the module's callback for whole device buffers in it on
+/// its own thread, and for none once requesting stops.
+#[test]
+fn a_module_plays_through_the_engines_audio_device_backend_in_the_format_it_asked_for() {
+    let module_host = module_host_lending_no_port("audio_playback");
+    let mut playback_stream = module_host
+        .open_audio_playback_stream(&PLAYBACK_REQUEST_AT_48_KHZ_STEREO_F32)
+        .expect("the default device, or the null arm, opens at 48 kHz stereo f32");
+    assert_eq!(
+        playback_stream.stream_format(),
+        tatolab_module_sdk::ModuleHostAudioStreamFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            sample_format: tatolab_module_sdk::ModuleHostAudioSampleFormat::F32,
+        }
+    );
+    let (request_sender, request_receiver) = std::sync::mpsc::sync_channel(64);
+    playback_stream
+        .start_requesting_from(Box::new(move |requested_block| {
+            requested_block.interleaved_sample_bytes_to_fill.fill(0);
+            let _ = request_sender.try_send((
+                requested_block.interleaved_sample_bytes_to_fill.len(),
+                requested_block.sample_count,
+            ));
+        }))
+        .unwrap();
+
+    for _ in 0..3 {
+        let (byte_count, sample_count) = request_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the device asks for samples within five seconds");
+        assert!(sample_count > 0);
+        assert_eq!(byte_count, sample_count as usize * 2 * 4);
+    }
+    assert_eq!(
+        playback_stream.failure_that_ended_the_stream().unwrap(),
+        None
+    );
+
+    playback_stream.stop_requesting().unwrap();
+    while request_receiver.try_recv().is_ok() {}
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        request_receiver.try_recv().is_err(),
+        "no buffer is asked for once requesting stops"
+    );
+}
+
+#[test]
+fn a_playback_device_no_backend_has_is_refused_by_name() {
+    let module_host = module_host_lending_no_port("audio_playback_unknown_device");
+
+    let refusal = module_host
+        .open_audio_playback_stream(&tatolab_module_sdk::ModuleHostAudioPlaybackStreamRequest {
+            device_id: Some("tatolab-no-such-audio-device"),
+            ..PLAYBACK_REQUEST_AT_48_KHZ_STEREO_F32
+        })
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        refusal.starts_with("audio_playback_stream_open: "),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("tatolab-no-such-audio-device"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_closed_playback_streams_handle_names_nothing_and_is_never_reused() {
+    let audio_playback_streams =
+        audio_playback_streams::AudioPlaybackStreamsOpenedForOneNode::default();
+    let (handle, _stream_format, _device_period) = audio_playback_streams
+        .open("speaker", None, Default::default())
+        .unwrap();
+    assert!(audio_playback_streams.opened_stream(handle).is_ok());
+
+    audio_playback_streams.close(handle);
+
+    let refusal = audio_playback_streams
+        .opened_stream(handle)
+        .err()
+        .expect("a closed stream's handle is refused");
+    assert!(
+        refusal.contains("names no playback stream this table has open"),
+        "{refusal}"
+    );
+    let (next_handle, _stream_format, _device_period) = audio_playback_streams
+        .open("speaker", None, Default::default())
         .unwrap();
     assert_ne!(next_handle, handle, "a handle is never reused");
 }

@@ -16,13 +16,22 @@ use crate::core::context::{
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
-    DeviceStreamLivenessReport,
+    DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
 
 mod audio_shim {
     use std::ffi::{c_char, c_int, c_void};
+
+    /// Mirrors `struct StreamLibPipeWireRequestedAudioFormat`.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RequestedAudioFormat {
+        pub sample_rate: u32,
+        pub channels: u32,
+        pub sample_format: u32,
+    }
 
     /// Mirrors `struct StreamLibPipeWireNegotiatedAudioFormat`.
     #[repr(C)]
@@ -72,6 +81,7 @@ mod audio_shim {
             entry_points: *const *mut c_void,
             direction: c_int,
             device_id_or_null: *const c_char,
+            requested_format: *const RequestedAudioFormat,
             negotiated_format_out: *mut NegotiatedAudioFormat,
             failure_text: *mut c_char,
             failure_text_capacity: usize,
@@ -184,8 +194,11 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
-        let (opened, capture_stream_format) =
-            self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
+        let (opened, capture_stream_format) = self.open_audio_stream(
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            request,
+            RequestedAudioStreamFormat::default(),
+        )?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
         let capture_stream = PipeWireAudioCaptureStream {
@@ -211,8 +224,11 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioPlaybackStream>> {
-        let (opened, playback_stream_format) =
-            self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
+        let (opened, playback_stream_format) = self.open_audio_stream(
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            request,
+            request.requested_format,
+        )?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
         let playback_stream = PipeWireAudioPlaybackStream {
@@ -234,8 +250,9 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
 }
 
 impl PipeWireAudioDeviceBackend {
-    /// Open one stream in either direction and read back what PipeWire settled
-    /// on.
+    /// Open one stream in either direction toward `requested_format` and read
+    /// back what PipeWire settled on. A capture stream asks for nothing but the
+    /// scalar encoding, so it settles on the device's own rate and channels.
     ///
     /// One function for both because everything here is direction-blind: the
     /// device id is validated the same way, the shim is asked the same way, and
@@ -244,6 +261,7 @@ impl PipeWireAudioDeviceBackend {
         &self,
         direction: c_int,
         request: &AudioDeviceStreamRequest,
+        requested_format: RequestedAudioStreamFormat,
     ) -> Result<(OpenedPipeWireAudioStream, AudioStreamFormat)> {
         // The device paces this arm, so the request's deviceless pacing clock
         // is deliberately untouched: a graph whose audio is device-paced never
@@ -262,11 +280,20 @@ impl PipeWireAudioDeviceBackend {
             })
             .transpose()?;
 
+        let requested_format = audio_shim::RequestedAudioFormat {
+            sample_rate: requested_format.sample_rate.unwrap_or(0),
+            channels: requested_format.channels.unwrap_or(0),
+            sample_format: match requested_format.sample_format {
+                Some(AudioSampleFormat::I16) => audio_shim::SAMPLE_FORMAT_I16_LE,
+                Some(AudioSampleFormat::F32) | None => audio_shim::SAMPLE_FORMAT_F32_LE,
+            },
+        };
         let mut negotiated_format = audio_shim::NegotiatedAudioFormat::default();
         let mut failure_text = ShimFailureText::new();
         let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
         // SAFETY: the device id, if any, is a live `CString` for the length of
-        // this call; the format and failure out-parameters are owned locals.
+        // this call; the requested format and the format and failure
+        // out-parameters are owned locals.
         let opened = unsafe {
             audio_shim::streamlib_pipewire_audio_stream_open(
                 self.entry_points.as_ptr(),
@@ -274,6 +301,7 @@ impl PipeWireAudioDeviceBackend {
                 device_id
                     .as_ref()
                     .map_or(std::ptr::null(), |device_id| device_id.as_ptr()),
+                &requested_format,
                 &mut negotiated_format,
                 failure_text_ptr,
                 failure_text_capacity,

@@ -21,9 +21,8 @@ serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
 tracing = { workspace = true }
 # libopus, statically linked through `opusic-sys`'s bundled copy (cmake, no
-# bindgen at build). Not target-gated: the Opus pair registers unconditionally
-# beside the audio built-ins, and nothing in it is platform-bound. The static
-# link is load-bearing — `test_wheel_portability.py` fails if `DT_NEEDED` grows.
+# bindgen at build). Not target-gated: the Opus pair registers unconditionally,
+# and nothing in it is platform-bound. The static link is load-bearing — `test_wheel_portability.py` fails if `DT_NEEDED` grows.
 opus = "0.4"
 # `RelayTrackSource`: a MoQ subscriber of one track at a relay, reading the
 # broadcast's catalog in the stack's layout. Pinned exactly as the publisher in
@@ -45,8 +44,6 @@ libc = { workspace = true }
 # Forwarded so a hardware-tier test in this crate gates the same way the engine's
 # do: `cargo test -p streamlib-media-builtins --features hardware-tests`.
 hardware-tests = ["streamlib/hardware-tests"]
-# The attended, audible tier, forwarded the same way.
-audible-hardware-tests = ["hardware-tests", "streamlib/audible-hardware-tests"]
 
 [dev-dependencies]
 # The relay source's tests run its output into input mailboxes over a channel in

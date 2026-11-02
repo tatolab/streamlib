@@ -23,11 +23,8 @@ use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::{AudioTickContext, SharedAudioClock};
 use crate::core::{Error, Result};
 
-/// A device that captures nothing has nothing to place in a stereo field, and
-/// playback matches it so that a microphone wired to a speaker runs unchanged
-/// here: both ends of a null-backend graph agree on one format, and the
-/// refusal a speaker owes a mismatched block never fires on a graph that
-/// played on a workstation.
+/// A device that captures nothing has nothing to place in a stereo field; a
+/// playback stream asked for no channel count matches it.
 const SILENT_NULL_STREAM_CHANNELS: u32 = 1;
 
 /// Silence at the pacing clock's own rate and quantum, on any machine.
@@ -54,9 +51,20 @@ impl AudioDeviceBackend for SilentNullAudioDeviceBackend {
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioPlaybackStream>> {
         let sample_rate = pacing_rate_a_stream_can_open_on(request)?;
+        let silent_null_format = silent_null_stream_format(sample_rate);
         Ok(Box::new(SilentNullAudioPlaybackStream::opened_on(
             Arc::clone(&request.deviceless_pacing_clock),
-            sample_rate,
+            AudioStreamFormat {
+                channels: request
+                    .requested_format
+                    .channels
+                    .unwrap_or(silent_null_format.channels),
+                sample_format: request
+                    .requested_format
+                    .sample_format
+                    .unwrap_or(silent_null_format.sample_format),
+                ..silent_null_format
+            },
         )))
     }
 }
@@ -265,8 +273,12 @@ struct SilentNullAudioPlaybackStream {
 }
 
 impl SilentNullAudioPlaybackStream {
-    fn opened_on(pacing_clock: SharedAudioClock, sample_rate: NonZeroU32) -> Self {
-        let playback_stream_format = silent_null_stream_format(sample_rate);
+    /// Discard samples in `playback_stream_format`, whose rate is the pacing
+    /// clock's.
+    fn opened_on(
+        pacing_clock: SharedAudioClock,
+        playback_stream_format: AudioStreamFormat,
+    ) -> Self {
         let pacing = Arc::new(Mutex::new(SilentNullAudioPlaybackStreamPacing {
             hand_off: None,
             samples_asked_for_and_discarded: vec![
@@ -371,6 +383,7 @@ mod tests {
     use super::*;
     use crate::core::context::{
         AudioClock, AudioClockConfig, AudioTickCallback, CaptureDeviceAccessPrompting,
+        RequestedAudioStreamFormat,
     };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -473,6 +486,7 @@ mod tests {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(clock) as SharedAudioClock,
                 capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format: RequestedAudioStreamFormat::default(),
             })
             .expect("the null backend opens its default device on any machine")
     }
@@ -488,6 +502,7 @@ mod tests {
                 device_id: Some("alsa_input.pci-0000_00_1f.3".to_string()),
                 deviceless_pacing_clock: clock as SharedAudioClock,
                 capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format: RequestedAudioStreamFormat::default(),
             })
         else {
             panic!("a named device cannot exist on a backend with no devices");
@@ -510,6 +525,7 @@ mod tests {
                     device_id: None,
                     deviceless_pacing_clock: clock as SharedAudioClock,
                     capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+                    requested_format: RequestedAudioStreamFormat::default(),
                 })
                 .is_err(),
             "no block duration derives from a rate of zero"
@@ -684,6 +700,7 @@ mod tests {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(clock) as SharedAudioClock,
                 capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format: RequestedAudioStreamFormat::default(),
             })
             .expect("the null backend opens its default device on any machine")
     }
@@ -711,6 +728,7 @@ mod tests {
                 device_id: Some("alsa_output.pci-0000_00_1f.3".to_string()),
                 deviceless_pacing_clock: clock as SharedAudioClock,
                 capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format: RequestedAudioStreamFormat::default(),
             })
         else {
             panic!("a named device cannot exist on a backend with no devices");

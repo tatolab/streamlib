@@ -136,7 +136,9 @@ across the language boundary.
 
 - REMOVED: runtime/streamlib-media-builtins/src/camera_source.rs
 - REMOVED: runtime/streamlib-media-builtins/src/microphone_source.rs
+  Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/speaker_sink.rs
+  Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/h264_encoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/h264_decoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/h265_encoder.rs
@@ -147,7 +149,9 @@ across the language boundary.
 - REMOVED: runtime/streamlib-media-builtins/src/virtual_camera_sink.rs
 - REMOVED: tatolab.stream:CameraSource
 - REMOVED: tatolab.stream:MicrophoneSource
+  Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: tatolab.stream:SpeakerSink
+  Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: tatolab.stream:H264Encoder
 - REMOVED: tatolab.stream:H264Decoder
 - REMOVED: tatolab.stream:H265Encoder

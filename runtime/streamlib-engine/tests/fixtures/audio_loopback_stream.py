@@ -4,8 +4,9 @@
 """A stream that plays a known signal and captures it back off the same sink.
 
 The engine carries the audio in both directions: a Python node publishes
-`AudioBlock` bags, `SpeakerSink` plays them into the sink named by
-`STREAMLIB_AUDIO_SINK`, and `MicrophoneSource` captures from the device named
+`AudioBlock` bags, the `tatolab-speaker` module's `SpeakerSink` plays them into
+the sink named by `STREAMLIB_AUDIO_SINK`, and the `tatolab-microphone` module's
+`MicrophoneSource` captures from the device named
 by `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` — by default that sink's PipeWire
 monitor. `e2e_audio_loopback.sh` closes the same loop with no StreamLib at
 all — so when this run fails and that one passes, the rig is sound and the
@@ -21,9 +22,10 @@ them.
 
 import os
 
-import tatolab.stream
 from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
+from tatolab.microphone import MicrophoneSource
+from tatolab.speaker import SpeakerSink
 from tatolab.stream import StreamBuilder, stream
 
 
@@ -43,13 +45,9 @@ def known_signal_played_and_captured_back(stream_builder: StreamBuilder) -> None
     sink, capture_device_id = _sink_and_capture_device_from_the_environment()
 
     signal = stream_builder.add(KnownAudioSignalSource)
-    speaker = stream_builder.add(
-        tatolab.stream.SpeakerSink, config={"device_id": sink} if sink else {}
-    )
+    speaker = stream_builder.add(SpeakerSink, config={"device_id": sink} if sink else {})
     stream_builder.connect(signal.output("audio"), speaker.input("audio"))
 
-    microphone = stream_builder.add(
-        tatolab.stream.MicrophoneSource, config={"device_id": capture_device_id}
-    )
+    microphone = stream_builder.add(MicrophoneSource, config={"device_id": capture_device_id})
     recorder = stream_builder.add(CapturedAudioWaveformRecorder)
     stream_builder.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))

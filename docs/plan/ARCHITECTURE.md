@@ -2337,10 +2337,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The audio device seam is an engine primitive beside the audio clock,
   not built-in-private code: `AudioDeviceBackend` opening `AudioCaptureStream` and
   `AudioPlaybackStream`, living in `core/context/` with its Linux implementations under
-  `linux/` and its CoreAudio one under `apple/`, exactly where the audio clock's two halves already sit. `MicrophoneSource`
-  and `SpeakerSink` are written against it and reach no engine guts — the layering wall
-  above, applied to a fourth device class. There is no second audio device path: the
-  built-ins, the null backend and every test open streams through this one seam. A
+  `linux/` and its CoreAudio one under `apple/`, exactly where the audio clock's two halves already sit. The `tatolab-microphone` and
+  `tatolab-speaker` modules reach it through the module host table and reach no engine
+  guts — the layering wall above, applied to a fourth device class. There is no second
+  audio device path: the modules, the null backend and every test open streams through
+  this one seam. A request carries a requested format: a playback stream opens in it and
+  the arm converts to the device; a capture stream opens in the device's own format and is
+  refused if that misses what was asked. A
   stream carries a liveness report its owner reads, so a publishing or draining thread
   whose device died comes back and says why rather than only telling the log.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #2012; macos-capability-parity —
@@ -2357,8 +2360,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   serial queue. Failures land on the stream's liveness report naming the device and the
   `OSStatus` — failed renders reaching the bound, a vanished device, a refused rebind, an
   oversized cycle. A playback stream reports its device period (`BufferFrameSize`) and
-  `SpeakerSink` sizes its `match_device` window and hop, ring and underrun cadence from it;
-  the PipeWire, ALSA and null arms report none, and `SpeakerSink` falls back to 10 ms there.
+  `SpeakerSink` sizes its ring and underrun cadence from it; the PipeWire, ALSA and null
+  arms report none, and `SpeakerSink` falls back to 10 ms there.
   Audible tests are attended only (`audible-hardware-tests`); the standing `hardware-tests`
   sweep on the Mac stays silent. The deviceless audio clock on Apple is a GCD timer, the
   peer of Linux's timerfd. [macos-capability-parity — SHIPPED #2411]
@@ -2654,12 +2657,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the declaration surface where any processor could reach it, and leave the declaration
   site silent about a resolution the reader needs to know happens.
   [audio-port-window-contract — SHIPPED #2034]
-- **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
-  the camera: native built-ins in the engine tree, registered with the other
-  media built-ins and reaching Python as classes generated into
-  `tatolab/stream/_built_in_nodes.py` from their descriptors, beside `CameraSource`,
-  configured the one way a built-in is configured
-  (`stream_builder.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
+- **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio nodes, shipped as
+  the `tatolab-microphone` and `tatolab-speaker` extension wheels
+  (`tatolab.microphone:MicrophoneSource`, `tatolab.speaker:SpeakerSink`): Python nodes in
+  their own helper processes whose native halves open the engine's audio device through
+  the module host table and move every block on a native thread, so Python never runs
+  per block, configured the one way a node is configured
+  (`stream_builder.add(MicrophoneSource, config={"device_id": "..."})`). A graph naming
+  their former built-in types is refused naming the module to install. Both are `execution =
   manual`, the mode `CameraSource` uses for a device that paces itself, with
   `scheduling = realtime` — an audio device callback is the deadline that priority
   exists for. The declaration names that deadline; it does not apply a priority here,
@@ -2667,21 +2672,20 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   design — real work runs on OS-managed callback threads, which is exactly right for
   audio, where the deadline belongs to the backend's own callback thread and not to the
   source's publishing thread. Conditioning — AEC, noise suppression, AGC via the
-  statically linked WebRTC Audio Processing Module — is configuration on the built-ins,
-  an engine-internal chain between device and published block, bypassable for
+  statically linked WebRTC Audio Processing Module — is configuration on the nodes,
+  a chain between device and published block, bypassable for
   microphones whose hardware DSP already conditions. `SpeakerSink` playback cancels
   immediately and reports played-up-to timestamps — the barge-in door and the AEC
   reference are one mechanism. A device callback never blocks on a slow consumer:
   at capacity `MicrophoneSource` drops at the device edge and the loss is
   explicit — the timestamp gap is derivable from the blocks around it and the
-  source counts what it dropped — never silent. `SpeakerSink` matches its device rather
-  than refusing what it cannot play: its input declares `audio_window = match_device`
-  with window = hop = one device period — it wants format conversion, not framing, and
-  under all-or-nothing that is how a converter is spelled — so the stage converts and the
-  sink plays. It has no refusal of a block whose rate, channels or dtype the device cannot
-  take, because the mic-to-speaker mismatch the two built-ins have by construction
-  (capture prefers mono, playback prefers stereo) is the plainest case the window contract
-  exists to fix. Conditioning and immediate cancel are a later rung.
+  source counts what it dropped — never silent. `SpeakerSink` converts rather than
+  refusing what it cannot play: its input declares a 48 kHz stereo `f32` window with
+  window = hop = 10 ms — it wants format conversion, not framing, and under
+  all-or-nothing that is how a converter is spelled — and its playback stream opens in
+  that same format, which the audio arm converts to the device. The mic-to-speaker
+  mismatch the two nodes have by construction (capture prefers mono, playback prefers
+  stereo) is the plainest case the window contract exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
   audio-port-window-contract — SHIPPED #2034; package-split-and-lend — SHIPPED #2684]
 - **DECIDED** — Codec blocks are native built-ins beside the camera and the audio

@@ -81,10 +81,21 @@ pub fn render_module_host_table_c_header(abi_source: &str) -> Result<String> {
                 let value = render_constant_value(item, &type_alias_scalar_names)?;
                 writeln!(declarations, "#define {} {value}\n", item.ident)?;
             }
+            syn::Item::Type(item)
+                if is_public(&item.vis) && matches!(*item.ty, syn::Type::BareFn(_)) =>
+            {
+                let declarator = render_c_declaration(&item.ty, &item.ident.to_string())
+                    .with_context(|| format!("type {}", item.ident))?;
+                declarations.push_str(&render_doc_comment(&item.attrs, ""));
+                writeln!(declarations, "typedef {declarator};\n")?;
+            }
             syn::Item::Type(item) if is_public(&item.vis) => {
                 let scalar_name = item.ty.to_token_stream().to_string();
                 let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
-                    format!("type {}: only a scalar alias renders to C", item.ident)
+                    format!(
+                        "type {}: only a scalar or `extern \"C\"` function alias renders to C",
+                        item.ident
+                    )
                 })?;
                 declarations.push_str(&render_doc_comment(&item.attrs, ""));
                 writeln!(declarations, "typedef {c_type} {};\n", item.ident)?;
@@ -384,6 +395,23 @@ mod tests {
         );
         assert!(
             header.contains("    void (*log)(void *node_host, const uint8_t *target);\n"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn a_callback_alias_renders_as_a_c_function_pointer_typedef() {
+        let header = render_module_host_table_c_header(
+            r#"
+            pub type ModuleHostTableBlockCallback =
+                unsafe extern "C" fn(callback_context: *mut c_void, block: *const u8);
+            "#,
+        )
+        .unwrap();
+        assert!(
+            header.contains(
+                "typedef void (*ModuleHostTableBlockCallback)(void *callback_context, const uint8_t *block);\n"
+            ),
             "{header}"
         );
     }
