@@ -658,7 +658,7 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
                 })?;
                 notices.push('\n');
                 notices.push_str(&render_the_cef_binary_distributions_notice(
-                    &cef_binary_distribution_root,
+                    &cef_binary_distribution_holding_libcef(&cef_binary_distribution_root)?,
                 )?);
             }
             projects_compiled_in.len() + usize::from(cef_notice_appended)
@@ -941,6 +941,9 @@ const CEF_BINDINGS_CRATE_NAME: &str = "cef-dll-sys";
 /// own build reads it.
 const CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE: &str = "CEF_PATH";
 
+/// The file whose directory is a CEF binary distribution's root.
+const CEF_LIBRARY_FILE_NAME: &str = "libcef.so";
+
 /// The licence file at the root of every CEF binary distribution.
 const CEF_LICENCE_FILE_NAME: &str = "LICENSE.txt";
 
@@ -957,6 +960,29 @@ fn extension_lockfile_resolves(extension_project_root: &Path, package_name: &str
     Ok(lockfile
         .lines()
         .any(|line| line.trim() == package_name_line))
+}
+
+/// The directory under `cef_path` holding `libcef.so`: `cef_path` itself or
+/// the one distribution extracted beneath it, as `stage_cef_runtime.py` finds it.
+fn cef_binary_distribution_holding_libcef(cef_path: &Path) -> Result<PathBuf> {
+    if cef_path.join(CEF_LIBRARY_FILE_NAME).is_file() {
+        return Ok(cef_path.to_path_buf());
+    }
+    let mut distributions_found: Vec<PathBuf> = walkdir::WalkDir::new(cef_path)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == CEF_LIBRARY_FILE_NAME)
+        .filter_map(|entry| entry.path().parent().map(Path::to_path_buf))
+        .collect();
+    distributions_found.sort();
+    match distributions_found.as_slice() {
+        [] => anyhow::bail!("no {CEF_LIBRARY_FILE_NAME} under {}", cef_path.display()),
+        [only_distribution] => Ok(only_distribution.clone()),
+        several => anyhow::bail!(
+            "more than one CEF distribution under {}: {several:?}",
+            cef_path.display()
+        ),
+    }
 }
 
 /// CEF's own licence, read from the binary distribution the wheel ships, and
@@ -1338,6 +1364,41 @@ mod tests {
 
         assert!(notice.contains("Marshall A. Greenblatt"));
         assert!(notice.contains(CHROMIUM_CREDITS_FILE_NAME));
+    }
+
+    #[test]
+    fn the_cef_distribution_is_found_beneath_cef_path_as_the_stager_finds_it() {
+        let cef_path = TempDir::new().expect("tempdir");
+        let nested_distribution = cef_path.path().join("cef_binary_156_linux64");
+        fs::create_dir_all(&nested_distribution).expect("create distribution");
+        fs::write(nested_distribution.join(CEF_LIBRARY_FILE_NAME), "").expect("write libcef");
+
+        assert_eq!(
+            cef_binary_distribution_holding_libcef(cef_path.path()).expect("find"),
+            nested_distribution
+        );
+        assert_eq!(
+            cef_binary_distribution_holding_libcef(&nested_distribution).expect("find"),
+            nested_distribution
+        );
+    }
+
+    #[test]
+    fn two_cef_distributions_beneath_cef_path_are_refused() {
+        let cef_path = TempDir::new().expect("tempdir");
+        for distribution_name in ["first", "second"] {
+            let distribution = cef_path.path().join(distribution_name);
+            fs::create_dir_all(&distribution).expect("create distribution");
+            fs::write(distribution.join(CEF_LIBRARY_FILE_NAME), "").expect("write libcef");
+        }
+
+        let refusal = cef_binary_distribution_holding_libcef(cef_path.path()).unwrap_err();
+
+        assert!(
+            refusal
+                .to_string()
+                .contains("more than one CEF distribution")
+        );
     }
 
     #[test]

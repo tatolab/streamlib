@@ -27,7 +27,8 @@ use tatolab_module_sdk::{
 
 use crate::page_audio_blocks::{PageAudioStreamTimeline, interleave_planar_samples};
 use crate::page_data_messages::{
-    events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
+    PageDataScriptsAwaitingTheLoadedDocument, events_msgpack_map_of_published_json,
+    page_data_detail_json_of_msgpack_map,
 };
 use crate::video_frame_record::PaintedPageVideoFrame;
 
@@ -93,6 +94,7 @@ struct PagePublishing {
     interleaved_audio: Mutex<Vec<f32>>,
     first_frame_refusal_logged: AtomicBool,
     publishing_stopped: AtomicBool,
+    main_frame_document_loaded: AtomicBool,
     page_closed: Mutex<Option<SyncSender<()>>>,
 }
 
@@ -479,6 +481,56 @@ fn create_an_owner_only_cef_cache_directory() -> Result<PathBuf, String> {
 /// The page the CEF thread renders, while one is open.
 struct OpenPage {
     browser: Browser,
+    publishing: Arc<PagePublishing>,
+    data_scripts_awaiting_the_loaded_document: PageDataScriptsAwaitingTheLoadedDocument,
+}
+
+impl OpenPage {
+    fn main_frame_document_loaded(&self) -> bool {
+        self.publishing
+            .main_frame_document_loaded
+            .load(Ordering::Acquire)
+    }
+
+    /// Run `script` in the main frame's document, or hold it until that
+    /// document has loaded, so the page's `tatolab:data` listeners exist.
+    fn dispatch_or_hold_data_script(&mut self, script: String) {
+        if self.main_frame_document_loaded() {
+            self.dispatch_data_script(&script);
+        } else if self.data_scripts_awaiting_the_loaded_document.hold(script) {
+            self.publishing
+                .counters
+                .data_messages_refused
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn dispatch_data_scripts_held_for_the_loaded_document(&mut self) {
+        if !self.main_frame_document_loaded() {
+            return;
+        }
+        for script in self
+            .data_scripts_awaiting_the_loaded_document
+            .take_in_arrival_order()
+        {
+            self.dispatch_data_script(&script);
+        }
+    }
+
+    fn dispatch_data_script(&self, script: &str) {
+        let Some(frame) = self.browser.main_frame() else {
+            return;
+        };
+        frame.execute_java_script(
+            Some(&CefString::from(script)),
+            Some(&CefString::from("tatolab://data")),
+            1,
+        );
+        self.publishing
+            .counters
+            .data_messages_delivered
+            .fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn serve_the_cef_thread(requests: Receiver<CefThreadRequest>) {
@@ -509,15 +561,8 @@ fn serve_the_cef_thread(requests: Receiver<CefThreadRequest>) {
                 }
             }
             Ok(CefThreadRequest::DispatchPageData { script }) => {
-                if let Some(frame) = open_page
-                    .as_ref()
-                    .and_then(|page| page.browser.main_frame())
-                {
-                    frame.execute_java_script(
-                        Some(&CefString::from(script.as_str())),
-                        Some(&CefString::from("tatolab://data")),
-                        1,
-                    );
+                if let Some(page) = open_page.as_mut() {
+                    page.dispatch_or_hold_data_script(script);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -526,6 +571,9 @@ fn serve_the_cef_thread(requests: Receiver<CefThreadRequest>) {
         if Instant::now() >= next_pump_at {
             do_message_loop_work();
             next_pump_at = Instant::now() + LONGEST_PUMP_INTERVAL;
+        }
+        if let Some(page) = open_page.as_mut() {
+            page.dispatch_data_scripts_held_for_the_loaded_document();
         }
     }
 }
@@ -556,6 +604,7 @@ fn open_a_page(publishing: Arc<PagePublishing>) -> Result<OpenPage, String> {
         PageRenderHandler::new(Arc::clone(&publishing)),
         PageAudioHandler::new(Arc::clone(&publishing)),
         PageLifeSpanHandler::new(Arc::clone(&publishing)),
+        PageLoadHandler::new(Arc::clone(&publishing)),
         Arc::clone(&publishing),
     );
     let browser = browser_host_create_browser_sync(
@@ -567,7 +616,12 @@ fn open_a_page(publishing: Arc<PagePublishing>) -> Result<OpenPage, String> {
         None,
     )
     .ok_or_else(|| format!("CEF refused to open {}", config.url))?;
-    Ok(OpenPage { browser })
+    Ok(OpenPage {
+        browser,
+        publishing,
+        data_scripts_awaiting_the_loaded_document:
+            PageDataScriptsAwaitingTheLoadedDocument::default(),
+    })
 }
 
 wrap_browser_process_handler! {
@@ -755,11 +809,46 @@ wrap_life_span_handler! {
     }
 }
 
+wrap_load_handler! {
+    struct PageLoadHandler {
+        publishing: Arc<PagePublishing>,
+    }
+
+    impl LoadHandler {
+        fn on_load_start(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _transition_type: TransitionType,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                self.publishing
+                    .main_frame_document_loaded
+                    .store(false, Ordering::Release);
+            }
+        }
+
+        fn on_load_end(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _http_status_code: ::std::os::raw::c_int,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                self.publishing
+                    .main_frame_document_loaded
+                    .store(true, Ordering::Release);
+            }
+        }
+    }
+}
+
 wrap_client! {
     struct PageClient {
         render_handler: RenderHandler,
         audio_handler: AudioHandler,
         life_span_handler: LifeSpanHandler,
+        load_handler: LoadHandler,
         publishing: Arc<PagePublishing>,
     }
 
@@ -774,6 +863,10 @@ wrap_client! {
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(self.life_span_handler.clone())
+        }
+
+        fn load_handler(&self) -> Option<LoadHandler> {
+            Some(self.load_handler.clone())
         }
 
         fn on_process_message_received(
@@ -831,6 +924,7 @@ impl BrowserPageRendering {
             interleaved_audio: Mutex::new(Vec::new()),
             first_frame_refusal_logged: AtomicBool::new(false),
             publishing_stopped: AtomicBool::new(false),
+            main_frame_document_loaded: AtomicBool::new(false),
             page_closed: Mutex::new(Some(page_closed_sender)),
         });
         let (opened, open_outcome) = std::sync::mpsc::sync_channel(1);
@@ -984,9 +1078,6 @@ fn deliver_data_messages_to_the_page(
                     {
                         return;
                     }
-                    counters
-                        .data_messages_delivered
-                        .fetch_add(1, Ordering::Relaxed);
                 }
                 Err(refusal) => {
                     if counters

@@ -50,6 +50,10 @@ cd streams/browser-source
 tatolab dev
 ```
 
+A `file://` page loads classic scripts only: Chromium refuses module scripts
+from a file URL, so a library shipped only as ES modules (three.js r160 and
+later) needs a classic build, inlined modules, or the page served over http.
+
 The probe page animates every frame, plays a 440 Hz tone and answers each
 `data` message from its next animation frame. Watch it at
 `http://127.0.0.1:4446/watch/<machine>/main`; a
