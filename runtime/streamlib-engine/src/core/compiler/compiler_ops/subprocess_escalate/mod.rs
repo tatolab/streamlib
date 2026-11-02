@@ -33,6 +33,7 @@ mod port_catalog_entry;
 mod ray_tracing;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_bound_kernel_binding;
+mod surface_color_conversion;
 mod surface_copy;
 #[cfg(test)]
 mod tests;
@@ -69,6 +70,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::CopySurfaceToSurface(p) => Some(&p.request_id),
+        EscalateRequest::ConvertSurfaceInto(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
@@ -129,6 +131,9 @@ pub(crate) fn handle_escalate_op(
         ),
         EscalateRequest::CopySurfaceToSurface(req) => Some(
             surface_copy::handle_copy_surface_to_surface(sandbox, rid, req),
+        ),
+        EscalateRequest::ConvertSurfaceInto(req) => Some(
+            surface_color_conversion::handle_convert_surface_into(sandbox, registry, rid, req),
         ),
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))

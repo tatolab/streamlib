@@ -28,7 +28,17 @@ The stream opens under the stream's capture-prompting policy, so only a stream
 that holds the node can put the platform's access prompt in front of the user,
 and only when its load allows.
 
-Version 1.2 adds playback through the same backend:
+Version 1.2 adds surfaces, so a module hands the GPU what a device wrote
+without a copy:
+
+- import a linear DMA-BUF fd with its plane layout, as written by a foreign
+  device;
+- acquire a texture from one of the node's output pools;
+- convert a YCbCr surface into an RGBA texture with the engine's colour
+  converter;
+- read the surface id a message names a surface by, and release it.
+
+Version 1.3 adds playback through the same backend:
 
 - open a playback stream on a named device or the default in the format the
   module plays (a rate, channel count or sample format left out takes the
@@ -41,7 +51,8 @@ Version 1.2 adds playback through the same backend:
 - read whether the device still serves the stream, and close it.
 
 Every verb is callable from any thread with no Python attached. The table carries
-plain data and opaque handles only. No engine or GPU object crosses it, and
+plain data, opaque handles and borrowed fds only. No engine or GPU object
+crosses it, and
 `cargo xtask check-module-host-table-surface` keeps it that way.
 
 ## Reaching it

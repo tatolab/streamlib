@@ -17,7 +17,9 @@
  *
  * Every verb is callable from any thread the module owns and never takes
  * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
- * which attaches to the interpreter for its round trip to the parent.
+ * which attaches to the interpreter for its round trip to the parent. The
+ * surface verbs minor 2 adds reach the parent over the helper's native escalate
+ * channel, with no interpreter on either end.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -38,7 +40,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(2)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(3)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -164,6 +166,78 @@ typedef struct ModuleHostTablePortHandle {
 } ModuleHostTablePortHandle;
 
 /**
+ * A surface lent to native code, valid until
+ * `ModuleHostTable.surface_release`; `0` names no surface.
+ */
+typedef struct ModuleHostTableSurfaceHandle {
+    uint64_t value;
+} ModuleHostTableSurfaceHandle;
+
+/**
+ * The most planes one `ModuleHostTableDmaBufImport` describes.
+ */
+#define MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES ((size_t)4)
+
+/**
+ * One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
+ *
+ * `fd` stays the caller's: the host dups it. Offsets and strides past
+ * `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
+ * refused.
+ */
+typedef struct ModuleHostTableDmaBufImport {
+    int32_t fd;
+    uint32_t width;
+    uint32_t height;
+    uint32_t plane_count;
+    /**
+     * A pixel format wire name, such as `nv12_video_range` or `yuyv`.
+     */
+    ModuleHostTableUtf8 pixel_format;
+    uint64_t allocation_byte_size;
+    uint64_t drm_format_modifier;
+    uint64_t plane_offsets_bytes[MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
+    uint64_t plane_strides_bytes[MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
+} ModuleHostTableDmaBufImport;
+
+/**
+ * One texture out of a node output pool: a new `<slot>#<generation>` per
+ * call, never a slot a consumer still holds.
+ */
+typedef struct ModuleHostTableNodeOutputTextureRequest {
+    /**
+     * The pool's key, unique within the node.
+     */
+    ModuleHostTableUtf8 pool_key;
+    /**
+     * A texture format wire name, such as `rgba8_unorm`.
+     */
+    ModuleHostTableUtf8 texture_format;
+    /**
+     * Usage names joined by commas, such as `storage_binding,texture_binding`.
+     */
+    ModuleHostTableUtf8 usage;
+    uint32_t width;
+    uint32_t height;
+    uint32_t rotation_depth;
+    /**
+     * Always zero; keeps the struct 8-aligned on every target.
+     */
+    uint32_t reserved;
+} ModuleHostTableNodeOutputTextureRequest;
+
+/**
+ * A surface's H.273 colour description by axis name, as `VideoFrame`'s
+ * `ColorInfo` spells it; an empty name leaves that axis to its default.
+ */
+typedef struct ModuleHostTableColorInfo {
+    ModuleHostTableUtf8 primaries;
+    ModuleHostTableUtf8 transfer;
+    ModuleHostTableUtf8 matrix;
+    ModuleHostTableUtf8 range;
+} ModuleHostTableColorInfo;
+
+/**
  * The caller's buffer a refused verb writes its message into.
  */
 typedef struct ModuleHostTableErrorMessage {
@@ -263,7 +337,7 @@ typedef struct ModuleHostTableCapturedAudioBlock {
 typedef void (*ModuleHostTableCapturedAudioBlockCallback)(void *callback_context, const ModuleHostTableCapturedAudioBlock *captured_block);
 
 /**
- * What a module asks the host to open a playback stream on. Minor 2.
+ * What a module asks the host to open a playback stream on. Minor 3.
  */
 typedef struct ModuleHostTableAudioPlaybackStreamRequest {
     /**
@@ -282,7 +356,7 @@ typedef struct ModuleHostTableAudioPlaybackStreamRequest {
 } ModuleHostTableAudioPlaybackStreamRequest;
 
 /**
- * What a playback stream opened in. Minor 2.
+ * What a playback stream opened in. Minor 3.
  */
 typedef struct ModuleHostTableOpenedAudioPlaybackStream {
     /**
@@ -438,31 +512,56 @@ typedef struct ModuleHostTable {
      */
     void (*audio_capture_stream_close)(void *node_host, ModuleHostTableAudioStreamHandle stream);
     /**
+     * Minor 2: adopt a foreign DMA-BUF as a surface the graph can resolve,
+     * registered with its plane layout and as written by a foreign device.
+     */
+    ModuleHostTableStatus (*surface_import_dma_buf)(void *node_host, const ModuleHostTableDmaBufImport *dma_buf_import, ModuleHostTableSurfaceHandle *imported_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 2: take the next texture out of a node output pool.
+     */
+    ModuleHostTableStatus (*output_texture_acquire_from_node_output_pool)(void *node_host, const ModuleHostTableNodeOutputTextureRequest *request, ModuleHostTableSurfaceHandle *acquired_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 2: convert a YCbCr pixel buffer into an RGBA texture of the same
+     * extent with the engine's colour converter, returning once the
+     * destination's next reader sees the result.
+     */
+    ModuleHostTableStatus (*surface_convert_into)(void *node_host, ModuleHostTableSurfaceHandle source, ModuleHostTableSurfaceHandle destination, const ModuleHostTableColorInfo *source_color, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 2: the surface id a message names `surface` by; valid until the
+     * surface is released, empty for a handle that names no surface.
+     */
+    ModuleHostTableUtf8 (*surface_id)(void *node_host, ModuleHostTableSurfaceHandle surface);
+    /**
+     * Minor 2: give a surface back. An import's registration is removed; a pool
+     * texture's slot stays the pool's.
+     */
+    void (*surface_release)(void *node_host, ModuleHostTableSurfaceHandle surface);
+    /**
      * Open a playback stream through the engine's audio device backend in the
      * requested format, and write the format and device period it opened
-     * with. Minor 2.
+     * with. Minor 3.
      */
     ModuleHostTableStatus (*audio_playback_stream_open)(void *node_host, const ModuleHostTableAudioPlaybackStreamRequest *request, ModuleHostTableAudioStreamHandle *opened_stream, ModuleHostTableOpenedAudioPlaybackStream *opened_playback_stream, ModuleHostTableErrorMessage *error_message);
     /**
      * Begin calling `fill_callback` with `callback_context` each time the
      * device needs samples, replacing any callback an earlier call installed.
-     * The replaced callback is not called once this returns. Minor 2.
+     * The replaced callback is not called once this returns. Minor 3.
      */
     ModuleHostTableStatus (*audio_playback_stream_start)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableAudioBlockRequestedByDeviceCallback fill_callback, void *callback_context, ModuleHostTableErrorMessage *error_message);
     /**
      * Stop asking; the callback is not called again once this returns.
-     * Minor 2.
+     * Minor 3.
      */
     ModuleHostTableStatus (*audio_playback_stream_stop)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
     /**
      * `MODULE_HOST_TABLE_STATUS_OK` while the device serves the stream;
      * `MODULE_HOST_TABLE_STATUS_ENDED`, with the failure written, once it
-     * stopped. Minor 2.
+     * stopped. Minor 3.
      */
     ModuleHostTableStatus (*audio_playback_stream_liveness)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
     /**
      * Stop asking and close the stream; its handle names nothing after.
-     * Minor 2.
+     * Minor 3.
      */
     void (*audio_playback_stream_close)(void *node_host, ModuleHostTableAudioStreamHandle stream);
 } ModuleHostTable;

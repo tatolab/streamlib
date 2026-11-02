@@ -77,7 +77,7 @@ impl ModuleHost {
     /// Open a playback stream through the engine's audio device backend in the
     /// requested format, which the backend converts to the device's.
     ///
-    /// Refused on a runtime lending a table older than minor 2.
+    /// Refused on a runtime lending a table older than minor 3.
     pub fn open_audio_playback_stream(
         &self,
         request: &ModuleHostAudioPlaybackStreamRequest<'_>,

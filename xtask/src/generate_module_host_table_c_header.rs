@@ -82,20 +82,18 @@ pub fn render_module_host_table_c_header(abi_source: &str) -> Result<String> {
                 writeln!(declarations, "#define {} {value}\n", item.ident)?;
             }
             syn::Item::Type(item)
-                if is_public(&item.vis) && matches!(*item.ty, syn::Type::BareFn(_)) =>
+                if is_public(&item.vis) && matches!(item.ty.as_ref(), syn::Type::BareFn(_)) =>
             {
-                let declarator = render_c_declaration(&item.ty, &item.ident.to_string())
-                    .with_context(|| format!("type {}", item.ident))?;
                 declarations.push_str(&render_doc_comment(&item.attrs, ""));
-                writeln!(declarations, "typedef {declarator};\n")?;
+                let function_pointer_declarator =
+                    render_c_declaration(&item.ty, &item.ident.to_string())
+                        .with_context(|| format!("type {}", item.ident))?;
+                writeln!(declarations, "typedef {function_pointer_declarator};\n")?;
             }
             syn::Item::Type(item) if is_public(&item.vis) => {
                 let scalar_name = item.ty.to_token_stream().to_string();
                 let c_type = c_scalar_type_name(&scalar_name).with_context(|| {
-                    format!(
-                        "type {}: only a scalar or `extern \"C\"` function alias renders to C",
-                        item.ident
-                    )
+                    format!("type {}: only a scalar alias renders to C", item.ident)
                 })?;
                 declarations.push_str(&render_doc_comment(&item.attrs, ""));
                 writeln!(declarations, "typedef {c_type} {};\n", item.ident)?;
@@ -400,17 +398,18 @@ mod tests {
     }
 
     #[test]
-    fn a_callback_alias_renders_as_a_c_function_pointer_typedef() {
+    fn a_function_pointer_alias_renders_as_a_c_typedef() {
         let header = render_module_host_table_c_header(
             r#"
             pub type ModuleHostTableBlockCallback =
-                unsafe extern "C" fn(callback_context: *mut c_void, block: *const u8);
+                unsafe extern "C" fn(callback_context: *mut c_void, sample_count: u32);
             "#,
         )
         .unwrap();
         assert!(
             header.contains(
-                "typedef void (*ModuleHostTableBlockCallback)(void *callback_context, const uint8_t *block);\n"
+                "typedef void (*ModuleHostTableBlockCallback)(void *callback_context, \
+                 uint32_t sample_count);"
             ),
             "{header}"
         );

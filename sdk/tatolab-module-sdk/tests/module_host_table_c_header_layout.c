@@ -85,14 +85,34 @@ _Static_assert(offsetof(ModuleHostTable, audio_capture_stream_start) == POINTER_
 _Static_assert(offsetof(ModuleHostTable, audio_capture_stream_stop) == POINTER_SLOT(16), "ModuleHostTable.audio_capture_stream_stop");
 _Static_assert(offsetof(ModuleHostTable, audio_capture_stream_liveness) == POINTER_SLOT(17), "ModuleHostTable.audio_capture_stream_liveness");
 _Static_assert(offsetof(ModuleHostTable, audio_capture_stream_close) == POINTER_SLOT(18), "ModuleHostTable.audio_capture_stream_close");
-_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_open) == POINTER_SLOT(19), "ModuleHostTable.audio_playback_stream_open");
-_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_start) == POINTER_SLOT(20), "ModuleHostTable.audio_playback_stream_start");
-_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_stop) == POINTER_SLOT(21), "ModuleHostTable.audio_playback_stream_stop");
-_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_liveness) == POINTER_SLOT(22), "ModuleHostTable.audio_playback_stream_liveness");
-_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_close) == POINTER_SLOT(23), "ModuleHostTable.audio_playback_stream_close");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(24), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, surface_import_dma_buf) == POINTER_SLOT(19), "ModuleHostTable.surface_import_dma_buf");
+_Static_assert(offsetof(ModuleHostTable, output_texture_acquire_from_node_output_pool) == POINTER_SLOT(20), "ModuleHostTable.output_texture_acquire_from_node_output_pool");
+_Static_assert(offsetof(ModuleHostTable, surface_convert_into) == POINTER_SLOT(21), "ModuleHostTable.surface_convert_into");
+_Static_assert(offsetof(ModuleHostTable, surface_id) == POINTER_SLOT(22), "ModuleHostTable.surface_id");
+_Static_assert(offsetof(ModuleHostTable, surface_release) == POINTER_SLOT(23), "ModuleHostTable.surface_release");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_open) == POINTER_SLOT(24), "ModuleHostTable.audio_playback_stream_open");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_start) == POINTER_SLOT(25), "ModuleHostTable.audio_playback_stream_start");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_stop) == POINTER_SLOT(26), "ModuleHostTable.audio_playback_stream_stop");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_liveness) == POINTER_SLOT(27), "ModuleHostTable.audio_playback_stream_liveness");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_close) == POINTER_SLOT(28), "ModuleHostTable.audio_playback_stream_close");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(29), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
+_Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
+_Static_assert(sizeof(ModuleHostTableAudioCaptureStreamRequest) == 2 * POINTER + 16, "ModuleHostTableAudioCaptureStreamRequest size");
+_Static_assert(sizeof(ModuleHostTableAudioStreamHandle) == 8, "ModuleHostTableAudioStreamHandle size");
+_Static_assert(sizeof(ModuleHostTableCapturedAudioBlock) == 2 * POINTER + 16, "ModuleHostTableCapturedAudioBlock size");
+
+_Static_assert(sizeof(ModuleHostTableSurfaceHandle) == 8, "ModuleHostTableSurfaceHandle size");
+_Static_assert(offsetof(ModuleHostTableDmaBufImport, allocation_byte_size) == 16 + 2 * POINTER, "ModuleHostTableDmaBufImport.allocation_byte_size");
+_Static_assert(offsetof(ModuleHostTableDmaBufImport, plane_strides_bytes) == 64 + 2 * POINTER, "ModuleHostTableDmaBufImport.plane_strides_bytes");
+_Static_assert(sizeof(ModuleHostTableDmaBufImport) == 96 + 2 * POINTER, "ModuleHostTableDmaBufImport size");
+_Static_assert(offsetof(ModuleHostTableNodeOutputTextureRequest, width) == 6 * POINTER, "ModuleHostTableNodeOutputTextureRequest.width");
+_Static_assert(sizeof(ModuleHostTableNodeOutputTextureRequest) == 6 * POINTER + 16, "ModuleHostTableNodeOutputTextureRequest size");
+_Static_assert(offsetof(ModuleHostTableColorInfo, matrix) == 4 * POINTER, "ModuleHostTableColorInfo.matrix");
+_Static_assert(sizeof(ModuleHostTableColorInfo) == 8 * POINTER, "ModuleHostTableColorInfo size");
+
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 3, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");
