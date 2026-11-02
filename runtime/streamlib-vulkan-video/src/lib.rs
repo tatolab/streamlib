@@ -58,6 +58,7 @@ pub use annex_b_nal_units::{
 };
 #[cfg(target_os = "linux")]
 pub use decode::exported_nv12_dma_buf_ring::ExportedNv12DmaBufPicture;
+#[cfg(target_os = "linux")]
 pub use decode::{
     DecodedFrame, DecodedPictureDelivery, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
 };

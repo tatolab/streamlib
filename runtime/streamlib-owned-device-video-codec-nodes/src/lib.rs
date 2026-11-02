@@ -224,8 +224,9 @@ fn open_the_encoder(
     VideoEncoderOnThisPlatform::open(node, settings)
 }
 
+/// No encoder opens here, so none exists to encode with.
 #[cfg(not(target_os = "linux"))]
-struct VideoEncoderOnThisPlatform;
+enum VideoEncoderOnThisPlatform {}
 
 #[cfg(not(target_os = "linux"))]
 impl VideoEncoderOnThisPlatform {
@@ -234,7 +235,7 @@ impl VideoEncoderOnThisPlatform {
         _frame: &VideoFrameMessage,
         _encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
-        Ok(())
+        match *self {}
     }
 }
 
@@ -310,8 +311,9 @@ fn open_the_decoder(
     VideoDecoderOnThisPlatform::open(node, module_host.clone(), settings)
 }
 
+/// No decoder opens here, so none exists to decode with.
 #[cfg(not(target_os = "linux"))]
-struct VideoDecoderOnThisPlatform;
+enum VideoDecoderOnThisPlatform {}
 
 #[cfg(not(target_os = "linux"))]
 impl VideoDecoderOnThisPlatform {
@@ -320,10 +322,12 @@ impl VideoDecoderOnThisPlatform {
         _media_frame: &tatolab_module_sdk::ModuleHostReadMessage,
         _video_output: &ModuleHostOutputPort,
     ) -> Result<(), String> {
-        Ok(())
+        match *self {}
     }
 
-    fn report_at_teardown(&self) {}
+    fn report_at_teardown(&self) {
+        match *self {}
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
