@@ -12,7 +12,9 @@
 //!
 //! Every verb is callable from any thread the module owns and never takes
 //! Python's GIL, except [`ModuleHostTable::output_port_set_catalog_entry`],
-//! which attaches to the interpreter for its round trip to the parent.
+//! which attaches to the interpreter for its round trip to the parent. The
+//! surface verbs minor 2 adds reach the parent over the helper's native escalate
+//! channel, with no interpreter on either end.
 
 use std::ffi::{CStr, c_void};
 
@@ -21,7 +23,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 1;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 2;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -92,6 +94,66 @@ pub struct ModuleHostTableBytes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleHostTablePortHandle {
     pub value: u64,
+}
+
+/// A surface lent to native code, valid until
+/// [`ModuleHostTable::surface_release`]; `0` names no surface.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableSurfaceHandle {
+    pub value: u64,
+}
+
+/// The most planes one [`ModuleHostTableDmaBufImport`] describes.
+pub const MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES: usize = 4;
+
+/// One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
+///
+/// `fd` stays the caller's: the host dups it. Offsets and strides past
+/// `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
+/// refused.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableDmaBufImport {
+    pub fd: i32,
+    pub width: u32,
+    pub height: u32,
+    pub plane_count: u32,
+    /// A pixel format wire name, such as `nv12_video_range` or `yuyv`.
+    pub pixel_format: ModuleHostTableUtf8,
+    pub allocation_byte_size: u64,
+    pub drm_format_modifier: u64,
+    pub plane_offsets_bytes: [u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES],
+    pub plane_strides_bytes: [u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES],
+}
+
+/// One texture out of a node output pool: a new `<slot>#<generation>` per
+/// call, never a slot a consumer still holds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableNodeOutputTextureRequest {
+    /// The pool's key, unique within the node.
+    pub pool_key: ModuleHostTableUtf8,
+    /// A texture format wire name, such as `rgba8_unorm`.
+    pub texture_format: ModuleHostTableUtf8,
+    /// Usage names joined by commas, such as `storage_binding,texture_binding`.
+    pub usage: ModuleHostTableUtf8,
+    pub width: u32,
+    pub height: u32,
+    pub rotation_depth: u32,
+    /// Always zero; keeps the struct 8-aligned on every target.
+    pub reserved: u32,
+}
+
+/// A surface's H.273 colour description by axis name, as `VideoFrame`'s
+/// `ColorInfo` spells it; an empty name leaves that axis to its default.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableColorInfo {
+    pub primaries: ModuleHostTableUtf8,
+    pub transfer: ModuleHostTableUtf8,
+    pub matrix: ModuleHostTableUtf8,
+    pub range: ModuleHostTableUtf8,
 }
 
 /// The caller's buffer a refused verb writes its message into.
@@ -298,6 +360,42 @@ pub struct ModuleHostTable {
     /// Minor 1.
     pub audio_capture_stream_close:
         unsafe extern "C" fn(node_host: *mut c_void, stream: ModuleHostTableAudioStreamHandle),
+    /// Minor 2: adopt a foreign DMA-BUF as a surface the graph can resolve,
+    /// registered with its plane layout and as written by a foreign device.
+    pub surface_import_dma_buf: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        dma_buf_import: *const ModuleHostTableDmaBufImport,
+        imported_surface: *mut ModuleHostTableSurfaceHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 2: take the next texture out of a node output pool.
+    pub output_texture_acquire_from_node_output_pool: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        request: *const ModuleHostTableNodeOutputTextureRequest,
+        acquired_surface: *mut ModuleHostTableSurfaceHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    )
+        -> ModuleHostTableStatus,
+    /// Minor 2: convert a YCbCr pixel buffer into an RGBA texture of the same
+    /// extent with the engine's colour converter, returning once the
+    /// destination's next reader sees the result.
+    pub surface_convert_into: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        source: ModuleHostTableSurfaceHandle,
+        destination: ModuleHostTableSurfaceHandle,
+        source_color: *const ModuleHostTableColorInfo,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 2: the surface id a message names `surface` by; valid until the
+    /// surface is released, empty for a handle that names no surface.
+    pub surface_id: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        surface: ModuleHostTableSurfaceHandle,
+    ) -> ModuleHostTableUtf8,
+    /// Minor 2: give a surface back. An import's registration is removed; a pool
+    /// texture's slot stays the pool's.
+    pub surface_release:
+        unsafe extern "C" fn(node_host: *mut c_void, surface: ModuleHostTableSurfaceHandle),
 }
 
 impl ModuleHostTableUtf8 {
@@ -504,7 +602,6 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_appended_at_minor_1.into_iter().enumerate() {
             assert_eq!(offset, 16 + (14 + slot) * POINTER, "minor 1 slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 19 * POINTER);
         assert_eq!(align_of::<ModuleHostTable>(), 8);
     }
 
@@ -542,6 +639,95 @@ mod layout_regression_tests {
             align_of::<ModuleHostTableAudioCaptureStreamRequest>(),
             POINTER
         );
+    }
+
+    /// Minor 2 appends its surface verbs after the minor 1 audio capture verbs.
+    #[test]
+    fn the_v1_2_table_appends_its_surface_verbs_after_every_v1_1_field() {
+        let pointer_slots_in_order = [
+            offset_of!(ModuleHostTable, surface_import_dma_buf),
+            offset_of!(
+                ModuleHostTable,
+                output_texture_acquire_from_node_output_pool
+            ),
+            offset_of!(ModuleHostTable, surface_convert_into),
+            offset_of!(ModuleHostTable, surface_id),
+            offset_of!(ModuleHostTable, surface_release),
+        ];
+        for (slot, offset) in pointer_slots_in_order.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (19 + slot) * POINTER, "pointer slot {slot}");
+        }
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 24 * POINTER);
+    }
+
+    #[test]
+    fn a_surface_handle_is_one_u64() {
+        assert_eq!(size_of::<ModuleHostTableSurfaceHandle>(), 8);
+        assert_eq!(align_of::<ModuleHostTableSurfaceHandle>(), 8);
+    }
+
+    #[test]
+    fn a_dma_buf_import_puts_its_geometry_then_its_name_then_its_planes() {
+        assert_eq!(offset_of!(ModuleHostTableDmaBufImport, fd), 0);
+        assert_eq!(offset_of!(ModuleHostTableDmaBufImport, width), 4);
+        assert_eq!(offset_of!(ModuleHostTableDmaBufImport, height), 8);
+        assert_eq!(offset_of!(ModuleHostTableDmaBufImport, plane_count), 12);
+        assert_eq!(offset_of!(ModuleHostTableDmaBufImport, pixel_format), 16);
+        let after_the_name = 16 + 2 * POINTER;
+        assert_eq!(
+            offset_of!(ModuleHostTableDmaBufImport, allocation_byte_size),
+            after_the_name
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableDmaBufImport, drm_format_modifier),
+            after_the_name + 8
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableDmaBufImport, plane_offsets_bytes),
+            after_the_name + 16
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableDmaBufImport, plane_strides_bytes),
+            after_the_name + 48
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableDmaBufImport>(),
+            after_the_name + 80
+        );
+    }
+
+    #[test]
+    fn a_node_output_texture_request_puts_its_names_then_its_geometry() {
+        assert_eq!(
+            offset_of!(ModuleHostTableNodeOutputTextureRequest, pool_key),
+            0
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableNodeOutputTextureRequest, texture_format),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableNodeOutputTextureRequest, usage),
+            4 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableNodeOutputTextureRequest, width),
+            6 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableNodeOutputTextureRequest, reserved),
+            6 * POINTER + 12
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableNodeOutputTextureRequest>(),
+            6 * POINTER + 16
+        );
+    }
+
+    #[test]
+    fn a_color_info_is_four_names() {
+        assert_eq!(offset_of!(ModuleHostTableColorInfo, matrix), 4 * POINTER);
+        assert_eq!(size_of::<ModuleHostTableColorInfo>(), 8 * POINTER);
     }
 
     #[test]

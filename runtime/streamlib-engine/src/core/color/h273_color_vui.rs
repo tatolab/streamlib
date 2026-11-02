@@ -38,6 +38,107 @@ impl ResolveH273ColorVuiDefaults for H273ColorVui {
     }
 }
 
+/// `ColorInfo.primaries` names and the H.273 byte each spells.
+const PRIMARIES_NAMES: [(&str, u8); 11] = [
+    ("bt709", primaries::BT709),
+    ("bt470_m", primaries::BT470_M),
+    ("bt470_bg", primaries::BT470_BG),
+    ("smpte170m", primaries::SMPTE170M),
+    ("smpte240m", primaries::SMPTE240M),
+    ("film", primaries::FILM),
+    ("bt2020", primaries::BT2020),
+    ("smpte428", primaries::SMPTE428),
+    ("smpte431", primaries::SMPTE431),
+    ("smpte432", primaries::SMPTE432),
+    ("ebu3213", primaries::EBU3213),
+];
+
+/// `ColorInfo.transfer` names and the H.273 byte each spells.
+const TRANSFER_NAMES: [(&str, u8); 16] = [
+    ("bt709", transfer::BT709),
+    ("gamma22", transfer::GAMMA22),
+    ("gamma28", transfer::GAMMA28),
+    ("smpte170m", transfer::SMPTE170M),
+    ("smpte240m", transfer::SMPTE240M),
+    ("linear", transfer::LINEAR),
+    ("log100", transfer::LOG100),
+    ("log100_sqrt10", transfer::LOG100_SQRT10),
+    ("xvycc", transfer::XVYCC),
+    ("bt1361", transfer::BT1361),
+    ("srgb", transfer::SRGB),
+    ("bt2020_ten_bit", transfer::BT2020_TEN_BIT),
+    ("bt2020_twelve_bit", transfer::BT2020_TWELVE_BIT),
+    ("smpte2084", transfer::SMPTE2084),
+    ("smpte428", transfer::SMPTE428),
+    ("arib_std_b67", transfer::ARIB_STD_B67),
+];
+
+/// `ColorInfo.matrix` names and the H.273 byte each spells.
+const MATRIX_NAMES: [(&str, u8); 13] = [
+    ("identity", matrix::IDENTITY),
+    ("bt709", matrix::BT709),
+    ("fcc", matrix::FCC),
+    ("bt470_bg", matrix::BT470_BG),
+    ("smpte170m", matrix::SMPTE170M),
+    ("smpte240m", matrix::SMPTE240M),
+    ("ycgco", matrix::YCGCO),
+    ("bt2020_ncl", matrix::BT2020_NCL),
+    ("bt2020_cl", matrix::BT2020_CL),
+    ("smpte2085", matrix::SMPTE2085),
+    ("chroma_ncl", matrix::CHROMA_NCL),
+    ("chroma_cl", matrix::CHROMA_CL),
+    ("ictcp", matrix::ICTCP),
+];
+
+/// The H.273 byte `name` spells on `axis`, refusing a name the axis lacks.
+fn h273_byte_of_axis_name(
+    axis: &str,
+    names: &[(&str, u8)],
+    name: Option<&str>,
+) -> crate::core::Result<Option<u8>> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    names
+        .iter()
+        .find(|(known_name, _)| *known_name == name)
+        .map(|(_, byte)| Some(*byte))
+        .ok_or_else(|| {
+            let known_names: Vec<&str> = names.iter().map(|(known_name, _)| *known_name).collect();
+            crate::core::Error::Configuration(format!(
+                "{name:?} is not a {axis} name ColorInfo knows; the {axis} names are {}",
+                known_names.join(", ")
+            ))
+        })
+}
+
+/// The description `ColorInfo`'s axis names spell — the names
+/// `tatolab.stream.video_frame` declares — with an absent axis left
+/// unspecified and an unknown name refused.
+pub fn h273_color_vui_from_color_info_axis_names(
+    primaries_name: Option<&str>,
+    transfer_name: Option<&str>,
+    matrix_name: Option<&str>,
+    range_name: Option<&str>,
+) -> crate::core::Result<H273ColorVui> {
+    let full_range = match range_name {
+        None => None,
+        Some("full") => Some(true),
+        Some("limited") => Some(false),
+        Some(other) => {
+            return Err(crate::core::Error::Configuration(format!(
+                "{other:?} is not a range name ColorInfo knows; the range names are full and limited"
+            )));
+        }
+    };
+    Ok(H273ColorVui {
+        primaries: h273_byte_of_axis_name("primaries", &PRIMARIES_NAMES, primaries_name)?,
+        transfer: h273_byte_of_axis_name("transfer", &TRANSFER_NAMES, transfer_name)?,
+        matrix: h273_byte_of_axis_name("matrix", &MATRIX_NAMES, matrix_name)?,
+        full_range,
+    })
+}
+
 /// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
 /// Unspecified and for any value the engine has no id for.
 fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
@@ -119,6 +220,43 @@ fn range_id_from_h273_full_range_flag(full_range: bool) -> RangeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_info_axis_names_spell_their_h273_bytes() {
+        let described = h273_color_vui_from_color_info_axis_names(
+            Some("bt709"),
+            Some("srgb"),
+            Some("smpte170m"),
+            Some("limited"),
+        )
+        .expect("every name is one ColorInfo declares");
+        assert_eq!(
+            described,
+            H273ColorVui {
+                primaries: Some(primaries::BT709),
+                transfer: Some(transfer::SRGB),
+                matrix: Some(matrix::SMPTE170M),
+                full_range: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn absent_color_info_axes_stay_unspecified() {
+        assert_eq!(
+            h273_color_vui_from_color_info_axis_names(None, None, None, None)
+                .expect("an absent axis is not a refusal"),
+            H273ColorVui::default()
+        );
+    }
+
+    #[test]
+    fn an_unknown_color_info_name_is_refused_naming_its_axis() {
+        let refusal = h273_color_vui_from_color_info_axis_names(None, None, Some("rec709"), None)
+            .expect_err("rec709 is not a matrix name");
+        assert!(refusal.to_string().contains("matrix"), "{refusal}");
+        assert!(refusal.to_string().contains("bt709"), "{refusal}");
+    }
 
     /// Unspecified is how H.273 spells an absent axis, so it must resolve
     /// exactly as an absent one does rather than landing on an id.

@@ -18,7 +18,9 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
-use crate::core::rhi::{TensorStorageBufferLayout, pool_slot_key_of_surface_id};
+use crate::core::rhi::{
+    PixelPlanesWithinOneAllocation, TensorStorageBufferLayout, pool_slot_key_of_surface_id,
+};
 
 #[derive(Debug)]
 pub struct SurfaceMetadata {
@@ -151,6 +153,9 @@ pub struct SurfaceMetadata {
     /// The declared tensor shape and dtype of a `storage_buffer`
     /// registration; `None` for every other resource type.
     pub tensor_layout: Option<TensorStorageBufferLayout>,
+    /// Where a pixel buffer's format planes sit inside its one allocation,
+    /// when its registration stated them.
+    pub pixel_planes_within_one_allocation: Option<PixelPlanesWithinOneAllocation>,
 }
 
 // The atomic field makes `SurfaceMetadata` not `Clone`-by-derive. Hand-roll
@@ -184,6 +189,7 @@ impl Clone for SurfaceMetadata {
             vk_memory_type_index: self.vk_memory_type_index,
             exporting_device_uuid: self.exporting_device_uuid.clone(),
             tensor_layout: self.tensor_layout.clone(),
+            pixel_planes_within_one_allocation: self.pixel_planes_within_one_allocation.clone(),
         }
     }
 }
@@ -253,6 +259,9 @@ pub struct SurfacePlaneCheckout {
     pub exporting_device_uuid: Option<String>,
     /// Snapshot of [`SurfaceMetadata::tensor_layout`] at lookup time.
     pub tensor_layout: Option<TensorStorageBufferLayout>,
+    /// Snapshot of [`SurfaceMetadata::pixel_planes_within_one_allocation`] at
+    /// lookup time.
+    pub pixel_planes_within_one_allocation: Option<PixelPlanesWithinOneAllocation>,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -332,6 +341,9 @@ pub struct SurfaceRegistration<'a> {
     /// The declared tensor layout of a `storage_buffer` registration, or
     /// `None` — see [`SurfaceMetadata::tensor_layout`].
     pub tensor_layout: Option<TensorStorageBufferLayout>,
+    /// The stated plane layout of a pixel buffer, or `None` — see
+    /// [`SurfaceMetadata::pixel_planes_within_one_allocation`].
+    pub pixel_planes_within_one_allocation: Option<PixelPlanesWithinOneAllocation>,
 }
 
 impl SurfaceShareState {
@@ -388,6 +400,7 @@ impl SurfaceShareState {
                 vk_memory_type_index: reg.vk_memory_type_index,
                 exporting_device_uuid: reg.exporting_device_uuid,
                 tensor_layout: reg.tensor_layout,
+                pixel_planes_within_one_allocation: reg.pixel_planes_within_one_allocation,
             },
         );
         Ok(())
@@ -443,6 +456,9 @@ impl SurfaceShareState {
                     vk_memory_type_index: metadata.vk_memory_type_index,
                     exporting_device_uuid: metadata.exporting_device_uuid.clone(),
                     tensor_layout: metadata.tensor_layout.clone(),
+                    pixel_planes_within_one_allocation: metadata
+                        .pixel_planes_within_one_allocation
+                        .clone(),
                 }
             })
     }
@@ -546,6 +562,7 @@ mod tests {
             vk_memory_type_index: None,
             exporting_device_uuid: None,
             tensor_layout: None,
+            pixel_planes_within_one_allocation: None,
         }
     }
 
@@ -714,6 +731,7 @@ mod tests {
                 vk_memory_type_index: Some(7),
                 exporting_device_uuid: Some("00112233445566778899aabbccddeeff".to_string()),
                 tensor_layout: None,
+                pixel_planes_within_one_allocation: None,
             })
             .expect("register vk-image-rt");
 
@@ -802,6 +820,7 @@ mod tests {
                 vk_memory_type_index: None,
                 exporting_device_uuid: None,
                 tensor_layout: None,
+                pixel_planes_within_one_allocation: None,
             })
             .expect("register multi-plane");
 

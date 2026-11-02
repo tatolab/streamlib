@@ -146,11 +146,30 @@ pub(crate) struct EscalateHandleRegistry {
     /// slots are never registry entries of their own: a frame's id names a
     /// generation, and the slot outlives it.
     processor_output_pools: Mutex<ProcessorOutputPoolsOfOneHelper>,
+    /// The colour conversions this helper asked for, and the sources they
+    /// resolved, which go away with the helper.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    surface_color_conversion_session:
+        Mutex<crate::core::context::surface_color_conversion::SurfaceColorConversionSession>,
 }
 
 impl EscalateHandleRegistry {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// This helper's colour-conversion session, taken for one conversion or
+    /// one eviction; recovered rather than panicking when poisoned.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn surface_color_conversion_session(
+        &self,
+    ) -> std::sync::MutexGuard<
+        '_,
+        crate::core::context::surface_color_conversion::SurfaceColorConversionSession,
+    > {
+        self.surface_color_conversion_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Acquire a one-off for the helper, counted against the node's one-offs
@@ -267,7 +286,13 @@ pub(super) fn handle_release_handle(
         handle_id,
     } = request;
     let removed_handle = registry.remove_handle(&handle_id);
-    let removed = removed_handle.is_some();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let forgot_a_color_conversion_source = registry
+        .surface_color_conversion_session()
+        .forget_source(&handle_id);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let forgot_a_color_conversion_source = false;
+    let removed = removed_handle.is_some() || forgot_a_color_conversion_source;
     if let Some(removed_handle) = removed_handle {
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }

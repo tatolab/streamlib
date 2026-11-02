@@ -41,12 +41,6 @@ machine-directories-under-a-test-root = [
     "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
 ]
 
-# Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
-# zero out bitstream buffers when (re)allocating, to make NAL-parser bugs
-# easier to spot in raw memory. Off by default; opt-in for nvpro-style
-# debugging only. Inherited from the former libs/vulkan-video crate's
-# feature set; intent kept identical post-fold.
-clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
@@ -81,6 +75,8 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.11" }
+# The Annex-B and parameter-set reading both codec arms parse streams with.
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.11" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -172,9 +168,8 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.1
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
-# The Vulkan Video encode path the H.264/H.265 built-ins encode through, and the
-# session / DPB / bitstream / query-pool primitives the decoder mints on the
-# engine's device.
+# The Vulkan Video encode and decode paths the H.264/H.265 built-ins code
+# through on the engine's device.
 streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.11", features = ["engine-error-conversions"] }
 # rtkit (RealtimeKit) D-Bus client for unprivileged SCHED_FIFO / nice
 # priority elevation on Linux. PipeWire / PulseAudio / JACK use the
