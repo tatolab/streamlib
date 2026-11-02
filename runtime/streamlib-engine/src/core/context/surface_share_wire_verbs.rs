@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use super::{SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry};
-use crate::core::rhi::TensorStorageBufferLayout;
+use crate::core::rhi::{PixelFormat, PixelPlanesWithinOneAllocation, TensorStorageBufferLayout};
 
 /// The `runtime_id` a request that names none is charged to. Never a real
 /// runtime, so a connection that only ever sends it latches none.
@@ -364,6 +364,67 @@ pub(crate) fn echo_the_tensor_layout_onto_a_lookup_reply(
     if let Some(tensor_layout) = tensor_layout {
         tensor_layout.write_surface_share_fields(reply);
     }
+}
+
+/// The plane layout a pixel-buffer registration states, validated against
+/// its format, extent and one memory plane; `None` when it states none.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        dead_code,
+        reason = "only the Unix-socket arm adopts a foreign allocation with a plane layout"
+    )
+)]
+pub(crate) fn pixel_planes_of_a_pixel_buffer_registration(
+    request: &Value,
+    plane_sizes: &[u64],
+) -> Result<Option<PixelPlanesWithinOneAllocation>, String> {
+    let Some(stated) = PixelPlanesWithinOneAllocation::from_surface_share_fields(request)
+        .map_err(|refusal| refusal.to_string())?
+    else {
+        return Ok(None);
+    };
+    let resource_type = request
+        .get("resource_type")
+        .and_then(Value::as_str)
+        .unwrap_or(SURFACE_RESOURCE_TYPE_PIXEL_BUFFER);
+    if resource_type != SURFACE_RESOURCE_TYPE_PIXEL_BUFFER {
+        return Err(format!(
+            "a pixel plane layout describes a pixel buffer, and this registration is a \
+             {resource_type}"
+        ));
+    }
+    let [allocation_byte_size] = plane_sizes else {
+        return Err(format!(
+            "a pixel plane layout places every plane inside one allocation, and this \
+             registration carries {} memory planes",
+            plane_sizes.len()
+        ));
+    };
+    let stated_u32 = |key: &str| {
+        request
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0)
+    };
+    let pixel_format = PixelFormat::parse_wire_name(
+        request
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+    )?;
+    PixelPlanesWithinOneAllocation::new(
+        pixel_format,
+        stated_u32("width"),
+        stated_u32("height"),
+        *allocation_byte_size,
+        stated.plane_offsets_bytes().to_vec(),
+        stated.plane_strides_bytes().to_vec(),
+        stated.written_by_a_foreign_device(),
+    )
+    .map(Some)
+    .map_err(|refusal| refusal.to_string())
 }
 
 #[cfg(test)]

@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-video-bitstream"
+description = "H.264 and H.265 Annex-B access units, NAL units and sequence parameter sets for StreamLib, on every platform and with no GPU"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_video_bitstream"
+path = "src/lib.rs"
+
+[dependencies]
+tracing.workspace = true
+
+[dev-dependencies]
+# The MoQ players' parse of a codec string, which every string minted here
+# must read back through.
+hang = "=0.21.16"
+
+[lints]
+workspace = true

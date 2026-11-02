@@ -26,9 +26,10 @@ use crate::core::context::surface_share_wire_verbs::{
     SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
     latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
-    record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
-    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
-    stated_vk_memory_type_index, tensor_layout_of_a_storage_buffer_registration,
+    pixel_planes_of_a_pixel_buffer_registration, record_check_out_lease_or_refusal,
+    refusal_of_a_retired_frame_id, release_what_a_closed_connection_held, requested_runtime_id,
+    requested_surface_id, stated_vk_memory_type_index,
+    tensor_layout_of_a_storage_buffer_registration,
 };
 
 use super::state::{SurfaceRegistration, SurfaceShareState};
@@ -511,6 +512,11 @@ fn handle_register(
         Ok(tensor_layout) => tensor_layout,
         Err(refusal) => return (serde_json::json!({"error": refusal}), Vec::new()),
     };
+    let pixel_planes_within_one_allocation =
+        match pixel_planes_of_a_pixel_buffer_registration(request, &plane_sizes) {
+            Ok(pixel_planes_within_one_allocation) => pixel_planes_within_one_allocation,
+            Err(refusal) => return (serde_json::json!({"error": refusal}), Vec::new()),
+        };
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -589,6 +595,7 @@ fn handle_register(
         vk_memory_type_index,
         exporting_device_uuid,
         tensor_layout,
+        pixel_planes_within_one_allocation,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -794,6 +801,9 @@ fn handle_lookup(
         response[SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID] = exporting_device_uuid.into();
     }
     echo_the_tensor_layout_onto_a_lookup_reply(&mut response, checkout.tensor_layout.as_ref());
+    if let Some(pixel_planes_within_one_allocation) = &checkout.pixel_planes_within_one_allocation {
+        pixel_planes_within_one_allocation.write_surface_share_fields(&mut response);
+    }
     (response, dup_fds)
 }
 
@@ -901,6 +911,11 @@ fn handle_check_in(
         vk_memory_type_index,
         exporting_device_uuid,
     } = parse_raw_handle_export_contract_fields(request);
+    let pixel_planes_within_one_allocation =
+        match pixel_planes_of_a_pixel_buffer_registration(request, &plane_sizes) {
+            Ok(pixel_planes_within_one_allocation) => pixel_planes_within_one_allocation,
+            Err(refusal) => return (serde_json::json!({"error": refusal}), Vec::new()),
+        };
 
     let surface_id = uuid::Uuid::new_v4().to_string();
 
@@ -954,6 +969,7 @@ fn handle_check_in(
             vk_memory_type_index,
             exporting_device_uuid,
             tensor_layout: None,
+            pixel_planes_within_one_allocation,
         })
     {
         for fd in &leftover_planes {
@@ -1862,6 +1878,7 @@ mod tests {
                     vk_memory_type_index: None,
                     exporting_device_uuid: None,
                     tensor_layout: None,
+                    pixel_planes_within_one_allocation: None,
                 })
                 .expect("register");
         }

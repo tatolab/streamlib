@@ -2840,6 +2840,61 @@ impl GpuContext {
         }
     }
 
+    /// Import the first `readable_byte_len` bytes of a caller-owned mapped
+    /// range for GPU reads, taking the imported tier when the driver allows
+    /// it and host-visible staging otherwise. See
+    /// [`HostMappingReadByGpu`](crate::vulkan::rhi::HostMappingReadByGpu) for
+    /// the per-read protocol.
+    ///
+    /// # Safety
+    ///
+    /// All `mapped_byte_len` bytes must stay mapped and readable until the
+    /// returned value drops.
+    #[cfg(target_os = "linux")]
+    pub(crate) unsafe fn import_host_mapping_for_gpu_reads(
+        &self,
+        host_range_ptr: *const u8,
+        mapped_byte_len: usize,
+        readable_byte_len: usize,
+    ) -> Result<crate::vulkan::rhi::HostMappingReadByGpu> {
+        // SAFETY: the caller upholds this method's own contract.
+        unsafe {
+            crate::vulkan::rhi::HostMappingReadByGpu::import_for_gpu_reads(
+                &self.device.inner,
+                host_range_ptr,
+                mapped_byte_len,
+                readable_byte_len,
+            )
+        }
+    }
+
+    /// Give the first `readable_byte_len` bytes of a caller-owned mapped
+    /// range to GPU reads through host-visible staging, never asking the
+    /// driver to import it. See
+    /// [`HostMappingReadByGpu::stage_for_gpu_reads`](crate::vulkan::rhi::HostMappingReadByGpu::stage_for_gpu_reads).
+    ///
+    /// # Safety
+    ///
+    /// All `readable_byte_len` bytes must stay mapped and readable until the
+    /// returned value drops.
+    #[cfg(target_os = "linux")]
+    pub(crate) unsafe fn stage_host_mapping_for_gpu_reads(
+        &self,
+        host_range_ptr: *const u8,
+        readable_byte_len: usize,
+        why_the_range_is_not_imported: String,
+    ) -> Result<crate::vulkan::rhi::HostMappingReadByGpu> {
+        // SAFETY: the caller upholds this method's own contract.
+        unsafe {
+            crate::vulkan::rhi::HostMappingReadByGpu::stage_for_gpu_reads(
+                &self.device.inner,
+                host_range_ptr,
+                readable_byte_len,
+                why_the_range_is_not_imported,
+            )
+        }
+    }
+
     /// Build a [`crate::vulkan::rhi::VulkanOffscreenCompositor`] for
     /// `attachment_format`.
     ///
@@ -3386,8 +3441,7 @@ impl GpuContext {
     }
 
     /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
-    /// on this context's host device, built directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
+    /// on this context's host device.
     ///
     /// Coded dimensions are auto-detected from the first SPS (query via
     /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
@@ -3400,7 +3454,7 @@ impl GpuContext {
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
         let host_device = Arc::clone(&self.device.inner);
-        crate::vulkan::video::decode::SimpleDecoder::from_host_device(host_device, config)
+        crate::vulkan::video::decode::SimpleDecoder::new(host_device, config)
             .map_err(|e| Error::GpuError(format!("create_decoder_session: {e}")))
     }
 

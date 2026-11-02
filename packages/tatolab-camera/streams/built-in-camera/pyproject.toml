@@ -1,0 +1,10 @@
+[project]
+name = "tatolab-camera-built-in-camera"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream>=0.68.7", "tatolab-camera"]
+
+# The wheel as a third party's stream would take it, built from this checkout
+# rather than an index: an ordinary non-editable dependency.
+[tool.uv.sources]
+tatolab-camera = { path = "../..", editable = false }

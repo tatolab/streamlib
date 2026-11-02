@@ -44,6 +44,21 @@ pub struct CheckedOutPixelBuffer {
     pub memory: CheckedOutPixelBufferMemory,
 }
 
+/// The surface-share field a registration states its pixel planes' row
+/// pitches in, first plane first.
+pub const SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD: &str = "pixel_plane_strides";
+
+/// The first plane's row pitch a registration states, padding included;
+/// `None` when it states no plane layout.
+fn first_pixel_plane_stride_a_registration_states(response: &serde_json::Value) -> Option<u64> {
+    response
+        .get(SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD)?
+        .as_array()?
+        .first()?
+        .as_u64()
+        .filter(|&stride| stride > 0)
+}
+
 /// The refusal the service answered a request with, if it answered one.
 pub fn refusal_the_surface_share_service_answered(response: &serde_json::Value) -> Option<&str> {
     response.get("error").and_then(|value| value.as_str())
@@ -160,17 +175,23 @@ impl CheckedOutPixelBuffer {
             ));
         }
         let plane0_size = plane_sizes.first().copied().unwrap_or(0);
-        if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
-            return Err(format!(
-                "surface {surface_id:?} reports plane size {plane0_size}, not a whole number of \
-                 {height} rows"
-            ));
-        }
+        let bytes_per_row = match first_pixel_plane_stride_a_registration_states(response) {
+            Some(stated_first_plane_stride) => stated_first_plane_stride,
+            None => {
+                if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
+                    return Err(format!(
+                        "surface {surface_id:?} reports plane size {plane0_size}, not a whole \
+                         number of {height} rows"
+                    ));
+                }
+                plane0_size / u64::from(height)
+            }
+        };
         Ok(Self {
             width,
             height,
             format_wire_name,
-            bytes_per_row: plane0_size / u64::from(height),
+            bytes_per_row,
             plane_sizes,
             memory,
         })
@@ -317,6 +338,18 @@ mod tests {
     fn pipe_fd() -> OwnedFd {
         let (read_end, _write_end) = std::io::pipe().expect("a pipe opens");
         OwnedFd::from(read_end)
+    }
+
+    #[test]
+    fn a_stated_plane_stride_is_the_row_pitch_even_past_whole_rows() {
+        let response = serde_json::json!({
+            "width": 4, "height": 2, "format": "nv12", "plane_sizes": [4100],
+            "handle_type": "dma_buf", "pixel_plane_offsets": [0, 128],
+            "pixel_plane_strides": [64, 64],
+        });
+        let pixel_buffer =
+            CheckedOutPixelBuffer::from_check_out("s", &response, vec![pipe_fd()]).unwrap();
+        assert_eq!(pixel_buffer.bytes_per_row, 64);
     }
 
     #[test]

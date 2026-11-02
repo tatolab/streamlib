@@ -36,10 +36,6 @@ use super::{
 use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
 use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
 use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
-use crate::core::annex_b_access_unit::{
-    NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
-    length_prefix_annex_b_access_unit,
-};
 use crate::core::color::{ColorSpaceKind, ResolveH273ColorVuiDefaults};
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, GpuContextLimitedAccess, VideoCodecElementaryStream,
@@ -47,6 +43,10 @@ use crate::core::context::{
 };
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
+use streamlib_video_bitstream::annex_b_access_unit::{
+    NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
+    length_prefix_annex_b_access_unit,
+};
 
 /// A decoded picture's pixel buffer, handed from the VideoToolbox thread
 /// that decoded it to the one that lands it in the pool.

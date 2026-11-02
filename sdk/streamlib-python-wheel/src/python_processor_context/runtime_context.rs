@@ -273,6 +273,10 @@ impl PythonRuntimeContextFullAccess {
                 .as_ref()
                 .map(|requester| requester.clone_ref(python)),
             Arc::clone(&self.stop_requested_by_parent),
+            self.gpu_full_access_context
+                .get()
+                .helper_process_exchange_client
+                .clone(),
         )
     }
 }

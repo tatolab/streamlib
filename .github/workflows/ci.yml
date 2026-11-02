@@ -285,7 +285,7 @@ jobs:
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
-          -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk
+          -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track -p streamlib-relay-track-reader
@@ -411,8 +411,10 @@ jobs:
           workspaces: |
             . -> target
             packages/streamlib-webrtc -> target
+            packages/tatolab-camera -> target
             packages/tatolab-microphone -> target
             packages/streamlib-h264 -> target
+            packages/streamlib-h265 -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
@@ -582,6 +584,20 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+      # The camera is a standalone wheel like the extension above; its
+      # capture needs a camera, so CI holds its pure logic, lints and stub.
+      - name: "Camera: formatting, crate tests, clippy, stub and types"
+        working-directory: packages/tatolab-camera
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+          .venv/bin/python -m mypy.stubtest tatolab.camera._native
+          uvx pyright@1.1.411
+
       - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
         working-directory: packages/tatolab-microphone
         run: |
@@ -629,6 +645,30 @@ jobs:
         working-directory: packages/streamlib-h264
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.h264._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      # The H.265 module shares the H.264 module's encoder body; the same holds.
+      - name: "Extension: build streamlib-h265 into a venv holding tatolab-stream"
+        working-directory: packages/streamlib-h265
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: streamlib-h265 formatting, crate tests, clippy and types"
+        working-directory: packages/streamlib-h265
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uvx pyright@1.1.411
+
+      - name: "Extension: streamlib-h265 stubs and tests, GPU-free"
+        working-directory: packages/streamlib-h265
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.h265._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
@@ -712,6 +752,7 @@ jobs:
           # refused naming the floor and the rest of it loads.
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
+          cargo test --locked -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes
           cargo test --locked -p tatolab-module-sdk --features pyo3
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local \

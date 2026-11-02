@@ -9,7 +9,7 @@ use std::sync::{Arc, MutexGuard};
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
 
-use streamlib_consumer_rhi::OwnedVulkanVideoEncodeDevice;
+use streamlib_consumer_rhi::{OwnedVulkanVideoCodecDevice, VulkanVideoCodecDirection};
 
 use crate::{VideoError, VideoResult};
 
@@ -58,7 +58,7 @@ pub trait VulkanVideoCodecDevice: Send + Sync {
     fn wait_idle(&self) -> VideoResult<()>;
 }
 
-impl VulkanVideoCodecDevice for OwnedVulkanVideoEncodeDevice {
+impl VulkanVideoCodecDevice for OwnedVulkanVideoCodecDevice {
     fn instance(&self) -> &vulkanalia::Instance {
         self.consumer_vulkan_device().instance()
     }
@@ -72,19 +72,15 @@ impl VulkanVideoCodecDevice for OwnedVulkanVideoEncodeDevice {
     }
 
     fn allocator(&self) -> &Arc<vma::Allocator> {
-        OwnedVulkanVideoEncodeDevice::allocator(self)
+        OwnedVulkanVideoCodecDevice::allocator(self)
     }
 
     fn video_encode_queue(&self) -> Option<VulkanVideoCodecQueue> {
-        let video_encode_queue = OwnedVulkanVideoEncodeDevice::video_encode_queue(self);
-        Some(VulkanVideoCodecQueue {
-            queue: video_encode_queue.queue,
-            queue_family_index: video_encode_queue.queue_family_index,
-        })
+        the_video_codec_queue_of(self, VulkanVideoCodecDirection::Encode)
     }
 
     fn video_decode_queue(&self) -> Option<VulkanVideoCodecQueue> {
-        None
+        the_video_codec_queue_of(self, VulkanVideoCodecDirection::Decode)
     }
 
     fn compute_queue(&self) -> VulkanVideoCodecQueue {
@@ -109,7 +105,7 @@ impl VulkanVideoCodecDevice for OwnedVulkanVideoEncodeDevice {
     }
 
     fn lock_device(&self) -> MutexGuard<'_, ()> {
-        OwnedVulkanVideoEncodeDevice::lock_device(self)
+        OwnedVulkanVideoCodecDevice::lock_device(self)
     }
 
     fn wait_idle(&self) -> VideoResult<()> {
@@ -119,8 +115,20 @@ impl VulkanVideoCodecDevice for OwnedVulkanVideoEncodeDevice {
     }
 }
 
+/// The owned device's video queue, when it codes in `direction`.
+fn the_video_codec_queue_of(
+    owned_device: &OwnedVulkanVideoCodecDevice,
+    direction: VulkanVideoCodecDirection,
+) -> Option<VulkanVideoCodecQueue> {
+    let video_codec_queue = owned_device.video_codec_queue();
+    (video_codec_queue.direction == direction).then_some(VulkanVideoCodecQueue {
+        queue: video_codec_queue.queue,
+        queue_family_index: video_codec_queue.queue_family_index,
+    })
+}
+
 /// The owned device's one GRAPHICS queue, which also computes and copies.
-fn the_import_queue_of(owned_device: &OwnedVulkanVideoEncodeDevice) -> VulkanVideoCodecQueue {
+fn the_import_queue_of(owned_device: &OwnedVulkanVideoCodecDevice) -> VulkanVideoCodecQueue {
     VulkanVideoCodecQueue {
         queue: owned_device.consumer_vulkan_device().queue(),
         queue_family_index: owned_device.consumer_vulkan_device().queue_family_index(),
