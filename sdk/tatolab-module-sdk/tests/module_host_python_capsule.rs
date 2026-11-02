@@ -15,7 +15,8 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableAudioCaptureStreamRequest, ModuleHostTableAudioPlaybackStreamRequest,
     ModuleHostTableAudioStreamFormat, ModuleHostTableAudioStreamHandle,
     ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableErrorMessage,
-    ModuleHostTableOpenedAudioPlaybackStream, ModuleHostTableStatus, ModuleHostTableUtf8,
+    ModuleHostTableIOSurfaceImport, ModuleHostTableOpenedAudioPlaybackStream,
+    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 use tatolab_module_sdk::{MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHost, ModuleHostTable};
 
@@ -90,6 +91,14 @@ unsafe extern "C" fn refuse_import(
     _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableErrorMessage,
 ) -> i32 {
     -1
+}
+unsafe extern "C" fn refuse_iosurface_import(
+    _: *mut c_void,
+    _: *const ModuleHostTableIOSurfaceImport,
+    _: *mut ModuleHostTableSurfaceHandle,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
 }
 unsafe extern "C" fn refuse_acquire(
     _: *mut c_void,
@@ -199,6 +208,7 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         audio_playback_stream_stop: refuse_audio_capture_verb,
         audio_playback_stream_liveness: refuse_audio_capture_verb,
         audio_playback_stream_close: close_nothing,
+        surface_import_iosurface: refuse_iosurface_import,
     }));
     NonNull::from(table).cast()
 }
@@ -209,14 +219,14 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(3),
+                leaked_table_of_minor(4),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 3));
+        assert_eq!(module_host.module_host_table_version(), (1, 4));
     });
 }
 
@@ -224,7 +234,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(3), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(python, leaked_table_of_minor(4), c"numpy.core._ARRAY_API")
         }
         .unwrap();
         let refusal =
