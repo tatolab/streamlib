@@ -63,6 +63,7 @@ Cargo.lock
 !/packages/tatolab-camera/Cargo.lock
 !/packages/tatolab-microphone/Cargo.lock
 !/packages/streamlib-microphone-proof/Cargo.lock
+!/packages/tatolab-rive/Cargo.lock
 
 # Node/Nx
 node_modules/

@@ -47,6 +47,15 @@ pub use linux_pixel_buffer_check_out::{
     release_check_out_on_surface_share, resource_type_of_a_check_out,
 };
 
+#[cfg(target_os = "linux")]
+mod linux_texture_check_out;
+
+#[cfg(target_os = "linux")]
+pub use linux_texture_check_out::{
+    CheckedOutTexture, CheckedOutTextureMemory, check_out_texture_on_surface_share,
+    publish_image_layout_on_surface_share,
+};
+
 #[cfg(target_os = "macos")]
 mod macos;
 
