@@ -8,7 +8,7 @@ no panic, no timeout — just blocks forever.
 
 ```
 running 1 test
-test core::utils::loop_control::tests::test_shutdown_event_exits_loop ...
+test <a test that publishes to a listener on a spawned thread> ...
 ```
 (never completes)
 
@@ -38,14 +38,14 @@ hang is the only symptom.
 
 1. **Wait for the spawned thread to reach its `subscribe()` call** — on an
    observable effect of the thread having got there, never on a duration.
-   `test_shutdown_event_exits_loop` waits for the loop's first iteration,
-   because `shutdown_aware_loop` subscribes before its first callback.
+   A listener loop that subscribes before its first iteration is past its
+   `subscribe()` once that first iteration is observed.
 
 2. **Use `mpsc::channel` + `recv_timeout` instead of `handle.join()`**:
 ```rust
 let (done_tx, done_rx) = mpsc::channel();
 std::thread::spawn(move || {
-    let result = shutdown_aware_loop(|| { ... });
+    let result = run_the_listener_loop_that_subscribes_first();
     done_tx.send(result).ok();
 });
 
@@ -60,8 +60,7 @@ match done_rx.recv_timeout(Duration::from_secs(5)) {
 ## Where this hits
 
 Any test that publishes PUBSUB events (shutdown, reconfigure, etc.) to a
-listener that subscribes from a spawned thread:
-- `runtime/streamlib-engine/src/core/utils/loop_control.rs` — `test_shutdown_event_exits_loop`
+listener that subscribes from a spawned thread.
 
 ## Reference
 - PUBSUB implementation: `runtime/streamlib-engine/src/core/pubsub/bus.rs`
