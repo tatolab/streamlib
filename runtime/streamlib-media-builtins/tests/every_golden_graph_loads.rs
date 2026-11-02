@@ -24,22 +24,28 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0001-every-key-and-every-built-in.json",
-        "bbf52c5c6cf8108ef1c901978abe070b34e1d12764462ccb1df79cda23052cc1",
+        "0007-every-key-every-built-in-and-the-opus-module.json",
+        "cd111cac068974b6dcd940964b18e98cd9790c0e92fdf08f09a4f180f490d6f7",
     ),
     (
-        "0002-every-key-with-exposure-levels.json",
-        "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
+        "0008-every-key-with-exposure-levels-and-the-opus-module.json",
+        "a130335e83d3f2a697448ace0f0b4def9691d5d64320ddfcd5ca35361ff73d31",
     ),
     (
-        "0005-every-key-with-a-relay-track-source-by-broadcast-and-track.json",
-        "039aa23c351db3716ea6a69dd1c1530d241c1d01560e7732f9d7af2d6c8c7b49",
+        "0009-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-opus-module.json",
+        "2c7cdbcc0eed17ae02758f09fbec253f69b315f787667b4bdd4d66f5e072d661",
     ),
     (
-        "0006-every-key-with-a-relay-track-source-reading-with-a-max-age.json",
-        "8aee6ba720db7cca8babdd83cd1f078ece78a1fba7671b5a132923a14041cc2e",
+        "0010-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-opus-module.json",
+        "dbc2d53c13a5f55d2f6700db5fa29e94fcbd8e48a3d6cfd616721cc310ae6116",
     ),
 ];
+
+/// The module node types a golden may name. A module's node is described in
+/// a stream's own interpreter, which this crate's tests have none of, so a
+/// golden loads here with those nodes taken out.
+const MODULE_NODE_TYPES_A_GOLDEN_NAMES: &[&str] =
+    &["tatolab.opus:OpusEncoder", "tatolab.opus:OpusDecoder"];
 
 fn golden_graph_paths() -> Vec<PathBuf> {
     let golden_graphs_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden_graphs");
@@ -101,6 +107,30 @@ fn without_the_nodes(
     remaining
 }
 
+/// The names of the nodes whose type is a module's rather than a built-in,
+/// refusing a module type no golden is meant to name.
+fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> {
+    graph_document["nodes"]
+        .as_array()
+        .expect("a graph holds nodes")
+        .iter()
+        .filter_map(|node| {
+            let node_type = node["type"].as_str().expect("a node has a type");
+            if ProcessorClassImportPath::new(node_type)
+                .expect("a type names a class")
+                .names_a_built_in_node()
+            {
+                return None;
+            }
+            assert!(
+                MODULE_NODE_TYPES_A_GOLDEN_NAMES.contains(&node_type),
+                "a golden names `{node_type}`, a module type none is meant to name"
+            );
+            Some(node["name"].as_str().expect("a node has a name").to_string())
+        })
+        .collect()
+}
+
 /// Load `graph` as the one stream of a fresh engine, in a project directory of
 /// its own.
 fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Result<()> {
@@ -114,17 +144,26 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .map(drop)
 }
 
-/// A golden naming a built-in this floor compiles out is refused for it,
-/// naming the floor, and loads whole once those nodes are taken out — which is
-/// as much of it as this floor can run.
+/// Every golden reads whole, and loads with its module nodes taken out. One
+/// naming a built-in this floor compiles out is refused for it, naming the
+/// floor, and loads once those nodes are taken out too — which is as much of it
+/// as this floor can run.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
 
     for path in golden_graph_paths() {
-        let graph_document = golden_graph_document(&path);
-        let graph = GraphSnapshot::from_graph_document(graph_document.clone())
+        let recorded_graph_document = golden_graph_document(&path);
+        GraphSnapshot::from_graph_document(recorded_graph_document.clone())
             .unwrap_or_else(|refusal| panic!("{path:?} no longer reads: {refusal}"));
+        let graph_document = without_the_nodes(
+            &recorded_graph_document,
+            &module_node_names_in(&recorded_graph_document),
+        );
+        let graph = GraphSnapshot::from_graph_document(graph_document.clone())
+            .unwrap_or_else(|refusal| {
+                panic!("{path:?} without its module nodes no longer reads: {refusal}")
+            });
         let node_names_compiled_out_here: BTreeSet<String> = graph
             .nodes
             .iter()

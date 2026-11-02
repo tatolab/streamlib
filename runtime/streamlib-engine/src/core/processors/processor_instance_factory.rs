@@ -13,6 +13,7 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
 use crate::core::output_port_catalog_entries::refuse_a_catalog_entry_hang_does_not_read;
+use crate::core::processors::built_in_node_types_moved_to_modules::refuse_a_built_in_node_type_moved_to_a_module;
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 
 /// A created processor instance for runtime use.
@@ -498,13 +499,15 @@ impl ProcessorInstanceFactory {
     }
 
     /// Refuse a node this runtime cannot add before anything is added: a
-    /// built-in this floor compiles out, or a config its type would not take.
+    /// former built-in that moved to a module, a built-in this floor compiles
+    /// out, or a config its type would not take.
     pub fn refuse_a_node_this_runtime_cannot_add(
         &self,
         node_name: &str,
         node_type: &ProcessorClassImportPath,
         config: &serde_json::Value,
     ) -> Result<()> {
+        refuse_a_built_in_node_type_moved_to_a_module(node_type)?;
         self.refuse_a_built_in_node_type_absent_on_this_floor(node_type)?;
         self.refuse_a_config_the_node_type_does_not_take(node_name, node_type, config)
     }

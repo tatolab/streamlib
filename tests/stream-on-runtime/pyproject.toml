@@ -12,6 +12,8 @@ version = "0"
 requires-python = ">=3.10"
 dependencies = [
     "tatolab-stream",
+    # The Opus nodes the codec and wiring fixtures add.
+    "tatolab-opus",
     "pytest>=7.0",
     "numpy>=2.1",
     # The official MCP Python SDK, whose streamable-HTTP client drives a
@@ -40,6 +42,7 @@ package = false
 
 [tool.uv.sources]
 tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
+tatolab-opus = { path = "../../packages/tatolab-opus" }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's

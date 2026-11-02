@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-media-builtins"
-description = "First-party media built-ins: native pre-built blocks (test-pattern source, camera, codecs, audio) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
+description = "First-party media built-ins: native pre-built blocks (test-pattern source, camera, video codecs, audio) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,11 +20,6 @@ serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
 tracing = { workspace = true }
-# libopus, statically linked through `opusic-sys`'s bundled copy (cmake, no
-# bindgen at build). Not target-gated: the Opus pair registers unconditionally
-# beside the audio built-ins, and nothing in it is platform-bound. The static
-# link is load-bearing — `test_wheel_portability.py` fails if `DT_NEEDED` grows.
-opus = "0.4"
 # `RelayTrackSource`: a MoQ subscriber of one track at a relay, reading the
 # broadcast's catalog in the stack's layout. Pinned exactly as the publisher in
 # `tatolabd` pins them.

@@ -34,10 +34,6 @@ from ._built_in_nodes import H265Encoder as H265Encoder
 from ._built_in_nodes import H265EncoderConfig as H265EncoderConfig
 from ._built_in_nodes import MicrophoneSource as MicrophoneSource
 from ._built_in_nodes import MicrophoneSourceConfig as MicrophoneSourceConfig
-from ._built_in_nodes import OpusDecoder as OpusDecoder
-from ._built_in_nodes import OpusDecoderConfig as OpusDecoderConfig
-from ._built_in_nodes import OpusEncoder as OpusEncoder
-from ._built_in_nodes import OpusEncoderConfig as OpusEncoderConfig
 from ._built_in_nodes import RelayTrackSource as RelayTrackSource
 from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._built_in_nodes import SpeakerSink as SpeakerSink
@@ -169,10 +165,6 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "OpaqueFdAllocationExport",
-    "OpusDecoder",
-    "OpusDecoderConfig",
-    "OpusEncoder",
-    "OpusEncoderConfig",
     "PixelAccessToOneClaimedSurface",
     "RayTracingKernel",
     "RelayTrackSource",

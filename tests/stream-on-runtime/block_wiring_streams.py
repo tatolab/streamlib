@@ -1,18 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Streams wiring the audio and video built-ins into each other with no adapter
+"""Streams wiring the audio and video codec nodes into each other with no adapter
 between them, each run from the suite project to prove the engine loads the
-wiring as the built-ins publish their ports."""
+wiring as those nodes publish their ports."""
 
 import tatolab.stream
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.stream import (
     H264Decoder,
     H264Encoder,
     H265Decoder,
     H265Encoder,
-    OpusDecoder,
-    OpusEncoder,
     StreamBuilder,
     stream,
 )

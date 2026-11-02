@@ -140,6 +140,17 @@ pub enum Error {
         floors_it_runs_on: String,
     },
 
+    #[error(
+        "`{node_type}` is no longer built into the runtime: it ships in the \
+         `{module_distribution}` module. Add `{module_distribution}` to the stream project's \
+         dependencies and name the node `{module_node_type}`"
+    )]
+    BuiltInNodeTypeMovedToAModule {
+        node_type: ProcessorClassImportPath,
+        module_distribution: String,
+        module_node_type: String,
+    },
+
     #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]
     NodeConfigRefused {
         node_name: String,

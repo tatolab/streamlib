@@ -8,6 +8,7 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
+mod built_in_node_types_moved_to_modules;
 mod empty_config;
 mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;

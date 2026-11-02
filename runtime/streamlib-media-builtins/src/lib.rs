@@ -11,7 +11,6 @@
 
 pub mod audio_block;
 pub(crate) mod audio_samples_awaiting_playback_ring;
-pub mod audio_window_to_encoded_packet_encoder;
 pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
@@ -19,7 +18,6 @@ pub(crate) mod cumulative_count_report_threshold;
 #[cfg(test)]
 mod emitted_log_line_test_support;
 pub mod encoded_frame_to_published_surface_decoder;
-pub mod encoded_packet_to_audio_block_decoder;
 pub mod h264_decoder;
 pub mod h264_encoder;
 pub mod h265_decoder;
@@ -29,10 +27,6 @@ pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
-pub mod opus_decoder;
-pub mod opus_encoder;
-pub mod opus_identification_header;
-pub mod opus_stream_layout;
 pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
 pub mod relay_track_source;
@@ -48,7 +42,6 @@ pub mod virtual_camera_sink;
 mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
-pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 pub use camera_source::{CameraSource, CameraSourceConfig};
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use h264_decoder::H264Decoder;
@@ -56,8 +49,6 @@ pub use h264_encoder::H264Encoder;
 pub use h265_decoder::H265Decoder;
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
-pub use opus_decoder::OpusDecoder;
-pub use opus_encoder::OpusEncoder;
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
@@ -82,8 +73,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
     PROCESSOR_REGISTRY.register::<speaker_sink::SpeakerSink::Processor>();
-    PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
-    PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
@@ -171,7 +160,6 @@ mod built_in_node_type_tests {
             ("H264Decoder", "video"),
             ("H265Decoder", "video"),
             ("MicrophoneSource", "audio"),
-            ("OpusDecoder", "audio"),
         ] {
             let descriptor = PROCESSOR_REGISTRY
                 .descriptor(&ProcessorClassImportPath::of_built_in_node(class_name))
@@ -190,7 +178,7 @@ mod built_in_node_type_tests {
     }
 
     /// Each built-in's config derives `deny_unknown_fields` by hand, so this is
-    /// what fails when one does not — a fourteenth built-in included.
+    /// what fails when one does not — any later built-in included.
     #[test]
     fn every_built_in_refuses_a_setting_it_does_not_take_naming_it() {
         for built_in_node_type in every_built_in_registered_on_this_floor() {
