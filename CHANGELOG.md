@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.9](https://github.com/tatolab/streamlib/compare/v0.68.8...v0.68.9) (2026-11-02)
+
+
+### Features
+
+* encode H.264 in a module on its own Vulkan device ([#3062](https://github.com/tatolab/streamlib/issues/3062)) ([43f2d4c](https://github.com/tatolab/streamlib/commit/43f2d4c5cad86b41a11bcb02c70ab7a29b88b5d1))
+
 ## [0.68.8](https://github.com/tatolab/streamlib/compare/v0.68.7...v0.68.8) (2026-11-02)
 
 
