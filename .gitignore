@@ -61,7 +61,6 @@ Cargo.lock
 !/Cargo.lock
 !/packages/streamlib-webrtc/Cargo.lock
 !/packages/tatolab-microphone/Cargo.lock
-!/packages/streamlib-microphone-proof/Cargo.lock
 
 # Node/Nx
 node_modules/
