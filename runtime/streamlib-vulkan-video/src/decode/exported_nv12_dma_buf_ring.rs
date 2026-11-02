@@ -13,8 +13,9 @@ use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands as _;
 
 use crate::VideoError;
 
-/// Pictures in flight at once: one being read by its consumer, one decoding,
+/// Buffers a ring starts with: one being read by its consumer, one decoding,
 /// and one spare so a consumer that lags a picture behind never sees a write.
+/// The ring grows past this when every buffer is still held by a consumer.
 pub(crate) const EXPORTED_NV12_DMA_BUF_RING_DEPTH: usize = 3;
 
 /// A decoded picture's NV12 planes in a DMA-BUF this decoder exported: the Y
@@ -26,7 +27,9 @@ pub struct ExportedNv12DmaBufPicture {
     /// of it is held.
     pub dma_buf_fd: Arc<OwnedFd>,
     /// Which of the ring's buffers this is, stable until `ring_generation`
-    /// changes — a consumer may adopt each buffer once and reuse it.
+    /// changes — a consumer may adopt each buffer once and reuse it. The
+    /// ring never writes a buffer while any clone of its `dma_buf_fd` is
+    /// held outside it.
     pub ring_slot_index: usize,
     /// Bumped whenever the ring is reallocated, for a new coded extent.
     pub ring_generation: u64,
@@ -42,10 +45,19 @@ struct ExportedNv12DmaBufSlot {
     allocation_byte_size: u64,
 }
 
+impl ExportedNv12DmaBufSlot {
+    fn is_held_by_a_consumer(&self) -> bool {
+        Arc::strong_count(&self.dma_buf_fd) > 1
+    }
+}
+
 /// The ring of exported buffers a decoder copies each picture into.
 pub(crate) struct ExportedNv12DmaBufRing {
     device: vulkanalia::Device,
     slots: Vec<ExportedNv12DmaBufSlot>,
+    /// Buffers of an earlier coded extent a consumer still holds, freed once
+    /// it lets go.
+    retired_slots_held_by_a_consumer: Vec<ExportedNv12DmaBufSlot>,
     next_slot_index: usize,
     coded_width: u32,
     coded_height: u32,
@@ -58,6 +70,7 @@ impl ExportedNv12DmaBufRing {
         Self {
             device,
             slots: Vec::new(),
+            retired_slots_held_by_a_consumer: Vec::new(),
             next_slot_index: 0,
             coded_width: 0,
             coded_height: 0,
@@ -65,8 +78,9 @@ impl ExportedNv12DmaBufRing {
         }
     }
 
-    /// The buffer the next picture is copied into, reallocating the ring when
-    /// the coded extent changed, and its slot index.
+    /// The buffer the next picture is copied into and its slot index: the
+    /// next buffer no consumer holds, after reallocating the ring when the
+    /// coded extent changed, or a new buffer when a consumer holds them all.
     ///
     /// # Safety
     ///
@@ -79,30 +93,53 @@ impl ExportedNv12DmaBufRing {
         coded_width: u32,
         coded_height: u32,
     ) -> Result<(vk::Buffer, usize), VideoError> {
+        unsafe { self.free_retired_slots_no_consumer_holds() };
+        let picture_byte_size = nv12_picture_byte_size(coded_width, coded_height);
         if self.slots.is_empty()
             || (self.coded_width, self.coded_height) != (coded_width, coded_height)
         {
-            unsafe { self.destroy_slots() };
-            let picture_byte_size = nv12_picture_byte_size(coded_width, coded_height);
-            for _ in 0..EXPORTED_NV12_DMA_BUF_RING_DEPTH {
-                let slot = unsafe {
-                    allocate_exported_slot(
-                        &self.device,
-                        instance,
-                        physical_device,
-                        picture_byte_size,
-                    )?
-                };
-                self.slots.push(slot);
-            }
+            unsafe { self.retire_slots() };
             self.coded_width = coded_width;
             self.coded_height = coded_height;
             self.generation += 1;
             self.next_slot_index = 0;
+            for _ in 0..EXPORTED_NV12_DMA_BUF_RING_DEPTH {
+                if let Err(allocation_failure) = unsafe {
+                    self.allocate_one_more_slot(instance, physical_device, picture_byte_size)
+                } {
+                    unsafe { self.retire_slots() };
+                    return Err(allocation_failure);
+                }
+            }
         }
-        let slot_index = self.next_slot_index;
-        self.next_slot_index = (self.next_slot_index + 1) % self.slots.len();
+        let slot_count = self.slots.len();
+        let free_slot_index = (0..slot_count)
+            .map(|offset| (self.next_slot_index + offset) % slot_count)
+            .find(|&slot_index| !self.slots[slot_index].is_held_by_a_consumer());
+        let slot_index = match free_slot_index {
+            Some(slot_index) => slot_index,
+            None => {
+                unsafe {
+                    self.allocate_one_more_slot(instance, physical_device, picture_byte_size)?
+                };
+                slot_count
+            }
+        };
+        self.next_slot_index = (slot_index + 1) % self.slots.len();
         Ok((self.slots[slot_index].buffer, slot_index))
+    }
+
+    unsafe fn allocate_one_more_slot(
+        &mut self,
+        instance: &vulkanalia::Instance,
+        physical_device: vk::PhysicalDevice,
+        picture_byte_size: u64,
+    ) -> Result<(), VideoError> {
+        let slot = unsafe {
+            allocate_exported_slot(&self.device, instance, physical_device, picture_byte_size)?
+        };
+        self.slots.push(slot);
+        Ok(())
     }
 
     /// The picture slot `slot_index` holds, described for a consumer: the
@@ -131,20 +168,43 @@ impl ExportedNv12DmaBufRing {
         })
     }
 
-    unsafe fn destroy_slots(&mut self) {
-        for slot in self.slots.drain(..) {
-            unsafe {
-                self.device.destroy_buffer(slot.buffer, None);
-                self.device.free_memory(slot.memory, None);
-            }
+    /// Move every buffer out of the ring, freeing those no consumer holds.
+    unsafe fn retire_slots(&mut self) {
+        let slots = std::mem::take(&mut self.slots);
+        self.retired_slots_held_by_a_consumer.extend(slots);
+        unsafe { self.free_retired_slots_no_consumer_holds() };
+    }
+
+    unsafe fn free_retired_slots_no_consumer_holds(&mut self) {
+        let (still_held, released): (Vec<_>, Vec<_>) = self
+            .retired_slots_held_by_a_consumer
+            .drain(..)
+            .partition(ExportedNv12DmaBufSlot::is_held_by_a_consumer);
+        self.retired_slots_held_by_a_consumer = still_held;
+        for slot in released {
+            unsafe { destroy_slot(&self.device, slot) };
         }
+    }
+}
+
+unsafe fn destroy_slot(device: &vulkanalia::Device, slot: ExportedNv12DmaBufSlot) {
+    unsafe {
+        device.destroy_buffer(slot.buffer, None);
+        device.free_memory(slot.memory, None);
     }
 }
 
 impl Drop for ExportedNv12DmaBufRing {
     fn drop(&mut self) {
-        // SAFETY: the owning decoder waits for its device to idle first.
-        unsafe { self.destroy_slots() };
+        let all_slots = self
+            .slots
+            .drain(..)
+            .chain(self.retired_slots_held_by_a_consumer.drain(..));
+        for slot in all_slots.collect::<Vec<_>>() {
+            // SAFETY: the owning decoder waits for its device to idle first. A
+            // consumer still holding an fd keeps the DMA-BUF's memory alive.
+            unsafe { destroy_slot(&self.device, slot) };
+        }
     }
 }
 

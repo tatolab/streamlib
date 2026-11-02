@@ -238,3 +238,69 @@ fn the_h265_clip_decodes_into_exported_dma_bufs_holding_the_read_back_pictures()
         "videotoolbox_h265_320x180.access_units",
     );
 }
+
+fn pictures_held_across_the_whole_clip_keep_their_own_buffers(codec: Codec, clip_file_name: &str) {
+    let Some(exported_pictures) = decode_the_clip_on_an_owned_device_inspecting_each_picture(
+        codec,
+        clip_file_name,
+        DecodedPictureDelivery::Nv12InAnExportedDmaBuf,
+        |_| {},
+    ) else {
+        return;
+    };
+    let read_back_pictures = decode_the_clip_on_an_owned_device_inspecting_each_picture(
+        codec,
+        clip_file_name,
+        DecodedPictureDelivery::ReadBackNv12,
+        |_| {},
+    )
+    .expect("the device decoded the clip a moment ago");
+    let ring_slots_used: std::collections::BTreeSet<usize> = exported_pictures
+        .iter()
+        .filter_map(|picture| picture.exported_nv12.as_ref())
+        .map(|exported| exported.ring_slot_index)
+        .collect();
+    assert_eq!(
+        ring_slots_used.len(),
+        exported_pictures.len(),
+        "no buffer a held picture names is written again"
+    );
+    for (picture_index, (exported, read_back)) in exported_pictures
+        .iter()
+        .zip(&read_back_pictures)
+        .enumerate()
+    {
+        let exported_luma = luma_rows_mapped_from_the_exported_dma_buf(
+            exported
+                .exported_nv12
+                .as_ref()
+                .expect("an exported picture"),
+            exported.width,
+            exported.height,
+        );
+        let coded_width = read_back.width as usize;
+        let read_back_luma: Vec<u8> = (0..CLIP_HEIGHT as usize)
+            .flat_map(|row| {
+                read_back.data[row * coded_width..row * coded_width + CLIP_WIDTH as usize]
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert!(
+            read_back_luma == exported_luma,
+            "picture {picture_index}, read after the clip ended, still holds its own luma"
+        );
+    }
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — needs Vulkan Video decode; set --features hardware-tests"
+)]
+#[test]
+fn h264_pictures_held_across_the_whole_clip_keep_their_own_buffers() {
+    pictures_held_across_the_whole_clip_keep_their_own_buffers(
+        Codec::H264,
+        "videotoolbox_h264_320x180.access_units",
+    );
+}
