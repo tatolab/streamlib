@@ -61,8 +61,9 @@ class H264EncoderConfig:
 class H264Encoder:
     """Video frames in, H.264 media frames out, encoded with Vulkan Video on Linux.
 
-    `video` takes buffer-backed `rgba32` frames (camera, test pattern); a
-    texture-backed or other-format frame is refused by name and dropped.
+    `video` takes 8-bit RGBA or BGRA frames, buffer-backed (camera, test
+    pattern) or texture-backed (a GPU effect, a decoder); any other format is
+    refused by name and dropped.
     `encoded_video` publishes one media frame per access unit — a QUIC varint
     timestamp in microseconds, then the Annex-B access unit, parameter sets
     inline before each keyframe — and a keyframe opens a group. After the first
