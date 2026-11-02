@@ -28,7 +28,7 @@ name: Distributions
 # which is how a release whose distributions were never built or uploaded is
 # published by hand. A partially failed upload is recovered by re-running the
 # original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
-# tatolab-webrtc wheels, whose compiled `_native` differs byte for byte from the
+# extension wheels, whose compiled `_native` differs byte for byte from the
 # files PyPI already holds, so their upload fails on a hash mismatch. A dry run
 # builds and checks every distribution and stops short of PyPI;
 # distribution-dry-run.yml runs one on every push to `main`.
@@ -207,6 +207,18 @@ jobs:
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
+  build-tatolab-microphone-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-microphone
+      extension_distribution_name: tatolab-microphone
+      extension_import_package_name: tatolab.microphone
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
   # uploaded.
@@ -255,6 +267,7 @@ jobs:
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
+      - build-tatolab-microphone-distribution
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
       - check-the-linux-runtime-can-be-published
