@@ -142,7 +142,7 @@ jobs:
       # change to them is a recorded patch against upstream.
       - name: Compiler warnings are errors (workspace, all targets)
         run: >-
-          cargo clippy --locked --workspace --all-targets --no-deps
+          cargo clippy --locked --keep-going --workspace --all-targets --no-deps
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::all -D warnings
@@ -639,7 +639,7 @@ jobs:
 
       - name: Compiler warnings are errors (workspace, all targets)
         run: >-
-          cargo clippy --locked --workspace --all-targets --no-deps
+          cargo clippy --locked --keep-going --workspace --all-targets --no-deps
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::all -D warnings
 
