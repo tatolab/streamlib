@@ -11,7 +11,7 @@ use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     self as h264dec, BitstreamReader as H264BitstreamReader, MAX_DPB_SIZE as H264_MAX_DPB_SIZE,
     MAX_REFS as H264_MAX_REFS, VulkanH264Decoder, reference_picture_list_initialization_p_frame,
 };
-use crate::vulkan::video::video_context::VideoError;
+use streamlib_vulkan_video::VideoError;
 
 use super::decoded_picture_display_window::{
     H264FrameCroppingSyntax, SpsCropOffsets, h264_frame_cropping_window,

@@ -5837,6 +5837,7 @@ dependencies = [
  "objc2-metal",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -5905,6 +5906,7 @@ dependencies = [
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
+ "streamlib-vulkan-video",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tempfile",
@@ -6136,6 +6138,17 @@ dependencies = [
  "serde_json",
  "streamlib",
  "streamlib-macros",
+]
+
+[[package]]
+name = "streamlib-vulkan-video"
+version = "0.68.7"
+dependencies = [
+ "streamlib-consumer-rhi",
+ "streamlib-error",
+ "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
+ "tracing",
 ]
 
 [[package]]

@@ -7,12 +7,15 @@ use std::sync::Arc;
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
+use streamlib_surface_client::{
+    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, SurfaceShareCheckOutFds,
+    resource_type_of_a_check_out,
+};
 
 use super::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
     HelperSurfaceCheckOutLeaseDebt, SURFACE_SHARE_RESPONSE_TIMEOUT,
-    refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
-    response_field,
+    refuse_check_out_the_service_declined, response_field,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
@@ -346,19 +349,6 @@ impl HelperCheckedOutSurface {
     }
 }
 
-/// The handle type a pixel-buffer checkout's registration names, with the
-/// plane fds it delivered, decided before any fd is duplicated or any device
-/// is created.
-enum CheckedOutPixelBufferHandleType {
-    DmaBuf {
-        plane_fds: Vec<OwnedFd>,
-    },
-    OpaqueFdAtStatedMemoryTypeIndex {
-        opaque_memory_fd: OwnedFd,
-        export_contract: OpaqueFdExportContract,
-    },
-}
-
 /// How many connections a helper sets aside after a timeout before it stops
 /// asking the service anything: each one stays open, and a service that has
 /// outwaited the timeout this often has stopped answering.
@@ -479,36 +469,14 @@ impl HelperProcessGpuExchangeClient {
         // pixel-buffer checkout carries none today. Peeled rather than
         // assumed absent, so a registration that gains them cannot corrupt
         // the plane list.
-        let has_produce_done_fd =
-            registration_states_a_timeline_fd(response, "has_produce_done_fd");
-        let has_consume_done_fd =
-            registration_states_a_timeline_fd(response, "has_consume_done_fd");
-        let trailing_timeline_fd_count =
-            usize::from(has_produce_done_fd) + usize::from(has_consume_done_fd);
-        if received_fds.len() < trailing_timeline_fd_count + 1 {
-            return Err(PyRuntimeError::new_err(format!(
-                "check_out of {surface_id:?} returned {} fds, fewer than the {} its metadata \
-                 promises",
-                received_fds.len(),
-                trailing_timeline_fd_count + 1,
-            )));
-        }
-        let mut plane_fds = received_fds;
-        let mut trailing_timeline_fds = plane_fds
-            .split_off(plane_fds.len() - trailing_timeline_fd_count)
-            .into_iter();
-        let produce_done_fd = has_produce_done_fd
-            .then(|| trailing_timeline_fds.next())
-            .flatten();
-        let consume_done_fd = has_consume_done_fd
-            .then(|| trailing_timeline_fds.next())
-            .flatten();
+        let SurfaceShareCheckOutFds {
+            plane_fds,
+            produce_done_fd,
+            consume_done_fd,
+        } = SurfaceShareCheckOutFds::split_off_the_timeline_fds(surface_id, response, received_fds)
+            .map_err(PyRuntimeError::new_err)?;
 
-        match response
-            .get("resource_type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pixel_buffer")
-        {
+        match resource_type_of_a_check_out(response) {
             "texture" => {
                 return self
                     .import_checked_out_texture(
@@ -534,73 +502,21 @@ impl HelperProcessGpuExchangeClient {
             }
         }
 
-        let delivered_plane_fd_count = plane_fds.len();
-        let pixel_buffer_handle_type = match response
-            .get("handle_type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("dma_buf")
-        {
-            "dma_buf" => CheckedOutPixelBufferHandleType::DmaBuf { plane_fds },
-            "opaque_fd" => {
-                // Refused before any dup exists to leak or any device is
-                // needed: every pooled frame is one RGBA allocation today.
-                let [opaque_memory_fd] = <[OwnedFd; 1]>::try_from(plane_fds).map_err(
-                    |delivered_plane_fds: Vec<OwnedFd>| {
-                        PyRuntimeError::new_err(format!(
-                            "pixel buffer {surface_id:?} is registered as opaque_fd with {} \
-                             planes; an OPAQUE_FD pixel buffer imports as one allocation at its \
-                             stated memory type index, so only a single-plane one is accepted",
-                            delivered_plane_fds.len()
-                        ))
-                    },
-                )?;
-                CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
-                    opaque_memory_fd,
-                    export_contract: opaque_fd_export_contract_stated_by_a_registration(
-                        format_args!("opaque_fd pixel buffer {surface_id:?}"),
-                        response,
-                    )?,
-                }
-            }
-            other => {
-                return Err(PyRuntimeError::new_err(format!(
-                    "pixel buffer {surface_id:?} is registered with handle type {other:?}, \
-                     which this consumer does not know; a pixel buffer crosses as dma_buf or \
-                     opaque_fd"
-                )));
-            }
-        };
-
-        let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
-        let height =
-            required_positive_u32_check_out_metadata_field(response, surface_id, "height")?;
-        let format_name = response
-            .get("format")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
-        let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
-        let plane_sizes = plane_u64_array_check_out_metadata_field(response, "plane_sizes");
-        if plane_sizes.len() != delivered_plane_fd_count {
-            return Err(PyRuntimeError::new_err(format!(
-                "check_out of {surface_id:?} returned {delivered_plane_fd_count} plane fds but {} \
-                 plane sizes",
-                plane_sizes.len(),
-            )));
-        }
-        // The allocation's row pitch, padding included — the same derivation
-        // the engine-side view uses, so the strides agree across processes.
+        let CheckedOutPixelBuffer {
+            width,
+            height,
+            format_wire_name,
+            plane_sizes,
+            bytes_per_row,
+            memory: checked_out_memory,
+        } = CheckedOutPixelBuffer::from_check_out(surface_id, response, plane_fds)
+            .map_err(PyRuntimeError::new_err)?;
+        let format = crate::python_processor_context::parse_pixel_format_name(&format_wire_name)?;
         let plane0_size = plane_sizes.first().copied().unwrap_or(0);
-        if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
-            return Err(PyRuntimeError::new_err(format!(
-                "surface {surface_id:?} reports plane size {plane0_size}, not a whole number of \
-                 {height} rows"
-            )));
-        }
-        let bytes_per_row = plane0_size / u64::from(height);
 
         let vulkan_device = self.consumer_vulkan_device()?;
-        let (consumer_buffer, memory_flavour) = match pixel_buffer_handle_type {
-            CheckedOutPixelBufferHandleType::DmaBuf { plane_fds } => {
+        let (consumer_buffer, memory_flavour) = match checked_out_memory {
+            CheckedOutPixelBufferMemory::DmaBuf { plane_fds } => {
                 // Refused before the dups exist: a multi-plane refusal from the
                 // RHI leaves its dups unclosed (see `close_single_plane_dup_vulkan_refused`).
                 if !vulkan_device.supports_dma_buf_memory_import() {
@@ -631,11 +547,15 @@ impl HelperProcessGpuExchangeClient {
                     },
                 )
             }
-            CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
-                opaque_memory_fd,
-                export_contract,
+            CheckedOutPixelBufferMemory::OpaqueFd {
+                memory_fd: opaque_memory_fd,
+                vk_memory_type_index: stated_memory_type_index,
+                exporting_device_uuid,
             } => {
-                let stated_memory_type_index = export_contract.vk_memory_type_index;
+                let export_contract = OpaqueFdExportContract {
+                    vk_memory_type_index: stated_memory_type_index,
+                    exporting_device_uuid,
+                };
                 let duplicated_for_import = duplicate_memory_fd(
                     &opaque_memory_fd,
                     format_args!("opaque_fd pixel buffer {surface_id:?}'s"),
