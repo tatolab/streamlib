@@ -362,6 +362,7 @@ fn initialize_cef(
         ));
     }
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+    remove_cef_cache_directories_whose_helper_has_exited(&std::env::temp_dir());
     let root_cache_directory = create_an_owner_only_cef_cache_directory()?;
     let path_text = |path: &Path| CefString::from(path.to_string_lossy().as_ref());
     let settings = Settings {
@@ -402,10 +403,49 @@ fn initialize_cef(
     Ok(())
 }
 
+/// What every CEF cache directory's name starts with.
+const CEF_CACHE_DIRECTORY_NAME_PREFIX: &str = "tatolab-browser-";
+
+/// The file in a CEF cache directory naming the helper that holds it.
+const CEF_CACHE_DIRECTORY_OWNER_PID_FILE_NAME: &str = "helper.pid";
+
+/// Remove the CEF cache directories under `temporary_directory` whose helper
+/// is gone. CEF holds its cache until the helper exits, often by SIGKILL, so
+/// the next helper to start removes what earlier ones left.
+fn remove_cef_cache_directories_whose_helper_has_exited(temporary_directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(temporary_directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(CEF_CACHE_DIRECTORY_NAME_PREFIX)
+        {
+            continue;
+        }
+        let cache_directory = entry.path();
+        let owner_pid =
+            std::fs::read_to_string(cache_directory.join(CEF_CACHE_DIRECTORY_OWNER_PID_FILE_NAME))
+                .ok()
+                .and_then(|text| text.trim().parse::<libc::pid_t>().ok());
+        if owner_pid.is_some_and(|pid| !process_is_alive(pid)) {
+            let _ = std::fs::remove_dir_all(&cache_directory);
+        }
+    }
+}
+
+fn process_is_alive(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether `pid` exists.
+    let answer = unsafe { libc::kill(pid, 0) };
+    answer == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 /// A fresh directory only this user can open, named unpredictably, under the
-/// system temporary directory. CEF holds it for the helper's whole life.
+/// system temporary directory, naming this helper as its holder. CEF holds it
+/// for the helper's whole life.
 fn create_an_owner_only_cef_cache_directory() -> Result<PathBuf, String> {
-    let template = std::env::temp_dir().join("tatolab-browser-XXXXXX");
+    let template = std::env::temp_dir().join(format!("{CEF_CACHE_DIRECTORY_NAME_PREFIX}XXXXXX"));
     let mut template_bytes = CString::new(template.as_os_str().as_encoded_bytes())
         .map_err(|_| format!("{} holds a NUL", template.display()))?
         .into_bytes_with_nul();
@@ -420,9 +460,20 @@ fn create_an_owner_only_cef_cache_directory() -> Result<PathBuf, String> {
         ));
     }
     template_bytes.pop();
-    Ok(PathBuf::from(std::ffi::OsString::from(
+    let cache_directory = PathBuf::from(std::ffi::OsString::from(
         String::from_utf8_lossy(&template_bytes).into_owned(),
-    )))
+    ));
+    std::fs::write(
+        cache_directory.join(CEF_CACHE_DIRECTORY_OWNER_PID_FILE_NAME),
+        std::process::id().to_string(),
+    )
+    .map_err(|write_failure| {
+        format!(
+            "{} could not name its helper: {write_failure}",
+            cache_directory.display()
+        )
+    })?;
+    Ok(cache_directory)
 }
 
 /// The page the CEF thread renders, while one is open.
@@ -958,6 +1009,44 @@ fn deliver_data_messages_to_the_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cache_directory_held_by(temporary_directory: &Path, name: &str, pid: u32) -> PathBuf {
+        let cache_directory = temporary_directory.join(name);
+        std::fs::create_dir(&cache_directory).unwrap();
+        std::fs::write(
+            cache_directory.join(CEF_CACHE_DIRECTORY_OWNER_PID_FILE_NAME),
+            pid.to_string(),
+        )
+        .unwrap();
+        cache_directory
+    }
+
+    #[test]
+    fn only_the_cache_of_an_exited_helper_is_removed() {
+        let temporary_directory =
+            std::env::temp_dir().join(format!("cef-cache-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+        std::fs::create_dir(&temporary_directory).unwrap();
+        let mut exited_child = std::process::Command::new("true").spawn().unwrap();
+        let exited_pid = exited_child.id();
+        exited_child.wait().unwrap();
+        let exited_helpers_cache =
+            cache_directory_held_by(&temporary_directory, "tatolab-browser-gone00", exited_pid);
+        let live_helpers_cache = cache_directory_held_by(
+            &temporary_directory,
+            "tatolab-browser-alive0",
+            std::process::id(),
+        );
+        let unnamed_cache = temporary_directory.join("tatolab-browser-unnamed");
+        std::fs::create_dir(&unnamed_cache).unwrap();
+
+        remove_cef_cache_directories_whose_helper_has_exited(&temporary_directory);
+
+        assert!(!exited_helpers_cache.exists());
+        assert!(live_helpers_cache.exists());
+        assert!(unnamed_cache.exists());
+        std::fs::remove_dir_all(&temporary_directory).unwrap();
+    }
 
     fn config() -> BrowserPageConfig {
         BrowserPageConfig {
