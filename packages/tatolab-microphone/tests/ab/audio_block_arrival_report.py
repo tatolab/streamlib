@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Score the built-in and proof arms' arrival recordings against the ticket's bar.
+"""Score the built-in and module arms' arrival recordings against the ticket's bar.
 
 Each recording is the CSV `AudioBlockArrivalRecorder` writes. Per arm:
 
@@ -11,10 +11,10 @@ Each recording is the CSV `AudioBlockArrivalRecorder` writes. Per arm:
   median by more than one block duration — a stall, not a constant offset;
 - block-arrival jitter: |inter-arrival interval − block duration|, p50/p99/max.
 
-The proof passes when it drops and delivers late no more blocks than the
+The module passes when it drops and delivers late no more blocks than the
 built-in, and its p99 jitter is within 1 ms of the built-in's.
 
-Usage: audio_block_arrival_report.py <built_in.csv> <proof.csv> [--warmup-seconds N]
+Usage: audio_block_arrival_report.py <built_in.csv> <module.csv> [--warmup-seconds N]
        [--markdown out.md] [--json out.json]
 """
 
@@ -138,16 +138,16 @@ def score_arm(arrivals: list[RecordedArrival], warmup_seconds: float) -> ArmScor
     )
 
 
-def verdict(built_in: ArmScore, proof: ArmScore) -> dict[str, bool]:
+def verdict(built_in: ArmScore, module: ArmScore) -> dict[str, bool]:
     return {
-        "dropped_blocks_no_more_than_the_built_in": proof.dropped_blocks <= built_in.dropped_blocks,
-        "late_blocks_no_more_than_the_built_in": proof.late_blocks <= built_in.late_blocks,
-        "jitter_p99_within_1ms_of_the_built_in": proof.jitter_ms_p99
+        "dropped_blocks_no_more_than_the_built_in": module.dropped_blocks <= built_in.dropped_blocks,
+        "late_blocks_no_more_than_the_built_in": module.late_blocks <= built_in.late_blocks,
+        "jitter_p99_within_1ms_of_the_built_in": module.jitter_ms_p99
         <= built_in.jitter_ms_p99 + JITTER_P99_ALLOWANCE_MS,
     }
 
 
-def markdown_table(built_in: ArmScore, proof: ArmScore) -> str:
+def markdown_table(built_in: ArmScore, module: ArmScore) -> str:
     rows = [
         ("blocks measured", "blocks", "{:d}"),
         ("seconds measured", "seconds_measured", "{:.1f}"),
@@ -163,11 +163,14 @@ def markdown_table(built_in: ArmScore, proof: ArmScore) -> str:
         ("arrival jitter p99", "jitter_ms_p99", "{:.3f} ms"),
         ("arrival jitter max", "jitter_ms_max", "{:.3f} ms"),
     ]
-    lines = ["| | built-in `MicrophoneSource` | `MicrophoneProofSource` |", "|---|---:|---:|"]
+    lines = [
+        "| | built-in `MicrophoneSource` | `tatolab.microphone` `MicrophoneSource` |",
+        "|---|---:|---:|",
+    ]
     for label, field, spelling in rows:
         lines.append(
             f"| {label} | {spelling.format(getattr(built_in, field))} "
-            f"| {spelling.format(getattr(proof, field))} |"
+            f"| {spelling.format(getattr(module, field))} |"
         )
     return "\n".join(lines)
 
@@ -175,18 +178,18 @@ def markdown_table(built_in: ArmScore, proof: ArmScore) -> str:
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Score the microphone A/B recordings.")
     parser.add_argument("built_in_recording", type=Path)
-    parser.add_argument("proof_recording", type=Path)
+    parser.add_argument("module_recording", type=Path)
     parser.add_argument("--warmup-seconds", type=float, default=2.0)
     parser.add_argument("--markdown", type=Path)
     parser.add_argument("--json", type=Path)
     parsed = parser.parse_args(arguments)
 
     built_in = score_arm(read_recording(parsed.built_in_recording), parsed.warmup_seconds)
-    proof = score_arm(read_recording(parsed.proof_recording), parsed.warmup_seconds)
-    checks = verdict(built_in, proof)
+    module = score_arm(read_recording(parsed.module_recording), parsed.warmup_seconds)
+    checks = verdict(built_in, module)
     passed = all(checks.values())
 
-    table = markdown_table(built_in, proof)
+    table = markdown_table(built_in, module)
     summary = "\n".join(f"- {name}: {'yes' if held else 'NO'}" for name, held in checks.items())
     report = f"{table}\n\n{summary}\n\nRESULT: {'PASS' if passed else 'MISS'}\n"
     print(report)
@@ -195,7 +198,7 @@ def main(arguments: list[str]) -> int:
     if parsed.json:
         parsed.json.write_text(
             json.dumps(
-                {"built_in": asdict(built_in), "proof": asdict(proof), "checks": checks},
+                {"built_in": asdict(built_in), "module": asdict(module), "checks": checks},
                 indent=2,
             ),
             encoding="utf-8",

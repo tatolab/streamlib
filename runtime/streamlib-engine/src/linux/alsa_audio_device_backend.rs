@@ -1187,9 +1187,9 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
 
-    // A PipeWire client is granted realtime by the daemon; an ALSA client has
-    // to ask. Failure is logged and the thread continues on `SCHED_OTHER`,
-    // which is what a container without rtkit gets.
+    // Realtime comes only from asking for it, through rtkit or `CAP_SYS_NICE`.
+    // Failure is logged and the thread continues on `SCHED_OTHER`, which is
+    // what a container without rtkit gets.
     if let Err(refusal) = apply_thread_priority(ThreadPriority::RealTime) {
         tracing::debug!(
             device = %device_name,
@@ -1546,9 +1546,9 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
 
-    // A PipeWire client is granted realtime by the daemon; an ALSA client has
-    // to ask. Failure is logged and the thread continues on `SCHED_OTHER`,
-    // which is what a container without rtkit gets.
+    // Realtime comes only from asking for it, through rtkit or `CAP_SYS_NICE`.
+    // Failure is logged and the thread continues on `SCHED_OTHER`, which is
+    // what a container without rtkit gets.
     if let Err(refusal) = apply_thread_priority(ThreadPriority::RealTime) {
         tracing::debug!(
             device = %device_name,

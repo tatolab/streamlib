@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! H.264 or H.265 encode on a Vulkan device this module owns: each published frame is
-//! checked out over surface-share, imported onto the owned device and encoded
-//! there, so a fault in the video engine ends this helper and nothing else.
+//! H.264 or H.265 encode on a Vulkan device this module owns: each published frame,
+//! a pixel buffer or a texture, is checked out over surface-share, imported
+//! onto the owned device and encoded there, so a fault in the video engine
+//! ends this helper and nothing else.
 
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd};
@@ -13,12 +14,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use streamlib_consumer_rhi::{
-    ConsumerVulkanBuffer, OwnedVulkanVideoCodecDevice, PixelFormat, VulkanVideoCodecDirection,
+    ConsumerVulkanBuffer, ConsumerVulkanTexture, OwnedVulkanVideoCodecDevice, PixelFormat,
+    TextureFormat, VulkanLayout, VulkanVideoCodecDirection,
     runtime_vulkan_device_uuid_named_at_spawn,
 };
 use streamlib_surface_client::{
-    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, check_out_pixel_buffer_on_surface_share,
-    connect_to_surface_share_socket, release_check_out_on_surface_share,
+    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, CheckedOutSurface, CheckedOutTexture,
+    CheckedOutTextureMemory, check_out_surface_on_surface_share, connect_to_surface_share_socket,
+    publish_image_layout_on_surface_share, release_check_out_on_surface_share,
 };
 use streamlib_vulkan_video::{
     Preset, RgbaPixelBufferVideoEncoder, SimpleEncoder, SimpleEncoderConfig, VulkanVideoCodecDevice,
@@ -35,7 +38,7 @@ use crate::video_frame_message::VideoFrameMessage;
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
 /// Imports kept per surface id; a producer's pool is far smaller.
-const MOST_PIXEL_BUFFER_IMPORTS_KEPT: usize = 32;
+const MOST_SURFACE_IMPORTS_KEPT: usize = 32;
 
 const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 
@@ -54,6 +57,7 @@ pub struct OwnedDeviceVideoEncoder {
     owned_device: Arc<OwnedVulkanVideoCodecDevice>,
     surface_share_connection: UnixStream,
     imported_pixel_buffers: HashMap<String, ConsumerVulkanBuffer>,
+    imported_textures: HashMap<String, ConsumerVulkanTexture>,
     minted_session: Option<VideoEncodeSessionMintedFromAFrame>,
     session_mint_already_failed: bool,
     next_frame_must_be_a_sync_point: bool,
@@ -112,6 +116,7 @@ impl OwnedDeviceVideoEncoder {
             owned_device,
             surface_share_connection,
             imported_pixel_buffers: HashMap::new(),
+            imported_textures: HashMap::new(),
             minted_session: None,
             session_mint_already_failed: false,
             next_frame_must_be_a_sync_point: false,
@@ -134,7 +139,7 @@ impl OwnedDeviceVideoEncoder {
         if self.minted_session.is_none() && self.session_mint_already_failed {
             return Ok(());
         }
-        let checked_out = match check_out_pixel_buffer_on_surface_share(
+        let checked_out = match check_out_surface_on_surface_share(
             &self.surface_share_connection,
             &frame.surface_id,
         ) {
@@ -150,7 +155,12 @@ impl OwnedDeviceVideoEncoder {
                 return Ok(());
             }
         };
-        let encoded = self.encode_checked_out_pixel_buffer(frame, checked_out);
+        let encoded = match checked_out {
+            CheckedOutSurface::PixelBuffer(pixel_buffer) => {
+                self.encode_checked_out_pixel_buffer(frame, pixel_buffer)
+            }
+            CheckedOutSurface::Texture(texture) => self.encode_checked_out_texture(frame, texture),
+        };
         if let Err(release_refusal) =
             release_check_out_on_surface_share(&self.surface_share_connection, &frame.surface_id)
         {
@@ -263,6 +273,164 @@ impl OwnedDeviceVideoEncoder {
             .collect())
     }
 
+    /// Encode a texture in the layout its last user published, then hand it
+    /// back to the producer's queue family and publish the layout it is left
+    /// in, so the next reader's acquire names it.
+    fn encode_checked_out_texture(
+        &mut self,
+        frame: &VideoFrameMessage,
+        checked_out: CheckedOutTexture,
+    ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
+        let node_type_name = self.node.node_type_name;
+        let surface_id = frame.surface_id.as_str();
+        let (width, height) = (checked_out.width, checked_out.height);
+        let published_layout = VulkanLayout(checked_out.current_image_layout);
+        self.import_texture_unless_already_imported(surface_id, checked_out)?;
+        self.mint_unless_a_session_matches(frame, width, height)?;
+        let session = self
+            .minted_session
+            .as_mut()
+            .ok_or_else(|| format!("{node_type_name}: no encoder session"))?;
+        if self.next_frame_must_be_a_sync_point {
+            session.encoder.encoder_mut().force_idr();
+        }
+        let texture = self
+            .imported_textures
+            .get(surface_id)
+            .ok_or_else(|| format!("{node_type_name}: surface {surface_id:?} was not imported"))?;
+        texture
+            .acquire_from_foreign_layout(published_layout)
+            .map_err(|refusal| {
+                format!(
+                    "{node_type_name}: texture {surface_id:?} could not be acquired from its \
+                     producer: {refusal}"
+                )
+            })?;
+        let rgba_image_view = texture.image_view().map_err(|refusal| {
+            format!("{node_type_name}: texture {surface_id:?} has no image view: {refusal}")
+        })?;
+        let (packets, layout_left_in) = session
+            .encoder
+            .encoder_mut()
+            .encode_rgba_image_published_in(
+                texture.image(),
+                rgba_image_view,
+                published_layout,
+                width,
+                height,
+                Some(frame.timestamp_ns),
+            )
+            .map_err(|encode_failure| {
+                format!("{node_type_name}: encode failed: {encode_failure}")
+            })?;
+        texture
+            .release_to_foreign_layout(layout_left_in, layout_left_in)
+            .map_err(|refusal| {
+                format!(
+                    "{node_type_name}: texture {surface_id:?} could not be released to its \
+                     producer: {refusal}"
+                )
+            })?;
+        if layout_left_in != published_layout {
+            publish_image_layout_on_surface_share(
+                &self.surface_share_connection,
+                surface_id,
+                layout_left_in.0,
+            )?;
+        }
+        self.next_frame_must_be_a_sync_point = false;
+        Ok(packets
+            .into_iter()
+            .map(|packet| EncodedVideoAccessUnit {
+                annex_b_access_unit_bytes: packet.data,
+                is_sync_point: packet.is_keyframe,
+            })
+            .collect())
+    }
+
+    fn import_texture_unless_already_imported(
+        &mut self,
+        surface_id: &str,
+        checked_out: CheckedOutTexture,
+    ) -> Result<(), String> {
+        let node_type_name = self.node.node_type_name;
+        if self.imported_textures.contains_key(surface_id) {
+            return Ok(());
+        }
+        let format = TextureFormat::from_wire_name(&checked_out.format_wire_name)
+            .filter(|format| {
+                matches!(
+                    format,
+                    TextureFormat::Rgba8Unorm
+                        | TextureFormat::Rgba8UnormSrgb
+                        | TextureFormat::Bgra8Unorm
+                        | TextureFormat::Bgra8UnormSrgb
+                )
+            })
+            .ok_or_else(|| {
+                format!(
+                    "{node_type_name}: surface {surface_id:?} is a {} texture; the encoder reads \
+                     8-bit RGBA or BGRA",
+                    checked_out.format_wire_name
+                )
+            })?;
+        let consumer_vulkan_device = self.owned_device.consumer_vulkan_device();
+        let (memory_fd, imported) = match checked_out.memory {
+            CheckedOutTextureMemory::DmaBuf {
+                memory_fd,
+                drm_format_modifier,
+                plane_offsets,
+                plane_strides,
+            } => {
+                let raw_memory_fd = memory_fd.into_raw_fd();
+                let imported = ConsumerVulkanTexture::import_render_target_dma_buf(
+                    consumer_vulkan_device,
+                    &[raw_memory_fd],
+                    &plane_offsets,
+                    &plane_strides,
+                    drm_format_modifier,
+                    checked_out.width,
+                    checked_out.height,
+                    format,
+                    checked_out.allocation_byte_size,
+                );
+                (raw_memory_fd, imported)
+            }
+            CheckedOutTextureMemory::OpaqueFd {
+                memory_fd,
+                vk_memory_type_index,
+                ..
+            } => {
+                let raw_memory_fd = memory_fd.into_raw_fd();
+                let imported = ConsumerVulkanTexture::from_opaque_fd(
+                    consumer_vulkan_device,
+                    raw_memory_fd,
+                    checked_out.width,
+                    checked_out.height,
+                    format,
+                    checked_out.vk_image_usage_flags,
+                    checked_out.allocation_byte_size,
+                    vk_memory_type_index,
+                );
+                (raw_memory_fd, imported)
+            }
+        };
+        let imported = imported.map_err(|import_failure| {
+            // SAFETY: Vulkan refused the fd, so it is still ours alone.
+            drop(unsafe { OwnedFd::from_raw_fd(memory_fd) });
+            format!(
+                "{node_type_name}: texture {surface_id:?} did not import onto the owned device: \
+                 {import_failure}"
+            )
+        })?;
+        if self.imported_textures.len() >= MOST_SURFACE_IMPORTS_KEPT {
+            self.imported_textures.clear();
+        }
+        self.imported_textures
+            .insert(surface_id.to_owned(), imported);
+        Ok(())
+    }
+
     fn import_unless_already_imported(
         &mut self,
         surface_id: &str,
@@ -315,7 +483,7 @@ impl OwnedDeviceVideoEncoder {
                 )
             })?,
         };
-        if self.imported_pixel_buffers.len() >= MOST_PIXEL_BUFFER_IMPORTS_KEPT {
+        if self.imported_pixel_buffers.len() >= MOST_SURFACE_IMPORTS_KEPT {
             self.imported_pixel_buffers.clear();
         }
         self.imported_pixel_buffers

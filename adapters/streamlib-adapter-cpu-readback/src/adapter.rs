@@ -249,7 +249,6 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         }
 
         let state = SurfaceState {
-            surface_id: id,
             texture: registration.texture,
             planes,
             produce_done: registration.produce_done,

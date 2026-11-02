@@ -11,7 +11,7 @@ import os
 
 from tatolab.stream import MicrophoneSource, MicrophoneSourceConfig, StreamBuilder, stream
 
-from tatolab.microphone_proof import AudioBlockArrivalRecorder
+from audio_block_arrival_recorder import AudioBlockArrivalRecorder
 
 
 @stream

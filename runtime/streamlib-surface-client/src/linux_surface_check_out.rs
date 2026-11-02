@@ -3,8 +3,8 @@
 
 //! A surface-share `check_out` answer, read into typed fields: which fds are
 //! plane memory and which are timeline semaphores, what resource the surface
-//! is, and — for a pixel buffer — its extent, row pitch and the handle type
-//! its memory crossed as.
+//! is, and its extent, layout facts and the handle type its memory crossed
+//! as.
 
 use std::os::fd::{FromRawFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -198,13 +198,171 @@ impl CheckedOutPixelBuffer {
     }
 }
 
-/// Claim `surface_id` against producer reuse and read it as a pixel buffer.
-/// The claim holds until [`release_check_out_on_surface_share`] on the same
-/// connection, or until the connection closes.
-pub fn check_out_pixel_buffer_on_surface_share(
+/// The `vk_image_usage` a texture registration that states none carries:
+/// `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE`.
+pub const SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
+
+/// The handle type a checked-out texture's memory crossed as. Either way the
+/// whole image travels as one memory fd.
+pub enum CheckedOutTextureMemory {
+    /// A DMA-BUF with an explicit DRM format modifier, its planes at the
+    /// stated offsets and row pitches.
+    DmaBuf {
+        memory_fd: OwnedFd,
+        drm_format_modifier: u64,
+        plane_offsets: Vec<u64>,
+        plane_strides: Vec<u64>,
+    },
+    /// One OPAQUE_FD allocation, imported at the memory type index the
+    /// exporter allocated from, on the GPU the exporter named.
+    OpaqueFd {
+        memory_fd: OwnedFd,
+        vk_memory_type_index: u32,
+        exporting_device_uuid: [u8; 16],
+    },
+}
+
+/// A checked-out texture: the image its registration describes and its
+/// memory's handle.
+pub struct CheckedOutTexture {
+    pub width: u32,
+    pub height: u32,
+    /// The wire name of the texture format (`"rgba8_unorm"`, …).
+    pub format_wire_name: String,
+    pub allocation_byte_size: u64,
+    /// The `VkImageLayout` its last user published, `UNDEFINED` (0) when
+    /// none has.
+    pub current_image_layout: i32,
+    pub vk_image_usage_flags: u32,
+    pub memory: CheckedOutTextureMemory,
+}
+
+impl CheckedOutTexture {
+    /// Read a texture's `check_out` answer and its plane fds.
+    pub fn from_check_out(
+        surface_id: &str,
+        response: &serde_json::Value,
+        plane_fds: Vec<OwnedFd>,
+    ) -> Result<Self, String> {
+        let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
+        let height =
+            required_positive_u32_check_out_metadata_field(response, surface_id, "height")?;
+        let format_wire_name = response
+            .get("format")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let allocation_byte_size = response
+            .get("vk_image_allocation_size")
+            .and_then(|value| value.as_u64())
+            .filter(|size| *size > 0)
+            .ok_or_else(|| {
+                format!(
+                    "texture {surface_id:?} was registered without its allocation byte size; \
+                     binding imported memory of unknown extent reads past the allocation \
+                     instead of failing here"
+                )
+            })?;
+        let current_image_layout_raw = response
+            .get("current_image_layout")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let current_image_layout = i32::try_from(current_image_layout_raw).map_err(|_| {
+            format!(
+                "texture {surface_id:?} reports image layout {current_image_layout_raw}, which \
+                 is not a VkImageLayout"
+            )
+        })?;
+        let vk_image_usage_flags = response
+            .get("vk_image_usage")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT);
+        let [memory_fd] =
+            <[OwnedFd; 1]>::try_from(plane_fds).map_err(|delivered: Vec<OwnedFd>| {
+                format!(
+                    "texture {surface_id:?} arrived with {} fds; a texture checkout carries its \
+                 memory as exactly one",
+                    delivered.len()
+                )
+            })?;
+        let memory = match response
+            .get("handle_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("dma_buf")
+        {
+            "dma_buf" => {
+                let drm_format_modifier = response
+                    .get("drm_format_modifier")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                if drm_format_modifier == 0 {
+                    return Err(format!(
+                        "texture {surface_id:?} was registered without an explicit DRM \
+                         modifier: its image layout is driver-opaque and no other process can \
+                         reconstruct it"
+                    ));
+                }
+                CheckedOutTextureMemory::DmaBuf {
+                    memory_fd,
+                    drm_format_modifier,
+                    plane_offsets: plane_u64_array_check_out_metadata_field(
+                        response,
+                        "plane_offsets",
+                    ),
+                    plane_strides: plane_u64_array_check_out_metadata_field(
+                        response,
+                        "plane_strides",
+                    ),
+                }
+            }
+            "opaque_fd" => {
+                let registered_subject = format!("opaque_fd texture {surface_id:?}");
+                CheckedOutTextureMemory::OpaqueFd {
+                    memory_fd,
+                    vk_memory_type_index: memory_type_index_stated_by_an_opaque_fd_registration(
+                        &registered_subject,
+                        response,
+                    )?,
+                    exporting_device_uuid: exporting_device_uuid_stated_by_a_registration(
+                        &registered_subject,
+                        response,
+                    )?,
+                }
+            }
+            other => {
+                return Err(format!(
+                    "texture {surface_id:?} is registered with handle type {other:?}, which \
+                     this consumer does not know"
+                ));
+            }
+        };
+        Ok(Self {
+            width,
+            height,
+            format_wire_name,
+            allocation_byte_size,
+            current_image_layout,
+            vk_image_usage_flags,
+            memory,
+        })
+    }
+}
+
+/// A checked-out surface, read as the resource its registration names.
+pub enum CheckedOutSurface {
+    PixelBuffer(CheckedOutPixelBuffer),
+    Texture(CheckedOutTexture),
+}
+
+/// Claim `surface_id` against producer reuse and read it as the pixel buffer
+/// or texture it is registered as. The claim holds until
+/// [`release_check_out_on_surface_share`] on the same connection, or until the
+/// connection closes.
+pub fn check_out_surface_on_surface_share(
     surface_share_connection: &UnixStream,
     surface_id: &str,
-) -> Result<CheckedOutPixelBuffer, String> {
+) -> Result<CheckedOutSurface, String> {
     let (response, received_raw_fds) = send_request_with_fds(
         surface_share_connection,
         &serde_json::json!({"op": "check_out", "surface_id": surface_id}),
@@ -222,16 +380,53 @@ pub fn check_out_pixel_buffer_on_surface_share(
             "the surface-share service refused check_out of {surface_id:?}: {refusal}"
         ));
     }
-    let resource_type = resource_type_of_a_check_out(&response);
-    if resource_type != "pixel_buffer" {
-        return Err(format!(
-            "surface {surface_id:?} is registered as resource type {resource_type:?}; only a \
-             pixel buffer is read here"
-        ));
-    }
     let check_out_fds =
         SurfaceShareCheckOutFds::split_off_the_timeline_fds(surface_id, &response, received_fds)?;
-    CheckedOutPixelBuffer::from_check_out(surface_id, &response, check_out_fds.plane_fds)
+    match resource_type_of_a_check_out(&response) {
+        "pixel_buffer" => {
+            CheckedOutPixelBuffer::from_check_out(surface_id, &response, check_out_fds.plane_fds)
+                .map(CheckedOutSurface::PixelBuffer)
+        }
+        "texture" => {
+            CheckedOutTexture::from_check_out(surface_id, &response, check_out_fds.plane_fds)
+                .map(CheckedOutSurface::Texture)
+        }
+        other => Err(format!(
+            "surface {surface_id:?} is registered as resource type {other:?}; a pixel buffer or \
+             a texture is read here"
+        )),
+    }
+}
+
+/// Publish the `VkImageLayout` a checked-out texture was left in, so its next
+/// reader's acquire barrier names the right source layout.
+pub fn publish_image_layout_on_surface_share(
+    surface_share_connection: &UnixStream,
+    surface_id: &str,
+    current_image_layout: i32,
+) -> Result<(), String> {
+    let (response, _no_fds) = send_request_with_fds(
+        surface_share_connection,
+        &serde_json::json!({
+            "op": "update_layout",
+            "surface_id": surface_id,
+            "current_image_layout": current_image_layout,
+        }),
+        &[],
+        0,
+    )
+    .map_err(|request_failure| format!("update_layout of {surface_id:?}: {request_failure}"))?;
+    if let Some(refusal) = refusal_the_surface_share_service_answered(&response) {
+        return Err(format!(
+            "the surface-share service refused the layout publish for {surface_id:?}: {refusal}"
+        ));
+    }
+    match response.get("success").and_then(|value| value.as_bool()) {
+        Some(true) => Ok(()),
+        _ => Err(format!(
+            "the surface-share service did not record the layout publish for {surface_id:?}"
+        )),
+    }
 }
 
 /// Let go of one claim on `surface_id`, freeing its slot for its producer.
@@ -338,6 +533,76 @@ mod tests {
     fn pipe_fd() -> OwnedFd {
         let (read_end, _write_end) = std::io::pipe().expect("a pipe opens");
         OwnedFd::from(read_end)
+    }
+
+    fn texture_check_out_response(handle_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "resource_type": "texture", "width": 8, "height": 4, "format": "rgba8_unorm",
+            "handle_type": handle_type, "vk_image_allocation_size": 4096,
+            "current_image_layout": 1, "drm_format_modifier": 3,
+            "plane_offsets": [0], "plane_strides": [64], "vk_memory_type_index": 2,
+            "exporting_device_uuid": "00112233445566778899aabbccddeeff",
+        })
+    }
+
+    #[test]
+    fn a_dma_buf_texture_reads_its_modifier_planes_and_published_layout() {
+        let texture = CheckedOutTexture::from_check_out(
+            "s",
+            &texture_check_out_response("dma_buf"),
+            vec![pipe_fd()],
+        )
+        .unwrap();
+        assert_eq!((texture.width, texture.height), (8, 4));
+        assert_eq!(texture.current_image_layout, 1);
+        assert_eq!(
+            texture.vk_image_usage_flags,
+            SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT
+        );
+        assert!(matches!(
+            texture.memory,
+            CheckedOutTextureMemory::DmaBuf { drm_format_modifier: 3, ref plane_strides, .. }
+                if plane_strides == &[64]
+        ));
+    }
+
+    #[test]
+    fn an_opaque_fd_texture_reads_its_export_contract() {
+        let texture = CheckedOutTexture::from_check_out(
+            "s",
+            &texture_check_out_response("opaque_fd"),
+            vec![pipe_fd()],
+        )
+        .unwrap();
+        assert!(matches!(
+            texture.memory,
+            CheckedOutTextureMemory::OpaqueFd {
+                vk_memory_type_index: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_dma_buf_texture_without_an_explicit_modifier_is_refused_by_name() {
+        let mut response = texture_check_out_response("dma_buf");
+        response["drm_format_modifier"] = 0.into();
+        let refusal = CheckedOutTexture::from_check_out("s", &response, vec![pipe_fd()])
+            .err()
+            .expect("refused");
+        assert!(refusal.contains("explicit DRM modifier"), "{refusal}");
+    }
+
+    #[test]
+    fn a_texture_delivered_as_more_than_one_fd_is_refused() {
+        let refusal = CheckedOutTexture::from_check_out(
+            "s",
+            &texture_check_out_response("dma_buf"),
+            vec![pipe_fd(), pipe_fd()],
+        )
+        .err()
+        .expect("refused");
+        assert!(refusal.contains("arrived with 2 fds"), "{refusal}");
     }
 
     #[test]

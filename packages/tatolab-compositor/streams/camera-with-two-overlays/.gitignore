@@ -1,4 +1,3 @@
-target/
 .venv/
 __pycache__/
-*.so
+*.py[cod]

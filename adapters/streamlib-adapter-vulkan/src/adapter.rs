@@ -124,7 +124,6 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         let inserted = self.surfaces.register(
             id,
             SurfaceState {
-                surface_id: id,
                 texture: registration.texture,
                 produce_done: registration.produce_done,
                 consume_done: registration.consume_done,
