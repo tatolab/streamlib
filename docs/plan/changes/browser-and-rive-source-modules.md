@@ -14,7 +14,11 @@ a dynamic flow" around, with "a basic html app with JavaScript").
 **After this change:**
 - **`tatolab.browser:BrowserSource`** renders a URL offscreen with Chromium and publishes each
   painted frame as a video frame. A `data` input delivers each message to the page as a DOM
-  event. The page can publish back on an `events` output.
+  event. The page can publish back on an `events` output. The page's audio comes out on an
+  `audio` output.
+- **A page can composite the stream's own media.** Each video or audio input wired to a
+  browser node reaches the page as an ordinary `MediaStreamTrack`, so a web app can mix
+  camera, overlays and sound itself and the node publishes what it paints.
 - **`tatolab.rive:RiveSource`** plays a `.riv` file's state machine and publishes each frame.
   A `data` input sets the file's view-model properties by name.
 - **`tatolab.compositor:AlphaOverCompositor`** layers N video inputs, back to front, into one
@@ -49,7 +53,13 @@ retires nothing.
 - **CEF** (the Chromium Embedded Framework, BSD-3) is what OBS's browser source uses. Its
   offscreen rendering paints either to a CPU BGRA buffer (`OnPaint`) or to a shared GPU
   texture (`OnAcceleratedPaint`): a DMA-BUF on Linux, an IOSurface on macOS. CEF is
-  multi-process: it re-executes a subprocess binary for its renderer and GPU processes.
+  multi-process: it re-executes a subprocess binary for its renderer and GPU processes. Its
+  `CefAudioHandler` hands the host each page audio stream as planar float samples.
+- **A page cannot take a GPU texture from outside.** Stock Chromium has no import path for a
+  foreign texture into a page, and no supported way to present a fake capture device to
+  `getUserMedia` without patching Chromium. A page can build a track from frames and samples it
+  is handed (`MediaStreamTrackGenerator`, WebCodecs `VideoFrame` and `AudioData`), which
+  costs a GPU-to-CPU readback of each input frame.
 - **Rive's C++ renderer** (`rive-runtime`, MIT) has a Vulkan backend.
   `RenderContextVulkanImpl::MakeContext` takes the host's instance, physical device, device
   and `vkGetInstanceProcAddr`, and records into a command buffer the host supplies. It also
@@ -76,6 +86,11 @@ retires nothing.
   - Each `data` message is a msgpack map and reaches the page as
     `window.dispatchEvent(new CustomEvent("tatolab:data", {detail}))`.
   - `window.tatolab.publish(object)` writes one msgpack map to `events`.
+  - The page's audio is published on `audio` as the house audio block, resampled to the
+    configured `audio_sample_rate`; a silent page publishes nothing.
+  - Optional `video_in_N` and `audio_in_N` inputs reach the page as
+    `window.tatolab.inputTrack("video_in_0")`, a `MediaStreamTrack` built from frames read
+    back to host memory and samples handed over unchanged. An unwired input has no track.
 - **`packages/tatolab-rive`.** It renders a `.riv` file on an external-renderer device into the
   output texture: zero copy, NVIDIA included.
   - Config: `riv_path`, `artboard`, `state_machine`, `width`, `height`, `frame_rate`.
@@ -132,13 +147,19 @@ for marketers.
 **Assumed, not asked:**
 - CEF ships inside platform wheels on the repo-hosted PEP 503 index, which has no PyPI-style
   size cap.
-- Browser audio, and mouse and keyboard input into the page, are later work.
+- Mouse and keyboard input into the page is later work.
+- Overlays composite on the GPU through `tatolab-compositor`. Page inputs are for a page that
+  mixes media itself, and they pay one readback copy per input frame; the GPU compositor stays
+  the default for overlays.
+- A fake capture device visible to `getUserMedia` is out: it needs a patched Chromium.
 - The `data` and `events` payloads are msgpack maps, the house wire.
 
 ## Tracer bullets
 
 1. **Browser source, CPU path.** Host table 1.3 `surface_write_from_host_memory`, and
-   `tatolab-browser` with `OnPaint`, the `data` and `events` ports, and the subprocess binary.
+   `tatolab-browser` with `OnPaint`, the `data`, `events` and `audio` ports, and the
+   subprocess binary.
+   - Done: a page playing a tone publishes it on `audio` with no gaps over 10 minutes.
    - Done: a 1080p page animates at 60 fps on the dev box.
    - Done: a `data` message changes the page within one frame.
    - Done: `kill -9` of the helper takes CEF's subprocesses with it.
@@ -154,5 +175,10 @@ for marketers.
    - Done: the three-source graph runs at 60 fps on the dev box.
    - Done: a `data` message swaps the template live.
    - Done: a recording of it is attached to the PR.
+5. **Page inputs.** `video_in_N` and `audio_in_N` on `tatolab-browser`, readback in the
+   engine's surface path, and `window.tatolab.inputTrack`.
+   - Done: a page draws the camera and plays the microphone through its own canvas mix, and
+     the node publishes the result at 1080p30 on the dev box.
+   - Done: added latency per input is measured and recorded.
 
-Order: 1, then 2 and 3 in parallel, then 4. Bullet 2's macOS half waits on #3046.
+Order: 1, then 2 and 3 in parallel, then 4, then 5. Bullet 2's macOS half waits on #3046.
