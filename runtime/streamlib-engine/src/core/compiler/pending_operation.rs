@@ -31,45 +31,6 @@ pub enum PendingOperation {
     },
 }
 
-impl PendingOperation {
-    /// Get the processor ID if this operation involves a processor.
-    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
-        match self {
-            PendingOperation::AddProcessor(id) => Some(id),
-            PendingOperation::RemoveProcessor(id) => Some(id),
-            PendingOperation::UpdateProcessorConfig { processor_id, .. } => Some(processor_id),
-            PendingOperation::AddLink(_) | PendingOperation::RemoveLink(_) => None,
-        }
-    }
-
-    /// Get the link ID if this operation involves a link.
-    pub fn link_id(&self) -> Option<&LinkUniqueId> {
-        match self {
-            PendingOperation::AddLink(id) => Some(id),
-            PendingOperation::RemoveLink(id) => Some(id),
-            PendingOperation::AddProcessor(_)
-            | PendingOperation::RemoveProcessor(_)
-            | PendingOperation::UpdateProcessorConfig { .. } => None,
-        }
-    }
-
-    /// Check if this is an add operation.
-    pub fn is_add(&self) -> bool {
-        matches!(
-            self,
-            PendingOperation::AddProcessor(_) | PendingOperation::AddLink(_)
-        )
-    }
-
-    /// Check if this is a remove operation.
-    pub fn is_remove(&self) -> bool {
-        matches!(
-            self,
-            PendingOperation::RemoveProcessor(_) | PendingOperation::RemoveLink(_)
-        )
-    }
-}
-
 impl std::fmt::Display for PendingOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -92,13 +53,5 @@ mod tests {
     fn test_pending_operation_display() {
         let op = PendingOperation::AddProcessor("proc_1".into());
         assert_eq!(format!("{}", op), "AddProcessor(proc_1)");
-    }
-
-    #[test]
-    fn test_is_add_remove() {
-        assert!(PendingOperation::AddProcessor("p".into()).is_add());
-        assert!(PendingOperation::RemoveProcessor("p".into()).is_remove());
-        assert!(!PendingOperation::AddProcessor("p".into()).is_remove());
-        assert!(!PendingOperation::RemoveProcessor("p".into()).is_add());
     }
 }
