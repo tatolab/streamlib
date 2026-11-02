@@ -9,15 +9,21 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
-    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTableBytes,
-    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
+    MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY, MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32,
+    MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16, MODULE_HOST_TABLE_STATUS_EMPTY,
+    MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
+    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW,
+    ModuleHostTableAudioCaptureStreamRequest, ModuleHostTableAudioStreamFormat,
+    ModuleHostTableAudioStreamHandle, ModuleHostTableBytes, ModuleHostTableCapturedAudioBlock,
+    ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableColorInfo,
+    ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 use tatolab_module_sdk::{
-    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, ModuleHost, ModuleHostColorInfo,
-    ModuleHostError, ModuleHostForeignDmaBuf, ModuleHostLogLevel,
+    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, ModuleHost,
+    ModuleHostAudioCaptureStreamRequest, ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat,
+    ModuleHostColorInfo, ModuleHostError, ModuleHostForeignDmaBuf, ModuleHostLogLevel,
     ModuleHostNodeOutputTextureRequest, ModuleHostTable,
     refuse_a_module_host_table_this_module_cannot_read,
 };
@@ -39,8 +45,22 @@ struct StoodUpNodeHost {
     log_records: Mutex<Vec<(u32, String, String)>>,
     released_reads: AtomicUsize,
     stop_requested: AtomicU32,
+    audio_capture: Mutex<StoodUpAudioCaptureStream>,
     surface_calls: Mutex<Vec<String>>,
 }
+
+/// What the stood-up host knows of the one capture stream it opens.
+#[derive(Default)]
+struct StoodUpAudioCaptureStream {
+    requested_device_id: Option<String>,
+    requested_format: Option<(u32, u32, u32)>,
+    installed_callback: Option<(ModuleHostTableCapturedAudioBlockCallback, usize)>,
+    ended_with: Option<String>,
+    closed: bool,
+}
+
+/// The handle the stood-up host opens its capture stream under.
+const STOOD_UP_AUDIO_STREAM_HANDLE: u64 = 3;
 
 fn node_host_of(node_host: *mut c_void) -> &'static StoodUpNodeHost {
     // SAFETY: every table here names a leaked `StoodUpNodeHost`.
@@ -282,25 +302,137 @@ unsafe extern "C" fn record_a_released_surface(
         .push(format!("release {}", surface.value));
 }
 
-unsafe extern "C" fn a_verb_added_at_minor_2(_node_host: *mut c_void) -> u32 {
+unsafe extern "C" fn audio_capture_stream_open(
+    node_host: *mut c_void,
+    request: *const ModuleHostTableAudioCaptureStreamRequest,
+    opened_stream: *mut ModuleHostTableAudioStreamHandle,
+    opened_format: *mut ModuleHostTableAudioStreamFormat,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK passes a live request and live out-pointers.
+    let request = unsafe { &*request };
+    let device_id = unsafe { request.device_id.as_str() }.unwrap().to_string();
+    if device_id == "unplugged" {
+        unsafe { (*error_message).write("audio device 'unplugged' is not attached") };
+        return MODULE_HOST_TABLE_STATUS_REFUSED;
+    }
+    let mut audio_capture = node_host_of(node_host).audio_capture.lock().unwrap();
+    audio_capture.requested_device_id = Some(device_id);
+    audio_capture.requested_format = Some((
+        request.requested_format.sample_rate,
+        request.requested_format.channels,
+        request.requested_format.sample_format,
+    ));
+    unsafe {
+        (*opened_stream).value = STOOD_UP_AUDIO_STREAM_HANDLE;
+        *opened_format = ModuleHostTableAudioStreamFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            sample_format: MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16,
+        };
+    }
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
+unsafe extern "C" fn audio_capture_stream_start(
+    node_host: *mut c_void,
+    stream: ModuleHostTableAudioStreamHandle,
+    block_callback: ModuleHostTableCapturedAudioBlockCallback,
+    callback_context: *mut c_void,
+    _error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    assert_eq!(stream.value, STOOD_UP_AUDIO_STREAM_HANDLE);
+    node_host_of(node_host)
+        .audio_capture
+        .lock()
+        .unwrap()
+        .installed_callback = Some((block_callback, callback_context as usize));
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
+unsafe extern "C" fn audio_capture_stream_stop(
+    node_host: *mut c_void,
+    _stream: ModuleHostTableAudioStreamHandle,
+    _error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    node_host_of(node_host)
+        .audio_capture
+        .lock()
+        .unwrap()
+        .installed_callback = None;
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
+unsafe extern "C" fn audio_capture_stream_liveness(
+    node_host: *mut c_void,
+    _stream: ModuleHostTableAudioStreamHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    match &node_host_of(node_host)
+        .audio_capture
+        .lock()
+        .unwrap()
+        .ended_with
+    {
+        Some(failure) => {
+            unsafe { (*error_message).write(failure) };
+            MODULE_HOST_TABLE_STATUS_ENDED
+        }
+        None => MODULE_HOST_TABLE_STATUS_OK,
+    }
+}
+
+unsafe extern "C" fn audio_capture_stream_close(
+    node_host: *mut c_void,
+    _stream: ModuleHostTableAudioStreamHandle,
+) {
+    let mut audio_capture = node_host_of(node_host).audio_capture.lock().unwrap();
+    audio_capture.installed_callback = None;
+    audio_capture.closed = true;
+}
+
+/// Deliver one block the way the host's device thread does, through whatever
+/// callback is installed; `false` when none is.
+fn deliver_one_block_through_the_installed_callback(
+    node_host: &StoodUpNodeHost,
+    interleaved_sample_bytes: &[u8],
+    sample_count: u32,
+    first_sample_timestamp_ns: i64,
+) -> bool {
+    let Some((block_callback, callback_context)) =
+        node_host.audio_capture.lock().unwrap().installed_callback
+    else {
+        return false;
+    };
+    let captured_block = ModuleHostTableCapturedAudioBlock {
+        interleaved_sample_bytes: ModuleHostTableBytes::of(interleaved_sample_bytes),
+        sample_count,
+        reserved: 0,
+        first_sample_timestamp_ns,
+    };
+    unsafe { block_callback(callback_context as *mut c_void, &captured_block) };
+    true
+}
+
+unsafe extern "C" fn a_verb_added_at_minor_3(_node_host: *mut c_void) -> u32 {
     11
 }
 
-/// v1.1's fields, then one verb a later minor appended.
+/// v1.2's fields, then one verb a later minor appended.
 #[repr(C)]
-struct ModuleHostTableAtMinor2 {
-    fields_of_minor_1: ModuleHostTable,
-    a_verb_added_at_minor_2: unsafe extern "C" fn(*mut c_void) -> u32,
+struct ModuleHostTableAtMinor3 {
+    fields_of_minor_2: ModuleHostTable,
+    a_verb_added_at_minor_3: unsafe extern "C" fn(*mut c_void) -> u32,
 }
 
 fn stood_up_node_host() -> &'static StoodUpNodeHost {
     Box::leak(Box::new(StoodUpNodeHost::default()))
 }
 
-fn v1_1_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
+fn v1_2_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
     ModuleHostTable {
         abi_major: 1,
-        abi_minor: 1,
+        abi_minor: 2,
         table_size_bytes: std::mem::size_of::<ModuleHostTable>() as u64,
         node_host: std::ptr::from_ref(node_host).cast_mut().cast(),
         node_host_retain: retain,
@@ -316,6 +448,11 @@ fn v1_1_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
         monotonic_now_ns,
         log,
         host_capabilities_json,
+        audio_capture_stream_open,
+        audio_capture_stream_start,
+        audio_capture_stream_stop,
+        audio_capture_stream_liveness,
+        audio_capture_stream_close,
         surface_import_dma_buf: import_dma_buf_as_surface_3,
         output_texture_acquire_from_node_output_pool: acquire_output_texture_as_surface_4,
         surface_convert_into: convert_refusing_an_unknown_range,
@@ -325,36 +462,36 @@ fn v1_1_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
 }
 
 #[test]
-fn this_sdk_reads_table_1_1() {
+fn this_sdk_reads_table_1_2() {
     assert_eq!(
         (MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR),
-        (1, 1)
+        (1, 2)
     );
 }
 
 #[test]
-fn a_module_built_against_1_1_loads_on_a_runtime_lending_1_2_and_reaches_its_ports() {
+fn a_module_built_against_1_2_loads_on_a_runtime_lending_1_3_and_reaches_its_ports() {
     let node_host = stood_up_node_host();
-    let mut fields_of_minor_1 = v1_1_table_over(node_host);
-    fields_of_minor_1.abi_minor = 2;
-    fields_of_minor_1.table_size_bytes = std::mem::size_of::<ModuleHostTableAtMinor2>() as u64;
-    let table_at_minor_2 = ModuleHostTableAtMinor2 {
-        fields_of_minor_1,
-        a_verb_added_at_minor_2,
+    let mut fields_of_minor_2 = v1_2_table_over(node_host);
+    fields_of_minor_2.abi_minor = 3;
+    fields_of_minor_2.table_size_bytes = std::mem::size_of::<ModuleHostTableAtMinor3>() as u64;
+    let table_at_minor_3 = ModuleHostTableAtMinor3 {
+        fields_of_minor_2,
+        a_verb_added_at_minor_3,
     };
     assert_eq!(
-        unsafe { (table_at_minor_2.a_verb_added_at_minor_2)(std::ptr::null_mut()) },
+        unsafe { (table_at_minor_3.a_verb_added_at_minor_3)(std::ptr::null_mut()) },
         11
     );
 
     let module_host = unsafe {
         ModuleHost::from_module_host_table_pointer(
-            std::ptr::from_ref(&table_at_minor_2).cast::<ModuleHostTable>(),
+            std::ptr::from_ref(&table_at_minor_3).cast::<ModuleHostTable>(),
         )
     }
-    .expect("a 1.1 module loads on a 1.2 runtime");
+    .expect("a 1.2 module loads on a 1.3 runtime");
 
-    assert_eq!(module_host.module_host_table_version(), (1, 2));
+    assert_eq!(module_host.module_host_table_version(), (1, 3));
     let output_port = module_host
         .open_output_port("lent")
         .expect("the lent port opens");
@@ -382,8 +519,9 @@ fn a_module_built_against_1_1_loads_on_a_runtime_lending_1_2_and_reaches_its_por
 #[test]
 fn a_runtime_of_another_major_is_refused_naming_both_versions() {
     let node_host = stood_up_node_host();
-    let mut table = v1_1_table_over(node_host);
+    let mut table = v1_2_table_over(node_host);
     table.abi_major = 2;
+    table.abi_minor = 0;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
 
@@ -391,14 +529,14 @@ fn a_runtime_of_another_major_is_refused_naming_both_versions() {
         refusal,
         ModuleHostError::ModuleHostTableMajorMismatch {
             runtime_major: 2,
-            runtime_minor: 1,
+            runtime_minor: 0,
             module_major: 1,
-            module_minor: 1,
+            module_minor: 2,
         }
     );
     let message = refusal.to_string();
-    assert!(message.contains("module host table 1.1"), "{message}");
-    assert!(message.contains("lends 2.1"), "{message}");
+    assert!(message.contains("module host table 1.2"), "{message}");
+    assert!(message.contains("lends 2.0"), "{message}");
     assert_eq!(
         node_host.references.load(Ordering::SeqCst),
         0,
@@ -418,18 +556,18 @@ fn a_runtime_older_than_the_minor_a_module_needs_is_refused_naming_the_update() 
 }
 
 #[test]
-fn a_1_1_module_is_refused_on_a_runtime_lending_1_0() {
+fn a_1_2_module_is_refused_on_a_runtime_lending_1_1() {
     let node_host = stood_up_node_host();
-    let mut table = v1_1_table_over(node_host);
-    table.abi_minor = 0;
+    let mut table = v1_2_table_over(node_host);
+    table.abi_minor = 1;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
 
     assert!(matches!(
         refusal,
         ModuleHostError::ModuleHostTableOlderThanTheModuleNeeds {
-            runtime_minor: 0,
-            module_minor: 1,
+            runtime_minor: 1,
+            module_minor: 2,
             ..
         }
     ));
@@ -438,7 +576,7 @@ fn a_1_1_module_is_refused_on_a_runtime_lending_1_0() {
 #[test]
 fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let imported = module_host
@@ -510,7 +648,7 @@ fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it
 #[test]
 fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -532,7 +670,7 @@ fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() 
 #[test]
 fn a_table_smaller_than_its_minor_states_is_refused() {
     let node_host = stood_up_node_host();
-    let mut table = v1_1_table_over(node_host);
+    let mut table = v1_2_table_over(node_host);
     table.table_size_bytes = 16;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
@@ -556,7 +694,7 @@ fn a_null_table_is_refused() {
 #[test]
 fn every_handle_on_the_node_host_holds_one_reference_until_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
 
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_port = module_host.open_output_port("lent").unwrap();
@@ -570,7 +708,7 @@ fn every_handle_on_the_node_host_holds_one_reference_until_it_drops() {
 #[test]
 fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host.open_output_port("never lent").unwrap_err();
@@ -593,7 +731,7 @@ fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
 #[test]
 fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let input_port = module_host.open_input_port("lent").unwrap();
 
@@ -612,7 +750,7 @@ fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
 #[test]
 fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     assert_eq!(module_host.monotonic_now_ns(), 1_000);
@@ -640,7 +778,7 @@ fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
 #[test]
 fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
     let node_host = stood_up_node_host();
-    let table = v1_1_table_over(node_host);
+    let table = v1_2_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to(&module_host);
@@ -656,4 +794,168 @@ fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
             "reconnecting attempt=2".to_string()
         )]
     );
+}
+
+/// A runtime lending 1.0 has no audio capture or surface verbs, so a module
+/// built against 1.2 never reads past the end of its table.
+#[test]
+fn a_module_built_against_1_2_is_refused_on_a_runtime_lending_1_0() {
+    let node_host = stood_up_node_host();
+    let mut table = v1_2_table_over(node_host);
+    table.abi_minor = 0;
+
+    let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
+
+    assert_eq!(
+        refusal.to_string(),
+        "this module needs module host table 1.2, and this runtime lends 1.0 — update the runtime"
+    );
+}
+
+#[test]
+fn a_capture_stream_carries_the_request_and_reports_the_format_it_opened_in() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    let capture_stream = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest {
+            device_id: Some("hw:1"),
+            sample_rate: Some(48_000),
+            channels: None,
+            sample_format: Some(ModuleHostAudioSampleFormat::F32),
+        })
+        .expect("the stood-up host opens every device but `unplugged`");
+
+    assert_eq!(
+        capture_stream.stream_format(),
+        ModuleHostAudioStreamFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            sample_format: ModuleHostAudioSampleFormat::I16,
+        }
+    );
+    let audio_capture = node_host.audio_capture.lock().unwrap();
+    assert_eq!(audio_capture.requested_device_id.as_deref(), Some("hw:1"));
+    assert_eq!(
+        audio_capture.requested_format,
+        Some((48_000, 0, MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32))
+    );
+}
+
+#[test]
+fn a_capture_request_naming_nothing_asks_for_the_default_device_in_its_own_format() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    let _capture_stream = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
+        .unwrap();
+
+    let audio_capture = node_host.audio_capture.lock().unwrap();
+    assert_eq!(audio_capture.requested_device_id.as_deref(), Some(""));
+    assert_eq!(
+        audio_capture.requested_format,
+        Some((0, 0, MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY))
+    );
+}
+
+#[test]
+fn a_capture_stream_the_host_refuses_carries_its_message() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    let refusal = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest {
+            device_id: Some("unplugged"),
+            ..ModuleHostAudioCaptureStreamRequest::default()
+        })
+        .unwrap_err();
+
+    assert_eq!(
+        refusal.to_string(),
+        "audio_capture_stream_open: audio device 'unplugged' is not attached"
+    );
+}
+
+#[test]
+fn captured_blocks_reach_the_hand_off_until_delivery_stops() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+    let mut capture_stream = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
+        .unwrap();
+    let handed_off = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let handed_off_in_the_hand_off = std::sync::Arc::clone(&handed_off);
+
+    capture_stream
+        .start_delivering_to(Box::new(move |captured_block| {
+            handed_off_in_the_hand_off.lock().unwrap().push((
+                captured_block.interleaved_sample_bytes.to_vec(),
+                captured_block.sample_count,
+                captured_block.first_sample_timestamp_ns,
+            ));
+        }))
+        .unwrap();
+    assert!(deliver_one_block_through_the_installed_callback(
+        node_host,
+        &[1, 2, 3, 4],
+        1,
+        77
+    ));
+    capture_stream.stop_delivering().unwrap();
+
+    assert!(!deliver_one_block_through_the_installed_callback(
+        node_host,
+        &[5, 6, 7, 8],
+        1,
+        78
+    ));
+    assert_eq!(*handed_off.lock().unwrap(), vec![(vec![1, 2, 3, 4], 1, 77)]);
+}
+
+#[test]
+fn a_capture_stream_reports_the_failure_that_ended_it() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+    let capture_stream = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
+        .unwrap();
+    assert_eq!(
+        capture_stream.failure_that_ended_the_stream().unwrap(),
+        None
+    );
+
+    node_host.audio_capture.lock().unwrap().ended_with = Some("the device was unplugged".into());
+
+    assert_eq!(
+        capture_stream.failure_that_ended_the_stream().unwrap(),
+        Some("the device was unplugged".to_string())
+    );
+}
+
+#[test]
+fn a_dropped_capture_stream_is_closed_and_releases_its_reference() {
+    let node_host = stood_up_node_host();
+    let table = v1_2_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+    let mut capture_stream = module_host
+        .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
+        .unwrap();
+    capture_stream
+        .start_delivering_to(Box::new(|_captured_block| {}))
+        .unwrap();
+    assert_eq!(node_host.references.load(Ordering::SeqCst), 2);
+
+    drop(capture_stream);
+
+    let audio_capture = node_host.audio_capture.lock().unwrap();
+    assert!(audio_capture.closed);
+    assert!(audio_capture.installed_callback.is_none());
+    drop(audio_capture);
+    assert_eq!(node_host.references.load(Ordering::SeqCst), 1);
 }

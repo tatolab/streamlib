@@ -37,6 +37,7 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::context::{
+    CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
 use crate::core::descriptors::ProcessorDescriptor;
@@ -271,6 +272,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
         iceoryx2_domain_root: &Path,
         surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
         runtime_vulkan_device_uuid: Option<[u8; 16]>,
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
     ) -> Result<Command> {
         let mut command = processor_interpreter_bootstrap_command(
             &self.stream_environment,
@@ -298,6 +300,10 @@ impl ProcessorInterpreterSpawnHostProcessor {
                 &self.processor_id,
             )
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
+            .env(
+                CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE,
+                capture_device_access_prompting.as_environment_value(),
+            )
             .env(
                 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
                 iceoryx2_domain_root,
@@ -742,6 +748,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
             &iceoryx2_domain_root,
             surface_share_channel,
             runtime_vulkan_device_uuid,
+            ctx.capture_device_access_prompting(),
         )?;
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
@@ -1965,6 +1972,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
@@ -2005,6 +2013,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
@@ -2022,6 +2031,34 @@ sys.exit(0)
         );
     }
 
+    /// A device the helper's node opens prompts only as the stream's load
+    /// allows, so the child carries the stream's policy.
+    #[test]
+    fn the_child_is_handed_the_streams_capture_device_access_prompting() {
+        for policy in [
+            CaptureDeviceAccessPrompting::MayAskTheUser,
+            CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+        ] {
+            let command = spawn_host_for_test()
+                .build_helper_process_command(
+                    "Rtest",
+                    Path::new("/tmp/streamlib-1000/iox2"),
+                    None,
+                    None,
+                    policy,
+                )
+                .expect("the test directories hold no path-list separator");
+            let environment = environment_of(&command);
+            assert_eq!(
+                value_of(
+                    &environment,
+                    CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE
+                ),
+                Some(policy.as_environment_value())
+            );
+        }
+    }
+
     /// The child opens its iceoryx2 node in the domain its parent resolved, so
     /// the two always share one domain whatever the child's working directory.
     #[test]
@@ -2032,6 +2069,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
@@ -2051,6 +2089,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
@@ -2075,6 +2114,7 @@ sys.exit(0)
                     channel_name: OsStr::new("com.tatolab.streamlib.surface-share.Rtest"),
                 }),
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
@@ -2088,6 +2128,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&without_a_channel);
@@ -2114,6 +2155,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 Some(runtime_vulkan_device_uuid),
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let handed_device_uuid = value_of(
@@ -2138,6 +2180,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
@@ -2288,6 +2331,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
@@ -2390,6 +2434,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         let describe_command =
@@ -2494,6 +2539,7 @@ sys.exit(0)
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(

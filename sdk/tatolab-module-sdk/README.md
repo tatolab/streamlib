@@ -6,20 +6,41 @@ against this crate alone, and the runtime that starts its node lends the table.
 
 ## What the table carries
 
-Version 1.1 carries, for the ports a node lends to its native code:
+Version 1.0 carries, for the ports a node lends to its native code:
 
 - open, write and catalog-entry on an output port;
 - open, read and wait on input ports;
 - the node's stop flag;
 - log records into the node's log, at the host's levels;
 - the runtime's monotonic clock;
-- the host's capabilities, as JSON;
-- surfaces: import a linear DMA-BUF fd with its plane layout, acquire a texture
-  from the node's output pool, convert a YCbCr surface into an RGBA texture,
-  read a surface's id, and release it.
+- the host's capabilities, as JSON.
+
+Version 1.1 adds the engine's audio device backend, so a module captures from
+PipeWire, ALSA or CoreAudio without carrying an audio path of its own:
+
+- open a capture stream on a named device or the default, optionally requiring
+  a sample rate, channel count or sample format (a device that opens in another
+  is refused, never converted);
+- start and stop delivering blocks to a callback on the backend's device thread;
+- read whether the device still serves the stream, and close it.
+
+The stream opens under the stream's capture-prompting policy, so only a stream
+that holds the node can put the platform's access prompt in front of the user,
+and only when its load allows.
+
+Version 1.2 adds surfaces, so a module hands the GPU what a device wrote
+without a copy:
+
+- import a linear DMA-BUF fd with its plane layout, as written by a foreign
+  device;
+- acquire a texture from one of the node's output pools;
+- convert a YCbCr surface into an RGBA texture with the engine's colour
+  converter;
+- read the surface id a message names a surface by, and release it.
 
 Every verb is callable from any thread with no Python attached. The table carries
-plain data, opaque handles and borrowed fds only. No engine or GPU object crosses it, and
+plain data, opaque handles and borrowed fds only. No engine or GPU object
+crosses it, and
 `cargo xtask check-module-host-table-surface` keeps it that way.
 
 ## Reaching it
@@ -51,6 +72,17 @@ std::thread::spawn(move || {
         }
     }
 });
+```
+
+A capture stream hands each block to a closure; the closure must not block,
+so a module copies the block into its own queue and publishes from a thread:
+
+```rust
+let mut capture_stream =
+    module_host.open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())?;
+capture_stream.start_delivering_to(Box::new(move |captured_block| {
+    queue.push(captured_block.interleaved_sample_bytes.to_vec());
+}))?;
 ```
 
 With the default `tracing` feature,

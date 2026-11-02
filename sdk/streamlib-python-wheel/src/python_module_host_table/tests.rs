@@ -358,9 +358,13 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 1})
+        serde_json::json!({"major": 1, "minor": 2})
     );
     assert_eq!(capabilities["node_id"], "source-node");
+    assert_eq!(
+        capabilities["capture_device_access_prompting"], "refuse_what_was_never_asked_for",
+        "a helper the engine did not spawn never prompts"
+    );
     assert_eq!(
         capabilities["lent_output_ports"],
         serde_json::json!([SOURCE_OUTPUT_PORT])
@@ -414,4 +418,132 @@ fn an_input_is_lent_only_to_a_node_the_runtime_runs_manually() {
         note_execution_mode_from_parent_on_runtime_context(python, &lent_before_its_run, "manual")
             .unwrap();
     });
+}
+
+/// A host over a node that lent nothing: the audio verbs need no port.
+fn module_host_lending_no_port(label: &str) -> ModuleHost {
+    Python::initialize();
+    Python::attach(|python| {
+        let (source, _destination) = one_wired_link(python, label);
+        let (context, _) = full_access_context_recording_escalates(python, source, "microphone");
+        module_host_of(&open_module_host_table(&context, &[], &[]).unwrap())
+    })
+}
+
+/// Whichever arm this machine probes — a device, or the null backend's
+/// silence — delivers whole, device-stamped blocks through the module's
+/// callback on its own thread, and none once delivery stops.
+#[test]
+fn a_module_captures_blocks_through_the_engines_audio_device_backend() {
+    let module_host = module_host_lending_no_port("audio_capture");
+    let mut capture_stream = module_host
+        .open_audio_capture_stream(
+            &tatolab_module_sdk::ModuleHostAudioCaptureStreamRequest::default(),
+        )
+        .expect("the default device, or silence, opens");
+    let stream_format = capture_stream.stream_format();
+    let (block_sender, block_receiver) = std::sync::mpsc::sync_channel(64);
+    capture_stream
+        .start_delivering_to(Box::new(move |captured_block| {
+            let _ = block_sender.try_send((
+                captured_block.interleaved_sample_bytes.len(),
+                captured_block.sample_count,
+                captured_block.first_sample_timestamp_ns,
+            ));
+        }))
+        .unwrap();
+
+    let mut previous_first_sample_timestamp_ns = i64::MIN;
+    for _ in 0..3 {
+        let (byte_count, sample_count, first_sample_timestamp_ns) = block_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a block arrives within five seconds");
+        assert!(sample_count > 0);
+        assert_eq!(
+            byte_count,
+            sample_count as usize
+                * stream_format.channels as usize
+                * stream_format.sample_format.bytes_per_sample()
+        );
+        assert!(first_sample_timestamp_ns > previous_first_sample_timestamp_ns);
+        previous_first_sample_timestamp_ns = first_sample_timestamp_ns;
+    }
+    assert_eq!(
+        capture_stream.failure_that_ended_the_stream().unwrap(),
+        None
+    );
+
+    capture_stream.stop_delivering().unwrap();
+    while block_receiver.try_recv().is_ok() {}
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        block_receiver.try_recv().is_err(),
+        "no block is delivered once delivery stops"
+    );
+}
+
+#[test]
+fn a_device_no_backend_has_is_refused_by_name() {
+    let module_host = module_host_lending_no_port("audio_unknown_device");
+
+    let refusal = module_host
+        .open_audio_capture_stream(&tatolab_module_sdk::ModuleHostAudioCaptureStreamRequest {
+            device_id: Some("tatolab-no-such-audio-device"),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        refusal.starts_with("audio_capture_stream_open: "),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("tatolab-no-such-audio-device"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_format_the_device_does_not_open_in_is_refused_never_converted() {
+    let module_host = module_host_lending_no_port("audio_format");
+
+    let refusal = module_host
+        .open_audio_capture_stream(&tatolab_module_sdk::ModuleHostAudioCaptureStreamRequest {
+            channels: Some(31),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        refusal.contains("31 channel(s) were requested"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_closed_capture_streams_handle_names_nothing() {
+    let audio_capture_streams = audio_capture_streams::AudioCaptureStreamsOpenedForOneNode::under(
+        CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+    );
+    let (handle, _stream_format) = audio_capture_streams
+        .open("microphone", None, Default::default())
+        .unwrap();
+    assert!(audio_capture_streams.opened_stream(handle).is_ok());
+
+    audio_capture_streams.close(handle);
+
+    let refusal = audio_capture_streams
+        .opened_stream(handle)
+        .err()
+        .expect("a closed stream's handle is refused");
+    assert!(
+        refusal.contains("names no capture stream this table has open"),
+        "{refusal}"
+    );
+    let (next_handle, _stream_format) = audio_capture_streams
+        .open("microphone", None, Default::default())
+        .unwrap();
+    assert_ne!(next_handle, handle, "a handle is never reused");
 }

@@ -42,15 +42,18 @@ mod video_device_backend;
 
 pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
-    SoftwareAudioClock,
+    SoftwareAudioClock, platform_audio_clock_for_one_stream,
 };
 pub use audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
-    SharedAudioDeviceBackend, probe_audio_device_backend,
+    RequestedAudioStreamFormat, SharedAudioDeviceBackend, open_capture_stream_in_requested_format,
+    probe_audio_device_backend,
 };
-pub use capture_device_access_prompting::CaptureDeviceAccessPrompting;
+pub use capture_device_access_prompting::{
+    CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
+};
 pub use device_backend_probe_chain::DeviceBackendArmUnavailableReason;
 pub use device_stream_liveness_report::{
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,

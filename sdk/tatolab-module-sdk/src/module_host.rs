@@ -160,7 +160,7 @@ impl ModuleHostLogLevel {
 /// holds another.
 #[derive(Debug)]
 pub struct ModuleHost {
-    module_host_table: ModuleHostTable,
+    pub(crate) module_host_table: ModuleHostTable,
 }
 
 // SAFETY: the table's contract is that every verb is callable from any
@@ -689,7 +689,7 @@ impl Drop for ModuleHostReadMessage {
     }
 }
 
-fn refuse_unless_ok(
+pub(crate) fn refuse_unless_ok(
     verb: &'static str,
     status: ModuleHostTableStatus,
     error_message: &ModuleHostTableErrorMessage,
