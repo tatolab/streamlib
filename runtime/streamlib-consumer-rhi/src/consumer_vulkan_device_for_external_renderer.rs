@@ -244,7 +244,7 @@ impl ConsumerVulkanDeviceForExternalRenderer {
             })?;
         let device = &self.consumer_vulkan_device;
         let texture = match checked_out.memory {
-            CheckedOutTextureMemory::DmaBufWithExplicitDrmFormatModifier {
+            CheckedOutTextureMemory::DmaBuf {
                 memory_fd,
                 plane_offsets,
                 plane_strides,
@@ -269,10 +269,10 @@ impl ConsumerVulkanDeviceForExternalRenderer {
             }
             CheckedOutTextureMemory::OpaqueFd {
                 memory_fd,
-                vk_image_usage_flags,
                 vk_memory_type_index,
                 exporting_device_uuid,
             } => {
+                let vk_image_usage_flags = checked_out.vk_image_usage_flags;
                 if exporting_device_uuid != device.physical_device_uuid() {
                     return Err(ConsumerRhiError::Gpu(format!(
                         "texture {surface_id:?} was exported by another GPU; an OPAQUE_FD \

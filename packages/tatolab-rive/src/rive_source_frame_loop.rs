@@ -18,7 +18,7 @@ use streamlib_consumer_rhi::{
     runtime_vulkan_device_uuid_named_at_spawn,
 };
 use streamlib_surface_client::{
-    check_out_texture_on_surface_share, connect_to_surface_share_socket,
+    CheckedOutSurface, check_out_surface_on_surface_share, connect_to_surface_share_socket,
     publish_image_layout_on_surface_share, release_check_out_on_surface_share,
 };
 use tatolab_module_sdk::{
@@ -359,9 +359,18 @@ impl RiveSourceFrameLoop {
             })
             .map_err(|refusal| refusal.to_string())?;
         let surface_id = output_texture.surface_id().to_owned();
-        let checked_out =
-            check_out_texture_on_surface_share(&self.surface_share_connection, &surface_id)?;
-        let drawn = self.draw_into_checked_out_texture(&surface_id, checked_out, elapsed_seconds);
+        let drawn = match check_out_surface_on_surface_share(
+            &self.surface_share_connection,
+            &surface_id,
+        )? {
+            CheckedOutSurface::Texture(checked_out) => {
+                self.draw_into_checked_out_texture(&surface_id, checked_out, elapsed_seconds)
+            }
+            CheckedOutSurface::PixelBuffer(_) => Err(format!(
+                "output pool surface {surface_id:?} checked out as a pixel buffer, not the \
+                 texture it was acquired as"
+            )),
+        };
         let released =
             release_check_out_on_surface_share(&self.surface_share_connection, &surface_id);
         let published_layout = drawn?;
