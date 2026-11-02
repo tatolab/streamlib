@@ -273,7 +273,7 @@ impl TextureReadback {
     fn host_inner(&self) -> &crate::vulkan::rhi::VulkanTextureReadback {
         // SAFETY: `handle` is `Box::into_raw(Box<Arc<VulkanTextureReadback>>)`.
         unsafe {
-            &**(self.handle as *const std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>)
+            &*(self.handle as *const std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>)
         }
     }
 

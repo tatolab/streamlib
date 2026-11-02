@@ -29,7 +29,7 @@ fn prime_with_pattern(
         .acquire_write(descriptor)
         .expect("prime: acquire_write");
     let bytes = guard.view_mut().plane_mut(0).bytes_mut();
-    for chunk in bytes.chunks_exact_mut(4) {
+    for chunk in bytes.as_chunks_mut::<4>().0 {
         chunk.copy_from_slice(&pattern);
     }
 }
@@ -59,7 +59,7 @@ fn round_trip_read_observes_host_pattern() {
     assert_eq!(plane.bytes().len(), 32 * 16 * 4);
     assert_eq!(view.read_bytes().len(), 32 * 16 * 4);
 
-    for (i, chunk) in plane.bytes().chunks_exact(4).enumerate() {
+    for (i, chunk) in plane.bytes().as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(chunk, &pattern, "pixel {i} mismatch: {chunk:02x?}");
     }
 }

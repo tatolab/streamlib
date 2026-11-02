@@ -37,6 +37,30 @@ _Static_assert(offsetof(ModuleHostTableReadMessage, lost_since_last_read) == 2 *
 _Static_assert(offsetof(ModuleHostTableReadMessage, host_owned_message) == 2 * POINTER + 24, "ModuleHostTableReadMessage.host_owned_message");
 _Static_assert(sizeof(ModuleHostTableReadMessage) == 3 * POINTER + 24, "ModuleHostTableReadMessage size");
 
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, sample_rate) == 0, "ModuleHostTableAudioStreamFormat.sample_rate");
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, channels) == 4, "ModuleHostTableAudioStreamFormat.channels");
+_Static_assert(offsetof(ModuleHostTableAudioStreamFormat, sample_format) == 8, "ModuleHostTableAudioStreamFormat.sample_format");
+_Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
+
+_Static_assert(offsetof(ModuleHostTableAudioCaptureStreamRequest, requested_format) == 2 * POINTER, "ModuleHostTableAudioCaptureStreamRequest.requested_format");
+_Static_assert(sizeof(ModuleHostTableAudioCaptureStreamRequest) == 2 * POINTER + 16, "ModuleHostTableAudioCaptureStreamRequest size");
+
+_Static_assert(sizeof(ModuleHostTableAudioStreamHandle) == 8, "ModuleHostTableAudioStreamHandle size");
+
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, sample_count) == 2 * POINTER, "ModuleHostTableCapturedAudioBlock.sample_count");
+_Static_assert(offsetof(ModuleHostTableCapturedAudioBlock, first_sample_timestamp_ns) == 2 * POINTER + 8, "ModuleHostTableCapturedAudioBlock.first_sample_timestamp_ns");
+_Static_assert(sizeof(ModuleHostTableCapturedAudioBlock) == 2 * POINTER + 16, "ModuleHostTableCapturedAudioBlock size");
+
+_Static_assert(offsetof(ModuleHostTableAudioPlaybackStreamRequest, requested_format) == 2 * POINTER, "ModuleHostTableAudioPlaybackStreamRequest.requested_format");
+_Static_assert(sizeof(ModuleHostTableAudioPlaybackStreamRequest) == 2 * POINTER + 16, "ModuleHostTableAudioPlaybackStreamRequest size");
+
+_Static_assert(offsetof(ModuleHostTableOpenedAudioPlaybackStream, device_period_in_per_channel_samples) == 12, "ModuleHostTableOpenedAudioPlaybackStream.device_period_in_per_channel_samples");
+_Static_assert(sizeof(ModuleHostTableOpenedAudioPlaybackStream) == 16, "ModuleHostTableOpenedAudioPlaybackStream size");
+
+_Static_assert(offsetof(ModuleHostTableAudioBlockRequestedByDevice, interleaved_sample_byte_count) == POINTER, "ModuleHostTableAudioBlockRequestedByDevice.interleaved_sample_byte_count");
+_Static_assert(offsetof(ModuleHostTableAudioBlockRequestedByDevice, sample_count) == 2 * POINTER, "ModuleHostTableAudioBlockRequestedByDevice.sample_count");
+_Static_assert(sizeof(ModuleHostTableAudioBlockRequestedByDevice) == 2 * POINTER + 8, "ModuleHostTableAudioBlockRequestedByDevice size");
+
 #define POINTER_SLOT(slot) (16 + (slot) * POINTER)
 
 _Static_assert(offsetof(ModuleHostTable, abi_major) == 0, "ModuleHostTable.abi_major");
@@ -66,8 +90,13 @@ _Static_assert(offsetof(ModuleHostTable, output_texture_acquire_from_node_output
 _Static_assert(offsetof(ModuleHostTable, surface_convert_into) == POINTER_SLOT(21), "ModuleHostTable.surface_convert_into");
 _Static_assert(offsetof(ModuleHostTable, surface_id) == POINTER_SLOT(22), "ModuleHostTable.surface_id");
 _Static_assert(offsetof(ModuleHostTable, surface_release) == POINTER_SLOT(23), "ModuleHostTable.surface_release");
-_Static_assert(offsetof(ModuleHostTable, surface_write_from_host_memory) == POINTER_SLOT(24), "ModuleHostTable.surface_write_from_host_memory");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(25), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_open) == POINTER_SLOT(24), "ModuleHostTable.audio_playback_stream_open");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_start) == POINTER_SLOT(25), "ModuleHostTable.audio_playback_stream_start");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_stop) == POINTER_SLOT(26), "ModuleHostTable.audio_playback_stream_stop");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_liveness) == POINTER_SLOT(27), "ModuleHostTable.audio_playback_stream_liveness");
+_Static_assert(offsetof(ModuleHostTable, audio_playback_stream_close) == POINTER_SLOT(28), "ModuleHostTable.audio_playback_stream_close");
+_Static_assert(offsetof(ModuleHostTable, surface_write_from_host_memory) == POINTER_SLOT(29), "ModuleHostTable.surface_write_from_host_memory");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(30), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -88,6 +117,6 @@ _Static_assert(offsetof(ModuleHostTableHostMemoryPixels, row_stride_bytes) == 4 
 _Static_assert(sizeof(ModuleHostTableHostMemoryPixels) == 4 * POINTER + 16, "ModuleHostTableHostMemoryPixels size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 3, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 4, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");

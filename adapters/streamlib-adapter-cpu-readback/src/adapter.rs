@@ -229,7 +229,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             // pixel-shape lives on `PlaneSlot`, not on the bottom-layer
             // primitive, so we validate against `size()` only.
             let expected_size = (pw as u64) * (ph as u64) * (pbpp as u64);
-            let actual_size = staging.size() as u64;
+            let actual_size = staging.size();
             if actual_size != expected_size {
                 return Err(AdapterError::UnsupportedFormat {
                     surface_id: id,

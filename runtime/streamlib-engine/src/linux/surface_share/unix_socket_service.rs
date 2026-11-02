@@ -284,12 +284,8 @@ fn handle_client_connection(
             unsafe { libc::close(*fd) };
         }
 
-        let response_bytes = serde_json::to_vec(&response).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to serialize response: {}", e),
-            )
-        })?;
+        let response_bytes = serde_json::to_vec(&response)
+            .map_err(|e| std::io::Error::other(format!("Failed to serialize response: {}", e)))?;
 
         send_message_with_fds(&stream, &response_bytes, &reply_fds)?;
 

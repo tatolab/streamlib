@@ -9,7 +9,7 @@
 
 #[cfg(not(target_os = "linux"))]
 compile_error!(
-    "tatolab-browser paints through host table 1.3's Linux upload; its macOS half follows"
+    "tatolab-browser paints through host table 1.4's Linux upload; its macOS half follows"
 );
 
 pub mod cef_browser_process;

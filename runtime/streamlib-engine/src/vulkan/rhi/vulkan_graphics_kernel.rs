@@ -1789,7 +1789,9 @@ fn create_shader_modules(
     for stage in descriptor.stages {
         let spirv: Vec<u32> = stage
             .spv
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();

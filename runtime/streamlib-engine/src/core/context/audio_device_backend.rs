@@ -63,8 +63,9 @@ impl AudioStreamFormat {
 /// The format a caller asks a stream for; each `None` takes what the device
 /// opened in.
 ///
-/// The arms open in the device's own format, so a request is honoured when the
-/// device opened in it and refused by name otherwise — never converted.
+/// A playback stream opens in it, the arm converting to the device where the
+/// device carries another format. A capture stream opens in the device's own
+/// format, and a request it misses is refused by name, never converted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RequestedAudioStreamFormat {
     /// Sample rate in hertz.
@@ -109,18 +110,49 @@ impl RequestedAudioStreamFormat {
 }
 
 /// Open a capture stream on `backend` and refuse it, by name, unless it opened
-/// in the format `requested` asks for.
+/// in the format the request asks for.
 pub fn open_capture_stream_in_requested_format(
     backend: &dyn AudioDeviceBackend,
     request: &AudioDeviceStreamRequest,
-    requested: RequestedAudioStreamFormat,
 ) -> Result<Box<dyn AudioCaptureStream>> {
     let capture_stream = backend.open_capture_stream(request)?;
-    match requested.refusal_of(capture_stream.stream_format()) {
-        None => Ok(capture_stream),
+    refuse_a_stream_outside_the_requested_format(
+        backend,
+        request,
+        "capture",
+        capture_stream.stream_format(),
+    )?;
+    Ok(capture_stream)
+}
+
+/// Open a playback stream on `backend` in the format the request asks for, and
+/// refuse it, by name, where the arm could not open it in that format.
+pub fn open_playback_stream_in_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+) -> Result<Box<dyn AudioPlaybackStream>> {
+    let playback_stream = backend.open_playback_stream(request)?;
+    refuse_a_stream_outside_the_requested_format(
+        backend,
+        request,
+        "playback",
+        playback_stream.stream_format(),
+    )?;
+    Ok(playback_stream)
+}
+
+fn refuse_a_stream_outside_the_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+    direction_name: &str,
+    opened: AudioStreamFormat,
+) -> Result<()> {
+    match request.requested_format.refusal_of(opened) {
+        None => Ok(()),
         Some(refusal) => Err(crate::core::Error::Configuration(format!(
-            "the {} capture stream on {} cannot be opened in the requested format: {refusal}. \
-             Omit what the device cannot give, and read the stream's format once it opens.",
+            "the {} {direction_name} stream on {} cannot be opened in the requested format: \
+             {refusal}. Omit what the device cannot give, and read the stream's format once it \
+             opens.",
             backend.backend_name(),
             request.device_id.as_deref().map_or_else(
                 || "the default device".to_string(),
@@ -167,6 +199,9 @@ pub struct AudioDeviceStreamRequest {
     /// Whether opening a capture device may ask the user for access nobody
     /// has answered yet; a playback stream asks for nothing.
     pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    /// The format the stream is asked for: a playback arm opens in it, a
+    /// capture arm opens in the device's own.
+    pub requested_format: RequestedAudioStreamFormat,
 }
 
 /// A capture stream a backend opened.
@@ -221,9 +256,7 @@ pub type AudioBlockForPlaybackHandOff = Box<dyn Fn(AudioBlockRequestedByDevice<'
 /// A playback stream a backend opened.
 pub trait AudioPlaybackStream: Send {
     /// The rate, channel count and scalar encoding every block handed to this
-    /// stream must already be in. Conversion belongs to the read-side window
-    /// stage at a consuming port, not to a backend: a stream reports what it
-    /// opened and a caller matches it.
+    /// stream must already be in: the request's, wherever it named one.
     fn stream_format(&self) -> AudioStreamFormat;
 
     /// Per-channel samples the device asks for in one cycle, or `None` where
@@ -515,6 +548,7 @@ mod tests {
 
     fn a_request_for_silence(
         capture_device_access_prompting: CaptureDeviceAccessPrompting,
+        requested_format: RequestedAudioStreamFormat,
     ) -> AudioDeviceStreamRequest {
         AudioDeviceStreamRequest {
             device_id: None,
@@ -522,6 +556,7 @@ mod tests {
                 crate::core::context::SoftwareAudioClock::with_defaults(),
             ),
             capture_device_access_prompting,
+            requested_format,
         }
     }
 
@@ -529,27 +564,75 @@ mod tests {
     fn a_request_the_opened_stream_meets_opens_it() {
         let capture_stream = open_capture_stream_in_requested_format(
             &SilentNullAudioDeviceBackend,
-            &a_request_for_silence(CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor),
-            RequestedAudioStreamFormat {
-                sample_rate: Some(48_000),
-                channels: Some(1),
-                sample_format: Some(AudioSampleFormat::F32),
-            },
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(48_000),
+                    channels: Some(1),
+                    sample_format: Some(AudioSampleFormat::F32),
+                },
+            ),
         )
         .expect("the null stream opens at the pacing clock's rate, mono, f32");
         assert_eq!(capture_stream.stream_format().sample_rate, 48_000);
     }
 
     #[test]
+    fn a_playback_stream_opens_in_the_format_it_was_asked_for() {
+        let requested_format = RequestedAudioStreamFormat {
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            sample_format: Some(AudioSampleFormat::I16),
+        };
+        let playback_stream = open_playback_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format,
+            ),
+        )
+        .expect("the null arm plays whatever format it is asked for");
+        assert_eq!(
+            playback_stream.stream_format(),
+            AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+                sample_format: AudioSampleFormat::I16,
+            }
+        );
+    }
+
+    #[test]
+    fn a_playback_request_at_another_rate_than_the_pacing_clock_is_refused_by_name() {
+        let refusal = open_playback_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(44_100),
+                    ..RequestedAudioStreamFormat::default()
+                },
+            ),
+        )
+        .err()
+        .expect("the null arm paces at its clock's rate and cannot play another")
+        .to_string();
+        assert!(refusal.contains("44100 Hz was requested"), "{refusal}");
+        assert!(refusal.contains("playback"), "{refusal}");
+    }
+
+    #[test]
     fn a_request_the_opened_stream_misses_is_refused_naming_each_field_it_missed() {
         let refusal = open_capture_stream_in_requested_format(
             &SilentNullAudioDeviceBackend,
-            &a_request_for_silence(CaptureDeviceAccessPrompting::MayAskTheUser),
-            RequestedAudioStreamFormat {
-                sample_rate: Some(44_100),
-                channels: Some(2),
-                sample_format: None,
-            },
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(44_100),
+                    channels: Some(2),
+                    sample_format: None,
+                },
+            ),
         )
         .err()
         .expect("a mono 48 kHz stream does not meet a stereo 44.1 kHz request")

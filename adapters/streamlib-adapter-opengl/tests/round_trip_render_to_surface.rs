@@ -79,7 +79,7 @@ fn round_trip_render_to_surface() {
         (width as usize) * (height as usize) * 4,
         "readback buffer size"
     );
-    let mismatch = bytes.chunks_exact(4).enumerate().find(|(_, px)| {
+    let mismatch = bytes.as_chunks::<4>().0.iter().enumerate().find(|(_, px)| {
         (px[0] as i32 - 191).abs() > 6
             || (px[1] as i32 - 128).abs() > 6
             || (px[2] as i32 - 64).abs() > 6

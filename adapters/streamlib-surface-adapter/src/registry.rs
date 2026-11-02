@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn read_blocks_write() {
         let r = registry_with(1);
-        let _read = r.try_begin_read(1, |_| Ok(())).unwrap().unwrap();
+        r.try_begin_read(1, |_| Ok(())).unwrap().unwrap();
         let write = r.try_begin_write(1, |_| Ok(())).unwrap();
         assert!(write.is_none(), "write must be contended by reader");
         // State was not mutated.
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn write_blocks_read() {
         let r = registry_with(1);
-        let _write = r.try_begin_write(1, |_| Ok(())).unwrap().unwrap();
+        r.try_begin_write(1, |_| Ok(())).unwrap().unwrap();
         let read = r.try_begin_read(1, |_| Ok(())).unwrap();
         assert!(read.is_none(), "read must be contended by writer");
         r.with(1, |s| {
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn write_blocks_write() {
         let r = registry_with(1);
-        let _w1 = r.try_begin_write(1, |_| Ok(())).unwrap().unwrap();
+        r.try_begin_write(1, |_| Ok(())).unwrap().unwrap();
         let w2 = r.try_begin_write(1, |_| Ok(())).unwrap();
         assert!(w2.is_none(), "second writer must be contended");
     }

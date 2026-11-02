@@ -12,7 +12,7 @@ import re
 from runtime_process_under_test import RuntimeProcessUnderTest
 
 MICROPHONE_SOURCE_RECORD_DROPPED_BLOCKS = re.compile(
-    r"streamlib_media_builtins::microphone_source — .*\bdropped_blocks=(\d+)"
+    r"MicrophoneSource: teardown\. .*\bdropped_blocks=(\d+)"
 )
 
 

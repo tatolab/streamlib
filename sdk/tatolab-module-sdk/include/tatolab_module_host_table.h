@@ -18,7 +18,7 @@
  * Every verb is callable from any thread the module owns and never takes
  * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
  * which attaches to the interpreter for its round trip to the parent. The
- * surface verbs minors 2 and 3 add reach the parent over the helper's native
+ * surface verbs minors 2 and 4 add reach the parent over the helper's native
  * escalate channel, with no interpreter on either end.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
@@ -40,7 +40,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(3)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(4)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -357,6 +357,72 @@ typedef struct ModuleHostTableCapturedAudioBlock {
 typedef void (*ModuleHostTableCapturedAudioBlockCallback)(void *callback_context, const ModuleHostTableCapturedAudioBlock *captured_block);
 
 /**
+ * What a module asks the host to open a playback stream on. Minor 3.
+ */
+typedef struct ModuleHostTableAudioPlaybackStreamRequest {
+    /**
+     * The backend-named device; empty takes the backend's default.
+     */
+    ModuleHostTableUtf8 device_id;
+    /**
+     * The format every block handed to the stream is in; the host converts it
+     * to the device's, and refuses the open where it cannot.
+     */
+    ModuleHostTableAudioStreamFormat requested_format;
+    /**
+     * Always zero; keeps the struct's size a multiple of 8 on every target.
+     */
+    uint32_t reserved;
+} ModuleHostTableAudioPlaybackStreamRequest;
+
+/**
+ * What a playback stream opened in. Minor 3.
+ */
+typedef struct ModuleHostTableOpenedAudioPlaybackStream {
+    /**
+     * The format every block handed to the stream must be in.
+     */
+    ModuleHostTableAudioStreamFormat stream_format;
+    /**
+     * Per-channel samples the device asks for in one cycle; `0` where the
+     * backend does not report its device's period.
+     */
+    uint32_t device_period_in_per_channel_samples;
+} ModuleHostTableOpenedAudioPlaybackStream;
+
+/**
+ * One block a playback device asks for, borrowed for the length of the
+ * callback it is handed to.
+ */
+typedef struct ModuleHostTableAudioBlockRequestedByDevice {
+    /**
+     * The device's buffer, to be filled whole with interleaved little-endian
+     * scalars in the stream's format; whatever is left unwritten plays as
+     * whatever was there.
+     */
+    uint8_t *interleaved_sample_bytes_to_fill;
+    /**
+     * The buffer's length in bytes.
+     */
+    size_t interleaved_sample_byte_count;
+    /**
+     * Per-channel samples the buffer has room for.
+     */
+    uint32_t sample_count;
+    /**
+     * Always zero; keeps the struct's size a multiple of 8 on every target.
+     */
+    uint32_t reserved;
+} ModuleHostTableAudioBlockRequestedByDevice;
+
+/**
+ * What a playback stream calls each time its device needs samples, on the
+ * host's device thread. It must not block, and must not call a verb on the
+ * stream asking.
+ */
+typedef void (*ModuleHostTableAudioBlockRequestedByDeviceCallback)(void *callback_context, const ModuleHostTableAudioBlockRequestedByDevice *requested_block);
+
+/**
  * The verbs a node's native code reaches its node through, and the node host
  * they act on. Every verb's first argument is `ModuleHostTable.node_host`.
  */
@@ -491,7 +557,35 @@ typedef struct ModuleHostTable {
      */
     void (*surface_release)(void *node_host, ModuleHostTableSurfaceHandle surface);
     /**
-     * Minor 3: write CPU pixels over every pixel of an output-pool texture of
+     * Open a playback stream through the engine's audio device backend in the
+     * requested format, and write the format and device period it opened
+     * with. Minor 3.
+     */
+    ModuleHostTableStatus (*audio_playback_stream_open)(void *node_host, const ModuleHostTableAudioPlaybackStreamRequest *request, ModuleHostTableAudioStreamHandle *opened_stream, ModuleHostTableOpenedAudioPlaybackStream *opened_playback_stream, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Begin calling `fill_callback` with `callback_context` each time the
+     * device needs samples, replacing any callback an earlier call installed.
+     * The replaced callback is not called once this returns. Minor 3.
+     */
+    ModuleHostTableStatus (*audio_playback_stream_start)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableAudioBlockRequestedByDeviceCallback fill_callback, void *callback_context, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Stop asking; the callback is not called again once this returns.
+     * Minor 3.
+     */
+    ModuleHostTableStatus (*audio_playback_stream_stop)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
+    /**
+     * `MODULE_HOST_TABLE_STATUS_OK` while the device serves the stream;
+     * `MODULE_HOST_TABLE_STATUS_ENDED`, with the failure written, once it
+     * stopped. Minor 3.
+     */
+    ModuleHostTableStatus (*audio_playback_stream_liveness)(void *node_host, ModuleHostTableAudioStreamHandle stream, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Stop asking and close the stream; its handle names nothing after.
+     * Minor 3.
+     */
+    void (*audio_playback_stream_close)(void *node_host, ModuleHostTableAudioStreamHandle stream);
+    /**
+     * Minor 4: write CPU pixels over every pixel of an output-pool texture of
      * the same extent, swapping channel order between `bgra32` and `rgba32`
      * where the texture's differs, and return once the texture's next reader
      * sees them.

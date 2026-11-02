@@ -1002,6 +1002,102 @@ fn payload_bytes_the_write_was_handed<'payload>(
         })
 }
 
+/// Read the window contract the parent wired this input port with.
+///
+/// The parent sends the values resolved — a `match_device` sentinel resolves in
+/// the process that opened the device stream — so a child reads one shape and
+/// never a sentinel it could not settle. Field by field rather than through a
+/// serde bridge, so a key the parent got wrong is named here rather than
+/// surfacing as an anonymous decode failure.
+fn read_the_window_contract_the_parent_wired(
+    port_name: &str,
+    declared: &Bound<'_, PyAny>,
+) -> PyResult<ResolvedAudioWindowContract> {
+    fn field<'py, T: for<'a> FromPyObject<'a, 'py, Error = PyErr>>(
+        port_name: &str,
+        declared: &Bound<'py, PyAny>,
+        key: &str,
+    ) -> PyResult<T> {
+        declared
+            .get_item(key)
+            .and_then(|value| value.extract())
+            .map_err(|read_failure| {
+                PyValueError::new_err(format!(
+                    "input port {port_name:?} was wired with an `audio_window` whose \
+                     {key:?} the helper could not read: {read_failure}"
+                ))
+            })
+    }
+
+    let values = AudioWindowContractDeclaredValues {
+        sample_rate: field(port_name, declared, "sample_rate")?,
+        channels: channel_count_the_parent_wired(port_name, declared)?,
+        dtype: field(port_name, declared, "dtype")?,
+        window_size: field(port_name, declared, "window_size")?,
+        hop: field(port_name, declared, "hop")?,
+    };
+    ResolvedAudioWindowContract::from_declared_values(&values).map_err(|refusal| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?} was wired with an `audio_window` the stage cannot \
+             honour: {refusal}"
+        ))
+    })
+}
+
+/// Read the channel count off the contract the parent wired, or `None` where
+/// the port follows whatever count its source sends.
+///
+/// The one field of the envelope that may be absent, and the one that may
+/// arrive as a word rather than a number.
+fn channel_count_the_parent_wired(
+    port_name: &str,
+    declared: &Bound<'_, PyAny>,
+) -> PyResult<Option<u32>> {
+    let value = match declared.get_item("channels") {
+        Ok(value) => value,
+        // Only a missing key means "follows its source". Anything else is an
+        // envelope the helper could not read, and swallowing it here would
+        // turn a wiring bug into a silently different contract.
+        Err(lookup_failure) if lookup_failure.is_instance_of::<PyKeyError>(declared.py()) => {
+            return Ok(None);
+        }
+        Err(lookup_failure) => {
+            return Err(PyValueError::new_err(format!(
+                "input port {port_name:?} was wired with an `audio_window` the helper could \
+                 not read `channels` out of: {lookup_failure}"
+            )));
+        }
+    };
+    read_a_channel_count_or_the_source_spelling(
+        &value,
+        format!(
+            "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
+             the helper could not read: it"
+        ),
+    )
+}
+
+fn not_a_helper_process_data_plane_error() -> PyErr {
+    PyRuntimeError::new_err(
+        "this processor's links belong to the engine that wired them, so they cannot be wired \
+         again from Python — only a helper process wires its own",
+    )
+}
+
+/// The declared port an author's spelling names: `@node` cast each declared
+/// name, so a lookup casts its argument and `read("Video")` finds `video`.
+fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
+    cast_exposed_name_to_url_safe(port_name)
+        .map_err(|names_no_port| PyValueError::new_err(names_no_port.to_string()))
+}
+
+fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {
+    PyRuntimeError::new_err(format!(
+        "{direction} port {port_name:?} is not one this processor declared, so no link \
+         can reach it"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1693,100 +1789,4 @@ mod tests {
             );
         });
     }
-}
-
-/// Read the window contract the parent wired this input port with.
-///
-/// The parent sends the values resolved — a `match_device` sentinel resolves in
-/// the process that opened the device stream — so a child reads one shape and
-/// never a sentinel it could not settle. Field by field rather than through a
-/// serde bridge, so a key the parent got wrong is named here rather than
-/// surfacing as an anonymous decode failure.
-fn read_the_window_contract_the_parent_wired(
-    port_name: &str,
-    declared: &Bound<'_, PyAny>,
-) -> PyResult<ResolvedAudioWindowContract> {
-    fn field<'py, T: for<'a> FromPyObject<'a, 'py, Error = PyErr>>(
-        port_name: &str,
-        declared: &Bound<'py, PyAny>,
-        key: &str,
-    ) -> PyResult<T> {
-        declared
-            .get_item(key)
-            .and_then(|value| value.extract())
-            .map_err(|read_failure| {
-                PyValueError::new_err(format!(
-                    "input port {port_name:?} was wired with an `audio_window` whose \
-                     {key:?} the helper could not read: {read_failure}"
-                ))
-            })
-    }
-
-    let values = AudioWindowContractDeclaredValues {
-        sample_rate: field(port_name, declared, "sample_rate")?,
-        channels: channel_count_the_parent_wired(port_name, declared)?,
-        dtype: field(port_name, declared, "dtype")?,
-        window_size: field(port_name, declared, "window_size")?,
-        hop: field(port_name, declared, "hop")?,
-    };
-    ResolvedAudioWindowContract::from_declared_values(&values).map_err(|refusal| {
-        PyValueError::new_err(format!(
-            "input port {port_name:?} was wired with an `audio_window` the stage cannot \
-             honour: {refusal}"
-        ))
-    })
-}
-
-/// Read the channel count off the contract the parent wired, or `None` where
-/// the port follows whatever count its source sends.
-///
-/// The one field of the envelope that may be absent, and the one that may
-/// arrive as a word rather than a number.
-fn channel_count_the_parent_wired(
-    port_name: &str,
-    declared: &Bound<'_, PyAny>,
-) -> PyResult<Option<u32>> {
-    let value = match declared.get_item("channels") {
-        Ok(value) => value,
-        // Only a missing key means "follows its source". Anything else is an
-        // envelope the helper could not read, and swallowing it here would
-        // turn a wiring bug into a silently different contract.
-        Err(lookup_failure) if lookup_failure.is_instance_of::<PyKeyError>(declared.py()) => {
-            return Ok(None);
-        }
-        Err(lookup_failure) => {
-            return Err(PyValueError::new_err(format!(
-                "input port {port_name:?} was wired with an `audio_window` the helper could \
-                 not read `channels` out of: {lookup_failure}"
-            )));
-        }
-    };
-    read_a_channel_count_or_the_source_spelling(
-        &value,
-        format!(
-            "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
-             the helper could not read: it"
-        ),
-    )
-}
-
-fn not_a_helper_process_data_plane_error() -> PyErr {
-    PyRuntimeError::new_err(
-        "this processor's links belong to the engine that wired them, so they cannot be wired \
-         again from Python — only a helper process wires its own",
-    )
-}
-
-/// The declared port an author's spelling names: `@node` cast each declared
-/// name, so a lookup casts its argument and `read("Video")` finds `video`.
-fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
-    cast_exposed_name_to_url_safe(port_name)
-        .map_err(|names_no_port| PyValueError::new_err(names_no_port.to_string()))
-}
-
-fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {
-    PyRuntimeError::new_err(format!(
-        "{direction} port {port_name:?} is not one this processor declared, so no link \
-         can reach it"
-    ))
 }

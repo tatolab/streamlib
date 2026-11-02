@@ -7,7 +7,8 @@
 # Third of three audio fixtures, and the one that closes the rung. Where
 # `e2e_audio_loopback.sh` proves the *rig* with no StreamLib in the path, and
 # `verify_audio_channel.sh` proves one processor off its own port, this proves
-# the round trip: `SpeakerSink` plays the known signal into a null sink and
+# the round trip: the `tatolab-speaker` module's `SpeakerSink` plays the known
+# signal into a null sink and the `tatolab-microphone` module's
 # `MicrophoneSource` captures it back off that sink's monitor. Both ends are
 # StreamLib, so a failure here with the rig fixture green is the engine's.
 #
@@ -19,7 +20,7 @@
 #                output, which `MicrophoneSource` opens through a shared
 #                aggregate device. Digital and silent, and scored as strictly as
 #                the null sink. Shared, not private like the rig peer's, because
-#                the speaker plays inside `tatolabd` and a private device is
+#                the speaker plays in its own helper process and a private device is
 #                visible only to the process that made it: this script holds
 #                both for the run and destroys them on exit. Being global, it
 #                also hears anything else that plays during the run.
@@ -91,6 +92,7 @@ fi
 
 require_the_runtime_unit
 require_the_fixture_venv
+require_the_audio_modules_in_the_fixture_venv
 # Built before the stream runs, so the build takes none of the signal's window.
 require_tatolab_read_track
 
@@ -321,8 +323,8 @@ fi
 
 # A bag the windowing stage could not read, by name rather than left to show up
 # as silence — silence is also what a dead sink looks like and the two need
-# different fixes. The speaker no longer refuses a format it cannot play: its
-# port declares `audio_window = match_device`, so the stage converts. What it
+# different fixes. The speaker does not refuse a format it cannot play: its
+# port declares a window the stage converts every block to. What it
 # still refuses is a bag it cannot decode as an audio block at all.
 if grep -q "cannot be read as an audio block" "$NODE_LOG"; then
     echo "ERROR: the speaker's port refused the signal's bags — see the reason below" >&2

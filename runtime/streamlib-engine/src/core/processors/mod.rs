@@ -42,7 +42,3 @@ pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
-
-// Audio processors are not here: capture and playback ship as engine
-// built-ins in `streamlib-media-builtins` (`microphone_source.rs`,
-// `speaker_sink.rs`).

@@ -10,14 +10,10 @@
 //! pool, texture cache — never private engine guts.
 
 pub mod audio_block;
-pub(crate) mod audio_samples_awaiting_playback_ring;
 pub mod audio_window_to_encoded_packet_encoder;
 pub mod camera_source;
-pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
-#[cfg(test)]
-mod emitted_log_line_test_support;
 pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_packet_to_audio_block_decoder;
 pub mod h264_decoder;
@@ -26,7 +22,6 @@ pub mod h265_decoder;
 pub mod h265_encoder;
 pub mod h273_color_vui_translation;
 pub mod hardware_video_codec_processor_identity;
-pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod opus_decoder;
@@ -36,7 +31,6 @@ pub mod opus_stream_layout;
 pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
 pub mod relay_track_source;
-pub mod speaker_sink;
 pub(crate) mod test_pattern_frame_renderer;
 #[cfg(test)]
 mod test_pattern_frames_render_from_their_index_alone_on_the_device;
@@ -44,8 +38,6 @@ pub mod test_pattern_source;
 pub mod video_frame;
 #[cfg(target_os = "linux")]
 pub mod virtual_camera_sink;
-#[cfg(test)]
-mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
@@ -55,12 +47,10 @@ pub use h264_decoder::H264Decoder;
 pub use h264_encoder::H264Encoder;
 pub use h265_decoder::H265Decoder;
 pub use h265_encoder::H265Encoder;
-pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
-pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
 #[cfg(target_os = "linux")]
@@ -74,14 +64,27 @@ use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 const BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY: &[(&str, &str)] =
     &[("VirtualCameraSink", "Linux")];
 
+/// Each built-in that left the runtime for a module, by its former public class
+/// name, with the module's node type and the distribution that installs it.
+const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
+    (
+        "MicrophoneSource",
+        "tatolab.microphone:MicrophoneSource",
+        "tatolab-microphone",
+    ),
+    (
+        "SpeakerSink",
+        "tatolab.speaker:SpeakerSink",
+        "tatolab-speaker",
+    ),
+];
+
 /// Register every media built-in on the process-wide registry, and record each
-/// one this floor compiles out so a graph naming it is refused naming the
-/// floors it runs on. In-process static registration (the api-server
+/// one this floor compiles out or that moved to a module, so a graph naming it
+/// is refused naming the floors it runs on or the module to install. In-process static registration (the api-server
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
-    PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
-    PROCESSOR_REGISTRY.register::<speaker_sink::SpeakerSink::Processor>();
     PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
@@ -100,6 +103,23 @@ pub fn register_media_builtin_processor_types() {
                 built_in_node_type,
                 *floors_it_runs_on,
             );
+        }
+    }
+    for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
+        match ProcessorClassImportPath::new(*module_node_type) {
+            Ok(module_node_type) => PROCESSOR_REGISTRY
+                .register_built_in_node_type_moved_to_a_module(
+                    ProcessorClassImportPath::of_built_in_node(former_class_name),
+                    module_node_type,
+                    *module_distribution,
+                ),
+            Err(refusal) => tracing::error!(
+                former_class_name,
+                module_node_type,
+                %refusal,
+                "a moved built-in's module node type names no class, so its former type is \
+                 refused as unknown"
+            ),
         }
     }
 }
@@ -170,7 +190,6 @@ mod built_in_node_type_tests {
             ("TestPatternSource", "video"),
             ("H264Decoder", "video"),
             ("H265Decoder", "video"),
-            ("MicrophoneSource", "audio"),
             ("OpusDecoder", "audio"),
         ] {
             let descriptor = PROCESSOR_REGISTRY
@@ -219,7 +238,7 @@ mod built_in_node_type_tests {
         for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
             let built_in_node_type = ProcessorClassImportPath::of_built_in_node(class_name);
             let refusal = PROCESSOR_REGISTRY
-                .refuse_a_built_in_node_type_absent_on_this_floor(&built_in_node_type);
+                .refuse_a_built_in_node_type_this_runtime_lacks(&built_in_node_type);
             if PROCESSOR_REGISTRY.is_registered(&built_in_node_type) {
                 assert!(refusal.is_ok(), "{refusal:?}");
             } else {
@@ -244,5 +263,57 @@ mod built_in_node_type_tests {
                 }),
             "Linux compiles in every built-in, so every name the table holds is one it registers"
         );
+    }
+
+    /// A graph recorded before a built-in moved to a module names its former
+    /// type, and is refused naming the module's type and what to install.
+    #[test]
+    fn the_former_audio_built_ins_are_refused_naming_the_module_to_install() {
+        register_media_builtin_processor_types();
+
+        for (former_class_name, module_node_type, module_distribution) in [
+            (
+                "MicrophoneSource",
+                "tatolab.microphone:MicrophoneSource",
+                "tatolab-microphone",
+            ),
+            (
+                "SpeakerSink",
+                "tatolab.speaker:SpeakerSink",
+                "tatolab-speaker",
+            ),
+        ] {
+            let former_node_type = ProcessorClassImportPath::of_built_in_node(former_class_name);
+            assert!(!PROCESSOR_REGISTRY.is_registered(&former_node_type));
+
+            let refusal = PROCESSOR_REGISTRY
+                .refuse_a_node_this_runtime_cannot_add(
+                    "former",
+                    &former_node_type,
+                    &serde_json::json!({"device_id": "default"}),
+                )
+                .unwrap_err();
+
+            match &refusal {
+                Error::BuiltInNodeTypeMovedToAModule {
+                    node_type,
+                    module_node_type: refused_naming,
+                    module_distribution: refused_distribution,
+                } => {
+                    assert_eq!(*node_type, former_node_type);
+                    assert_eq!(refused_naming.as_str(), module_node_type);
+                    assert_eq!(refused_distribution, module_distribution);
+                }
+                other => panic!(
+                    "{former_node_type}: expected the moved-to-a-module refusal, got {other:?}"
+                ),
+            }
+            let message = refusal.to_string();
+            assert!(message.contains(module_node_type), "{message}");
+            assert!(
+                message.contains(&format!("pip install {module_distribution}")),
+                "{message}"
+            );
+        }
     }
 }

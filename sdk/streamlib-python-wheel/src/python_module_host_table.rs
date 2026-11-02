@@ -7,8 +7,8 @@
 //!
 //! Every verb but the catalog entry's runs with no Python attached, from any
 //! thread. The engine never calls into a module; a module calls in here, and
-//! the audio capture streams it opens call its callback from their device
-//! thread.
+//! the audio capture and playback streams it opens call its callbacks from
+//! their device threads.
 
 mod host_memory_pixel_rows;
 mod module_host_surface_verbs;
@@ -51,7 +51,14 @@ use audio_capture_streams::{
     audio_capture_stream_open, audio_capture_stream_start, audio_capture_stream_stop,
 };
 
+use audio_playback_streams::{
+    AudioPlaybackStreamsOpenedForOneNode, audio_playback_stream_close,
+    audio_playback_stream_liveness, audio_playback_stream_open, audio_playback_stream_start,
+    audio_playback_stream_stop,
+};
+
 mod audio_capture_streams;
+mod audio_playback_streams;
 
 /// The `tracing` target a module's records are emitted under in this helper;
 /// the module's own target rides as the `module_target` field.
@@ -74,6 +81,7 @@ struct ModuleHostOfOneNode {
     host_capabilities_json: String,
     audio_capture_streams: AudioCaptureStreamsOpenedForOneNode,
     surfaces_lent_to_native_code: SurfacesLentToNativeCode,
+    audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode,
 }
 
 /// The capsule `ctx.open_module_host_table(...)` returns: a table over the
@@ -167,6 +175,11 @@ fn module_host_of_one_node(
                 surface_convert_into,
                 surface_id,
                 surface_release,
+                audio_playback_stream_open,
+                audio_playback_stream_start,
+                audio_playback_stream_stop,
+                audio_playback_stream_liveness,
+                audio_playback_stream_close,
                 surface_write_from_host_memory,
             },
             node_id: node_id.to_string(),
@@ -181,6 +194,7 @@ fn module_host_of_one_node(
                 capture_device_access_prompting,
             ),
             surfaces_lent_to_native_code,
+            audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode::default(),
         },
     )
 }

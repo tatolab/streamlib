@@ -195,7 +195,9 @@ fn expected_frame(frame_index: u64) -> Vec<u8> {
 
 fn first_differing_pixel(actual: &[u8], expected: &[u8]) -> Option<(u32, u32, [u8; 4], [u8; 4])> {
     actual
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .zip(expected.chunks_exact(4))
         .position(|(actual_pixel, expected_pixel)| actual_pixel != expected_pixel)
         .map(|pixel_index| {

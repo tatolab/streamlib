@@ -3,9 +3,9 @@
 
 //! The module host table a Tatolab module's native half reaches its node
 //! through: the node's lent ports, its log, the engine's monotonic clock, its
-//! stop flag, the host's capabilities, the engine's audio capture devices, and
-//! surface import, output textures, colour conversion and host-memory pixel
-//! writes, from any thread, without Python.
+//! stop flag, the host's capabilities, the engine's audio capture and playback
+//! devices, and surface import, output textures, colour conversion and
+//! host-memory pixel writes, from any thread, without Python.
 //!
 //! The lent `tatolab.runtime` builds the table; a node's Python half opens it
 //! with `ctx.open_module_host_table(output_ports=[...], input_ports=[...])` and
@@ -15,6 +15,7 @@
 
 pub mod module_host;
 pub mod module_host_audio_capture;
+pub mod module_host_audio_playback;
 #[cfg(feature = "pyo3")]
 mod module_host_python_capsule;
 pub mod module_host_table_abi;
@@ -31,6 +32,11 @@ pub use module_host_audio_capture::{
     ModuleHostAudioCaptureStream, ModuleHostAudioCaptureStreamLiveness,
     ModuleHostAudioCaptureStreamRequest, ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat,
     ModuleHostCapturedAudioBlock, ModuleHostCapturedAudioBlockHandOff,
+};
+pub use module_host_audio_playback::{
+    ModuleHostAudioBlockForPlaybackHandOff, ModuleHostAudioBlockRequestedByDevice,
+    ModuleHostAudioPlaybackStream, ModuleHostAudioPlaybackStreamLiveness,
+    ModuleHostAudioPlaybackStreamRequest,
 };
 pub use module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,

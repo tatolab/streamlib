@@ -68,7 +68,7 @@ retires nothing.
 
 ## ADDED
 
-- **Host table 1.3: `surface_write_from_host_memory`.** Writes tightly described CPU pixels
+- **Host table 1.4: `surface_write_from_host_memory`.** Writes tightly described CPU pixels
   (format, width, height, row stride) into an output-pool texture. This is the fallback for a
   renderer that cannot share a GPU buffer, and it is public to every module.
 - **`streamlib-consumer-rhi` external-renderer device.** On the owned-device tier, a
@@ -157,7 +157,7 @@ for marketers.
 
 ## Tracer bullets
 
-1. **Browser source, CPU path.** Host table 1.3 `surface_write_from_host_memory`, and
+1. **Browser source, CPU path.** Host table 1.4 `surface_write_from_host_memory`, and
    `tatolab-browser` with `OnPaint`, the `data`, `events` and `audio` ports, and the
    subprocess binary.
    - Done: a page playing a tone publishes it on `audio` with no gaps over 10 minutes.
