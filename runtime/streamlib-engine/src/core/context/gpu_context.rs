@@ -2031,10 +2031,27 @@ impl GpuContext {
         // so the frame-vs-slot distinction lives here.
         self.refuse_a_retired_frame_id(surface_id)?;
 
-        // Path 1: same-process texture cache (fastest)
+        // Path 1: same-process texture cache (fastest). A frame record that
+        // carries a layout was released by a producer on another device — a
+        // helper process's module drawing into this process's output pool —
+        // so its texture is acquired from the external queue family into
+        // that layout, as Path 2 acquires an imported one.
         {
             let cache = self.texture_cache.lock().unwrap();
             if let Some(reg) = cache.get(pool_slot_key_of_surface_id(surface_id)) {
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                if let Some(layout_the_foreign_producer_released_in) = texture_layout
+                    .map(VulkanLayout)
+                    .filter(|layout| *layout != VulkanLayout::UNDEFINED)
+                {
+                    if let Some(image) = reg.texture().vulkan_inner().image() {
+                        self.device.inner.acquire_from_foreign(
+                            image,
+                            layout_the_foreign_producer_released_in.as_vk(),
+                        )?;
+                    }
+                    reg.update_layout(layout_the_foreign_producer_released_in);
+                }
                 return Ok(reg.clone());
             }
         }
