@@ -1151,7 +1151,8 @@ impl PythonGpuContextFullAccess {
             plane_offsets,
             plane_strides,
             drm_format_modifier,
-        )?;
+        )
+        .map_err(PyValueError::new_err)?;
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let checked_out = exchange_client.import_foreign_dma_buf(
                 python,

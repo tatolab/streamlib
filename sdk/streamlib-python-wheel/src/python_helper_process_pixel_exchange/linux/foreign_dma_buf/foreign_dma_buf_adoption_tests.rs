@@ -327,7 +327,6 @@ fn an_unstated_nv12_layout_is_tightly_packed() {
 
 #[test]
 fn a_stated_layout_without_its_byte_size_is_refused() {
-    Python::initialize();
     let refusal = foreign_dma_buf_plane_layout(
         PixelFormat::Nv12FullRange,
         ADOPTED_WIDTH,
@@ -337,15 +336,12 @@ fn a_stated_layout_without_its_byte_size_is_refused() {
         Some(vec![128, 128]),
         0,
     )
-    .err()
-    .expect("a layout without the allocation it sits in must be refused")
-    .to_string();
+    .expect_err("a layout without the allocation it sits in must be refused");
     assert!(refusal.contains("byte_size"), "{refusal:?}");
 }
 
 #[test]
 fn offsets_without_strides_are_refused() {
-    Python::initialize();
     let refusal = foreign_dma_buf_plane_layout(
         PixelFormat::Nv12FullRange,
         ADOPTED_WIDTH,
@@ -355,15 +351,12 @@ fn offsets_without_strides_are_refused() {
         None,
         0,
     )
-    .err()
-    .expect("half a layout must be refused")
-    .to_string();
+    .expect_err("half a layout must be refused");
     assert!(refusal.contains("together"), "{refusal:?}");
 }
 
 #[test]
 fn a_tiled_modifier_is_refused_by_value() {
-    Python::initialize();
     let refusal = foreign_dma_buf_plane_layout(
         PixelFormat::Bgra32,
         ADOPTED_WIDTH,
@@ -373,8 +366,6 @@ fn a_tiled_modifier_is_refused_by_value() {
         None,
         0x0100_0000_0000_0001,
     )
-    .err()
-    .expect("a tiled buffer must be refused")
-    .to_string();
+    .expect_err("a tiled buffer must be refused");
     assert!(refusal.contains("0x100000000000001"), "{refusal:?}");
 }

@@ -176,6 +176,9 @@ ENTRYPOINT_ENV = "STREAMLIB_ENTRYPOINT"
 PROCESSOR_ID_ENV = "STREAMLIB_PROCESSOR_ID"
 RUNTIME_ID_ENV = "STREAMLIB_RUNTIME_ID"
 ESCALATE_FD_ENV = "STREAMLIB_ESCALATE_FD"
+# The socket the helper's native code escalates over, read by the engine
+# module itself; this bootstrap only keeps it out of what the processor starts.
+NATIVE_ESCALATE_FD_ENV = "STREAMLIB_NATIVE_ESCALATE_FD"
 ENGINE_BUILD_ID_ENV = "STREAMLIB_ENGINE_BUILD_ID"
 
 # Upper bound on how long an escalate request waits for its correlated
@@ -1729,6 +1732,19 @@ def main(arguments: "list[str]") -> int:
     return 0
 
 
+def _keep_the_native_escalate_socket_from_what_the_processor_starts() -> None:
+    """Mark the inherited native escalate socket close-on-exec, as the bridge's own is."""
+    raw_fd = os.environ.get(NATIVE_ESCALATE_FD_ENV)
+    if not raw_fd:
+        return
+    try:
+        os.set_inheritable(int(raw_fd), False)
+    except (ValueError, OSError) as unusable:
+        raise HelperProcessProtocolError(
+            f"{NATIVE_ESCALATE_FD_ENV}={raw_fd!r} is not a descriptor this helper holds"
+        ) from unusable
+
+
 def run_one_processor_until_its_parent_tears_it_down() -> None:
     """Run the processor `STREAMLIB_ENTRYPOINT` names until its parent tears it down."""
     try:
@@ -1736,6 +1752,7 @@ def run_one_processor_until_its_parent_tears_it_down() -> None:
         processor_id = _required_environment(PROCESSOR_ID_ENV)
         runtime_id = os.environ.get(RUNTIME_ID_ENV, "")
         bridge = ParentProcessBridge.open_from_inherited_fd()
+        _keep_the_native_escalate_socket_from_what_the_processor_starts()
     except HelperProcessProtocolError as bootstrap_failure:
         _write_a_bootstrap_fatal_to_raw_stderr(bootstrap_failure)
         sys.exit(1)

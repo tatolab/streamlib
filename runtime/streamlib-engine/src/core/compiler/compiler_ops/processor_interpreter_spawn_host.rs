@@ -799,8 +799,10 @@ impl ProcessorInterpreterSpawnHostProcessor {
         }
 
         self.child = Some(child);
+        let escalate_transport_parent_ends = escalate_transport.into_parent_ends();
         let bridge = SubprocessBridge::new(
-            escalate_transport.into_parent_stream(),
+            escalate_transport_parent_ends.bridge,
+            Some(escalate_transport_parent_ends.native_escalate),
             // Uncounted: the helper's one-offs are counted by its escalate
             // registry, never also against this spawn host.
             GpuContextLimitedAccess::new(ctx.gpu_limited_access().host_inner().clone()),
@@ -1714,7 +1716,7 @@ if os.fork() == 0:
         let child = command.spawn().expect("the stub helper to start");
         let helper_process_id = child.id();
         escalate_transport.release_child_end();
-        let parent_end_of_the_escalate_socket = escalate_transport.into_parent_stream();
+        let parent_end_of_the_escalate_socket = escalate_transport.into_parent_ends().bridge;
 
         assert!(
             a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
@@ -1747,6 +1749,7 @@ if os.fork() == 0:
                 r#"
 import os, sys
 os.fstat(int(os.environ["STREAMLIB_ESCALATE_FD"]))
+os.fstat(int(os.environ["STREAMLIB_NATIVE_ESCALATE_FD"]))
 sys.exit(0)
 "#,
             )

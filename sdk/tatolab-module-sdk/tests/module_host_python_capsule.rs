@@ -77,6 +77,42 @@ unsafe extern "C" fn drop_log(
 unsafe extern "C" fn no_capabilities(_: *mut c_void) -> ModuleHostTableUtf8 {
     ModuleHostTableUtf8::of("{}")
 }
+unsafe extern "C" fn refuse_import(
+    _: *mut c_void,
+    _: *const tatolab_module_sdk::module_host_table_abi::ModuleHostTableDmaBufImport,
+    _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+    _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableErrorMessage,
+) -> i32 {
+    -1
+}
+unsafe extern "C" fn refuse_acquire(
+    _: *mut c_void,
+    _: *const tatolab_module_sdk::module_host_table_abi::ModuleHostTableNodeOutputTextureRequest,
+    _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+    _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableErrorMessage,
+) -> i32 {
+    -1
+}
+unsafe extern "C" fn refuse_convert(
+    _: *mut c_void,
+    _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+    _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+    _: *const tatolab_module_sdk::module_host_table_abi::ModuleHostTableColorInfo,
+    _: *mut tatolab_module_sdk::module_host_table_abi::ModuleHostTableErrorMessage,
+) -> i32 {
+    -1
+}
+unsafe extern "C" fn no_surface_id(
+    _: *mut c_void,
+    _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+) -> ModuleHostTableUtf8 {
+    ModuleHostTableUtf8::of("")
+}
+unsafe extern "C" fn release_no_surface(
+    _: *mut c_void,
+    _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+) {
+}
 
 fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
     let table = Box::leak(Box::new(ModuleHostTable {
@@ -97,6 +133,11 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         monotonic_now_ns: zero_clock,
         log: drop_log,
         host_capabilities_json: no_capabilities,
+        surface_import_dma_buf: refuse_import,
+        output_texture_acquire_from_node_output_pool: refuse_acquire,
+        surface_convert_into: refuse_convert,
+        surface_id: no_surface_id,
+        surface_release: release_no_surface,
     }));
     NonNull::from(table).cast()
 }
@@ -107,14 +148,14 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(0),
+                leaked_table_of_minor(1),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 0));
+        assert_eq!(module_host.module_host_table_version(), (1, 1));
     });
 }
 
@@ -122,7 +163,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(0), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(python, leaked_table_of_minor(1), c"numpy.core._ARRAY_API")
         }
         .unwrap();
         let refusal =

@@ -5,7 +5,6 @@ use std::os::fd::RawFd;
 use std::sync::Arc;
 
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use streamlib::sdk::rhi::{PixelFormat, PixelPlanesWithinOneAllocation};
 
@@ -70,29 +69,28 @@ pub(crate) fn foreign_dma_buf_plane_layout(
     plane_offsets: Option<Vec<u64>>,
     plane_strides: Option<Vec<u64>>,
     drm_format_modifier: u64,
-) -> PyResult<(u64, PixelPlanesWithinOneAllocation)> {
+) -> Result<(u64, PixelPlanesWithinOneAllocation), String> {
     if drm_format_modifier != DRM_FORMAT_MOD_LINEAR {
-        return Err(PyValueError::new_err(format!(
+        return Err(format!(
             "import_dma_buf reads linear buffers only; drm_format_modifier \
              {drm_format_modifier:#x} is a tiled or compressed layout"
-        )));
-    }
-    if width == 0 || height == 0 {
-        return Err(PyValueError::new_err(
-            "import_dma_buf needs a non-zero width and height; the fd carries no geometry \
-             of its own",
         ));
     }
-    let layout_refused =
-        |refusal: streamlib::sdk::error::Error| PyValueError::new_err(refusal.to_string());
+    if width == 0 || height == 0 {
+        return Err(
+            "import_dma_buf needs a non-zero width and height; the fd carries no \
+                    geometry of its own"
+                .to_string(),
+        );
+    }
+    let layout_refused = |refusal: streamlib::sdk::error::Error| refusal.to_string();
     let (allocation_byte_size, plane_offsets, plane_strides) = match (plane_offsets, plane_strides)
     {
         (Some(plane_offsets), Some(plane_strides)) => {
             let allocation_byte_size = byte_size.ok_or_else(|| {
-                PyValueError::new_err(
-                    "import_dma_buf with plane_offsets and plane_strides needs byte_size, \
-                         the size of the allocation the planes sit in",
-                )
+                "import_dma_buf with plane_offsets and plane_strides needs byte_size, the size \
+                 of the allocation the planes sit in"
+                    .to_string()
             })?;
             (allocation_byte_size, plane_offsets, plane_strides)
         }
@@ -108,10 +106,10 @@ pub(crate) fn foreign_dma_buf_plane_layout(
             };
             if allocation_byte_size == 0 || !allocation_byte_size.is_multiple_of(u64::from(height))
             {
-                return Err(PyValueError::new_err(format!(
-                    "import_dma_buf byte_size {allocation_byte_size} is not a whole number \
-                         of {height} rows; state plane_strides when the last row is unpadded"
-                )));
+                return Err(format!(
+                    "import_dma_buf byte_size {allocation_byte_size} is not a whole number of \
+                     {height} rows; state plane_strides when the last row is unpadded"
+                ));
             }
             (
                 allocation_byte_size,
@@ -138,9 +136,10 @@ pub(crate) fn foreign_dma_buf_plane_layout(
             )
         }
         _ => {
-            return Err(PyValueError::new_err(
-                "import_dma_buf takes plane_offsets and plane_strides together or neither",
-            ));
+            return Err(
+                "import_dma_buf takes plane_offsets and plane_strides together or neither"
+                    .to_string(),
+            );
         }
     };
     let planes = PixelPlanesWithinOneAllocation::new(
@@ -181,40 +180,15 @@ impl HelperProcessGpuExchangeClient {
         allocation_byte_size: u64,
         planes: &PixelPlanesWithinOneAllocation,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        let mut check_in_request = serde_json::json!({
-            "op": "check_in",
-            "runtime_id": self.foreign_surface_registration_runtime_id,
-            "width": width,
-            "height": height,
-            "format": pixel_format.wire_name(),
-            "resource_type": "pixel_buffer",
-            "handle_type": "dma_buf",
-            "plane_sizes": [allocation_byte_size],
-            "plane_offsets": [0u64],
-            "plane_strides": [planes.plane_strides_bytes()[0]],
-        });
-        planes.write_surface_share_fields(&mut check_in_request);
         let checked_out = python.detach(|| {
-            let (check_in_response, _no_fds_back) =
-                self.surface_share_request_with_fds(&check_in_request, &[foreign_dma_buf_fd])?;
-            if let Some(check_in_error) = check_in_response
-                .get("error")
-                .and_then(|value| value.as_str())
-            {
-                return Err(PyRuntimeError::new_err(format!(
-                    "the surface-share service refused to adopt the foreign DMA-BUF: \
-                     {check_in_error}"
-                )));
-            }
-            let adopted_surface_id: String = check_in_response
-                .get("surface_id")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "the surface-share service's check_in answered without a surface_id",
-                    )
-                })?
-                .to_string();
+            let adopted_surface_id = self.register_foreign_dma_buf(
+                foreign_dma_buf_fd,
+                width,
+                height,
+                pixel_format,
+                allocation_byte_size,
+                planes,
+            )?;
             // The debt exists from the moment the service registered: if the
             // checkout below fails, this drops on the error path and removes
             // the entry instead of stranding the service's fd dup.
@@ -236,10 +210,57 @@ impl HelperProcessGpuExchangeClient {
         Ok(checked_out)
     }
 
+    /// Register a foreign DMA-BUF fd with the surface-share service, with the
+    /// plane layout of the pixels inside it and the mark that a foreign device
+    /// writes it, and return the surface id the service minted. The caller
+    /// owes the registration its [`Self::unregister_foreign_surface`].
+    pub(crate) fn register_foreign_dma_buf(
+        &self,
+        foreign_dma_buf_fd: RawFd,
+        width: u32,
+        height: u32,
+        pixel_format: PixelFormat,
+        allocation_byte_size: u64,
+        planes: &PixelPlanesWithinOneAllocation,
+    ) -> PyResult<String> {
+        let mut check_in_request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.foreign_surface_registration_runtime_id,
+            "width": width,
+            "height": height,
+            "format": pixel_format.wire_name(),
+            "resource_type": "pixel_buffer",
+            "handle_type": "dma_buf",
+            "plane_sizes": [allocation_byte_size],
+            "plane_offsets": [0u64],
+            "plane_strides": [planes.plane_strides_bytes()[0]],
+        });
+        planes.write_surface_share_fields(&mut check_in_request);
+        let (check_in_response, _no_fds_back) =
+            self.surface_share_request_with_fds(&check_in_request, &[foreign_dma_buf_fd])?;
+        if let Some(check_in_error) = check_in_response
+            .get("error")
+            .and_then(|value| value.as_str())
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "the surface-share service refused to adopt the foreign DMA-BUF: \
+                 {check_in_error}"
+            )));
+        }
+        check_in_response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(
+                    "the surface-share service's check_in answered without a surface_id",
+                )
+            })
+    }
+
     /// Remove an adopted surface's registration, closing the service's fd
-    /// dups. The one place the `release` op is spelled for adoptions; every
-    /// caller is a [`HelperForeignSurfaceUnregisterDebt`].
-    fn unregister_foreign_surface(&self, surface_id: &str) -> PyResult<()> {
+    /// dups. The one place the `release` op is spelled for adoptions.
+    pub(crate) fn unregister_foreign_surface(&self, surface_id: &str) -> PyResult<()> {
         let (response, _no_fds) = self.surface_share_request(&serde_json::json!({
             "op": "release",
             "surface_id": surface_id,
