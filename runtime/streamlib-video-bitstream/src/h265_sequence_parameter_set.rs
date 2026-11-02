@@ -6,7 +6,7 @@
 //! Ported from NVIDIA's `NvVideoParser` (`VulkanH265Parser.cpp`); the field
 //! shapes mirror the `StdVideoH265*` structures the Vulkan Video decoder fills.
 
-use crate::core::nal_unit_raw_byte_sequence_payload::{
+use crate::nal_unit_raw_byte_sequence_payload::{
     RbspBitstreamReader, remove_emulation_prevention_bytes,
 };
 
@@ -240,16 +240,32 @@ impl ProfileTierLevel {
     /// The WebCodecs / RFC 6381 codec string for a stream with this profile,
     /// tier and level — `hvc1.1.6.L93.90` for x265's 1080p Main at level 3.1.
     pub fn hvc1_codec_string(&self) -> String {
-        hang::catalog::H265 {
-            in_band: false,
-            profile_space: self.general_profile_space,
-            profile_idc: self.general_profile_idc as u8,
-            profile_compatibility_flags: self.general_profile_compatibility_flags,
-            tier_flag: self.general_tier_flag,
-            level_idc: self.general_level_idc_in_the_bitstream,
-            constraint_flags: self.general_constraint_indicator_flags,
-        }
-        .to_string()
+        // ISO/IEC 14496-15 Annex E: the compatibility flags in reverse bit
+        // order, hex with leading zeros omitted; the constraint bytes in hex,
+        // trailing zero bytes omitted, and the whole field omitted when all
+        // six are zero.
+        let profile_space = match self.general_profile_space {
+            0 => String::new(),
+            space => char::from(b'A' + space - 1).to_string(),
+        };
+        let compatibility_flags_reversed =
+            u32::from_be_bytes(self.general_profile_compatibility_flags).reverse_bits();
+        let tier = if self.general_tier_flag { "H" } else { "L" };
+        let significant_constraint_bytes = self
+            .general_constraint_indicator_flags
+            .iter()
+            .rev()
+            .skip_while(|constraint_byte| **constraint_byte == 0)
+            .count();
+        let constraints: String = self.general_constraint_indicator_flags
+            [..significant_constraint_bytes]
+            .iter()
+            .map(|constraint_byte| format!(".{constraint_byte:X}"))
+            .collect();
+        format!(
+            "hvc1.{profile_space}{}.{compatibility_flags_reversed:X}.{tier}{}{constraints}",
+            self.general_profile_idc, self.general_level_idc_in_the_bitstream
+        )
     }
 }
 
@@ -473,7 +489,7 @@ impl Default for HevcSeqParam {
 ///
 /// `reader` provides the bitstream reading methods (u, ue, se).
 /// Returns `None` on parse error.
-pub(crate) fn parse_h265_short_term_ref_pic_set(
+pub fn parse_h265_short_term_ref_pic_set(
     reader: &mut RbspBitstreamReader,
     std_strps: &mut StdShortTermRefPicSet,
     strps: &mut ShortTermRefPicSet,
@@ -722,7 +738,7 @@ pub(crate) fn parse_h265_short_term_ref_pic_set(
 // -----------------------------------------------------------------------
 
 /// Parse scaling_list_data. Corresponds to C++ `scaling_list_data`.
-pub(crate) fn parse_h265_scaling_list_data(
+pub fn parse_h265_scaling_list_data(
     reader: &mut RbspBitstreamReader,
     scl: &mut ScalingList,
 ) -> Option<()> {
@@ -1018,7 +1034,7 @@ pub fn h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
 }
 
 /// Parse profile_tier_level() from the bitstream.
-pub(crate) fn parse_h265_profile_tier_level(
+pub fn parse_h265_profile_tier_level(
     reader: &mut RbspBitstreamReader,
     max_sub_layers_minus1: u8,
 ) -> Option<ProfileTierLevel> {

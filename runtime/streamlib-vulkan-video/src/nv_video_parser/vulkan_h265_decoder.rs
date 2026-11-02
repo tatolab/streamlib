@@ -16,12 +16,12 @@
 //!   `vk_video_decoder/libs/NvVideoParser/include/VulkanH265Decoder.h`
 //!   `vk_video_decoder/libs/NvVideoParser/src/VulkanH265Parser.cpp`
 
-use crate::core::h265_sequence_parameter_set::{
+use streamlib_video_bitstream::h265_sequence_parameter_set::{
     DecPicBufMgr, H265LevelIdc, HevcSeqParam, MAX_NUM_SPS, MAX_NUM_SUB_LAYERS, ProfileTierLevel,
     ScalingList, ShortTermRefPicSet, StdShortTermRefPicSet, VideoHrdParameters,
     parse_h265_profile_tier_level, parse_h265_scaling_list_data, parse_h265_short_term_ref_pic_set,
 };
-use crate::core::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
+use streamlib_video_bitstream::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
 
 // ---------------------------------------------------------------------------
 // Constants — direct ports of the C++ #defines

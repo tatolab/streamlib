@@ -13,10 +13,10 @@
 //! backwards. The two live together so a round-trip test can hold them to
 //! each other.
 
-use crate::core::annex_b_start_code_finder::StartCodeFinder;
-use crate::core::context::VideoCodecElementaryStream;
-use crate::core::h264_sequence_parameter_set::H264ProfileAndLevelFromSequenceParameterSet;
-use crate::core::h265_sequence_parameter_set::h265_profile_tier_level_from_sequence_parameter_set_nal_unit;
+use crate::VideoCodecElementaryStream;
+use crate::annex_b_start_code_finder::StartCodeFinder;
+use crate::h264_sequence_parameter_set::H264ProfileAndLevelFromSequenceParameterSet;
+use crate::h265_sequence_parameter_set::h265_profile_tier_level_from_sequence_parameter_set_nal_unit;
 
 /// H.264 `nal_unit_type` for a sequence parameter set (ITU-T H.264 §7.4.1).
 const H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;

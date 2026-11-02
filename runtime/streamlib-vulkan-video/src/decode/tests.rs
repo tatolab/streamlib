@@ -229,36 +229,28 @@ fn test_simple_decoder_config_defaults() {
 
 #[test]
 fn align_size_rounds_1080_up_to_the_macroblock_grid() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-        H264_MB_SIZE_ALIGNMENT, align_size,
-    };
+    use crate::vk_video_encoder::vk_video_encoder_def::{H264_MB_SIZE_ALIGNMENT, align_size};
     assert_eq!(align_size(1920u32, H264_MB_SIZE_ALIGNMENT), 1920);
     assert_eq!(align_size(1080u32, H264_MB_SIZE_ALIGNMENT), 1088);
 }
 
 #[test]
 fn align_size_leaves_an_already_aligned_extent_alone() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-        H264_MB_SIZE_ALIGNMENT, align_size,
-    };
+    use crate::vk_video_encoder::vk_video_encoder_def::{H264_MB_SIZE_ALIGNMENT, align_size};
     assert_eq!(align_size(1280u32, H264_MB_SIZE_ALIGNMENT), 1280);
     assert_eq!(align_size(720u32, H264_MB_SIZE_ALIGNMENT), 720);
 }
 
 #[test]
 fn align_size_leaves_4k_alone_on_both_axes() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-        H264_MB_SIZE_ALIGNMENT, align_size,
-    };
+    use crate::vk_video_encoder::vk_video_encoder_def::{H264_MB_SIZE_ALIGNMENT, align_size};
     assert_eq!(align_size(3840u32, H264_MB_SIZE_ALIGNMENT), 3840);
     assert_eq!(align_size(2160u32, H264_MB_SIZE_ALIGNMENT), 2160);
 }
 
 #[test]
 fn align_size_rounds_an_arbitrary_extent_up() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-        H264_MB_SIZE_ALIGNMENT, align_size,
-    };
+    use crate::vk_video_encoder::vk_video_encoder_def::{H264_MB_SIZE_ALIGNMENT, align_size};
     // Arbitrary non-aligned dims must round up to a multiple of 16.
     assert_eq!(align_size(641u32, H264_MB_SIZE_ALIGNMENT), 656);
     assert_eq!(align_size(481u32, H264_MB_SIZE_ALIGNMENT), 496);

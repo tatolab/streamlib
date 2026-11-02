@@ -508,11 +508,11 @@ impl VulkanSemaphoreSet {
 // ---------------------------------------------------------------------------
 
 /// Manages a single `VkQueryPool`. Thin adapter around the engine RHI
-/// primitive [`streamlib_vulkan_video::VulkanQueryPool`] — preserves
+/// primitive [`crate::VulkanQueryPool`] — preserves
 /// the codec_utils wrapping pattern while routing creation +
 /// destruction through the RHI's `lock_device`-protected paths.
 struct VulkanQueryPoolSet {
-    query_pool: Option<streamlib_vulkan_video::VulkanQueryPool>,
+    query_pool: Option<crate::VulkanQueryPool>,
     query_count: u32,
 }
 
@@ -534,15 +534,15 @@ impl VulkanQueryPoolSet {
     /// constructor checks the combination.
     fn create_set(
         &mut self,
-        vulkan_device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
+        vulkan_device: &std::sync::Arc<dyn crate::VulkanVideoCodecDevice>,
         count: u32,
         query_type: vk::QueryType,
         video_encode_feedback_flags: vk::VideoEncodeFeedbackFlagsKHR,
         video_profile: Option<&vk::VideoProfileInfoKHR>,
-    ) -> crate::core::Result<()> {
+    ) -> crate::VideoResult<()> {
         self.destroy();
 
-        let descriptor = streamlib_vulkan_video::QueryPoolDescriptor {
+        let descriptor = crate::QueryPoolDescriptor {
             label: "codec_utils/query_pool_set",
             query_type,
             query_count: count,
@@ -550,11 +550,7 @@ impl VulkanQueryPoolSet {
             video_encode_feedback_flags,
             video_profile,
         };
-        let pool = streamlib_vulkan_video::VulkanQueryPool::new(
-            &(std::sync::Arc::clone(vulkan_device)
-                as std::sync::Arc<dyn streamlib_vulkan_video::VulkanVideoCodecDevice>),
-            &descriptor,
-        )?;
+        let pool = crate::VulkanQueryPool::new(vulkan_device, &descriptor)?;
         self.query_pool = Some(pool);
         self.query_count = count;
         Ok(())
@@ -727,7 +723,7 @@ impl VulkanCommandBufferPool {
     /// the pool's `pNext` for `VIDEO_ENCODE_FEEDBACK_KHR`).
     pub unsafe fn configure(
         self: &mut Arc<Self>,
-        vulkan_device: &Arc<crate::vulkan::rhi::HostVulkanDevice>,
+        vulkan_device: &Arc<dyn crate::VulkanVideoCodecDevice>,
         device: &vulkanalia::Device,
         num_pool_nodes: u32,
         queue_family_index: u32,

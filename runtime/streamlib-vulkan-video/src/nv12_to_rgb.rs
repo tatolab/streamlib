@@ -3,7 +3,7 @@
 
 //! GPU NV12 → RGB(A) color-space converter using a Vulkan compute shader.
 //!
-//! The reverse of [`crate::vulkan::video::rgb_to_nv12::RgbToNv12Converter`].
+//! The reverse of [`crate::rgb_to_nv12::RgbToNv12Converter`].
 //!
 //! Uses a `VkSamplerYcbcrConversion` combined image sampler baked into the
 //! descriptor-set layout via `pImmutableSamplers` so the hardware handles
@@ -15,9 +15,9 @@
 //! writes and `TRANSFER_SRC` for CPU readback, using `CONCURRENT` sharing
 //! between the compute and decode queue families.
 //!
-//! Compute dispatch is owned by [`VulkanComputeKernel`]; the converter
-//! holds the YCbCr conversion + sampler + per-call NV12 sampled view, plus
-//! its own command-buffer / fence for recording the surrounding barriers.
+//! The converter owns its compute pipeline, the YCbCr conversion and the
+//! immutable sampler baked into its descriptor-set layout, the per-call NV12
+//! sampled view, and its own command buffer and fence.
 
 use std::sync::Arc;
 
@@ -25,12 +25,10 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
 
-use crate::core::color::H273ColorVui;
-use crate::core::color::h273_color_vui::matrix;
-use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
-use crate::vulkan::rhi::VulkanComputeKernel;
-use crate::vulkan::video::VideoContext;
-use streamlib_vulkan_video::VideoError;
+use crate::VideoError;
+use crate::VulkanVideoDecodeContext;
+use streamlib_consumer_rhi::h273_color_vui::H273ColorVui;
+use streamlib_consumer_rhi::h273_color_vui::matrix;
 
 /// Pre-compiled SPIR-V bytecode for the NV12→RGB compute shader.
 const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nv12_to_rgb.spv"));
@@ -39,10 +37,8 @@ const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nv12_to_rg
 /// - 0: COMBINED_IMAGE_SAMPLER — NV12 input via an immutable YCbCr sampler
 ///   chained at descriptor-set-layout creation time.
 /// - 1: STORAGE_IMAGE — RGBA output (R8G8B8A8_UNORM).
-const BINDINGS: &[ComputeBindingSpec] = &[
-    ComputeBindingSpec::sampled_texture(0),
-    ComputeBindingSpec::storage_image(1),
-];
+const NV12_INPUT_BINDING: u32 = 0;
+const RGBA_OUTPUT_BINDING: u32 = 1;
 
 /// Horizontal siting the hardware reconstructs 4:2:0 chroma at.
 ///
@@ -103,6 +99,182 @@ struct PushConstants {
     resolution: [i32; 2],
 }
 
+/// The `nv12_to_rgb.comp` pipeline and the one descriptor set its dispatch
+/// binds, rewritten before each dispatch: the converter waits on every
+/// dispatch's fence before the next, so the set is never in flight twice.
+struct Nv12ToRgbComputePipeline {
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_set: vk::DescriptorSet,
+}
+
+impl Nv12ToRgbComputePipeline {
+    /// Build the pipeline with `ycbcr_sampler` baked into binding 0's layout.
+    unsafe fn new(
+        device: &vulkanalia::Device,
+        ycbcr_sampler: vk::Sampler,
+    ) -> Result<Self, VideoError> {
+        unsafe {
+            let immutable_samplers = [ycbcr_sampler];
+            let layout_bindings = [
+                vk::DescriptorSetLayoutBinding::builder()
+                    .binding(NV12_INPUT_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .immutable_samplers(&immutable_samplers)
+                    .build(),
+                vk::DescriptorSetLayoutBinding::builder()
+                    .binding(RGBA_OUTPUT_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .build(),
+            ];
+            let descriptor_set_layout = device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&layout_bindings),
+                None,
+            )?;
+            let push_constant_ranges = [vk::PushConstantRange::builder()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .offset(0)
+                .size(std::mem::size_of::<PushConstants>() as u32)
+                .build()];
+            let set_layouts = [descriptor_set_layout];
+            let pipeline_layout = device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::builder()
+                    .set_layouts(&set_layouts)
+                    .push_constant_ranges(&push_constant_ranges),
+                None,
+            )?;
+            let spirv_words: Vec<u32> = SHADER_SPIRV
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+                .collect();
+            let shader_module = device.create_shader_module(
+                &vk::ShaderModuleCreateInfo::builder()
+                    .code_size(SHADER_SPIRV.len())
+                    .code(&spirv_words),
+                None,
+            )?;
+            let stage = vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::COMPUTE)
+                .module(shader_module)
+                .name(b"main\0");
+            let pipeline_info = vk::ComputePipelineCreateInfo::builder()
+                .stage(stage)
+                .layout(pipeline_layout);
+            let pipeline_result =
+                device.create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None);
+            device.destroy_shader_module(shader_module, None);
+            let pipeline = pipeline_result?.0[0];
+            let pool_sizes = [
+                vk::DescriptorPoolSize::builder()
+                    .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .build(),
+                vk::DescriptorPoolSize::builder()
+                    .type_(vk::DescriptorType::STORAGE_IMAGE)
+                    .descriptor_count(1)
+                    .build(),
+            ];
+            let descriptor_pool = device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::builder()
+                    .max_sets(1)
+                    .pool_sizes(&pool_sizes),
+                None,
+            )?;
+            let descriptor_set = device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::builder()
+                    .descriptor_pool(descriptor_pool)
+                    .set_layouts(&set_layouts),
+            )?[0];
+            Ok(Self {
+                descriptor_set_layout,
+                pipeline_layout,
+                pipeline,
+                descriptor_pool,
+                descriptor_set,
+            })
+        }
+    }
+
+    /// Point the set at this dispatch's views, then record the bind, push
+    /// constants and dispatch into `command_buffer`.
+    unsafe fn record(
+        &self,
+        device: &vulkanalia::Device,
+        command_buffer: vk::CommandBuffer,
+        nv12_sampled_view: vk::ImageView,
+        rgba_storage_view: vk::ImageView,
+        push_constants: PushConstants,
+        group_count_x: u32,
+        group_count_y: u32,
+    ) {
+        unsafe {
+            let nv12_image_info = [vk::DescriptorImageInfo::builder()
+                .image_view(nv12_sampled_view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .build()];
+            let rgba_image_info = [vk::DescriptorImageInfo::builder()
+                .image_view(rgba_storage_view)
+                .image_layout(vk::ImageLayout::GENERAL)
+                .build()];
+            let writes = [
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(NV12_INPUT_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&nv12_image_info)
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(RGBA_OUTPUT_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .image_info(&rgba_image_info)
+                    .build(),
+            ];
+            device.update_descriptor_sets(&writes, &[] as &[vk::CopyDescriptorSet]);
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.pipeline,
+            );
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.pipeline_layout,
+                0,
+                &[self.descriptor_set],
+                &[],
+            );
+            let push_constant_bytes = std::slice::from_raw_parts(
+                (&push_constants as *const PushConstants).cast::<u8>(),
+                std::mem::size_of::<PushConstants>(),
+            );
+            device.cmd_push_constants(
+                command_buffer,
+                self.pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_constant_bytes,
+            );
+            device.cmd_dispatch(command_buffer, group_count_x, group_count_y, 1);
+        }
+    }
+
+    unsafe fn destroy(&self, device: &vulkanalia::Device) {
+        unsafe {
+            device.destroy_descriptor_pool(self.descriptor_pool, None);
+            device.destroy_pipeline(self.pipeline, None);
+            device.destroy_pipeline_layout(self.pipeline_layout, None);
+            device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        }
+    }
+}
+
 /// GPU NV12 → RGBA converter.
 ///
 /// Owns a compute kernel with an immutable YCbCr sampler, an RGBA output
@@ -121,9 +293,7 @@ pub struct Nv12ToRgbConverter {
     ycbcr_conversion: vk::SamplerYcbcrConversion,
     sampler: vk::Sampler,
 
-    // Engine-managed compute pipeline (descriptor set / pipeline layout /
-    // pipeline / pipeline cache / SPIR-V reflection all live inside).
-    kernel: VulkanComputeKernel,
+    compute_pipeline: Nv12ToRgbComputePipeline,
 
     // RGBA output image
     rgba_image: vk::Image,
@@ -142,7 +312,7 @@ pub struct Nv12ToRgbConverter {
     _compute_queue_family: u32,
 
     // Host-side queue submission gateway.
-    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    codec_device: Arc<dyn crate::VulkanVideoCodecDevice>,
 
     // Dimensions
     width: u32,
@@ -162,7 +332,7 @@ impl Nv12ToRgbConverter {
     /// * `decode_queue_family` - Queue family index for video decode (for CONCURRENT sharing)
     /// * `ycbcr_model_and_range` - The conversion baked into the immutable sampler
     pub unsafe fn new(
-        ctx: &Arc<VideoContext>,
+        ctx: &Arc<VulkanVideoDecodeContext>,
         width: u32,
         height: u32,
         compute_queue_family: u32,
@@ -173,7 +343,7 @@ impl Nv12ToRgbConverter {
         unsafe {
             let device = ctx.device().clone();
             let allocator = ctx.allocator().clone();
-            let host_device = ctx.host_device().clone();
+            let codec_device = ctx.codec_device().clone();
 
             // --- 1. YCbCr conversion ---
             // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651 and -01652: a
@@ -240,27 +410,10 @@ impl Nv12ToRgbConverter {
                 None,
             )?;
 
-            // --- 3. Compute kernel via the engine RHI, with the YCbCr
-            // sampler baked into the descriptor-set layout as an immutable
-            // sampler. Lifetime contract: `sampler` is destroyed manually
-            // in `Self::drop` (after `device_wait_idle`, before
-            // `self.kernel` auto-drops). Vulkan spec permits this order —
-            // `vkDestroyDescriptorSetLayout` does not dereference the
-            // sampler handles a layout was created with via
-            // `pImmutableSamplers`; the handles are used at
-            // descriptor-write / dispatch time only, and `device_wait_idle`
-            // guarantees there is none of that in flight.
-            let kernel = VulkanComputeKernel::new_with_immutable_samplers(
-                ctx.host_device(),
-                &ComputeKernelDescriptor {
-                    entry_point: "main",
-                    label: "nv12_to_rgb",
-                    spv: SHADER_SPIRV,
-                    bindings: BINDINGS,
-                    push_constant_size: std::mem::size_of::<PushConstants>() as u32,
-                },
-                &[(0, sampler)],
-            )?;
+            // --- 3. Compute pipeline, with the YCbCr sampler baked into
+            // its descriptor-set layout as an immutable sampler. `Drop`
+            // destroys the pipeline before the sampler.
+            let compute_pipeline = Nv12ToRgbComputePipeline::new(&device, sampler)?;
 
             // --- 4. RGBA output image ---
             let queue_families = [compute_queue_family, decode_queue_family];
@@ -339,7 +492,7 @@ impl Nv12ToRgbConverter {
                 ycbcr_model_and_range,
                 ycbcr_conversion,
                 sampler,
-                kernel,
+                compute_pipeline,
                 rgba_image,
                 rgba_allocation,
                 rgba_view,
@@ -348,7 +501,7 @@ impl Nv12ToRgbConverter {
                 fence,
                 compute_queue,
                 _compute_queue_family: compute_queue_family,
-                host_device,
+                codec_device,
                 width,
                 height,
             })
@@ -396,18 +549,6 @@ impl Nv12ToRgbConverter {
             )?;
 
             let cb = self.command_buffer;
-
-            // --- Stage descriptor writes ---
-            // Binding 0: COMBINED_IMAGE_SAMPLER with view-only write (sampler
-            // is the immutable YCbCr one baked into the descriptor-set
-            // layout; Vulkan ignores the sampler field in the write).
-            // Binding 1: STORAGE_IMAGE for RGBA output.
-            self.kernel
-                .set_combined_image_sampler_view(0, nv12_sampled_view)?;
-            self.kernel.set_storage_image_view(1, self.rgba_view)?;
-            self.kernel.set_push_constants_value(&PushConstants {
-                resolution: [self.width as i32, self.height as i32],
-            })?;
 
             self.device
                 .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())?;
@@ -463,9 +604,17 @@ impl Nv12ToRgbConverter {
             // Each thread handles one pixel, workgroup is 8x8.
             let group_x = (self.width + 7) / 8;
             let group_y = (self.height + 7) / 8;
-            self.kernel
-                .record(cb, group_x, group_y, 1)
-                .map_err(|e| VideoError::Rhi(format!("nv12_to_rgb kernel record failed: {e}")))?;
+            self.compute_pipeline.record(
+                &self.device,
+                cb,
+                nv12_sampled_view,
+                self.rgba_view,
+                PushConstants {
+                    resolution: [self.width as i32, self.height as i32],
+                },
+                group_x,
+                group_y,
+            );
 
             // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---
             let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
@@ -502,7 +651,7 @@ impl Nv12ToRgbConverter {
                 .build();
 
             self.device.reset_fences(&[self.fence])?;
-            self.host_device
+            self.codec_device
                 .submit_to_queue(self.compute_queue, &[submit], self.fence)
                 .map_err(VideoError::from)?;
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
@@ -538,7 +687,7 @@ impl Nv12ToRgbConverter {
 impl Drop for Nv12ToRgbConverter {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.host_device.wait_idle();
+            let _ = self.codec_device.wait_idle();
 
             if self.fence != vk::Fence::null() {
                 self.device.destroy_fence(self.fence, None);
@@ -554,14 +703,7 @@ impl Drop for Nv12ToRgbConverter {
                 self.allocator
                     .destroy_image(self.rgba_image, self.rgba_allocation);
             }
-            // The compute kernel (descriptor layout / pipeline / pipeline
-            // layout / shader module / descriptor pool / command pool /
-            // fence) is torn down by its own Drop when `self.kernel` is
-            // dropped after this function returns. The kernel's
-            // descriptor-set layout retains the immutable `sampler`
-            // handle via `pImmutableSamplers`; the `device_wait_idle`
-            // above guarantees no GPU work is still using it, so
-            // destroying the sampler here is safe.
+            self.compute_pipeline.destroy(&self.device);
             if self.sampler != vk::Sampler::null() {
                 self.device.destroy_sampler(self.sampler, None);
             }
@@ -606,7 +748,7 @@ mod tests {
 
     #[test]
     fn chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies() {
-        use crate::vulkan::video::encode::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
+        use crate::encode::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
 
         // Anchored on the value the SPS builder writes. `EncoderConfig` carries a
         // `chroma_sample_loc_type` too, but nothing on the bitstream path reads it,
@@ -705,20 +847,5 @@ mod tests {
                 "matrix {matrix_coefficients} refused as {refusal}"
             );
         }
-    }
-
-    #[test]
-    fn bindings_match_shader_declaration() {
-        // Lock the binding shape against the shader: any drift between
-        // BINDINGS and nv12_to_rgb.comp will fail SPIR-V reflection at
-        // kernel construction time (rejecting silently-wrong dispatches),
-        // but locking it here at the data level catches regressions
-        // without needing a GPU.
-        use crate::core::rhi::ComputeBindingKind;
-        assert_eq!(BINDINGS.len(), 2);
-        assert_eq!(BINDINGS[0].binding, 0);
-        assert_eq!(BINDINGS[0].kind, ComputeBindingKind::SampledTexture);
-        assert_eq!(BINDINGS[1].binding, 1);
-        assert_eq!(BINDINGS[1].kind, ComputeBindingKind::StorageImage);
     }
 }

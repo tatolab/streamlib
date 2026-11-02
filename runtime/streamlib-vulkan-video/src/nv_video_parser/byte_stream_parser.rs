@@ -14,12 +14,12 @@
 //!
 //! Key C++ state that is mirrored here:
 //!   - `m_BitBfr` (`u32`) — the rolling shift-register of the start-code
-//!     scan, which is the engine's platform-free
-//!     [`StartCodeFinder`](crate::core::annex_b_start_code_finder::StartCodeFinder).
+//!     scan, which is the platform-free
+//!     `streamlib_video_bitstream::annex_b_start_code_finder::StartCodeFinder`.
 //!   - `NvVkNalUnit` — tracks the byte offsets of the NAL unit currently being
 //!     assembled inside the bitstream buffer.
 
-use crate::core::annex_b_start_code_finder::StartCodeFinder;
+use streamlib_video_bitstream::annex_b_start_code_finder::StartCodeFinder;
 
 // ---------------------------------------------------------------------------
 // NAL unit tracking — port of `NvVkNalUnit` from VulkanVideoDecoder.h

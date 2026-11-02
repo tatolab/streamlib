@@ -1,15 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Public decoder API for the codec layer.
-//!
-//! [`SimpleDecoder`] is the high-level entry point: it handles Vulkan
-//! instance/device creation, NAL parsing, session management, and frame
-//! readback internally. Under the hood it delegates to [`VkVideoDecoder`]
+//! Vulkan Video decode on any [`crate::VulkanVideoCodecDevice`] with a decode
+//! queue. [`SimpleDecoder`] parses Annex-B NAL units, manages session
+//! parameters and the DPB, and reads decoded pictures back, delegating each
+//! picture to [`crate::vk_video_decoder::vk_video_decoder::VkVideoDecoder`]
 //! for both H.264 and H.265.
-//!
-//! Supporting types ([`DecodeSubmitInfo`], [`DecodedFrame`], [`ReferenceSlot`],
-//! etc.) are shared with [`VkVideoDecoder`].
 
 pub(crate) mod decoded_picture_display_window;
 mod h264;
@@ -17,6 +13,8 @@ mod h265;
 mod session;
 mod types;
 
+#[cfg(test)]
+mod owned_device_decode_tests;
 #[cfg(test)]
 mod tests;
 
@@ -30,48 +28,24 @@ use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
 
 use self::decoded_picture_display_window::DecodedPictureDisplayWindow;
-use crate::vulkan::video::VideoContext;
-use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
+use crate::VideoError;
+use crate::VulkanVideoDecodeContext;
+use crate::nv_video_parser::vulkan_h264_decoder::{
     MAX_DPB_SIZE as H264_MAX_DPB_SIZE, VulkanH264Decoder,
 };
-use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
-    HEVC_DPB_SIZE, VulkanH265Decoder,
-};
-use streamlib_vulkan_video::VideoError;
+use crate::nv_video_parser::vulkan_h265_decoder::{HEVC_DPB_SIZE, VulkanH265Decoder};
 
 // ======================================================================
 // SimpleDecoder — high-level decoder with auto NAL parsing
 // ======================================================================
 
-/// High-level decoder that handles all Vulkan boilerplate automatically.
-///
-/// Creates a Vulkan instance and device internally, parses NAL units,
-/// manages SPS/PPS extraction, session parameters, DPB, and frame readback.
-/// Delegates actual decode to [`VkVideoDecoder`].
-///
-/// # Example
-///
-/// ```ignore
-/// let config = SimpleDecoderConfig {
-///     codec: Codec::H264,
-///     ..Default::default()
-/// };
-///
-/// let mut dec = SimpleDecoder::new(config)?;
-/// let frames = dec.feed(&h264_bitstream)?;
-/// for frame in frames {
-///     // frame.data contains NV12 pixels
-///     assert!(frame.width > 0 && frame.height > 0);
-/// }
-/// ```
+/// H.264 / H.265 decoder on a codec device: Annex-B in, NV12 or RGBA
+/// pictures read back out.
 pub struct SimpleDecoder {
-    // Vulkan objects we own
-    _entry: vulkanalia::Entry,
-    _instance: vulkanalia::Instance,
     device: vulkanalia::Device,
 
     // The ported VkVideoDecoder (used by both H.264 and H.265)
-    vk_decoder: Option<crate::vulkan::video::vk_video_decoder::vk_video_decoder::VkVideoDecoder>,
+    vk_decoder: Option<crate::vk_video_decoder::vk_video_decoder::VkVideoDecoder>,
 
     // Queues
     decode_queue: vk::Queue,
@@ -117,8 +91,7 @@ pub struct SimpleDecoder {
     // Config
     config: SimpleDecoderConfig,
 
-    // VideoContext (needed for readback)
-    ctx: Arc<VideoContext>,
+    ctx: Arc<VulkanVideoDecodeContext>,
 
     // H.264 parser state (SPS/PPS parsing, POC, DPB, ref list construction)
     h264_parser: Option<VulkanH264Decoder>,
@@ -139,7 +112,7 @@ pub struct SimpleDecoder {
     pending_frame: Option<PendingFrame>,
 
     // NV12→RGBA GPU compute converter (created when config.rgba_output is true)
-    nv12_converter: Option<crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter>,
+    nv12_converter: Option<crate::nv12_to_rgb::Nv12ToRgbConverter>,
     // RGBA staging buffer for readback after GPU conversion
     rgba_staging: Option<(vk::Buffer, vma::Allocation, u64, *mut u8)>,
     // Compute/transfer queue info for converter (graphics queue supports compute)
@@ -147,7 +120,7 @@ pub struct SimpleDecoder {
     compute_queue_family: u32,
 
     // Host-side queue submission gateway (per-queue mutex synchronization).
-    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    codec_device: Arc<dyn crate::VulkanVideoCodecDevice>,
 }
 
 /// Metadata for a frame whose GPU decode has been submitted but not yet read back.
@@ -160,7 +133,7 @@ struct PendingFrame {
     display_window: DecodedPictureDisplayWindow,
     /// The colour the SPS this picture was decoded under signals, matrix and
     /// range filled for its display window.
-    decoded_picture_color_vui: crate::core::color::H273ColorVui,
+    decoded_picture_color_vui: streamlib_consumer_rhi::h273_color_vui::H273ColorVui,
     decode_order: u64,
     poc: i32,
     setup_slot: usize,
@@ -171,79 +144,38 @@ struct PendingFrame {
 unsafe impl Send for SimpleDecoder {}
 
 impl SimpleDecoder {
-    /// Create a `SimpleDecoder` directly from a host-owned
-    /// `Arc<HostVulkanDevice>` — the modern, cdylib-safe construction path
-    /// (no `host_vulkan_device_arc` ABI transit). Pulls the host's Vulkan
-    /// instance, device, allocator, and the video decode / transfer queues
-    /// off the Arc; the codec submits through the host's per-queue
-    /// serialization via
-    /// [`crate::vulkan::rhi::HostVulkanDevice::submit_to_queue`]. Backs
-    /// [`crate::core::context::GpuContext::create_decoder_session`].
+    /// Mint a decoder on `codec_device`'s video decode queue, staging
+    /// readbacks on its transfer queue and converting NV12 → RGBA on its
+    /// compute queue.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - The host device wasn't created with video decode support
-    ///   ([`vk::QueueFlags::VIDEO_DECODE_KHR`] queue family missing).
-    /// - Any Vulkan resource creation fails.
-    pub(crate) fn from_host_device(
-        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    /// Refused when the device enabled no Vulkan Video decode queue, or any
+    /// Vulkan resource creation fails.
+    pub fn new(
+        codec_device: Arc<dyn crate::VulkanVideoCodecDevice>,
         config: SimpleDecoderConfig,
     ) -> Result<Self, VideoError> {
-        let decode_queue = host_device.video_decode_queue().ok_or_else(|| {
+        let crate::VulkanVideoCodecQueue {
+            queue: decode_queue,
+            queue_family_index: decode_queue_family,
+        } = codec_device.video_decode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
-                "host device has no video decode queue family — \
-                 GPU does not support Vulkan Video decode"
+                "the device enabled no video decode queue — it does not support Vulkan \
+                 Video decode"
                     .into(),
             )
         })?;
-        let decode_queue_family =
-            host_device
-                .video_decode_queue_family_index()
-                .ok_or_else(|| {
-                    VideoError::BitstreamError(
-                        "host device exposes decode queue but no queue family index".into(),
-                    )
-                })?;
-        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(&host_device);
-
-        Self::from_external_parts(
-            config,
-            host_device.instance().clone(),
-            host_device.device().clone(),
-            host_arc,
-            decode_queue,
-            decode_queue_family,
-            host_device.queue(),
-            host_device.queue_family_index(),
-        )
-    }
-
-    /// Internal helper — assemble a `SimpleDecoder` from the host RHI's
-    /// already-validated Vulkan handles. Only callable from
-    /// [`Self::from_host_device`]; not exposed to consumers.
-    #[allow(clippy::too_many_arguments)]
-    fn from_external_parts(
-        config: SimpleDecoderConfig,
-        instance: vulkanalia::Instance,
-        device: vulkanalia::Device,
-        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
-        decode_queue: vk::Queue,
-        decode_queue_family: u32,
-        transfer_queue: vk::Queue,
-        transfer_queue_family: u32,
-    ) -> Result<Self, VideoError> {
-        let ctx = Arc::new(VideoContext::new(host_device.clone())?);
-
-        // Load Vulkan for the Entry field (required by struct, not used for external path).
-        let entry = unsafe {
-            vulkanalia::Entry::new(
-                vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY).map_err(
-                    |e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)),
-                )?,
-            )
-            .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?
-        };
+        let crate::VulkanVideoCodecQueue {
+            queue: transfer_queue,
+            queue_family_index: transfer_queue_family,
+        } = codec_device.transfer_queue();
+        let crate::VulkanVideoCodecQueue {
+            queue: compute_queue,
+            queue_family_index: compute_queue_family,
+        } = codec_device.compute_queue();
+        let device = codec_device.device().clone();
+        let ctx = Arc::new(VulkanVideoDecodeContext::new(Arc::clone(&codec_device))?);
 
         let transfer_pool = unsafe {
             device
@@ -276,8 +208,6 @@ impl SimpleDecoder {
         info!(codec = ?config.codec, "SimpleDecoder created (external device)");
 
         Ok(Self {
-            _entry: entry,
-            _instance: instance,
             device,
             vk_decoder: None,
             decode_queue,
@@ -311,9 +241,9 @@ impl SimpleDecoder {
             pending_frame: None,
             nv12_converter: None,
             rgba_staging: None,
-            compute_queue: transfer_queue,
-            compute_queue_family: transfer_queue_family,
-            host_device,
+            compute_queue,
+            compute_queue_family,
+            codec_device,
         })
     }
 
@@ -329,7 +259,7 @@ impl SimpleDecoder {
         self.nal_buffer.extend_from_slice(data);
 
         // Split into NAL units
-        let nals = streamlib_vulkan_video::split_annex_b_nal_units(&self.nal_buffer);
+        let nals = crate::split_annex_b_nal_units(&self.nal_buffer);
 
         if nals.is_empty() {
             return Ok(Vec::new());
@@ -361,9 +291,9 @@ impl SimpleDecoder {
 
         // Process each NAL
         let mut frames = Vec::new();
-        let extracted_nals = streamlib_vulkan_video::split_annex_b_nal_units(&buffer_copy);
+        let extracted_nals = crate::split_annex_b_nal_units(&buffer_copy);
 
-        let is_h265 = self.config.codec == crate::vulkan::video::encode::Codec::H265;
+        let is_h265 = self.config.codec == crate::encode::Codec::H265;
 
         for nal in &extracted_nals {
             if nal.is_empty() {
@@ -569,7 +499,7 @@ impl SimpleDecoder {
     fn decoded_picture_color_vui(
         &self,
         display_window: DecodedPictureDisplayWindow,
-    ) -> crate::core::color::H273ColorVui {
+    ) -> streamlib_consumer_rhi::h273_color_vui::H273ColorVui {
         self.signalled_color_vui()
             .unwrap_or_default()
             .with_decoded_picture_matrix_and_range_defaults(
@@ -583,9 +513,9 @@ impl SimpleDecoder {
     ///
     /// Each axis is `Some(byte)` only if the bitstream actually carried it
     /// AND it isn't the H.273 "Unspecified" enumerant (value `2`).
-    fn signalled_color_vui(&self) -> Option<crate::core::color::H273ColorVui> {
+    fn signalled_color_vui(&self) -> Option<streamlib_consumer_rhi::h273_color_vui::H273ColorVui> {
         match self.config.codec {
-            crate::vulkan::video::encode::Codec::H264 => {
+            crate::encode::Codec::H264 => {
                 let parser = self.h264_parser.as_ref()?;
                 let sps = parser.sps.as_ref()?;
                 if !sps.flags.vui_parameters_present_flag {
@@ -602,7 +532,7 @@ impl SimpleDecoder {
                 };
                 build_color_vui(primaries, transfer, matrix, full_range)
             }
-            crate::vulkan::video::encode::Codec::H265 => {
+            crate::encode::Codec::H265 => {
                 let parser = self.h265_parser.as_ref()?;
                 let sps = parser.active_sps[0].as_ref()?;
                 if !sps.flags.vui_parameters_present_flag {
@@ -880,7 +810,7 @@ impl SimpleDecoder {
                 let submit_info = vk::SubmitInfo2::builder()
                     .command_buffer_infos(&cb_submits)
                     .build();
-                self.host_device
+                self.codec_device
                     .submit_to_queue(self.transfer_queue, &[submit_info], self.transfer_fence)
                     .map_err(VideoError::from)?;
                 self.device
@@ -967,7 +897,7 @@ fn decoded_byte_to_option(value: i32) -> Option<u8> {
         return None;
     }
     let byte = value as u8;
-    if byte == crate::core::color::H273_UNSPECIFIED {
+    if byte == streamlib_consumer_rhi::h273_color_vui::H273_UNSPECIFIED {
         return None;
     }
     Some(byte)
@@ -981,11 +911,11 @@ fn build_color_vui(
     transfer: Option<u8>,
     matrix: Option<u8>,
     full_range: Option<bool>,
-) -> Option<crate::core::color::H273ColorVui> {
+) -> Option<streamlib_consumer_rhi::h273_color_vui::H273ColorVui> {
     if primaries.is_none() && transfer.is_none() && matrix.is_none() && full_range.is_none() {
         return None;
     }
-    Some(crate::core::color::H273ColorVui {
+    Some(streamlib_consumer_rhi::h273_color_vui::H273ColorVui {
         primaries,
         transfer,
         matrix,
@@ -996,7 +926,7 @@ fn build_color_vui(
 #[cfg(test)]
 mod color_vui_helper_tests {
     use super::*;
-    use crate::core::color::h273_color_vui;
+    use streamlib_consumer_rhi::h273_color_vui;
 
     #[test]
     fn unspecified_byte_becomes_none() {
@@ -1048,7 +978,7 @@ mod color_vui_helper_tests {
 impl Drop for SimpleDecoder {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.host_device.wait_idle();
+            let _ = self.codec_device.wait_idle();
 
             // Destroy NV12→RGBA converter (owns its own Vulkan resources)
             self.nv12_converter.take();

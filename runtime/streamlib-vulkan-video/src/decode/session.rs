@@ -9,16 +9,14 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use super::SimpleDecoder;
-use crate::core::color::H273ColorVui;
-use crate::core::h265_sequence_parameter_set::H265LevelIdc;
-use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
+use crate::VideoError;
+use crate::nv_video_parser::vulkan_h264_decoder::{
     H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
 };
-use crate::vulkan::video::nv12_to_rgb::{Nv12SamplerYcbcrModelAndRange, Nv12ToRgbConverter};
-use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{
-    VkParserDetectedVideoFormat, VkVideoDecoder,
-};
-use streamlib_vulkan_video::VideoError;
+use crate::nv12_to_rgb::{Nv12SamplerYcbcrModelAndRange, Nv12ToRgbConverter};
+use crate::vk_video_decoder::vk_video_decoder::{VkParserDetectedVideoFormat, VkVideoDecoder};
+use streamlib_consumer_rhi::h273_color_vui::H273ColorVui;
+use streamlib_video_bitstream::h265_sequence_parameter_set::H265LevelIdc;
 
 impl SimpleDecoder {
     /// Eagerly allocate the GPU resources used during decode.
@@ -127,7 +125,7 @@ impl SimpleDecoder {
         self.dpb_slot_frame_num = vec![0u16; dpb_size as usize];
         self.dpb_slot_poc = vec![[0i32; 2]; dpb_size as usize];
 
-        let codec_flag = if self.config.codec == crate::vulkan::video::encode::Codec::H265 {
+        let codec_flag = if self.config.codec == crate::encode::Codec::H265 {
             vk::VideoCodecOperationFlagsKHR::DECODE_H265
         } else {
             vk::VideoCodecOperationFlagsKHR::DECODE_H264
@@ -213,7 +211,7 @@ impl SimpleDecoder {
             self.dpb_slot_frame_num = vec![0u16; dpb_size as usize];
             self.dpb_slot_poc = vec![[0i32; 2]; dpb_size as usize];
 
-            let codec_flag = if self.config.codec == crate::vulkan::video::encode::Codec::H265 {
+            let codec_flag = if self.config.codec == crate::encode::Codec::H265 {
                 vk::VideoCodecOperationFlagsKHR::DECODE_H265
             } else {
                 vk::VideoCodecOperationFlagsKHR::DECODE_H264
@@ -261,7 +259,7 @@ impl SimpleDecoder {
             self.vk_decoder = Some(vk_dec);
         }
 
-        if self.config.codec == crate::vulkan::video::encode::Codec::H265 {
+        if self.config.codec == crate::encode::Codec::H265 {
             self.create_session_params_h265()?;
         } else {
             self.create_session_params_h264_vk()?;
@@ -522,14 +520,14 @@ impl SimpleDecoder {
         // atomic from the caller's perspective.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
             self.ctx
-                .host_device()
+                .codec_device()
                 .wait_idle()
                 .map_err(VideoError::from)?;
         }
 
-        let descriptor = streamlib_vulkan_video::VideoSessionParametersDescriptor {
+        let descriptor = crate::VideoSessionParametersDescriptor {
             label: "decode/h264/session-params",
-            add_info: streamlib_vulkan_video::VideoSessionParametersAddInfo::DecodeH264 {
+            add_info: crate::VideoSessionParametersAddInfo::DecodeH264 {
                 sps: &sps_array,
                 pps: &pps_array,
                 max_std_sps_count: 32,
@@ -538,9 +536,8 @@ impl SimpleDecoder {
             quality_level: None,
             template: None,
         };
-        let new_params =
-            streamlib_vulkan_video::VulkanVideoSessionParameters::new(&session_arc, &descriptor)
-                .map_err(|e| VideoError::BitstreamError(format!("H.264 session params: {e}")))?;
+        let new_params = crate::VulkanVideoSessionParameters::new(&session_arc, &descriptor)
+            .map_err(|e| VideoError::BitstreamError(format!("H.264 session params: {e}")))?;
         vk_dec.set_session_parameters_arc(new_params);
 
         debug!("H.264 session parameters created on VkVideoDecoder");
@@ -956,7 +953,7 @@ impl SimpleDecoder {
         // VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
             self.ctx
-                .host_device()
+                .codec_device()
                 .wait_idle()
                 .map_err(VideoError::from)?;
         }
@@ -964,9 +961,9 @@ impl SimpleDecoder {
         let vps_array = [h265_vps];
         let sps_array = [h265_sps];
         let pps_array = [h265_pps];
-        let descriptor = streamlib_vulkan_video::VideoSessionParametersDescriptor {
+        let descriptor = crate::VideoSessionParametersDescriptor {
             label: "decode/h265/session-params",
-            add_info: streamlib_vulkan_video::VideoSessionParametersAddInfo::DecodeH265 {
+            add_info: crate::VideoSessionParametersAddInfo::DecodeH265 {
                 vps: &vps_array,
                 sps: &sps_array,
                 pps: &pps_array,
@@ -977,9 +974,8 @@ impl SimpleDecoder {
             quality_level: None,
             template: None,
         };
-        let new_params =
-            streamlib_vulkan_video::VulkanVideoSessionParameters::new(&session_arc, &descriptor)
-                .map_err(|e| VideoError::BitstreamError(format!("H.265 session params: {e}")))?;
+        let new_params = crate::VulkanVideoSessionParameters::new(&session_arc, &descriptor)
+            .map_err(|e| VideoError::BitstreamError(format!("H.265 session params: {e}")))?;
         vk_dec.set_session_parameters_arc(new_params);
         debug!("H265 session parameters created on VkVideoDecoder (from parsed SPS/PPS)");
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use streamlib_consumer_rhi::{
-    ConsumerVulkanBuffer, OwnedVulkanVideoEncodeDevice, PixelFormat,
+    ConsumerVulkanBuffer, OwnedVulkanVideoCodecDevice, PixelFormat, VulkanVideoCodecDirection,
     runtime_vulkan_device_uuid_named_at_spawn,
 };
 use streamlib_surface_client::{
@@ -50,7 +50,7 @@ struct H264EncodeSessionMintedFromAFrame {
 /// connection, and the session minted from the frames it receives.
 pub struct OwnedDeviceH264Encoder {
     settings: H264EncoderSettings,
-    owned_device: Arc<OwnedVulkanVideoEncodeDevice>,
+    owned_device: Arc<OwnedVulkanVideoCodecDevice>,
     surface_share_connection: UnixStream,
     imported_pixel_buffers: HashMap<String, ConsumerVulkanBuffer>,
     minted_session: Option<H264EncodeSessionMintedFromAFrame>,
@@ -70,8 +70,9 @@ impl OwnedDeviceH264Encoder {
         let runtime_vulkan_device_uuid = runtime_vulkan_device_uuid_named_at_spawn()
             .map_err(|refusal| format!("H264Encoder: {refusal}"))?;
         let owned_device = Arc::new(
-            OwnedVulkanVideoEncodeDevice::new_on_the_device_the_runtime_named(
+            OwnedVulkanVideoCodecDevice::new_on_the_device_the_runtime_named(
                 runtime_vulkan_device_uuid,
+                VulkanVideoCodecDirection::Encode,
             )
             .map_err(|refusal| {
                 format!("H264Encoder: the owned Vulkan Video encode device was refused: {refusal}")

@@ -5624,6 +5624,7 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib-engine",
+ "streamlib-video-bitstream",
  "tempfile",
 ]
 
@@ -5834,6 +5835,7 @@ dependencies = [
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
+ "streamlib-video-bitstream",
  "streamlib-vulkan-video",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -6067,11 +6069,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-video-bitstream"
+version = "0.68.11"
+dependencies = [
+ "hang",
+ "tracing",
+]
+
+[[package]]
 name = "streamlib-vulkan-video"
 version = "0.68.11"
 dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-error",
+ "streamlib-video-bitstream",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tracing",

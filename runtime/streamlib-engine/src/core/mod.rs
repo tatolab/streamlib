@@ -21,8 +21,6 @@ pub(crate) mod test_support;
 // Customer-facing modules. Module-path stays `pub` so consumers
 // can reach `streamlib::sdk::<name>` via the SDK's per-module
 // re-exports.
-pub mod annex_b_access_unit;
-pub mod annex_b_start_code_finder;
 pub mod child_process_lifetime;
 pub mod color;
 pub mod context;
@@ -31,13 +29,10 @@ pub mod error;
 pub mod execution;
 pub mod graph;
 pub mod graph_snapshot;
-pub mod h264_sequence_parameter_set;
-pub mod h265_sequence_parameter_set;
 pub mod hang_legacy_container_media_frame;
 pub mod json_schema;
 pub mod machine_global_unique_name;
 pub mod media_clock;
-pub mod nal_unit_raw_byte_sequence_payload;
 pub(crate) mod output_port_catalog_entries;
 pub mod prelude;
 pub mod processors;

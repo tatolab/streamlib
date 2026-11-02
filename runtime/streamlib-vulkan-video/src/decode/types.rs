@@ -199,7 +199,7 @@ pub struct H265RefPicInfo {
     pub long_term_ref: bool,
 }
 
-/// Parameters for a single [`Decoder::decode_frame`] call.
+/// Parameters for a single picture decode.
 ///
 /// The caller fills in the bitstream data and reference slot info obtained
 /// from the parser layer. This mirrors the information that the C++ code
@@ -230,14 +230,14 @@ pub struct DecodeSubmitInfo<'a> {
 // SimpleDecoder config and output types
 // ---------------------------------------------------------------------------
 
-/// User-facing configuration for [`SimpleDecoder`].
+/// User-facing configuration for [`crate::SimpleDecoder`].
 ///
 /// Only the essentials: codec, optional max resolution (auto-detected from
 /// SPS if zero), and DPB output mode.
 #[derive(Debug, Clone)]
 pub struct SimpleDecoderConfig {
     /// Codec to decode.
-    pub codec: crate::vulkan::video::encode::Codec,
+    pub codec: crate::encode::Codec,
     /// Maximum width for DPB allocation.  0 = auto-detect from first SPS.
     pub max_width: u32,
     /// Maximum height for DPB allocation.  0 = auto-detect from first SPS.
@@ -252,7 +252,7 @@ pub struct SimpleDecoderConfig {
 impl Default for SimpleDecoderConfig {
     fn default() -> Self {
         Self {
-            codec: crate::vulkan::video::encode::Codec::H264,
+            codec: crate::encode::Codec::H264,
             max_width: 0,
             max_height: 0,
             output_mode: DpbOutputMode::Coincide,
@@ -286,7 +286,7 @@ pub struct SimpleDecodedFrame {
     pub is_rgba: bool,
     /// The colour the decoded samples are in, matrix and range always set —
     /// on the RGBA path, the colour `data` was converted from.
-    pub decoded_picture_color_vui: crate::core::color::H273ColorVui,
+    pub decoded_picture_color_vui: streamlib_consumer_rhi::h273_color_vui::H273ColorVui,
 }
 
 // ---------------------------------------------------------------------------

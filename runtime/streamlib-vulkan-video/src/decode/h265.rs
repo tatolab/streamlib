@@ -6,13 +6,15 @@
 use tracing::{debug, warn};
 use vulkanalia::vk;
 
-use crate::core::h265_sequence_parameter_set::{MAX_NUM_SPS, parse_h265_sequence_parameter_set};
-use crate::core::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
-use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
+use crate::VideoError;
+use crate::nv_video_parser::vulkan_h265_decoder::{
     self as h265dec, HEVC_DPB_SIZE, MAX_NUM_PPS, MAX_NUM_VPS, NalUnitType as H265NalUnitType,
     VulkanH265Decoder,
 };
-use streamlib_vulkan_video::VideoError;
+use streamlib_video_bitstream::h265_sequence_parameter_set::{
+    MAX_NUM_SPS, parse_h265_sequence_parameter_set,
+};
+use streamlib_video_bitstream::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
 
 use super::decoded_picture_display_window::{
     H265ConformanceWindowSyntax, SpsCropOffsets, h265_conformance_window,
