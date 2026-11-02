@@ -453,3 +453,77 @@ fn a_codec_string_with_a_quote_is_escaped_in_the_entry_json() {
         "{\"codec\":\"avc1\\\"x\",\"codedWidth\":1,\"codedHeight\":1}"
     );
 }
+
+/// A session that hands back nothing and then reports it has ended.
+struct SessionEndingQuietly {
+    closed: Rc<RefCell<usize>>,
+}
+
+impl WhepPlayerConnectedSession for SessionEndingQuietly {
+    fn next_message(
+        &mut self,
+        _timeout: Duration,
+    ) -> Result<Option<MessageTheWhepPlayerWrites>, WebRtcExtensionError> {
+        Err(WebRtcExtensionError::Transport {
+            what: "the WHEP session's peer connection is failed".to_owned(),
+        })
+    }
+
+    fn close(&mut self) {
+        *self.closed.borrow_mut() += 1;
+    }
+}
+
+/// The first dial connects a session that ends with no media; every later dial
+/// connects one that sets the stop as soon as it is read.
+struct DialerWhoseFirstSessionEndsQuietly {
+    dials: RefCell<usize>,
+    sessions_closed: Rc<RefCell<usize>>,
+    stop_signal: Rc<WhepPlayerStopSignal>,
+}
+
+impl WhepPlayerSessionDialer for DialerWhoseFirstSessionEndsQuietly {
+    fn dial(&self) -> Result<Box<dyn WhepPlayerConnectedSession>, WebRtcExtensionError> {
+        *self.dials.borrow_mut() += 1;
+        if *self.dials.borrow() == 1 {
+            return Ok(Box::new(SessionEndingQuietly {
+                closed: Rc::clone(&self.sessions_closed),
+            }));
+        }
+        Ok(Box::new(SessionReplayingMessages {
+            messages_still_to_hand_back: VecDeque::new(),
+            stop_signal: Rc::clone(&self.stop_signal),
+            closed: Rc::clone(&self.sessions_closed),
+        }))
+    }
+}
+
+#[test]
+fn a_session_that_ends_with_no_media_is_closed_and_redialled() {
+    let stop_signal = a_stop_signal();
+    let dialer = DialerWhoseFirstSessionEndsQuietly {
+        dials: RefCell::new(0),
+        sessions_closed: Rc::new(RefCell::new(0)),
+        stop_signal: Rc::clone(&stop_signal),
+    };
+    let output_ports = RecordedOutputPorts::default();
+    let mut backoffs_waited = Vec::new();
+
+    play_until_stopped(&dialer, &output_ports, &stop_signal, &mut |delay| {
+        backoffs_waited.push(delay)
+    });
+
+    assert_eq!(*dialer.dials.borrow(), 2);
+    assert_eq!(*dialer.sessions_closed.borrow(), 2);
+    assert_eq!(backoffs_waited, [FIRST_RECONNECT_DELAY]);
+    assert!(
+        output_ports
+            .log_records
+            .borrow()
+            .iter()
+            .any(|(level, message)| *level == WhepPlayerLogLevel::Warn
+                && message.contains("the session ended")),
+        "{:?}",
+        output_ports.log_records.borrow()
+    );
+}

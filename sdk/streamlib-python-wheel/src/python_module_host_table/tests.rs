@@ -12,7 +12,8 @@ use tatolab_module_sdk::ModuleHost;
 
 use super::*;
 use crate::python_processor_context::{
-    PythonRuntimeContextFullAccess, note_stop_request_from_parent_on_runtime_context,
+    PythonRuntimeContextFullAccess, note_execution_mode_from_parent_on_runtime_context,
+    note_stop_request_from_parent_on_runtime_context,
     open_runtime_context_full_access_for_helper_process,
 };
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -382,4 +383,35 @@ fn the_node_host_outlives_the_capsule_for_as_long_as_native_code_holds_it() {
 
     let output_port = module_host.open_output_port(SOURCE_OUTPUT_PORT).unwrap();
     output_port.write(b"after the capsule", None, true).unwrap();
+}
+
+#[test]
+fn an_input_is_lent_only_to_a_node_the_runtime_runs_manually() {
+    Python::initialize();
+    Python::attach(|python| {
+        let (_source, reactive_destination) = one_wired_link(python, "lend_reactive");
+        let (reactive, _) =
+            full_access_context_recording_escalates(python, reactive_destination, "reactive");
+        note_execution_mode_from_parent_on_runtime_context(python, &reactive, "reactive").unwrap();
+        let refusal = open_module_host_table(&reactive, &[], &[DESTINATION_INPUT_PORT])
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("execution=\"manual\""), "{refusal}");
+
+        let (_source, early_destination) = one_wired_link(python, "lend_before_run");
+        let (lent_before_its_run, _) =
+            full_access_context_recording_escalates(python, early_destination, "lent_early");
+        let _capsule =
+            open_module_host_table(&lent_before_its_run, &[], &[DESTINATION_INPUT_PORT]).unwrap();
+        let refusal = note_execution_mode_from_parent_on_runtime_context(
+            python,
+            &lent_before_its_run,
+            "continuous",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refusal.contains(DESTINATION_INPUT_PORT), "{refusal}");
+        note_execution_mode_from_parent_on_runtime_context(python, &lent_before_its_run, "manual")
+            .unwrap();
+    });
 }

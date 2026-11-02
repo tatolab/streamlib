@@ -20,6 +20,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
 use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
@@ -102,12 +103,29 @@ impl WhepPlayingSession {
         })
     }
 
-    /// The next assembled access unit or Opus packet, or `None` if none arrived within `timeout`.
-    pub(crate) async fn next_media(&mut self, timeout: Duration) -> Option<ReceivedMedia> {
-        tokio::time::timeout(timeout, self.received_media.recv())
-            .await
-            .ok()
-            .flatten()
+    /// The next assembled access unit or Opus packet, `None` if none arrived
+    /// within `timeout`, refused once the session has ended: its peer
+    /// connection failed or closed, or every track it received has ended.
+    pub(crate) async fn next_media_unless_the_session_ended(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<ReceivedMedia>> {
+        let peer_connection_state = self.peer_connection.connection_state();
+        if matches!(
+            peer_connection_state,
+            RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed
+        ) {
+            return Err(WebRtcExtensionError::Transport {
+                what: format!("the WHEP session's peer connection is {peer_connection_state}"),
+            });
+        }
+        match tokio::time::timeout(timeout, self.received_media.recv()).await {
+            Err(_no_media_within_the_timeout) => Ok(None),
+            Ok(Some(received_media)) => Ok(Some(received_media)),
+            Ok(None) => Err(WebRtcExtensionError::Transport {
+                what: "every track the WHEP session received has ended".to_owned(),
+            }),
+        }
     }
 
     /// Close the peer connection and DELETE the session, bounded as a whole so

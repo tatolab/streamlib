@@ -155,6 +155,7 @@ from tatolab.runtime._engine import (
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
     limited_access_view_of_runtime_context_for_helper_process,
+    note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
     open_node_link_data_access_for_helper_process,
@@ -1400,6 +1401,13 @@ class HelperProcessLifecycle:
             log.warn("the parent sent `run` before `setup`")
             return
         execution_mode = command.get("execution", "reactive")
+        try:
+            note_execution_mode_from_parent_on_runtime_context(
+                self._hosted.full_access_context, execution_mode
+            )
+        except ValueError as refusal:
+            log.error(f"the processor cannot run: {refusal}")
+            return
         self._running = True
         note_stop_request_from_parent_on_runtime_context(
             self._hosted.full_access_context, False

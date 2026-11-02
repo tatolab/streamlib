@@ -376,7 +376,7 @@ impl WhepPlayerConnectedSession for ConnectedWhepPlayingSession {
         timeout: Duration,
     ) -> Result<Option<MessageTheWhepPlayerWrites>, WebRtcExtensionError> {
         transport_stack::transport_runtime()?
-            .block_on(self.session.next_media(timeout))
+            .block_on(self.session.next_media_unless_the_session_ended(timeout))?
             .map(MessageTheWhepPlayerWrites::of_received_media)
             .transpose()
     }

@@ -41,11 +41,15 @@ pub const MODULE_HOST_TABLE_STATUS_REFUSED: ModuleHostTableStatus = -1;
 /// The timestamp a write passes to be stamped with the host's monotonic now.
 pub const MODULE_HOST_TABLE_TIMESTAMP_NOW: i64 = i64::MIN;
 
-/// [`ModuleHostTable::log`] levels, most severe first.
+/// The [`ModuleHostTable::log`] level of a failure.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_ERROR: u32 = 1;
+/// The [`ModuleHostTable::log`] level of a condition the node recovers from.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_WARN: u32 = 2;
+/// The [`ModuleHostTable::log`] level of normal progress.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_INFO: u32 = 3;
+/// The [`ModuleHostTable::log`] level of a diagnostic.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_DEBUG: u32 = 4;
+/// The [`ModuleHostTable::log`] level of a per-step trace.
 pub const MODULE_HOST_TABLE_LOG_LEVEL_TRACE: u32 = 5;
 
 /// How many bytes of a refusal's message the caller's buffer holds; a longer
@@ -56,7 +60,9 @@ pub const MODULE_HOST_TABLE_ERROR_MESSAGE_CAPACITY_BYTES: usize = 1024;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleHostTableUtf8 {
+    /// The first byte of the text.
     pub bytes: *const u8,
+    /// The text's length in bytes.
     pub length: usize,
 }
 
@@ -64,7 +70,9 @@ pub struct ModuleHostTableUtf8 {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleHostTableBytes {
+    /// The first byte of the payload.
     pub bytes: *const u8,
+    /// The payload's length in bytes.
     pub length: usize,
 }
 
@@ -106,7 +114,9 @@ pub struct ModuleHostTableReadMessage {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleHostTable {
+    /// The table's ABI major; a module refuses any other than its own.
     pub abi_major: u32,
+    /// The table's ABI minor; a module refuses one older than its own.
     pub abi_minor: u32,
     /// The size of the table the runtime built, which is at least the size of
     /// the fields its minor states.
@@ -114,7 +124,9 @@ pub struct ModuleHostTable {
     /// Opaque; kept alive by [`ModuleHostTable::node_host_retain`] and
     /// [`ModuleHostTable::node_host_release`], counted from one the capsule holds.
     pub node_host: *mut c_void,
+    /// Add one count to `node_host`.
     pub node_host_retain: unsafe extern "C" fn(node_host: *mut c_void),
+    /// Drop one count from `node_host`, freeing it at zero.
     pub node_host_release: unsafe extern "C" fn(node_host: *mut c_void),
     /// Open an output port Python lent to native code, by its declared name.
     pub output_port_open: unsafe extern "C" fn(
@@ -158,6 +170,8 @@ pub struct ModuleHostTable {
         read_message: *mut ModuleHostTableReadMessage,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
+    /// Hand a message [`ModuleHostTable::input_port_read`] filled back to the
+    /// host, once.
     pub input_message_release:
         unsafe extern "C" fn(node_host: *mut c_void, read_message: *mut ModuleHostTableReadMessage),
     /// Wait up to `timeout_ns` for any input port to hold a message.

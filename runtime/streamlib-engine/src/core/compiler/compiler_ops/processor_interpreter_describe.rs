@@ -44,6 +44,10 @@ use crate::iceoryx2::{
 /// type it was asked for is refused.
 pub(crate) const PROCESSOR_INTERPRETER_DESCRIBE_BOUND: Duration = Duration::from_secs(60);
 
+/// How long a describe of the installed modules may run. Shorter than a named
+/// type's bound: no graph node waits on it, yet every load does.
+pub(crate) const INSTALLED_MODULES_DESCRIBE_BOUND: Duration = Duration::from_secs(15);
+
 /// The bootstrap argument that asks for a describe rather than a processor.
 const DESCRIBE_ARGUMENT: &str = "--describe";
 

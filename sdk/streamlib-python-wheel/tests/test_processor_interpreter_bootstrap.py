@@ -616,6 +616,15 @@ def install_a_distribution_declaring_nodes(
     )
 
 
+def installed_modules_of(document: dict[str, Any], distribution: str) -> "list[dict[str, str]]":
+    """The installed modules `distribution` declares, by import path — the
+    interpreter running the tests may install other `tatolab.nodes` distributions."""
+    return sorted(
+        (module for module in document["installed_modules"] if module["distribution"] == distribution),
+        key=lambda module: module["import_path"],
+    )
+
+
 def test_an_installed_distributions_node_classes_are_described_with_where_they_came_from(
     project_directory: Path,
 ):
@@ -630,11 +639,19 @@ def test_an_installed_distributions_node_classes_are_described_with_where_they_c
 
     assert described.returncode == 0, described.stderr
     document = json.loads(described.stdout)
-    assert [node["import_path"] for node in document["described_node_types"]] == [
-        "described_nodes:Ticker"
-    ]
-    assert refused_import_paths_in(document) == ["no_such_installed_module:Missing"]
-    assert sorted(document["installed_modules"], key=lambda module: module["import_path"]) == [
+    ours = installed_modules_of(document, "tatolab-ticking")
+    our_import_paths = {module["import_path"] for module in ours}
+    assert [
+        node["import_path"]
+        for node in document["described_node_types"]
+        if node["import_path"] in our_import_paths
+    ] == ["described_nodes:Ticker"]
+    assert [
+        import_path
+        for import_path in refused_import_paths_in(document)
+        if import_path in our_import_paths
+    ] == ["no_such_installed_module:Missing"]
+    assert ours == [
         {
             "import_path": "described_nodes:Ticker",
             "entry_point": "Ticker",
@@ -658,10 +675,11 @@ def test_an_environment_installing_no_node_classes_describes_none(project_direct
 
     assert described.returncode == 0, described.stderr
     document = json.loads(described.stdout)
-    assert document["described_node_types"] == []
-    assert document["refused_node_types"] == []
-    assert all(
-        module["distribution"] != "tatolab-ticking" for module in document["installed_modules"]
+    assert installed_modules_of(document, "tatolab-ticking") == []
+    project_import_paths = {"described_nodes:Ticker", "no_such_installed_module:Missing"}
+    assert not any(
+        node["import_path"] in project_import_paths
+        for node in document["described_node_types"] + document["refused_node_types"]
     )
 
 

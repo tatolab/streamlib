@@ -31,6 +31,7 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "limited_access_view_of_runtime_context_for_helper_process",
+    "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
     "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
@@ -67,6 +68,12 @@ def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
 ) -> None:
     """Record on a helper's context the pause state its parent just announced."""
+
+def note_execution_mode_from_parent_on_runtime_context(
+    full_access_context: _stream_protocols.RuntimeContextFullAccess, execution_mode: str
+) -> None:
+    """Record on a helper's context the execution mode its parent runs the node
+    in, refusing one that drives `process()` from inputs lent to native code."""
 
 def note_stop_request_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, stop_requested: bool

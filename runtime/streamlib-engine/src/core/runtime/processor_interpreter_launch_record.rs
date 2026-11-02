@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::compiler::compiler_ops::processor_interpreter_describe::{
-    PROCESSOR_INTERPRETER_DESCRIBE_BOUND, a_processor_interpreter_describes,
+    INSTALLED_MODULES_DESCRIBE_BOUND, a_processor_interpreter_describes,
     describe_and_register_node_types_in_a_processor_interpreter,
     describe_the_node_types_installed_modules_declare_within,
     register_the_node_types_installed_modules_declare,
@@ -113,7 +113,7 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         let described = describe_the_node_types_installed_modules_declare_within(
             stream_environment,
             lend_directory,
-            PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+            INSTALLED_MODULES_DESCRIBE_BOUND,
             &self.the_stream_its_helpers_belong_to,
             &|| {
                 self.describes_interrupted_by_the_host

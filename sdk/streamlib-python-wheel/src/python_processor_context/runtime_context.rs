@@ -164,6 +164,22 @@ pub(crate) fn note_stop_request_from_parent_on_runtime_context(
         .store(stop_requested, Ordering::Release);
 }
 
+/// Record on a helper's context the execution mode the parent runs the node
+/// in, refusing a mode that drives `process()` from inputs lent to native code.
+#[pyfunction]
+pub(crate) fn note_execution_mode_from_parent_on_runtime_context(
+    python: Python<'_>,
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+    execution_mode: &str,
+) -> PyResult<()> {
+    full_access_context
+        .get()
+        .link_data_access
+        .bind(python)
+        .get()
+        .note_whether_the_runtime_drives_process_from_inputs(execution_mode != "manual")
+}
+
 /// Record on a helper's context the pause state the parent just announced, so
 /// `is_paused` and `should_process` can answer without an engine to ask.
 #[pyfunction]

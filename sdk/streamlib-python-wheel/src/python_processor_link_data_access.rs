@@ -67,6 +67,9 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// table; Python's own reads and writes of them are refused by name.
     input_ports_lent_to_native_code: parking_lot::Mutex<HashSet<String>>,
     output_ports_lent_to_native_code: parking_lot::Mutex<HashSet<String>>,
+    /// Whether the runtime drives `process()` from this node's inputs, which
+    /// would race native code waiting on a lent input for the same wakeups.
+    runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool,
 }
 
 /// The data plane a module host table reaches a helper's lent ports through.
@@ -89,7 +92,33 @@ impl PythonProcessorLinkDataAccess {
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
             input_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
+            runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Record whether the runtime drives `process()` from this node's inputs,
+    /// refusing it when an input is already lent to native code.
+    pub(crate) fn note_whether_the_runtime_drives_process_from_inputs(
+        &self,
+        runtime_drives_process_from_inputs: bool,
+    ) -> PyResult<()> {
+        if runtime_drives_process_from_inputs {
+            let lent_input_ports = self.input_ports_lent_to_native_code.lock();
+            if !lent_input_ports.is_empty() {
+                let mut lent: Vec<&String> = lent_input_ports.iter().collect();
+                lent.sort();
+                return Err(PyValueError::new_err(format!(
+                    "input ports {lent:?} are lent to native code, so the runtime cannot drive \
+                     this node's `process()` from its inputs. A node that lends an input is \
+                     declared `execution=\"manual\"`"
+                )));
+            }
+        }
+        self.runtime_drives_process_from_inputs.store(
+            runtime_drives_process_from_inputs,
+            std::sync::atomic::Ordering::Release,
+        );
+        Ok(())
     }
 
     /// Lend `input_port_names` and `output_port_names` to the node's native
@@ -104,6 +133,17 @@ impl PythonProcessorLinkDataAccess {
         else {
             return Err(not_a_helper_process_data_plane_error());
         };
+        if !input_port_names.is_empty()
+            && self
+                .runtime_drives_process_from_inputs
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(PyValueError::new_err(format!(
+                "input ports {input_port_names:?} cannot be lent to native code: the runtime \
+                 drives this node's `process()` from its inputs. A node that lends an input \
+                 is declared `execution=\"manual\"`"
+            )));
+        }
         let lent_input_port_names = Self::cast_and_check_ports_to_lend(
             "input",
             input_port_names,
