@@ -1,7 +1,8 @@
 # browser-and-rive-source-modules
 
-> **Proposed, awaiting the owner's three decisions below.** The owner asked for this plan once
-> the Linux camera went zero-copy (2026-11-02: "Plan after camera lands").
+> **Approved by the owner, 2026-11-02**, with B1–B3 as recommended ("Approve all three").
+> The owner asked for this plan once the Linux camera went zero-copy ("Plan after camera
+> lands"), then added page audio out and media inputs into the page.
 
 Built on `media-built-ins-become-modules`. A stream's visuals today come from a camera, a test
 pattern or a user's own GPU kernel. The owner wants two more sources, both as first-party
@@ -117,7 +118,7 @@ Nothing; this change only adds.
 
 ## Decisions
 
-**B1 [NEEDS DECISION]: the web engine.**
+**B1 DECIDED (owner, 2026-11-02): the web engine.**
 - (a) **CEF.** It is what OBS uses, it runs on Linux and macOS, and it shares textures on both.
   It costs about 250 MB per platform, and Chromium's patent-encumbered codecs are off in
   standard builds.
@@ -126,22 +127,22 @@ Nothing; this change only adds.
 - (c) **The system webview** (WKWebView or WebKitGTK). It is small, but it has no supported
   offscreen texture path and behaves differently on each OS.
 
-Recommend (a): parity with OBS browser sources matters to the marketers it is for.
+Chosen (a): parity with OBS browser sources matters to the marketers it is for.
 
-**B2 [NEEDS DECISION]: how Rive gets its GPU.**
+**B2 DECIDED (owner, 2026-11-02): how Rive gets its GPU.**
 - (a) The **external-renderer device** above. It is zero copy everywhere, and the same
   mechanism serves Skia, Godot or any engine a third party embeds next.
 - (b) **Rive bootstraps its own Vulkan device** inside its C++ and exports each frame. StreamLib
   adds no RHI surface, but on NVIDIA every frame pays the staging copy.
 
-Recommend (a): D1 says a first-party need becomes public API, and "embed my renderer" is the
+Chosen (a): D1 says a first-party need becomes public API, and "embed my renderer" is the
 next thing a third party asks for.
 
-**B3 [NEEDS DECISION]: the compositor.**
+**B3 DECIDED (owner, 2026-11-02): the compositor.**
 - (a) Ship **`tatolab-compositor`** as a first-party module.
 - (b) Leave compositing to each stream's own kernel.
 
-Recommend (a): without it, the lower-third demo needs custom GPU code, which defeats the point
+Chosen (a): without it, the lower-third demo needs custom GPU code, which defeats the point
 for marketers.
 
 **Assumed, not asked:**
