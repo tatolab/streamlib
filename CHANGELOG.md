@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.10](https://github.com/tatolab/streamlib/compare/v0.68.9...v0.68.10) (2026-11-02)
+
+
+### Bug Fixes
+
+* **fixtures:** load fixture streams as projects with `tatolab run --dir` ([#3066](https://github.com/tatolab/streamlib/issues/3066)) ([caa8389](https://github.com/tatolab/streamlib/commit/caa83894eab83cd9244b319ae781c8bb7fe9e80c))
+
 ## [0.68.9](https://github.com/tatolab/streamlib/compare/v0.68.8...v0.68.9) (2026-11-02)
 
 

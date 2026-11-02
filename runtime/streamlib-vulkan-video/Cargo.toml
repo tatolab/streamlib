@@ -31,11 +31,11 @@ tracing.workspace = true
 # shared with the rest of the RHI.
 [target.'cfg(target_os = "linux")'.dependencies.streamlib-consumer-rhi]
 path = "../streamlib-consumer-rhi"
-version = "0.68.9"
+version = "0.68.10"
 
 [target.'cfg(target_os = "linux")'.dependencies.streamlib-error]
 path = "../../sdk/streamlib-error"
-version = "0.68.9"
+version = "0.68.10"
 optional = true
 
 [lints]
