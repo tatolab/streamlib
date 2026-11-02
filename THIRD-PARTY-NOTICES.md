@@ -21,11 +21,11 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 664 crates
-- **BSD 3-Clause "New" or "Revised" License** — 24 crates
+- **MIT License** — 614 crates
 - **Apache License 2.0** — 21 crates
 - **Unicode License v3** — 19 crates
 - **ISC License** — 10 crates
+- **BSD 3-Clause "New" or "Revised" License** — 8 crates
 - **BSD Zero Clause License** — 3 crates
 - **zlib License** — 3 crates
 - **Community Data License Agreement Permissive 2.0** — 2 crates
@@ -1483,839 +1483,6 @@ https://github.com/KhronosGroup/SPIRV-Tools/commit/9fc8658ef301b0f03b2173d274c52
 
 Used by:
 
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (C) 2013 Xiph.Org Foundation and contributors
-Copyright (c) 2013       Parrot
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef SILK_SIGPROC_FIX_ARMv4_H
-#define SILK_SIGPROC_FIX_ARMv4_H
-
-#undef silk_MLA
-static OPUS_INLINE opus_int32 silk_MLA_armv4(opus_int32 a, opus_int32 b,
- opus_int32 c)
-{
-  opus_int32 res;
-  __asm__(
-      "#silk_MLA\n\t"
-      "mla %0, %1, %2, %3\n\t"
-      : "=&r"(res)
-      : "r"(b), "r"(c), "r"(a)
-  );
-  return res;
-}
-#define silk_MLA(a, b, c) (silk_MLA_armv4(a, b, c))
-
-#endif
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (C) 2015 Vidyo
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef SILK_MACROS_ARM64_H
-#define SILK_MACROS_ARM64_H
-
-#include <arm_neon.h>
-
-#undef silk_ADD_SAT32
-#define silk_ADD_SAT32(a, b) (vqadds_s32((a), (b)))
-
-#undef silk_SUB_SAT32
-#define silk_SUB_SAT32(a, b) (vqsubs_s32((a), (b)))
-
-#endif /* SILK_MACROS_ARM64_H */
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Copyright (c) 2013       Parrot
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef SILK_SIGPROC_FIX_ARMv5E_H
-#define SILK_SIGPROC_FIX_ARMv5E_H
-
-#undef silk_SMULTT
-static OPUS_INLINE opus_int32 silk_SMULTT_armv5e(opus_int32 a, opus_int32 b)
-{
-  opus_int32 res;
-  __asm__(
-      "#silk_SMULTT\n\t"
-      "smultt %0, %1, %2\n\t"
-      : "=r"(res)
-      : "%r"(a), "r"(b)
-  );
-  return res;
-}
-#define silk_SMULTT(a, b) (silk_SMULTT_armv5e(a, b))
-
-#undef silk_SMLATT
-static OPUS_INLINE opus_int32 silk_SMLATT_armv5e(opus_int32 a, opus_int32 b,
- opus_int32 c)
-{
-  opus_int32 res;
-  __asm__(
-      "#silk_SMLATT\n\t"
-      "smlatt %0, %1, %2, %3\n\t"
-      : "=r"(res)
-      : "%r"(b), "r"(c), "r"(a)
-  );
-  return res;
-}
-#define silk_SMLATT(a, b, c) (silk_SMLATT_armv5e(a, b, c))
-
-#endif
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "SigProc_FIX.h"
-
-opus_int32 silk_inner_prod_aligned_scale(
-    const opus_int16 *const     inVec1,             /*    I input vector 1                                              */
-    const opus_int16 *const     inVec2,             /*    I input vector 2                                              */
-    const opus_int              scale,              /*    I number of bits to shift                                     */
-    const opus_int              len                 /*    I vector lengths                                              */
-)
-{
-    opus_int   i;
-    opus_int32 sum = 0;
-    for( i = 0; i < len; i++ ) {
-        sum = silk_ADD_RSHIFT32( sum, silk_SMULBB( inVec1[ i ], inVec2[ i ] ), scale );
-    }
-    return sum;
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "SigProc_FIX.h"
-#include "celt_lpc.h"
-
-/* Compute autocorrelation */
-void silk_autocorr(
-    opus_int32                  *results,           /* O    Result (length correlationCount)                            */
-    opus_int                    *scale,             /* O    Scaling of the correlation vector                           */
-    const opus_int16            *inputData,         /* I    Input data to correlate                                     */
-    const opus_int              inputDataSize,      /* I    Length of input                                             */
-    const opus_int              correlationCount,   /* I    Number of correlation taps to compute                       */
-    int                         arch                /* I    Run-time architecture                                       */
-)
-{
-    opus_int   corrCount;
-    corrCount = silk_min_int( inputDataSize, correlationCount );
-    *scale = _celt_autocorr(inputData, results, NULL, 0, corrCount-1, inputDataSize, arch);
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "SigProc_FIX.h"
-/* Approximation of 128 * log2() (very close inverse of silk_log2lin()) */
-/* Convert input to a log scale    */
-opus_int32 silk_lin2log(
-    const opus_int32            inLin               /* I  input in linear scale                                         */
-)
-{
-    opus_int32 lz, frac_Q7;
-
-    silk_CLZ_FRAC( inLin, &lz, &frac_Q7 );
-
-    /* Piece-wise parabolic approximation */
-    return silk_ADD_LSHIFT32( silk_SMLAWB( frac_Q7, silk_MUL( frac_Q7, 128 - frac_Q7 ), 179 ), 31 - lz, 7 );
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "SigProc_FLP.h"
-
-/* Chirp (bw expand) LP AR filter */
-void silk_bwexpander_FLP(
-    silk_float          *ar,                /* I/O  AR filter to be expanded (without leading 1)                */
-    const opus_int      d,                  /* I    length of ar                                                */
-    const silk_float    chirp               /* I    chirp factor (typically in range (0..1) )                   */
-)
-{
-    opus_int   i;
-    silk_float cfac = chirp;
-
-    for( i = 0; i < d - 1; i++ ) {
-        ar[ i ] *=  cfac;
-        cfac    *=  chirp;
-    }
-    ar[ d - 1 ] *=  cfac;
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "SigProc_FLP.h"
-
-/* multiply a vector by a constant */
-void silk_scale_vector_FLP(
-    silk_float          *data1,
-    silk_float          gain,
-    opus_int            dataSize
-)
-{
-    opus_int  i, dataSize4;
-
-    /* 4x unrolled loop */
-    dataSize4 = dataSize & 0xFFFC;
-    for( i = 0; i < dataSize4; i += 4 ) {
-        data1[ i + 0 ] *= gain;
-        data1[ i + 1 ] *= gain;
-        data1[ i + 2 ] *= gain;
-        data1[ i + 3 ] *= gain;
-    }
-
-    /* any remaining elements */
-    for( ; i < dataSize; i++ ) {
-        data1[ i ] *= gain;
-    }
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "main_FIX.h"
-
-/* Add noise to matrix diagonal */
-void silk_regularize_correlations_FIX(
-    opus_int32                      *XX,                                    /* I/O  Correlation matrices                                                        */
-    opus_int32                      *xx,                                    /* I/O  Correlation values                                                          */
-    opus_int32                      noise,                                  /* I    Noise to add                                                                */
-    opus_int                        D                                       /* I    Dimension of XX                                                             */
-)
-{
-    opus_int i;
-    for( i = 0; i < D; i++ ) {
-        matrix_ptr( &XX[ 0 ], i, i, D ) = silk_ADD32( matrix_ptr( &XX[ 0 ], i, i, D ), noise );
-    }
-    xx[ 0 ] += noise;
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "main_FLP.h"
-
-/* Add noise to matrix diagonal */
-void silk_regularize_correlations_FLP(
-    silk_float                      *XX,                                /* I/O  Correlation matrices                        */
-    silk_float                      *xx,                                /* I/O  Correlation values                          */
-    const silk_float                noise,                              /* I    Noise energy to add                         */
-    const opus_int                  D                                   /* I    Dimension of XX                             */
-)
-{
-    opus_int i;
-
-    for( i = 0; i < D; i++ ) {
-        matrix_ptr( &XX[ 0 ], i, i, D ) += noise;
-    }
-    xx[ 0 ] += noise;
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "typedef.h"
-#include "SigProc_FLP.h"
-
-/* compute autocorrelation */
-void silk_autocorrelation_FLP(
-    silk_float          *results,           /* O    result (length correlationCount)                            */
-    const silk_float    *inputData,         /* I    input data to correlate                                     */
-    opus_int            inputDataSize,      /* I    length of input                                             */
-    opus_int            correlationCount,    /* I    number of correlation taps to compute                       */
-    int                 arch
-)
-{
-    opus_int i;
-
-    if( correlationCount > inputDataSize ) {
-        correlationCount = inputDataSize;
-    }
-
-    for( i = 0; i < correlationCount; i++ ) {
-        results[ i ] =  (silk_float)silk_inner_product_FLP( inputData, inputData + i, inputDataSize - i, arch );
-    }
-}
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef BURG_H
-#define BURG_H
-
-
-float silk_burg_analysis(              /* O    returns residual energy                                     */
-    float          A[],                /* O    prediction coefficients (length order)                      */
-    const float    x[],                /* I    input signal, length: nb_subfr*(D+L_sub)                    */
-    const float    minInvGain,         /* I    minimum inverse prediction gain                             */
-    const int      subfr_length,       /* I    input signal subframe length (incl. D preceding samples)    */
-    const int      nb_subfr,           /* I    number of subframes stacked in x                            */
-    const int      D                   /* I    order                                                       */
-);
-
-#endif
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef SILK_RESAMPLER_STRUCTS_H
-#define SILK_RESAMPLER_STRUCTS_H
-
-#define SILK_RESAMPLER_MAX_FIR_ORDER                 36
-#define SILK_RESAMPLER_MAX_IIR_ORDER                 6
-
-typedef struct _silk_resampler_state_struct{
-    opus_int32       sIIR[ SILK_RESAMPLER_MAX_IIR_ORDER ]; /* this must be the first element of this struct */
-    union{
-        opus_int32   i32[ SILK_RESAMPLER_MAX_FIR_ORDER ];
-        opus_int16   i16[ SILK_RESAMPLER_MAX_FIR_ORDER ];
-    }                sFIR;
-    opus_int16       delayBuf[ 96 ];
-    opus_int         resampler_function;
-    opus_int         batchSize;
-    opus_int32       invRatio_Q16;
-    opus_int         FIR_Order;
-    opus_int         FIR_Fracs;
-    opus_int         Fs_in_kHz;
-    opus_int         Fs_out_kHz;
-    opus_int         inputDelay;
-    const opus_int16 *Coefs;
-} silk_resampler_state_struct;
-
-#endif /* SILK_RESAMPLER_STRUCTS_H */
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-/***********************************************************************
-Copyright (c) 2006-2011, Skype Limited. All rights reserved.
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-- Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-***********************************************************************/
-
-#ifndef SILK_SIGPROC_FIX_MIPSR1_H
-#define SILK_SIGPROC_FIX_MIPSR1_H
-
-#undef silk_SAT16
-static inline short int silk_SAT16(int a)
-{
-    int c;
-    c = __builtin_mips_shll_s_w(a, 16);
-    c = c>>16;
-
-    return c;
-}
-
-#undef silk_LSHIFT_SAT32
-static inline int silk_LSHIFT_SAT32(int a, int shift)
-{
-    int r;
-
-    r = __builtin_mips_shll_s_w(a, shift);
-
-    return r;
-}
-
-#undef silk_RSHIFT_ROUND
-static inline int silk_RSHIFT_ROUND(int a, int shift)
-{
-    int r;
-
-    r = __builtin_mips_shra_r_w(a, shift);
-    return r;
-}
-
-#endif /* SILK_SIGPROC_FIX_MIPSR1_H */
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
 - [matchit 0.8.4](https://github.com/ibraheemdev/matchit)
 
 ````text
@@ -2489,61 +1656,6 @@ Redistribution and use in source and binary forms, with or without modification,
 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-````
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-- [opusic-sys 0.7.5](https://github.com/DoumanAsh/opusic-sys)
-
-````text
-Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
-                    Jean-Marc Valin, Timothy B. Terriberry,
-                    CSIRO, Gregory Maxwell, Mark Borgerding,
-                    Erik de Castro Lopo, Mozilla, Amazon
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-- Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
-OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-Opus is subject to the royalty-free patent licenses which are
-specified at:
-
-Xiph.Org Foundation:
-https://datatracker.ietf.org/ipr/1524/
-
-Microsoft Corporation:
-https://datatracker.ietf.org/ipr/1914/
-
-Broadcom Corporation:
-https://datatracker.ietf.org/ipr/1526/
 
 ````
 
@@ -2854,77 +1966,13 @@ Used by:
 - [aws-lc-sys 0.46.0](https://github.com/aws/aws-lc-rs)
 
 ````text
-ISC License:
+ISC License
 
-Copyright (c) 2004-2010 by Internet Systems Consortium, Inc. ("ISC")
-Copyright (c) 1995-2003 by Internet Software Consortium
+Copyright <year> <owner> 
 
 Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
 
-THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL ISC BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-
-pnm2png / png2pnm --- conversion from PBM/PGM/PPM-file to PNG-file
-
-copyright (C) 1999-2019 by Willem van Schaik <willem at schaik dot com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-The software is provided "as is", without warranty of any kind, express or
-implied, including but not limited to the warranties of merchantability,
-fitness for a particular purpose and noninfringement. In no event shall the
-authors or copyright holders be liable for any claim, damages or other
-liability, whether in an action of contract, tort or otherwise, arising from,
-out of or in connection with the software or the use or other dealings in the
-software.
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-    MIT License
-
-    Copyright (c) Microsoft Corporation.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ````
 
@@ -2956,315 +2004,6 @@ Used by:
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017 Sebastian Pipping <sebastian@pipping.org>
-# Copyright (c) 2020 Jeffrey Walton <noloader@gmail.com>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-AM_CPPFLAGS = @AM_CPPFLAGS@ -I$(srcdir)/../../lib
-
-noinst_PROGRAMS = benchmark
-
-benchmark_SOURCES = benchmark.c
-
-benchmark_LDADD = ../../lib/libexpat.la
-
-EXTRA_DIST = \
-    README.txt
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017-2021 Sebastian Pipping <sebastian@pipping.org>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-bin_PROGRAMS = xmlwf
-
-xmlwf_LDADD = ../lib/libexpat.la
-xmlwf_SOURCES = \
-    xmlwf.c \
-    xmlfile.c \
-    codepage.c \
-    @FILEMAP@.c
-
-xmlwf_CPPFLAGS = @AM_CPPFLAGS@ -I$(srcdir)/../lib
-xmlwf_LDFLAGS = @AM_LDFLAGS@ @LIBM@
-
-if MINGW
-if UNICODE
-xmlwf_CPPFLAGS += -mwindows
-xmlwf_LDFLAGS += -municode
-endif
-endif
-
-EXTRA_DIST = \
-    codepage.h \
-    ct.c \
-    filemap.h \
-    readfilemap.c \
-    unixfilemap.c \
-    win32filemap.c \
-    xmlfile.h \
-    xmlmime.c \
-    xmlmime.h \
-    xmltchar.h
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017-2022 Sebastian Pipping <sebastian@pipping.org>
-# Copyright (c) 2020      Jeffrey Walton <noloader@gmail.com>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-AM_CPPFLAGS = @AM_CPPFLAGS@ -I$(srcdir)/../lib
-
-noinst_PROGRAMS = element_declarations elements outline
-
-element_declarations_SOURCES = element_declarations.c
-element_declarations_LDADD = ../lib/libexpat.la
-
-elements_SOURCES = elements.c
-elements_LDADD = ../lib/libexpat.la
-
-outline_SOURCES = outline.c
-outline_LDADD = ../lib/libexpat.la
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#
-# FreeType 2 BDF module definition
-#
-
-# Copyright 2001, 2002, 2006 by
-# Francesco Zappa Nardelli
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-
-
-FTMODULE_H_COMMANDS += BDF_DRIVER
-
-define BDF_DRIVER
-$(OPEN_DRIVER) FT_Driver_ClassRec, bdf_driver_class $(CLOSE_DRIVER)
-$(ECHO_DRIVER)bdf       $(ECHO_DRIVER_DESC)bdf bitmap fonts$(ECHO_DRIVER_DONE)
-endef
-
-# EOF
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#
-# FreeType 2 PCF module definition
-#
-
-# Copyright 2000, 2006 by
-# Francesco Zappa Nardelli
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-
-
-FTMODULE_H_COMMANDS += PCF_DRIVER
-
-define PCF_DRIVER
-$(OPEN_DRIVER) FT_Driver_ClassRec, pcf_driver_class $(CLOSE_DRIVER)
-$(ECHO_DRIVER)pcf       $(ECHO_DRIVER_DESC)pcf bitmap fonts$(ECHO_DRIVER_DONE)
-endef
-
-# EOF
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2019 Expat development team
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-set(CMAKE_SYSTEM_NAME Windows)
-
-set(CMAKE_C_COMPILER i686-w64-mingw32-gcc)
-set(CMAKE_CXX_COMPILER i686-w64-mingw32-g++)
-set(CMAKE_RC_COMPILER i686-w64-mingw32-windres)
-
-set(WIN32 ON)
-set(MINGW ON)
 
 ````
 
@@ -3332,199 +2071,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#! /usr/bin/env bash
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017 Sebastian Pipping <sebastian@pipping.org>
-# Copyright (c) 2019 Jeffrey Walton <noloader@gmail.com>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-set -e
-top_srcdir="$(dirname "$(type -p "$0")")"
-top_builddir=..
-
-# Suck up all dash-dash test-driver arguments
-test_driver_args=()
-while [[ ${1} != '--' ]]; do
-    test_driver_args=( "${test_driver_args[@]}" "${1}" )
-    shift
-done
-shift  # drop "--"
-
-exec "${top_srcdir}"/conftools/test-driver "${test_driver_args[@]}" "${top_builddir}"/run.sh "$@"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#! /usr/bin/env bash
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017-2022 Sebastian Pipping <sebastian@pipping.org>
-# Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-# Copyright (c) 2024      Dag-Erling Smørgrav <des@des.dev>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-set -e
-
-exec autoreconf --warnings=all --install --verbose "$@"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#! /usr/bin/env bash
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2019-2021 Sebastian Pipping <sebastian@pipping.org>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-./xmlwf/xmlwf_helpgen.py | sed \
-        -e 's,usage: ,usage:,' \
-        -e 's,  xmlwf,  %s,' \
-        -e 's, \[-h | -v\],,' \
-        -e 's,^,      T(",' \
-        -e 's,$,\\n"),'
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-#!/usr/bin/env bash
-# Clean source directory after running the coverage script.
-#                          __  __            _
-#                       ___\ \/ /_ __   __ _| |_
-#                      / _ \\  /| '_ \ / _` | __|
-#                     |  __//  \| |_) | (_| | |_
-#                      \___/_/\_\ .__/ \__,_|\__|
-#                               |_| XML parser
-#
-# Copyright (c) 2017 Rhodri James <rhodri@wildebeest.org.uk>
-# Copyright (c) 2018 Marco Maggi <marco.maggi-ipsu@poste.it>
-# Copyright (c) 2019 Sebastian Pipping <sebastian@pipping.org>
-# Licensed under the MIT license:
-#
-# Permission is  hereby granted,  free of charge,  to any  person obtaining
-# a  copy  of  this  software   and  associated  documentation  files  (the
-# "Software"),  to  deal in  the  Software  without restriction,  including
-# without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-# distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons  to whom  the Software  is  furnished to  do so,  subject to  the
-# following conditions:
-#
-# The above copyright  notice and this permission notice  shall be included
-# in all copies or substantial portions of the Software.
-#
-# THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-# EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-# NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-# USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-rm -r build__*
-rm -r coverage__*
-rm -r source__*
-
-### end of file
-
 ````
 
 ### MIT License
@@ -3693,1778 +2239,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
-   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
-   Copyright (c) 2002      Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2005      Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#define XML_MAP_FILE 01
-#define XML_EXTERNAL_ENTITIES 02
-
-#ifdef XML_LARGE_SIZE
-#  define XML_FMT_INT_MOD "ll"
-#else
-#  define XML_FMT_INT_MOD "l"
-#endif
-
-extern int g_read_size_bytes;
-
-extern int XML_ProcessFile(XML_Parser parser, const XML_Char *filename,
-                           unsigned flags);
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
-   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
-   Copyright (c) 2002      Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2016-2017 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-int codepageMap(int cp, int *map);
-int codepageConvert(int cp, const char *p);
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
-   Copyright (c) 2000-2004 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2021      Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-/* Stop not using half the screen */
-body {
-  max-width: none; /* was: 80ch */
-}
-
-.cpp-symbols dt {
-  font-family: monospace;
-}
-
-/* Resemble style of <footer> which is not part of xhtml1-strict */
-.footer {
-  font-size: var(--ok-fs-5);
-  color: var(--ok-tc-1);
-}
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
-   Copyright (c) 2002      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005      Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2017-2023 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2023      Orgad Shaneh <orgad.shaneh@audiocodes.com>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifndef WINCONFIG_H
-#define WINCONFIG_H
-
-#ifndef WIN32_LEAN_AND_MEAN
-#  define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#undef WIN32_LEAN_AND_MEAN
-
-#include <memory.h>
-#include <string.h>
-
-#endif /* ndef WINCONFIG_H */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*
- * Copyright 2001, 2002, 2012 Francesco Zappa Nardelli
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE COMPUTING RESEARCH LAB OR NEW MEXICO STATE UNIVERSITY BE LIABLE FOR ANY
- * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
- * OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
- * THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
-
-  /**************************************************************************
-   *
-   * This file is used to define the BDF error enumeration constants.
-   *
-   */
-
-#ifndef BDFERROR_H_
-#define BDFERROR_H_
-
-#include <freetype/ftmoderr.h>
-
-#undef FTERRORS_H_
-
-#undef  FT_ERR_PREFIX
-#define FT_ERR_PREFIX  BDF_Err_
-#define FT_ERR_BASE    FT_Mod_Err_BDF
-
-#include <freetype/fterrors.h>
-
-#endif /* BDFERROR_H_ */
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  bdf.c
-
-    FreeType font driver for bdf files
-
-    Copyright (C) 2001, 2002 by
-    Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#define FT_MAKE_OPTION_SINGLE_OBJECT
-
-#include "bdflib.c"
-#include "bdfdrivr.c"
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  bdfdrivr.h
-
-    FreeType font driver for bdf fonts
-
-  Copyright (C) 2001, 2002, 2003, 2004 by
-  Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#ifndef BDFDRIVR_H_
-#define BDFDRIVR_H_
-
-#include <freetype/internal/ftdrv.h>
-
-#include "bdf.h"
-
-
-FT_BEGIN_HEADER
-
-
-  typedef struct  BDF_encoding_el_
-  {
-    FT_ULong   enc;
-    FT_UShort  glyph;
-
-  } BDF_encoding_el;
-
-
-  typedef struct  BDF_FaceRec_
-  {
-    FT_FaceRec        root;
-
-    char*             charset_encoding;
-    char*             charset_registry;
-
-    bdf_font_t*       bdffont;
-
-    BDF_encoding_el*  en_table;
-
-    FT_UInt           default_glyph;
-
-  } BDF_FaceRec, *BDF_Face;
-
-
-  FT_EXPORT_VAR( const FT_Driver_ClassRec )  bdf_driver_class;
-
-
-FT_END_HEADER
-
-
-#endif /* BDFDRIVR_H_ */
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  pcf.c
-
-    FreeType font driver for pcf fonts
-
-  Copyright 2000-2001, 2003 by
-  Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#define FT_MAKE_OPTION_SINGLE_OBJECT
-
-#include "pcfdrivr.c"
-#include "pcfread.c"
-#include "pcfutil.c"
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  pcfdrivr.h
-
-    FreeType font driver for pcf fonts
-
-  Copyright 2000-2001, 2002 by
-  Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#ifndef PCFDRIVR_H_
-#define PCFDRIVR_H_
-
-#include <freetype/internal/ftdrv.h>
-
-
-FT_BEGIN_HEADER
-
-  FT_EXPORT_VAR( const FT_Driver_ClassRec )  pcf_driver_class;
-
-FT_END_HEADER
-
-
-#endif /* PCFDRIVR_H_ */
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  pcfread.h
-
-    FreeType font driver for pcf fonts
-
-  Copyright 2003 by
-  Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#ifndef PCFREAD_H_
-#define PCFREAD_H_
-
-
-
-FT_BEGIN_HEADER
-
-  FT_LOCAL( PCF_Property )
-  pcf_find_property( PCF_Face          face,
-                     const FT_String*  prop );
-
-FT_END_HEADER
-
-#endif /* PCFREAD_H_ */
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/*  pcfutil.h
-
-    FreeType font driver for pcf fonts
-
-  Copyright 2000, 2001, 2004 by
-  Francesco Zappa Nardelli
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
-
-#ifndef PCFUTIL_H_
-#define PCFUTIL_H_
-
-
-#include <ft2build.h>
-#include FT_CONFIG_CONFIG_H
-#include <freetype/internal/compiler-macros.h>
-
-FT_BEGIN_HEADER
-
-  FT_LOCAL( void )
-  BitOrderInvert( unsigned char*  buf,
-                  size_t          nbytes );
-
-  FT_LOCAL( void )
-  TwoByteSwap( unsigned char*  buf,
-               size_t          nbytes );
-
-  FT_LOCAL( void )
-  FourByteSwap( unsigned char*  buf,
-                size_t          nbytes );
-
-FT_END_HEADER
-
-#endif /* PCFUTIL_H_ */
-
-
-/* END */
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-
-   This is used to ensure the Expat headers can be included from C++
-   and have everything work as expected.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2005      Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2017-2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "runtests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "acc_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "alloc_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "basic_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "chardata.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "common.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "dummy.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "handlers.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "memcheck.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "minicheck.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "misc_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "ns_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "nsalloc_tests.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* C++ compilation harness for the test suite.
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#include "structdata.c"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "accounting" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_ACC_TESTS_H
-#  define XML_ACC_TESTS_H
-
-extern void make_accounting_test_case(Suite *s);
-
-#endif /* XML_ACC_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "allocation" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_ALLOC_TESTS_H
-#  define XML_ALLOC_TESTS_H
-
-extern void make_alloc_test_case(Suite *s);
-
-#endif /* XML_ALLOC_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "basic" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_BASIC_TESTS_H
-#  define XML_BASIC_TESTS_H
-
-extern void make_basic_test_case(Suite *s);
-
-#endif /* XML_BASIC_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "miscellaneous" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_MISC_TESTS_H
-#  define XML_MISC_TESTS_H
-
-extern void make_miscellaneous_test_case(Suite *s);
-
-#endif /* XML_MISC_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "namespace allocation" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_NSALLOC_TESTS_H
-#  define XML_NSALLOC_TESTS_H
-
-extern void make_nsalloc_test_case(Suite *s);
-
-#endif /* XML_NSALLOC_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-/* Tests in the "namespace" test case for the Expat test suite
-                            __  __            _
-                         ___\ \/ /_ __   __ _| |_
-                        / _ \\  /| '_ \ / _` | __|
-                       |  __//  \| |_) | (_| | |_
-                        \___/_/\_\ .__/ \__,_|\__|
-                                 |_| XML parser
-
-   Copyright (c) 2001-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
-   Copyright (c) 2003      Greg Stein <gstein@users.sourceforge.net>
-   Copyright (c) 2005-2007 Steven Solie <steven@solie.ca>
-   Copyright (c) 2005-2012 Karl Waclawek <karl@waclawek.net>
-   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
-   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
-   Copyright (c) 2017      Joe Orton <jorton@redhat.com>
-   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
-   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
-   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
-   Copyright (c) 2020      Tim Gates <tim.gates@iress.com>
-   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
-   Licensed under the MIT license:
-
-   Permission is  hereby granted,  free of charge,  to any  person obtaining
-   a  copy  of  this  software   and  associated  documentation  files  (the
-   "Software"),  to  deal in  the  Software  without restriction,  including
-   without  limitation the  rights  to use,  copy,  modify, merge,  publish,
-   distribute, sublicense, and/or sell copies of the Software, and to permit
-   persons  to whom  the Software  is  furnished to  do so,  subject to  the
-   following conditions:
-
-   The above copyright  notice and this permission notice  shall be included
-   in all copies or substantial portions of the Software.
-
-   THE  SOFTWARE  IS  PROVIDED  "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,
-   EXPRESS  OR IMPLIED,  INCLUDING  BUT  NOT LIMITED  TO  THE WARRANTIES  OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-   NO EVENT SHALL THE AUTHORS OR  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-   DAMAGES OR  OTHER LIABILITY, WHETHER  IN AN  ACTION OF CONTRACT,  TORT OR
-   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-   USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef XML_NS_TESTS_H
-#  define XML_NS_TESTS_H
-
-extern void make_namespace_test_case(Suite *s);
-
-#endif /* XML_NS_TESTS_H */
-
-#ifdef __cplusplus
-}
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-//
-// Copyright (c) 2017-2022 Advanced Micro Devices, Inc. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-//
-
-#ifndef TESTS_H_
-#define TESTS_H_
-
-#ifdef _WIN32
-
-void Test();
-
-#endif // #ifdef _WIN32
-
-#endif
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-//
-// Copyright (c) 2017-2022 Advanced Micro Devices, Inc. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-//
-
-#pragma once
-
-#ifdef _WIN32
-
-void TestSparseBinding();
-
-#endif // #ifdef _WIN32
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-//
-// Copyright (c) 2017-2022 Advanced Micro Devices, Inc. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-//
-
-/*
-In exactly one CPP file define macro VMA_IMPLEMENTATION and then include
-vk_mem_alloc.h to include definitions of its internal implementation
-*/
-
-#define VMA_IMPLEMENTATION
-
-#include "VmaUsage.h"
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-//
-// Copyright (c) 2019-2020 Advanced Micro Devices, Inc. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-//
-
-#pragma once
-
-#include "D3D12MemAlloc.h"
-
-struct TestContext
-{
-    D3D12MA::ALLOCATION_CALLBACKS* allocationCallbacks;
-    ID3D12Device* device;
-    D3D12MA::Allocator* allocator;
-    D3D12MA::ALLOCATOR_FLAGS allocatorFlags;
-};
-
-void Test(const TestContext& ctx);
-
-````
-
-### MIT License
-
-Used by:
-
 - [wasmtimer 0.4.3](https://github.com/whizsid/wasmtimer-rs)
 
 ````text
@@ -5558,38 +2332,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
-Copyright (c) 2001-2022 Expat maintainers
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be included
-in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
 - [sha3 0.10.8](https://github.com/RustCrypto/hashes)
 
 ````text
@@ -5659,35 +2401,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 ````
 
@@ -6721,6 +3434,42 @@ SOFTWARE.
 
 Used by:
 
+- [hkdf 0.13.0](https://github.com/RustCrypto/KDFs/)
+
+````text
+Copyright (c) 2015-2018 Vlad Filippov
+Copyright (c) 2018-2021 RustCrypto Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [httparse 1.10.1](https://github.com/seanmonstar/httparse)
 - [num_cpus 1.17.0](https://github.com/seanmonstar/num_cpus)
 
@@ -6984,35 +3733,6 @@ THE SOFTWARE.
 
 Used by:
 
-- [opus 0.4.0](https://github.com/SpaceManiac/opus-rs)
-
-````text
-Copyright (c) 2016 Tad Hardesty
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
 - [parking_lot 0.12.5](https://github.com/Amanieu/parking_lot)
 - [parking_lot_core 0.9.12](https://github.com/Amanieu/parking_lot)
@@ -7111,6 +3831,43 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [apple-native-keyring-store 1.0.2](https://github.com/open-source-cooperative/apple-native-keyring-store.git)
+- [keyring-core 1.0.1](https://github.com/open-source-cooperative/keyring-core.git)
+- [zbus-secret-service-keyring-store 1.0.1](https://github.com/open-source-cooperative/zbus-secret-service-keyring-store.git)
+
+````text
+Copyright (c) 2016 keyring Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ````
 
@@ -7227,6 +3984,41 @@ Used by:
 
 ````text
 Copyright (c) 2016-2020 RustCrypto Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [cipher 0.5.2](https://github.com/RustCrypto/traits)
+
+````text
+Copyright (c) 2016-2025 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -7798,35 +4590,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-Copyright (c) 2017-2022 Advanced Micro Devices, Inc. All rights reserved.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
 - [enumflags2 0.7.12](https://github.com/meithecatte/enumflags2)
 
 ````text
@@ -8238,6 +5001,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [cbc 0.2.1](https://github.com/RustCrypto/block-modes)
 - [ctr 0.9.2](https://github.com/RustCrypto/block-modes)
 
 ````text
@@ -8375,6 +5139,42 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [aes 0.9.3](https://github.com/RustCrypto/block-ciphers)
+
+````text
+Copyright (c) 2018-2024 The RustCrypto Project Developers
+Copyright (c) 2018 Artyom Pavlov
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [getrandom 0.2.17](https://github.com/rust-random/getrandom)
 
 ````text
@@ -8412,6 +5212,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - [block-buffer 0.12.1](https://github.com/RustCrypto/utils)
+- [block-padding 0.4.2](https://github.com/RustCrypto/utils)
 
 ````text
 Copyright (c) 2018-2025 The RustCrypto Project Developers
@@ -9125,35 +5926,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-Copyright (c) 2019-2020 Advanced Micro Devices, Inc. All rights reserved.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 ````
 
@@ -9901,6 +6673,42 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [inout 0.2.5](https://github.com/RustCrypto/utils)
+
+````text
+Copyright (c) 2022-2025 The RustCrypto Project Developers
+Copyright (c) 2022 Artyom Pavlov
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [cmov 0.5.4](https://github.com/RustCrypto/utils)
 - [hybrid-array 0.4.15](https://github.com/RustCrypto/hybrid-array)
 
@@ -10316,6 +7124,41 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+````
+
+### MIT License
+
+Used by:
+
+- [secret-service 5.2.0](https://github.com/hwchen/secret-service-rs.git)
+
+````text
+Copyright (c) 2025 secret-service Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 ````
 
 ### MIT License
@@ -10953,38 +7796,6 @@ SOFTWARE.
 
 Used by:
 
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-Little CMS
-Copyright (c) 1998-2011 Marti Maria Saguer
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
 - [fs_extra 1.3.0](https://github.com/webdesus/fs_extra)
 
 ````text
@@ -11109,26 +7920,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
-- [bytemuck 1.25.0](https://github.com/Lokathor/bytemuck)
-- [bytemuck_derive 1.10.2](https://github.com/Lokathor/bytemuck)
-
-````text
-MIT License
-
-Copyright (c) 2019 Daniel "Lokathor" Gee.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ````
 
@@ -11694,6 +8485,7 @@ Used by:
 - [rcgen 0.14.10](https://github.com/rustls/rcgen)
 - [rustls-platform-verifier-android 0.2.0](https://github.com/rustls/rustls-platform-verifier)
 - [siphasher 1.0.3](https://github.com/jedisct1/rust-siphash)
+- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
 - [skia-safe 0.86.1](https://github.com/rust-skia/rust-skia)
 - [tiny-fn 0.1.9](https://github.com/zakarumych/tiny-fn)
 - [usage-argv 6.12.1](https://github.com/jdx/usage)
@@ -12002,8 +8794,6 @@ SOFTWARE.
 Used by:
 
 - [ident_case 1.0.1](https://github.com/TedDriggs/ident_case)
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
 
 ````text
 MIT License
@@ -12025,35 +8815,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-````
-
-### MIT License
-
-Used by:
-
-- [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
-
-````text
-MIT License Copyright (c) <year> <copyright holders>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is furnished
-to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice (including the next
-paragraph) shall be included in all copies or substantial portions of the
-Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
-OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
-OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ````
 
@@ -14816,14 +11577,13 @@ Used by:
 - [aws-lc-sys 0.46.0](https://github.com/aws/aws-lc-rs)
 
 ````text
-ISC License:
+ISC License
 
-Copyright (c) 2004-2010 by Internet Systems Consortium, Inc. ("ISC")
-Copyright (c) 1995-2003 by Internet Software Consortium
+Copyright <year> <owner> 
 
 Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
 
-THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL ISC BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ````
 
@@ -23068,7 +19828,6 @@ driver the macOS or Linux wheel carries. These sections are appended by
 `cargo xtask generate-third-party-notices`.
 
 - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: shaderc, glslang, SPIRV-Tools and SPIRV-Headers
-- Through the `opusic-sys` crate, linked statically into the engine as `libopus.a`: libopus
 - Checked into this repository, compiled by `vendor/tatolab-vulkanalia-vma/build.rs`: VulkanMemoryAllocator and Vulkan-Headers
 - Checked into this repository as headers, compiled into the engine by `runtime/streamlib-engine/build.rs`: PipeWire
 - In the macOS and Linux wheels, compiled into the Vulkan loader library each carries beside the engine: Vulkan-Loader and cJSON
@@ -25090,57 +21849,6 @@ DEALINGS IN THE SOFTWARE.
 The above is the version of the MIT "Expat" License used by X.org:
 
     http://cgit.freedesktop.org/xorg/xserver/tree/COPYING
-````
-
-### libopus (BSD-3-Clause)
-
-Upstream: <https://gitlab.xiph.org/xiph/opus>
-
-````text
-Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
-                    Jean-Marc Valin, Timothy B. Terriberry,
-                    CSIRO, Gregory Maxwell, Mark Borgerding,
-                    Erik de Castro Lopo, Mozilla, Amazon
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-- Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-- Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-- Neither the name of Internet Society, IETF or IETF Trust, nor the
-names of specific contributors, may be used to endorse or promote
-products derived from this software without specific prior written
-permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
-OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-Opus is subject to the royalty-free patent licenses which are
-specified at:
-
-Xiph.Org Foundation:
-https://datatracker.ietf.org/ipr/1524/
-
-Microsoft Corporation:
-https://datatracker.ietf.org/ipr/1914/
-
-Broadcom Corporation:
-https://datatracker.ietf.org/ipr/1526/
 ````
 
 ### MoltenVK (Apache-2.0)
