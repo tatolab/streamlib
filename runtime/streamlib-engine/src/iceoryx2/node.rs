@@ -1214,7 +1214,7 @@ mod tests {
                     }
                     if relay_one(&subscriber, &publisher) {
                         count += 1;
-                        if relay_pause_every > 0 && count % relay_pause_every == 0 {
+                        if relay_pause_every > 0 && count.is_multiple_of(relay_pause_every) {
                             std::thread::sleep(Duration::from_millis(relay_pause_ms));
                         }
                     } else {
@@ -1518,10 +1518,10 @@ mod tests {
 
         let mut names = Vec::new();
         Node::<ipc::Service>::list(config, |node_state| {
-            if let NodeState::Alive(view) = node_state {
-                if let Some(details) = view.details() {
-                    names.push(details.name().as_str().to_string());
-                }
+            if let NodeState::Alive(view) = node_state
+                && let Some(details) = view.details()
+            {
+                names.push(details.name().as_str().to_string());
             }
             CallbackProgression::Continue
         })

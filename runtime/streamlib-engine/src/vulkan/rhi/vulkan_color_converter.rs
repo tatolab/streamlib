@@ -632,7 +632,10 @@ mod tests {
     /// (full bytes go through the matrix-expand path without
     /// clamping dominating the signal).
     fn build_deterministic_nv12(width: u32, height: u32) -> Vec<u8> {
-        assert!(width % 2 == 0 && height % 2 == 0, "NV12 needs even dims");
+        assert!(
+            width.is_multiple_of(2) && height.is_multiple_of(2),
+            "NV12 needs even dims"
+        );
         let y_plane_size = (width * height) as usize;
         let uv_plane_size = (width * height / 2) as usize;
         let mut buf = vec![0u8; y_plane_size + uv_plane_size];

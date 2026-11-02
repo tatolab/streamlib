@@ -8,7 +8,7 @@
 /// an empty Vec — the caller validates push-constant size separately
 /// against the kernel's declaration.
 pub(super) fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!(
             "expected even-length hex string, got {} characters",
             s.len()
@@ -27,7 +27,7 @@ pub(super) fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
             )),
         }
     };
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0 {
         out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
     }
     Ok(out)

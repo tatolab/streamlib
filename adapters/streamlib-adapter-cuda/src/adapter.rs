@@ -1168,10 +1168,10 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
                 return;
             }
         };
-        if let Some((consume_done, value)) = signal {
-            if let Err(e) = consume_done.signal_host(value) {
-                tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
-            }
+        if let Some((consume_done, value)) = signal
+            && let Err(e) = consume_done.signal_host(value)
+        {
+            tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
         }
     }
 

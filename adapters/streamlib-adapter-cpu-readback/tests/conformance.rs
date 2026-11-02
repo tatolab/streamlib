@@ -86,11 +86,8 @@ fn duplicate_registration_returns_surface_already_registered() {
     .expect("acquire_render_target_texture");
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
     let staging = Arc::new(
-        HostVulkanBuffer::new(
-            fixture.adapter.device(),
-            (64 as u64) * (64 as u64) * (4 as u64),
-        )
-        .expect("staging plane"),
+        HostVulkanBuffer::new(fixture.adapter.device(), 64_u64 * 64_u64 * 4_u64)
+            .expect("staging plane"),
     );
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(fixture.adapter.device().device(), 0)

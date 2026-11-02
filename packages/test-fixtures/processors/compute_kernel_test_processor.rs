@@ -220,7 +220,7 @@ fn run_compute_kernel_round_trip(
         std::slice::from_raw_parts(output.mapped_ptr() as *const u32, element_count as usize)
     };
     for i in 0..element_count {
-        let expected = ((i as u32) + 1) * 2u32;
+        let expected = (i + 1) * 2u32;
         let observed = output_slice[i as usize];
         if observed != expected {
             return Err(Error::Runtime(format!(

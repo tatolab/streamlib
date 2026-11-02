@@ -80,7 +80,7 @@ fn subprocess_writes_host_reads_round_trip() {
     );
 
     // BGRA8 in memory: B=0.4 → 102, G=0.1 → 26, R=0.9 → 230, A=1.0 → 255.
-    let mismatch = bytes.chunks_exact(4).enumerate().find(|(_, px)| {
+    let mismatch = bytes.as_chunks::<4>().0.iter().enumerate().find(|(_, px)| {
         (px[0] as i32 - 102).abs() > 4
             || (px[1] as i32 - 26).abs() > 4
             || (px[2] as i32 - 230).abs() > 4

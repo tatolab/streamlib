@@ -1548,8 +1548,7 @@ mod tests {
 
         let refusal = pending
             .arm(StagedWriteBackSource::CpuReadbackStaging)
-            .err()
-            .expect("a second, different source must be refused")
+            .expect_err("a second, different source must be refused")
             .to_string();
         assert!(
             refusal.contains("the device tensor") && refusal.contains("the CPU array"),
@@ -1588,8 +1587,7 @@ mod tests {
         // What a device-tensor scope minted off that same handle then does.
         let refusal = surfaces_pending_edit
             .arm(StagedWriteBackSource::DeviceExportStaging)
-            .err()
-            .expect("a device scope over a surface holding a CPU staged edit must be refused")
+            .expect_err("a device scope over a surface holding a CPU staged edit must be refused")
             .to_string();
         assert!(
             refusal.contains("the CPU array") && refusal.contains("the device tensor"),
