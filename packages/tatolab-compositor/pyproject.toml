@@ -24,7 +24,7 @@ dependencies = ["tatolab-stream>=0.68.7"]
 # The node catalog lists this in every stream whose environment installs this
 # distribution, before a graph names it.
 [project.entry-points."tatolab.nodes"]
-AlphaOverCompositor = "tatolab.compositor:AlphaOverCompositor"
+AlphaOverCompositor = "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
 
 [project.urls]
 Homepage = "https://tatolab.com"
