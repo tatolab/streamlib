@@ -35,7 +35,8 @@ const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKE
 
 const RENDERED_FRAME_POOL_KEY: &str = "rive_rendered_frames";
 const RENDERED_FRAME_TEXTURE_FORMAT: &str = "rgba8_unorm";
-const RENDERED_FRAME_TEXTURE_USAGE: [&str; 2] = ["render_attachment", "texture_binding"];
+const RENDERED_FRAME_TEXTURE_USAGE: [&str; 3] =
+    ["render_attachment", "texture_binding", "copy_src"];
 
 /// Render targets kept imported, by pool slot; the pool rotates far fewer.
 const MOST_RENDER_TARGETS_KEPT: usize = 16;
