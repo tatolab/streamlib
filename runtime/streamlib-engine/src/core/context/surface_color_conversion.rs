@@ -259,7 +259,9 @@ impl SurfaceColorConversionSession {
             gpu,
             surface_id,
             registration,
-            "a test resolves it so",
+            WhyAForeignDmaBufIsReadThroughAHostMapping::TheDmaBufImportFailed(
+                "a test resolves it so".to_string(),
+            ),
         )?;
         self.sources_by_surface_id
             .insert(surface_id.to_string(), resolved);
@@ -334,7 +336,7 @@ fn resolve_color_conversion_source_through_the_surface_store(
             gpu,
             surface_id,
             registration,
-            "this device's driver is blocklisted for cross-device DMA-BUF imports",
+            WhyAForeignDmaBufIsReadThroughAHostMapping::TheDriverIsBlocklistedForCrossDeviceDmaBufImports,
         );
     }
     match store.lookup_pixel_buffer_with_its_plane_layout(surface_id) {
@@ -352,7 +354,9 @@ fn resolve_color_conversion_source_through_the_surface_store(
                         gpu,
                         surface_id,
                         registration,
-                        &import_failure.to_string(),
+                        WhyAForeignDmaBufIsReadThroughAHostMapping::TheDmaBufImportFailed(
+                            import_failure.to_string(),
+                        ),
                     )
                 }
                 _ => Err(import_failure),
@@ -361,28 +365,58 @@ fn resolve_color_conversion_source_through_the_surface_store(
     }
 }
 
-/// Map a foreign device's DMA-BUF `registration` read-only and import the
-/// mapping for GPU reads, logging once why the buffer itself was not
+/// Why a foreign device's DMA-BUF reaches the converter through a host
+/// mapping instead of a Vulkan import of the buffer.
+#[cfg(target_os = "linux")]
+enum WhyAForeignDmaBufIsReadThroughAHostMapping {
+    /// The device is never asked to import the DMA-BUF, nor its mapping as a
+    /// host pointer: NVIDIA refuses that import with
+    /// `ERROR_OUT_OF_DEVICE_MEMORY` and then fails every later allocation.
+    TheDriverIsBlocklistedForCrossDeviceDmaBufImports,
+    /// The device refused the DMA-BUF import with this error; its mapping may
+    /// still import as a host pointer.
+    TheDmaBufImportFailed(String),
+}
+
+/// Map a foreign device's DMA-BUF `registration` read-only and hand the
+/// mapping to GPU reads, logging once why the buffer itself was not
 /// imported and which tier the mapping took.
 #[cfg(target_os = "linux")]
 fn foreign_dma_buf_read_through_a_host_mapping(
     gpu: &GpuContext,
     surface_id: &str,
     registration: crate::core::context::surface_store::DmaBufRegistrationWithItsPlaneLayout,
-    why_the_dma_buf_is_not_imported: &str,
+    why_the_dma_buf_is_not_imported: WhyAForeignDmaBufIsReadThroughAHostMapping,
 ) -> Result<SurfaceColorConversionSource> {
     use crate::linux::dma_buf_mapped_for_cpu_reads::DmaBufMappedForCpuReads;
     let dma_buf_mapping =
         DmaBufMappedForCpuReads::map(registration.dma_buf_fd, registration.allocation_byte_size)?;
-    // SAFETY: the mapping moves into the source beside the import and is
-    // dropped after it, so it outlives every read the import serves.
-    let host_mapping_read_by_gpu = unsafe {
-        gpu.import_host_mapping_for_gpu_reads(
-            dma_buf_mapping.mapped_ptr(),
-            dma_buf_mapping.mapped_byte_len(),
-            dma_buf_mapping.allocation_byte_size(),
-        )
-    }?;
+    // SAFETY: the mapping moves into the source beside the host mapping and
+    // is dropped after it, so it outlives every read the host mapping serves.
+    let (host_mapping_read_by_gpu, why_the_dma_buf_is_not_imported) =
+        match why_the_dma_buf_is_not_imported {
+            WhyAForeignDmaBufIsReadThroughAHostMapping::TheDriverIsBlocklistedForCrossDeviceDmaBufImports => {
+                let why = "this device's driver is blocklisted for cross-device DMA-BUF imports";
+                let staged = unsafe {
+                    gpu.stage_host_mapping_for_gpu_reads(
+                        dma_buf_mapping.mapped_ptr(),
+                        dma_buf_mapping.allocation_byte_size(),
+                        format!("{why}, so its mapping is not imported as a host pointer either"),
+                    )
+                }?;
+                (staged, why.to_string())
+            }
+            WhyAForeignDmaBufIsReadThroughAHostMapping::TheDmaBufImportFailed(import_failure) => {
+                let imported_or_staged = unsafe {
+                    gpu.import_host_mapping_for_gpu_reads(
+                        dma_buf_mapping.mapped_ptr(),
+                        dma_buf_mapping.mapped_byte_len(),
+                        dma_buf_mapping.allocation_byte_size(),
+                    )
+                }?;
+                (imported_or_staged, import_failure)
+            }
+        };
     tracing::info!(
         surface_id,
         tier = host_mapping_read_by_gpu.tier().as_str(),

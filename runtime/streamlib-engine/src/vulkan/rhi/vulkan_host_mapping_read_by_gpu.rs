@@ -6,9 +6,10 @@
 //!
 //! The imported tier binds the range itself as a `VkBuffer` through
 //! `VK_EXT_external_memory_host`, so a kernel reads the caller's pages in
-//! place. The staged tier, taken when the extension is absent or the driver
-//! declines the range, gives the kernel host-visible staging of the same
-//! length, filled with one `memcpy` before each read.
+//! place. The staged tier, taken when the extension is absent, the driver
+//! declines the range, or the caller must not ask, gives the kernel
+//! host-visible staging of the same length, filled with one `memcpy` before
+//! each read.
 
 use std::sync::Arc;
 
@@ -107,6 +108,44 @@ impl HostMappingReadByGpu {
             "VK_EXT_external_memory_host is not enabled on this device".to_string()
         };
 
+        // SAFETY: the caller upholds this function's contract, which covers
+        // the readable bytes the staged tier copies from.
+        unsafe {
+            Self::stage_for_gpu_reads(
+                vulkan_device,
+                host_range_ptr,
+                readable_byte_len,
+                import_refusal,
+            )
+        }
+    }
+
+    /// Give the first `readable_byte_len` bytes at `host_range_ptr` to GPU
+    /// reads through host-visible staging, without asking the driver to
+    /// import the range, keeping `why_the_range_is_not_imported` for the
+    /// caller's log line.
+    ///
+    /// For a range the driver must not be asked to import: NVIDIA answers a
+    /// host-pointer import of a foreign DMA-BUF's mapping with
+    /// `ERROR_OUT_OF_DEVICE_MEMORY` and then fails every later allocation on
+    /// the device the same way.
+    ///
+    /// # Safety
+    ///
+    /// All `readable_byte_len` bytes must stay mapped and readable until the
+    /// returned value drops.
+    pub unsafe fn stage_for_gpu_reads(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        host_range_ptr: *const u8,
+        readable_byte_len: usize,
+        why_the_range_is_not_imported: String,
+    ) -> Result<Self> {
+        if host_range_ptr.is_null() || readable_byte_len == 0 {
+            return Err(Error::Configuration(format!(
+                "HostMappingReadByGpu::stage_for_gpu_reads: {readable_byte_len} readable bytes \
+                 must be non-empty at a non-null pointer"
+            )));
+        }
         let staging = HostVulkanBuffer::new_storage_buffer_host_visible(
             vulkan_device,
             readable_byte_len as u64,
@@ -116,7 +155,7 @@ impl HostMappingReadByGpu {
             host_range_ptr,
             readable_byte_len,
             tier: HostMappingReadByGpuTier::HostVisibleStagingCopy,
-            fallback_reason: Some(import_refusal),
+            fallback_reason: Some(why_the_range_is_not_imported),
         })
     }
 
@@ -301,6 +340,46 @@ mod tests {
             read_back_through_the_gpu(&device, &mapping)
                 .iter()
                 .all(|&b| b == 0xC3),
+            "stage_from_host lands the range in the staging the GPU reads"
+        );
+    }
+
+    /// The staged constructor never asks the driver to import the range,
+    /// keeps the caller's reason, and reaches the GPU through each stage.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_range_staged_without_an_import_reaches_the_gpu_through_each_stage() {
+        let Some(device) = device_or_skip() else {
+            return;
+        };
+        let range = PageAlignedHostRange::new(4096 * 2);
+        let mut mapping = unsafe {
+            HostMappingReadByGpu::stage_for_gpu_reads(
+                &device,
+                range.ptr,
+                range.byte_len,
+                "the caller never imports this range".to_string(),
+            )
+        }
+        .expect("stage");
+        assert_eq!(
+            mapping.tier(),
+            HostMappingReadByGpuTier::HostVisibleStagingCopy
+        );
+        assert_eq!(
+            mapping.fallback_reason(),
+            Some("the caller never imports this range")
+        );
+
+        unsafe { std::ptr::write_bytes(range.ptr, 0x5A, range.byte_len) };
+        mapping.stage_from_host();
+        assert!(
+            read_back_through_the_gpu(&device, &mapping)
+                .iter()
+                .all(|&b| b == 0x5A),
             "stage_from_host lands the range in the staging the GPU reads"
         );
     }
