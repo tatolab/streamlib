@@ -64,9 +64,15 @@ mod tests {
             .expect_err("a former built-in is refused")
             .to_string();
 
-            assert!(refusal.contains(&format!("`tatolab.stream:{class_name}`")), "{refusal}");
+            assert!(
+                refusal.contains(&format!("`tatolab.stream:{class_name}`")),
+                "{refusal}"
+            );
             assert!(refusal.contains("`tatolab-opus`"), "{refusal}");
-            assert!(refusal.contains(&format!("`{module_node_type}`")), "{refusal}");
+            assert!(
+                refusal.contains(&format!("`{module_node_type}`")),
+                "{refusal}"
+            );
         }
     }
 
@@ -88,9 +94,15 @@ mod tests {
         for moved in BUILT_IN_NODE_TYPES_MOVED_TO_MODULES {
             let module_node_type =
                 ProcessorClassImportPath::new(moved.module_node_type).expect("a type");
-            assert!(!module_node_type.names_a_built_in_node(), "{module_node_type}");
+            assert!(
+                !module_node_type.names_a_built_in_node(),
+                "{module_node_type}"
+            );
             assert_eq!(
-                moved.module_node_type.rsplit_once(':').map(|(_, class)| class),
+                moved
+                    .module_node_type
+                    .rsplit_once(':')
+                    .map(|(_, class)| class),
                 Some(moved.built_in_class_name),
                 "a node keeps its class name when it moves"
             );

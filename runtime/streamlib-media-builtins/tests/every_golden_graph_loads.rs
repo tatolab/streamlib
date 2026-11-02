@@ -126,7 +126,12 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
                 MODULE_NODE_TYPES_A_GOLDEN_NAMES.contains(&node_type),
                 "a golden names `{node_type}`, a module type none is meant to name"
             );
-            Some(node["name"].as_str().expect("a node has a name").to_string())
+            Some(
+                node["name"]
+                    .as_str()
+                    .expect("a node has a name")
+                    .to_string(),
+            )
         })
         .collect()
 }
@@ -160,8 +165,8 @@ fn every_golden_graph_loads_on_this_floor() {
             &recorded_graph_document,
             &module_node_names_in(&recorded_graph_document),
         );
-        let graph = GraphSnapshot::from_graph_document(graph_document.clone())
-            .unwrap_or_else(|refusal| {
+        let graph =
+            GraphSnapshot::from_graph_document(graph_document.clone()).unwrap_or_else(|refusal| {
                 panic!("{path:?} without its module nodes no longer reads: {refusal}")
             });
         let node_names_compiled_out_here: BTreeSet<String> = graph
