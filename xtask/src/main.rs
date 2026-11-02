@@ -13,6 +13,7 @@ pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_iceoryx2_construction;
+pub mod check_module_host_table_surface;
 pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
@@ -177,7 +178,7 @@ pub fn tracked_files_under_scan_roots(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all fifteen in well under a second, and why CI runs them as
+/// lets one process run all sixteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -186,6 +187,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     (
         "check-no-in-process-placement",
         check_no_in_process_placement::run,
+    ),
+    (
+        "check-module-host-table-surface",
+        check_module_host_table_surface::run,
     ),
     (
         "check-no-escalate-in-lifecycle",
@@ -510,6 +515,12 @@ enum Commands {
     /// See `docs/decisions/helper-process-placement-only.md`.
     CheckNoInProcessPlacement,
 
+    /// CI gate keeping the module host table data-plane only: every field of
+    /// `tatolab-module-sdk`'s `#[repr(C)]` table is plain data, a handle or an
+    /// `extern "C"` verb over them — never an engine or RHI type — and the SDK
+    /// depends on no engine crate. See [`check_module_host_table_surface`].
+    CheckModuleHostTableSurface,
+
     /// CI gate for the escalate-from-lifecycle ban. Fails when
     /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
     /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
@@ -734,6 +745,9 @@ fn main() -> Result<()> {
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckNoInProcessPlacement => {
             check_no_in_process_placement::run(&workspace_root()?)?
+        }
+        Commands::CheckModuleHostTableSurface => {
+            check_module_host_table_surface::run(&workspace_root()?)?
         }
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?

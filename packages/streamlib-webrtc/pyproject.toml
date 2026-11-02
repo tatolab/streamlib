@@ -32,6 +32,12 @@ classifiers = [
 # depends on it.
 dependencies = ["tatolab-stream>=0.47.0"]
 
+# The node catalog lists these in every stream whose environment installs this
+# distribution, before a graph names one.
+[project.entry-points."tatolab.nodes"]
+WhipPublisher = "tatolab.webrtc.processors:WhipPublisher"
+WhepPlayer = "tatolab.webrtc.processors:WhepPlayer"
+
 [project.urls]
 Homepage = "https://tatolab.com"
 Documentation = "https://tatolab.com/docs/build/webrtc"

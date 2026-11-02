@@ -270,6 +270,20 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Ok(Vec::new())
             }
+            fn node_types_installed_modules_declare_in_the_stream_a_call_names(
+                &self,
+                stream_id: &str,
+            ) -> ::streamlib::sdk::error::Result<
+                Vec<(
+                    ::streamlib::sdk::descriptors::ProcessorDescriptor,
+                    ::streamlib::sdk::processors::InstalledModuleOfANodeType,
+                )>,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_id,
+                )?;
+                Ok(Vec::new())
+            }
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }

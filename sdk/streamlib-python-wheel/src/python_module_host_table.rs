@@ -1,0 +1,569 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! The module host table this wheel lends a node's native code: the one
+//! implementation of `tatolab-module-sdk`'s table, over the same data plane
+//! the node's Python reaches its ports through.
+//!
+//! Every verb but the catalog entry's runs with no Python attached, from any
+//! thread. The engine never calls into a module; a module calls in here.
+
+use std::ffi::c_void;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use pyo3::prelude::*;
+use pyo3::types::{PyCapsule, PyDict};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
+use streamlib::sdk::iceoryx2::{
+    InputMailboxesInner, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
+};
+use tatolab_module_sdk::module_host_table_abi::{
+    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
+    MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
+    MODULE_HOST_TABLE_LOG_LEVEL_WARN, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
+    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
+    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
+    ModuleHostTableBytes, ModuleHostTableErrorMessage, ModuleHostTablePortHandle,
+    ModuleHostTableReadMessage, ModuleHostTableStatus, ModuleHostTableUtf8,
+};
+
+use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
+
+/// The `tracing` target a module's records are emitted under in this helper;
+/// the module's own target rides as the `module_target` field.
+const MODULE_LOG_RECORD_TRACING_TARGET: &str = "tatolab_module";
+
+/// One node's lent ports and what else its native code reaches, behind the
+/// table it is reached through.
+///
+/// Reference-counted through the table's retain and release; the capsule
+/// Python holds owns one count.
+struct ModuleHostOfOneNode {
+    module_host_table: ModuleHostTable,
+    node_id: String,
+    input_mailboxes: Arc<InputMailboxesInner>,
+    output_writer: Arc<OutputWriterInner>,
+    lent_input_port_names: Vec<String>,
+    lent_output_port_names: Vec<String>,
+    escalate_request_to_parent: Option<Py<PyAny>>,
+    stop_requested_by_parent: Arc<AtomicBool>,
+    host_capabilities_json: String,
+}
+
+/// The capsule `ctx.open_module_host_table(...)` returns: a table over the
+/// ports `data_plane` lends, for the node `node_id` names.
+pub(crate) fn module_host_table_capsule_lending<'py>(
+    python: Python<'py>,
+    data_plane: HelperProcessDataPlaneLentToNativeCode,
+    node_id: &str,
+    runtime_id: &str,
+    escalate_request_to_parent: Option<Py<PyAny>>,
+    stop_requested_by_parent: Arc<AtomicBool>,
+) -> PyResult<Bound<'py, PyCapsule>> {
+    let module_host = module_host_of_one_node(
+        data_plane,
+        node_id,
+        runtime_id,
+        escalate_request_to_parent,
+        stop_requested_by_parent,
+    );
+    let module_host_table =
+        std::ptr::NonNull::from(&module_host.module_host_table).cast::<c_void>();
+    // The capsule's count; its destructor releases it.
+    let _ = Arc::into_raw(module_host);
+    // SAFETY: the pointer is to the table inside an allocation the count just
+    // leaked keeps alive until the destructor releases it.
+    unsafe {
+        PyCapsule::new_with_pointer_and_destructor(
+            python,
+            module_host_table,
+            MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
+            Some(release_the_count_a_module_host_table_capsule_holds),
+        )
+    }
+}
+
+fn module_host_of_one_node(
+    data_plane: HelperProcessDataPlaneLentToNativeCode,
+    node_id: &str,
+    runtime_id: &str,
+    escalate_request_to_parent: Option<Py<PyAny>>,
+    stop_requested_by_parent: Arc<AtomicBool>,
+) -> Arc<ModuleHostOfOneNode> {
+    let host_capabilities_json = serde_json::json!({
+        "module_host_table": {
+            "major": MODULE_HOST_TABLE_ABI_MAJOR,
+            "minor": MODULE_HOST_TABLE_ABI_MINOR,
+        },
+        "platform": std::env::consts::OS,
+        "architecture": std::env::consts::ARCH,
+        "node_id": node_id,
+        "runtime_id": runtime_id,
+        "lent_input_ports": data_plane.lent_input_port_names,
+        "lent_output_ports": data_plane.lent_output_port_names,
+    })
+    .to_string();
+    Arc::new_cyclic(
+        |this_node_host: &std::sync::Weak<ModuleHostOfOneNode>| ModuleHostOfOneNode {
+            module_host_table: ModuleHostTable {
+                abi_major: MODULE_HOST_TABLE_ABI_MAJOR,
+                abi_minor: MODULE_HOST_TABLE_ABI_MINOR,
+                table_size_bytes: std::mem::size_of::<ModuleHostTable>() as u64,
+                node_host: this_node_host.as_ptr().cast_mut().cast::<c_void>(),
+                node_host_retain,
+                node_host_release,
+                output_port_open,
+                output_port_write,
+                output_port_set_catalog_entry,
+                input_port_open,
+                input_port_read,
+                input_message_release,
+                input_wait_for_any_port,
+                stop_requested,
+                monotonic_now_ns,
+                log,
+                host_capabilities_json: host_capabilities_json_of,
+            },
+            node_id: node_id.to_string(),
+            input_mailboxes: data_plane.input_mailboxes,
+            output_writer: data_plane.output_writer,
+            lent_input_port_names: data_plane.lent_input_port_names,
+            lent_output_port_names: data_plane.lent_output_port_names,
+            escalate_request_to_parent,
+            stop_requested_by_parent,
+            host_capabilities_json,
+        },
+    )
+}
+
+unsafe extern "C" fn release_the_count_a_module_host_table_capsule_holds(
+    capsule: *mut pyo3::ffi::PyObject,
+) {
+    // SAFETY: CPython calls this with the capsule being destroyed, whose name
+    // is the one it was made with.
+    let module_host_table = unsafe {
+        pyo3::ffi::PyCapsule_GetPointer(capsule, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME.as_ptr())
+    };
+    if module_host_table.is_null() {
+        // SAFETY: an attached thread; the failed lookup set an exception that
+        // a destructor has nowhere to raise.
+        unsafe { pyo3::ffi::PyErr_Clear() };
+        return;
+    }
+    // SAFETY: the table names the node host whose count this capsule holds.
+    unsafe { node_host_release((*module_host_table.cast::<ModuleHostTable>()).node_host) };
+}
+
+/// The node host a verb was handed.
+///
+/// # Safety
+///
+/// `node_host` is the table's own, and some count keeps it alive for the call.
+unsafe fn node_host_of<'call>(node_host: *mut c_void) -> &'call ModuleHostOfOneNode {
+    // SAFETY: the caller's contract.
+    unsafe { &*node_host.cast::<ModuleHostOfOneNode>() }
+}
+
+unsafe extern "C" fn node_host_retain(node_host: *mut c_void) {
+    // SAFETY: a retain is called with a count already held.
+    unsafe { Arc::increment_strong_count(node_host.cast::<ModuleHostOfOneNode>()) };
+}
+
+unsafe extern "C" fn node_host_release(node_host: *mut c_void) {
+    // SAFETY: releases a count a retain, or the capsule, took.
+    unsafe { Arc::decrement_strong_count(node_host.cast::<ModuleHostOfOneNode>()) };
+}
+
+/// Write `refusal` into the caller's buffer, when it handed one.
+///
+/// # Safety
+///
+/// `error_message` is null or points at a live buffer.
+unsafe fn refuse(
+    error_message: *mut ModuleHostTableErrorMessage,
+    refusal: &str,
+) -> ModuleHostTableStatus {
+    if let Some(error_message) = unsafe { error_message.as_mut() } {
+        error_message.write(refusal);
+    }
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+
+/// The lent port `port_name` names, as a handle counted from one.
+fn handle_of_a_lent_port(
+    direction: &str,
+    lent_port_names: &[String],
+    port_name: &str,
+) -> Result<ModuleHostTablePortHandle, String> {
+    let port_name = cast_exposed_name_to_url_safe(port_name)
+        .map_err(|names_no_port| names_no_port.to_string())?;
+    lent_port_names
+        .iter()
+        .position(|lent| *lent == *port_name)
+        .map(|index| ModuleHostTablePortHandle {
+            value: index as u64 + 1,
+        })
+        .ok_or_else(|| {
+            format!(
+                "{direction} port {port_name:?} was not lent to native code; \
+                 `ctx.open_module_host_table` lent {lent_port_names:?}"
+            )
+        })
+}
+
+fn lent_port_name_of_a_handle<'node>(
+    direction: &str,
+    lent_port_names: &'node [String],
+    port: ModuleHostTablePortHandle,
+) -> Result<&'node str, String> {
+    usize::try_from(port.value)
+        .ok()
+        .and_then(|value| value.checked_sub(1))
+        .and_then(|index| lent_port_names.get(index))
+        .map(String::as_str)
+        .ok_or_else(|| {
+            format!(
+                "{direction} port handle {} names no port this table opened",
+                port.value
+            )
+        })
+}
+
+unsafe fn open_a_lent_port(
+    direction: &str,
+    lent_port_names: &[String],
+    port_name: ModuleHostTableUtf8,
+    opened_port: *mut ModuleHostTablePortHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a view live for the call.
+    let port_name = match unsafe { port_name.as_str() } {
+        Ok(port_name) => port_name,
+        Err(not_utf8) => {
+            return unsafe { refuse(error_message, &format!("a port name is UTF-8: {not_utf8}")) };
+        }
+    };
+    match handle_of_a_lent_port(direction, lent_port_names, port_name) {
+        Ok(handle) => match unsafe { opened_port.as_mut() } {
+            Some(opened_port) => {
+                *opened_port = handle;
+                MODULE_HOST_TABLE_STATUS_OK
+            }
+            None => unsafe { refuse(error_message, "no slot was handed for the opened port") },
+        },
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn output_port_open(
+    node_host: *mut c_void,
+    port_name: ModuleHostTableUtf8,
+    opened_port: *mut ModuleHostTablePortHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    unsafe {
+        open_a_lent_port(
+            "output",
+            &node_host.lent_output_port_names,
+            port_name,
+            opened_port,
+            error_message,
+        )
+    }
+}
+
+unsafe extern "C" fn input_port_open(
+    node_host: *mut c_void,
+    port_name: ModuleHostTableUtf8,
+    opened_port: *mut ModuleHostTablePortHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    unsafe {
+        open_a_lent_port(
+            "input",
+            &node_host.lent_input_port_names,
+            port_name,
+            opened_port,
+            error_message,
+        )
+    }
+}
+
+unsafe extern "C" fn output_port_write(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    payload: ModuleHostTableBytes,
+    timestamp_ns: i64,
+    starts_group: u32,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    let port_name =
+        match lent_port_name_of_a_handle("output", &node_host.lent_output_port_names, port) {
+            Ok(port_name) => port_name,
+            Err(refusal) => return unsafe { refuse(error_message, &refusal) },
+        };
+    if !node_host.output_writer.has_port(port_name) {
+        return MODULE_HOST_TABLE_STATUS_OK;
+    }
+    let timestamp_ns = if timestamp_ns == MODULE_HOST_TABLE_TIMESTAMP_NOW {
+        monotonic_clock_now_ns() as i64
+    } else {
+        timestamp_ns
+    };
+    let group_boundary = if starts_group != 0 {
+        MessageGroupBoundary::StartsGroup
+    } else {
+        MessageGroupBoundary::ContinuesGroup
+    };
+    // SAFETY: the SDK hands a payload live for the call.
+    let payload_bytes = unsafe { payload.as_slice() };
+    match node_host.output_writer.write_bytes_with_timestamp(
+        port_name,
+        payload_bytes,
+        timestamp_ns,
+        group_boundary,
+    ) {
+        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(Error::PayloadExceedsChannelCeiling {
+            channel,
+            payload_bytes,
+            largest_admitted_frame_bytes,
+            tier,
+            refused_bags_on_the_output_port: refused_bags,
+            ..
+        }) => {
+            tracing::warn!(
+                "output port {port_name:?} of node {:?} refused a {payload_bytes}-byte message \
+                 its native code wrote, past the {largest_admitted_frame_bytes} bytes channel \
+                 {channel:?} admits ({tier} tier); the message was dropped, and the port has \
+                 refused {refused_bags} so far",
+                node_host.node_id
+            );
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(write_failure) => unsafe { refuse(error_message, &write_failure.to_string()) },
+    }
+}
+
+unsafe extern "C" fn output_port_set_catalog_entry(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    section: ModuleHostTableUtf8,
+    entry_json: ModuleHostTableUtf8,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    // SAFETY: the SDK hands views live for the call.
+    let (section, entry_json) = match unsafe { (section.as_str(), entry_json.as_str()) } {
+        (Ok(section), Ok(entry_json)) => (section, entry_json),
+        _ => {
+            return unsafe {
+                refuse(
+                    error_message,
+                    "a catalog entry's section and fields are UTF-8",
+                )
+            };
+        }
+    };
+    match set_catalog_entry_through_the_parent(node_host, port, section, entry_json) {
+        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+fn set_catalog_entry_through_the_parent(
+    node_host: &ModuleHostOfOneNode,
+    port: ModuleHostTablePortHandle,
+    section: &str,
+    entry_json: &str,
+) -> Result<(), String> {
+    let port_name = lent_port_name_of_a_handle("output", &node_host.lent_output_port_names, port)?;
+    let entry_fields: serde_json::Value = serde_json::from_str(entry_json).map_err(|not_json| {
+        format!(
+            "output port {port_name:?}: a catalog entry's fields are one JSON object: {not_json}"
+        )
+    })?;
+    if !entry_fields.is_object() {
+        return Err(format!(
+            "output port {port_name:?}: a catalog entry's fields are one JSON object, got {entry_json}"
+        ));
+    }
+    let escalate_request_to_parent = node_host.escalate_request_to_parent.as_ref().ok_or_else(
+        || {
+            "a catalog entry lives on the parent's graph, and this node has no route to the parent"
+                .to_string()
+        },
+    )?;
+    Python::attach(|python| -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", "set_output_port_catalog_entry")?;
+        op.set_item("port", port_name)?;
+        op.set_item("section", section)?;
+        op.set_item("entry", json_value_to_python_object(python, &entry_fields)?)?;
+        escalate_request_to_parent.bind(python).call1((op,))?;
+        Ok(())
+    })
+    .map_err(|refusal| refusal.to_string())
+}
+
+unsafe extern "C" fn input_port_read(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    read_message: *mut ModuleHostTableReadMessage,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    let port_name =
+        match lent_port_name_of_a_handle("input", &node_host.lent_input_port_names, port) {
+            Ok(port_name) => port_name,
+            Err(refusal) => return unsafe { refuse(error_message, &refusal) },
+        };
+    let Some(read_message) = (unsafe { read_message.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the read message") };
+    };
+    if !node_host.input_mailboxes.has_port(port_name) {
+        return MODULE_HOST_TABLE_STATUS_EMPTY;
+    }
+    match node_host.input_mailboxes.read_raw(port_name) {
+        Ok(Some(message)) => {
+            let message = Box::new(message);
+            *read_message = ModuleHostTableReadMessage {
+                payload: message.payload_bytes.as_ptr(),
+                payload_length: message.payload_bytes.len(),
+                timestamp_ns: message.timestamp_ns,
+                starts_group: u32::from(matches!(
+                    message.group_boundary,
+                    MessageGroupBoundary::StartsGroup
+                )),
+                reserved: 0,
+                lost_since_last_read: message.lost_since_last_read,
+                host_owned_message: Box::into_raw(message).cast::<c_void>(),
+            };
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Ok(None) => MODULE_HOST_TABLE_STATUS_EMPTY,
+        Err(read_failure) => unsafe { refuse(error_message, &read_failure.to_string()) },
+    }
+}
+
+unsafe extern "C" fn input_message_release(
+    _node_host: *mut c_void,
+    read_message: *mut ModuleHostTableReadMessage,
+) {
+    let Some(read_message) = (unsafe { read_message.as_mut() }) else {
+        return;
+    };
+    let host_owned_message =
+        std::mem::replace(&mut read_message.host_owned_message, std::ptr::null_mut());
+    if !host_owned_message.is_null() {
+        // SAFETY: the read boxed this message and handed it out once.
+        drop(unsafe { Box::from_raw(host_owned_message.cast::<MessageReadFromInputPort>()) });
+    }
+    read_message.payload = std::ptr::null();
+    read_message.payload_length = 0;
+}
+
+unsafe extern "C" fn input_wait_for_any_port(
+    node_host: *mut c_void,
+    timeout_ns: u64,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    if node_host.input_mailboxes.any_port_has_data() {
+        return MODULE_HOST_TABLE_STATUS_OK;
+    }
+    let timeout = Duration::from_nanos(timeout_ns);
+    let timeout_ms =
+        i32::try_from(timeout.as_millis().max(u128::from(timeout_ns > 0))).unwrap_or(i32::MAX);
+    let listener_fd = node_host.input_mailboxes.listener_fd();
+    let mut poll_descriptors: Vec<libc::pollfd> = listener_fd
+        .map(|fd| libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .into_iter()
+        .collect();
+    // SAFETY: the slice is live for the call, and its length is its count.
+    let polled = unsafe {
+        libc::poll(
+            poll_descriptors.as_mut_ptr(),
+            poll_descriptors.len() as libc::nfds_t,
+            timeout_ms,
+        )
+    };
+    if polled < 0 {
+        let poll_failure = std::io::Error::last_os_error();
+        if poll_failure.kind() != std::io::ErrorKind::Interrupted {
+            return unsafe {
+                refuse(
+                    error_message,
+                    &format!("waiting on the input listener failed: {poll_failure}"),
+                )
+            };
+        }
+    }
+    if listener_fd.is_some() {
+        node_host.input_mailboxes.drain_listener();
+    }
+    if node_host.input_mailboxes.any_port_has_data() {
+        MODULE_HOST_TABLE_STATUS_OK
+    } else {
+        MODULE_HOST_TABLE_STATUS_TIMED_OUT
+    }
+}
+
+unsafe extern "C" fn stop_requested(node_host: *mut c_void) -> u32 {
+    let node_host = unsafe { node_host_of(node_host) };
+    u32::from(node_host.stop_requested_by_parent.load(Ordering::Acquire))
+}
+
+unsafe extern "C" fn monotonic_now_ns(_node_host: *mut c_void) -> i64 {
+    monotonic_clock_now_ns() as i64
+}
+
+unsafe extern "C" fn log(
+    node_host: *mut c_void,
+    level: u32,
+    target: ModuleHostTableUtf8,
+    message: ModuleHostTableUtf8,
+) {
+    let node_host = unsafe { node_host_of(node_host) };
+    // SAFETY: the SDK hands views live for the call.
+    let module_target = unsafe { target.as_str() }.unwrap_or("<target not UTF-8>");
+    let message = unsafe { message.as_str() }.unwrap_or("<message not UTF-8>");
+    let node_id = node_host.node_id.as_str();
+    match level {
+        MODULE_HOST_TABLE_LOG_LEVEL_ERROR => tracing::error!(
+            target: MODULE_LOG_RECORD_TRACING_TARGET, module_target, node_id, "{message}"
+        ),
+        MODULE_HOST_TABLE_LOG_LEVEL_WARN => tracing::warn!(
+            target: MODULE_LOG_RECORD_TRACING_TARGET, module_target, node_id, "{message}"
+        ),
+        MODULE_HOST_TABLE_LOG_LEVEL_INFO => tracing::info!(
+            target: MODULE_LOG_RECORD_TRACING_TARGET, module_target, node_id, "{message}"
+        ),
+        MODULE_HOST_TABLE_LOG_LEVEL_DEBUG => tracing::debug!(
+            target: MODULE_LOG_RECORD_TRACING_TARGET, module_target, node_id, "{message}"
+        ),
+        _ => tracing::trace!(
+            target: MODULE_LOG_RECORD_TRACING_TARGET, module_target, node_id, "{message}"
+        ),
+    }
+}
+
+unsafe extern "C" fn host_capabilities_json_of(node_host: *mut c_void) -> ModuleHostTableUtf8 {
+    let node_host = unsafe { node_host_of(node_host) };
+    ModuleHostTableUtf8::of(&node_host.host_capabilities_json)
+}
+
+#[cfg(test)]
+mod tests;

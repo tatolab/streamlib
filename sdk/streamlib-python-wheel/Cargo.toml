@@ -39,6 +39,10 @@ pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 
 streamlib = { path = "../streamlib-sdk", version = "0.68.7" }
 
+# The module host table's layout, which this wheel builds for a node's native
+# code to reach its lent ports through.
+tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.0.0", default-features = false }
+
 # The `VideoFrame` colour metadata a node-owned window's `show()` reads off a
 # frame. Nothing here registers or hosts a built-in.
 streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.68.7" }
@@ -100,6 +104,8 @@ streamlib = { path = "../streamlib-sdk", version = "0.68.7", features = ["test-s
 rmp-serde = { workspace = true }
 # The test surface-share service's socket directory, created at an explicit mode.
 streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.7" }
+# The table read back through the capsule, as a module's binding reads it.
+tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.0.0", default-features = false, features = ["pyo3"] }
 
 [lints]
 workspace = true
