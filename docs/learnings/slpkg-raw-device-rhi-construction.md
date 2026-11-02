@@ -149,10 +149,6 @@ a GPU package is plugin-safe; the only real test is a separate-build
 - The reference "done right" call is `create_texture_ring` — GPU
   packages that already use it for their output ring show the shape the
   kernel/buffer construction should follow.
-- Sibling learning:
-  [`cdylib-make-borrow-cached-fields.md`](cdylib-make-borrow-cached-fields.md)
-  — the other end of the same non-`#[repr(C)]` transit hazard (zeroed
-  cached fields on a reconstructed borrow).
 - Architecture: [`../architecture/compute-kernel.md`](../architecture/compute-kernel.md)
   (the single compute abstraction),
   [`../architecture/subprocess-rhi-parity.md`](../architecture/subprocess-rhi-parity.md)

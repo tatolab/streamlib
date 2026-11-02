@@ -55,8 +55,9 @@ their elements.
 
 Any file calling Vulkan commands with mixed empty/non-empty barrier arrays.
 Currently:
-- `runtime/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
-  barriers
+- `update_descriptor_sets(&writes, &[] as &[vk::CopyDescriptorSet])` in
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`,
+  `vulkan_graphics_kernel.rs` and `vulkan_ray_tracing_kernel.rs`
 
 `RhiCommandRecorder::record_image_barrier` /
 `record_buffer_barrier` carry the empty-slice cast internally —

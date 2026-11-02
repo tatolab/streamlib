@@ -48,12 +48,9 @@ for these is **app-process**:
 
 ## Enforcement
 
-- `cargo xtask check-no-in-process-placement` gates the vocabulary once its ticket lands
-  (commissioned by the 2026-08-04 pivot; a behavioural test — beyond the app's own
-  registration import, `rt.add` and running bags add nothing to the parent's
-  `sys.modules`, and the processor reports a child pid — lands with #1714). Until the code that hosts in-process is
-  deleted by #1714, the current tree is transitional debt, never evidence of intent — never
-  read the tree as the model.
+- `cargo xtask check-no-in-process-placement` gates the vocabulary in CI, as one of
+  `check-all-source-gates`. The code that hosted a processor in the app's interpreter is
+  deleted (#1714 shipped).
 - `review-pr` and `rust-craftsmanship-reviewer` return `blocker` on any banned shape.
   Vocabulary is not the invariant; a violation that uses none of these words is still a
   violation.

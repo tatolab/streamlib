@@ -6053,7 +6053,7 @@ mod tests {
     ///
     /// Mental-revert: if `create_opaque_fd_export_buffer` built the
     /// `StorageBuffer` with a zeroed `byte_size_cached` (the silent
-    /// all-zero borrow hazard — `docs/learnings/cdylib-make-borrow-cached-fields.md`),
+    /// all-zero cached size),
     /// the `byte_size() == BYTES` assertion below fails immediately —
     /// with no panic, no export error, just a wrong cached POD. GPU-gated:
     /// skips when no device is present (CI is GPU-free).
