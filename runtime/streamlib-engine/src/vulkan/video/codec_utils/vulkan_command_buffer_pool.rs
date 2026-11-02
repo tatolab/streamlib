@@ -508,11 +508,11 @@ impl VulkanSemaphoreSet {
 // ---------------------------------------------------------------------------
 
 /// Manages a single `VkQueryPool`. Thin adapter around the engine RHI
-/// primitive [`crate::vulkan::rhi::HostVulkanQueryPool`] — preserves
+/// primitive [`streamlib_vulkan_video::VulkanQueryPool`] — preserves
 /// the codec_utils wrapping pattern while routing creation +
 /// destruction through the RHI's `lock_device`-protected paths.
 struct VulkanQueryPoolSet {
-    query_pool: Option<crate::vulkan::rhi::HostVulkanQueryPool>,
+    query_pool: Option<streamlib_vulkan_video::VulkanQueryPool>,
     query_count: u32,
 }
 
@@ -542,7 +542,7 @@ impl VulkanQueryPoolSet {
     ) -> crate::core::Result<()> {
         self.destroy();
 
-        let descriptor = crate::vulkan::rhi::QueryPoolDescriptor {
+        let descriptor = streamlib_vulkan_video::QueryPoolDescriptor {
             label: "codec_utils/query_pool_set",
             query_type,
             query_count: count,
@@ -550,7 +550,11 @@ impl VulkanQueryPoolSet {
             video_encode_feedback_flags,
             video_profile,
         };
-        let pool = crate::vulkan::rhi::HostVulkanQueryPool::new(vulkan_device, &descriptor)?;
+        let pool = streamlib_vulkan_video::VulkanQueryPool::new(
+            &(std::sync::Arc::clone(vulkan_device)
+                as std::sync::Arc<dyn streamlib_vulkan_video::VulkanVideoCodecDevice>),
+            &descriptor,
+        )?;
         self.query_pool = Some(pool);
         self.query_count = count;
         Ok(())

@@ -48,7 +48,7 @@ use crate::apple::permissions::{
     CaptureDeviceAuthorizationAuthority, CaptureDeviceRefusal, PrivacyGatedCaptureDevice,
     authorize_the_capture_device_without_waiting_for_the_user, capture_device_refusal_for_the_user,
 };
-use crate::core::color::{ColorSpaceKind, H273ColorVui};
+use crate::core::color::{ColorSpaceKind, H273ColorVui, ResolveH273ColorVuiDefaults};
 use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
 use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,

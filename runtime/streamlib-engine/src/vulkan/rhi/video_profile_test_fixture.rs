@@ -3,8 +3,7 @@
 
 //! Real H.264 video profiles for the RHI's hardware-gated video fixtures.
 //!
-//! `HostVulkanTexture::new_video_dpb` and
-//! `HostVulkanBuffer::new_video_bitstream` chain the caller's profile onto
+//! `VulkanVideoDpbImage::new` and `VulkanVideoBitstreamBuffer::new` chain the caller's profile onto
 //! `VkVideoProfileListInfoKHR`, and the driver reads every field of it during
 //! `vkCreateImage` / `vkCreateBuffer`. A default-constructed profile is all
 //! zeroes, which is not a legal `VkVideoProfileInfoKHR` — the allocation is
@@ -14,7 +13,9 @@
 
 use vulkanalia::vk;
 
-use super::{HostVulkanDevice, VideoBitstreamDirection, VideoDpbDirection};
+use streamlib_vulkan_video::{VideoBitstreamDirection, VideoDpbDirection};
+
+use super::HostVulkanDevice;
 
 /// A `VkVideoProfileInfoKHR` that owns the codec-specific structs its `pNext`
 /// chain points at.

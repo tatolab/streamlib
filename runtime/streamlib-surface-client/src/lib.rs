@@ -36,6 +36,17 @@ pub use linux::{
     send_message_with_fds, send_request_with_fds,
 };
 
+#[cfg(target_os = "linux")]
+mod linux_pixel_buffer_check_out;
+
+#[cfg(target_os = "linux")]
+pub use linux_pixel_buffer_check_out::{
+    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, SurfaceShareCheckOutFds,
+    check_out_pixel_buffer_on_surface_share, device_uuid_of_its_hex_spelling,
+    refusal_the_surface_share_service_answered, release_check_out_on_surface_share,
+    resource_type_of_a_check_out,
+};
+
 #[cfg(target_os = "macos")]
 mod macos;
 

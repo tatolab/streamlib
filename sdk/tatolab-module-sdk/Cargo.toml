@@ -1,0 +1,36 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# What a module's native half links to reach its node's ports: the module host
+# table's `#[repr(C)]` mirror and the safe Rust over it. It depends on no engine
+# crate, so a third party's module builds against this alone.
+
+[package]
+name = "tatolab-module-sdk"
+# The module host table's ABI major.minor; a patch release never changes the table.
+version = "1.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "The module host table a Tatolab module's native code reaches its node's ports through"
+readme = "README.md"
+keywords = ["tatolab", "streaming", "ffi", "module"]
+
+[features]
+default = ["tracing"]
+# Forwards the module's own `tracing` records to the host's log.
+tracing = ["dep:tracing"]
+# Reads the table out of the capsule a node's context hands its Python half.
+pyo3 = ["dep:pyo3"]
+
+[dependencies]
+tracing = { version = "0.1.44", optional = true }
+pyo3 = { version = "0.29.0", optional = true, default-features = false, features = ["macros"] }
+
+[dev-dependencies]
+pyo3 = { version = "0.29.0", features = ["auto-initialize"] }
+
+[lints]
+workspace = true

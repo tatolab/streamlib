@@ -20,7 +20,7 @@ use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 
-use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId};
+use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId, ResolveH273ColorVuiDefaults};
 use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
     CapturedVideoFrameBytesInAStorageBuffer, CapturedVideoFrameDeliveryTally,
     CapturedVideoFrameToPooledRgbaConversionStage,

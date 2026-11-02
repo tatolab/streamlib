@@ -15,7 +15,9 @@ use crate::core::rhi::{PixelFormat, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::decode::{SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
-use super::encode::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
+use super::encode::{Codec, EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
+use crate::core::context::TextureRegistration;
+use crate::host_rhi::HostTextureExt;
 
 /// Vulkan Video hardware encode and decode on the host device's video queues.
 pub(crate) struct VulkanVideoCodecBackend;
@@ -155,9 +157,11 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
             self.encoder.force_idr();
         }
         let layout_the_source_was_published_in = source_registration.current_layout();
-        let encoded = self
-            .encoder
-            .encode_source_texture(&source_registration, Some(source.timestamp_ns));
+        let encoded = encode_published_source_texture(
+            &mut self.encoder,
+            &source_registration,
+            source.timestamp_ns,
+        );
         let layout_the_encoder_left_the_source_in = source_registration.current_layout();
         if layout_the_encoder_left_the_source_in != layout_the_source_was_published_in {
             self.publish_the_layout_the_encoder_left_a_cross_process_source_in(
@@ -174,6 +178,35 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
             })
             .collect())
     }
+}
+
+/// Encode the texture `source_registration` names, sampled in the layout it
+/// was published in or barriered out of it, and republish on the registration
+/// the layout the encoder left it in.
+fn encode_published_source_texture(
+    encoder: &mut SimpleEncoder,
+    source_registration: &TextureRegistration,
+    timestamp_ns: i64,
+) -> Result<Vec<EncodePacket>> {
+    let source = source_registration.texture();
+    let rgba_image = source.vulkan_inner().image().ok_or_else(|| {
+        Error::GpuError("encode a published source: the texture has no VkImage".to_string())
+    })?;
+    let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
+        Error::GpuError(format!(
+            "encode a published source: resolve the texture's image view: {e}"
+        ))
+    })?;
+    let (packets, layout_the_encoder_left_the_source_in) = encoder.encode_rgba_image_published_in(
+        rgba_image,
+        rgba_image_view,
+        source_registration.current_layout(),
+        source.width(),
+        source.height(),
+        Some(timestamp_ns),
+    )?;
+    source_registration.update_layout(layout_the_encoder_left_the_source_in);
+    Ok(packets)
 }
 
 struct VulkanVideoDecodeSession {

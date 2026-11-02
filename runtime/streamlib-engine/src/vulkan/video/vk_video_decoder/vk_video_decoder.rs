@@ -14,14 +14,14 @@ use vulkanalia::vk::{
 };
 
 use super::vk_parser_video_picture_parameters::VkParserVideoPictureParameters;
-use crate::core::rhi::TextureFormat;
-use crate::vulkan::rhi::{
-    HostVulkanBuffer, HostVulkanTexture, HostVulkanVideoSession, HostVulkanVideoSessionParameters,
-    VideoBitstreamBufferDescriptor, VideoBitstreamDirection, VideoDpbDirection,
-    VideoDpbTextureDescriptor,
-};
+use crate::vulkan::video::VideoContext;
 use crate::vulkan::video::decode::{DecodeSubmitInfo, DecodedFrame};
-use crate::vulkan::video::video_context::{VideoContext, VideoError, VideoResult};
+use streamlib_vulkan_video::{
+    VideoBitstreamBufferDescriptor, VideoBitstreamDirection, VideoDpbDirection,
+    VideoDpbImageDescriptor, VulkanVideoBitstreamBuffer, VulkanVideoDpbImage, VulkanVideoSession,
+    VulkanVideoSessionParameters,
+};
+use streamlib_vulkan_video::{VideoError, VideoResult};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -301,7 +301,7 @@ pub const MAX_RENDER_TARGETS: usize = 32;
 ///   `vulkanalia::Device` + extension function tables.
 pub struct VkVideoDecoder {
     // Real Vulkan device context — replaces the C++ opaque pointer.
-    ctx: Arc<crate::vulkan::video::video_context::VideoContext>,
+    ctx: Arc<crate::vulkan::video::VideoContext>,
     queue: vk::Queue,
     queue_family_index: u32,
 
@@ -316,7 +316,7 @@ pub struct VkVideoDecoder {
 
     capability_flags: vk::VideoDecodeCapabilityFlagsKHR,
     video_session: Option<vk::VideoSessionKHR>,
-    video_session_arc: Option<Arc<HostVulkanVideoSession>>,
+    video_session_arc: Option<Arc<VulkanVideoSession>>,
     decode_frames_data: NvVkDecodeFrameData,
 
     decode_pic_count: u64,
@@ -327,10 +327,10 @@ pub struct VkVideoDecoder {
     /// Owns the Vulkan parameter object's lifetime. `Drop` on the
     /// `Arc` runs `vkDestroyVideoSessionParametersKHR`; the raw shadow
     /// above goes to null only after the Arc is taken on replacement.
-    session_parameters_arc: Option<Arc<HostVulkanVideoSessionParameters>>,
+    session_parameters_arc: Option<Arc<VulkanVideoSessionParameters>>,
 
     // DPB — array-layered image (VUID-07244 for decode)
-    dpb_texture: Option<HostVulkanTexture>,
+    dpb_texture: Option<VulkanVideoDpbImage>,
     dpb_image_views: Vec<vk::ImageView>,
     dpb_slot_layouts: Vec<vk::ImageLayout>,
     dpb_slot_active: Vec<bool>,
@@ -342,10 +342,10 @@ pub struct VkVideoDecoder {
     /// True when a decode submission is in flight (fence not yet waited on).
     decode_in_flight: bool,
 
-    // Bitstream buffer (HostVulkanBuffer wraps the underlying vk::Buffer +
+    // Bitstream buffer (VulkanVideoBitstreamBuffer wraps the underlying vk::Buffer +
     // VMA allocation + persistent map; `bitstream_size` is kept on Self
     // for resize-trigger arithmetic against the next incoming bitstream).
-    bitstream_buffer_owner: Option<HostVulkanBuffer>,
+    bitstream_buffer_owner: Option<VulkanVideoBitstreamBuffer>,
     bitstream_size: u64,
 
     // Video profile (kept alive for DPB image creation)
@@ -597,7 +597,7 @@ impl VkVideoDecoder {
 
         // --- Create video session ---
         let max_dpb_slots = video_format.max_num_dpb_slots.max(4);
-        let session_descriptor = crate::vulkan::rhi::VideoSessionDescriptor {
+        let session_descriptor = streamlib_vulkan_video::VideoSessionDescriptor {
             label: "vk_video_decoder/session",
             session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
             video_queue_family: self.queue_family_index,
@@ -611,7 +611,7 @@ impl VkVideoDecoder {
         };
 
         let video_session =
-            match HostVulkanVideoSession::new(self.ctx.host_device(), &session_descriptor) {
+            match VulkanVideoSession::new(self.ctx.codec_device(), &session_descriptor) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!("Failed to create video session: {:?}", e);
@@ -624,11 +624,11 @@ impl VkVideoDecoder {
 
         // --- Allocate DPB images (array-layered, VUID-07244) ---
         let dpb_count = max_dpb_slots as usize;
-        let dpb_descriptor = VideoDpbTextureDescriptor {
+        let dpb_descriptor = VideoDpbImageDescriptor {
             label: "vk_video_decoder/dpb-shared-layered",
             width: self.coded_extent.width,
             height: self.coded_extent.height,
-            format: TextureFormat::Nv12,
+            format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             array_layers: dpb_count as u32,
             direction: VideoDpbDirection::Decode,
             additional_usage: vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
@@ -638,17 +638,14 @@ impl VkVideoDecoder {
             video_profile: &self.video_profile,
         };
 
-        let dpb_texture =
-            match HostVulkanTexture::new_video_dpb(self.ctx.host_device(), &dpb_descriptor) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("Failed to create DPB image: {:?}", e);
-                    return -1;
-                }
-            };
-        let dpb_image_handle = dpb_texture
-            .image()
-            .expect("HostVulkanTexture::new_video_dpb returns a texture with vk::Image");
+        let dpb_texture = match VulkanVideoDpbImage::new(self.ctx.codec_device(), &dpb_descriptor) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to create DPB image: {:?}", e);
+                return -1;
+            }
+        };
+        let dpb_image_handle = dpb_texture.image();
         self.dpb_texture = Some(dpb_texture);
 
         // Create per-layer views
@@ -692,7 +689,7 @@ impl VkVideoDecoder {
             video_profile: &self.video_profile,
         };
 
-        match HostVulkanBuffer::new_video_bitstream(self.ctx.host_device(), &bs_descriptor) {
+        match VulkanVideoBitstreamBuffer::new(self.ctx.codec_device(), &bs_descriptor) {
             Ok(buffer) => {
                 self.bitstream_buffer_owner = Some(buffer);
                 self.bitstream_size = bs_size;
@@ -834,11 +831,11 @@ impl VkVideoDecoder {
                     direction: VideoBitstreamDirection::Decode,
                     video_profile: &self.video_profile,
                 };
-                let resized = HostVulkanBuffer::new_video_bitstream(
-                    self.ctx.host_device(),
-                    &resize_descriptor,
-                )
-                .map_err(|e| VideoError::BitstreamError(format!("bitstream resize: {e}")))?;
+                let resized =
+                    VulkanVideoBitstreamBuffer::new(self.ctx.codec_device(), &resize_descriptor)
+                        .map_err(|e| {
+                            VideoError::BitstreamError(format!("bitstream resize: {e}"))
+                        })?;
                 self.bitstream_buffer_owner = Some(resized);
                 self.bitstream_size = aligned_size;
             }
@@ -864,7 +861,7 @@ impl VkVideoDecoder {
             let dpb_image = self
                 .dpb_texture
                 .as_ref()
-                .and_then(|t| t.image())
+                .map(|t| t.image())
                 .unwrap_or(vk::Image::null());
             let bitstream_buffer = self
                 .bitstream_buffer_owner
@@ -1412,7 +1409,7 @@ impl VkVideoDecoder {
     /// — the decoder doesn't run wait_idle on the caller's behalf
     /// because some replacements happen during initial setup before
     /// any submit has been issued.
-    pub fn set_session_parameters_arc(&mut self, params: Arc<HostVulkanVideoSessionParameters>) {
+    pub fn set_session_parameters_arc(&mut self, params: Arc<VulkanVideoSessionParameters>) {
         self.session_parameters = params.handle();
         self.session_parameters_arc = Some(params);
     }
@@ -1426,7 +1423,7 @@ impl VkVideoDecoder {
     pub fn dpb_image(&self) -> vk::Image {
         self.dpb_texture
             .as_ref()
-            .and_then(|t| t.image())
+            .map(|t| t.image())
             .unwrap_or(vk::Image::null())
     }
 
@@ -1452,7 +1449,7 @@ impl VkVideoDecoder {
     }
 
     /// Get the video session Arc.
-    pub fn video_session_arc(&self) -> Option<&Arc<HostVulkanVideoSession>> {
+    pub fn video_session_arc(&self) -> Option<&Arc<VulkanVideoSession>> {
         self.video_session_arc.as_ref()
     }
 
@@ -1528,7 +1525,7 @@ impl VkVideoDecoder {
         self.dpb_image_views.clear();
 
         // Destroy DPB image + bitstream buffer by dropping their wrappers.
-        // The `HostVulkanTexture` / `HostVulkanBuffer` Drop impls run
+        // The `VulkanVideoDpbImage` / `VulkanVideoBitstreamBuffer` Drop impls run
         // `vmaDestroyImage` / `vmaDestroyBuffer` and release VMA state.
         self.dpb_texture = None;
         self.bitstream_buffer_owner = None;

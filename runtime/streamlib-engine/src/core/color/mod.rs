@@ -17,7 +17,7 @@ mod resolved;
 mod tone;
 mod transfer;
 
-pub use h273_color_vui::{H273_UNSPECIFIED, H273ColorVui};
+pub use h273_color_vui::{H273_UNSPECIFIED, H273ColorVui, ResolveH273ColorVuiDefaults};
 pub use matrix::{
     RgbToYuvDecomposition, YuvToRgbDecomposition, rgb_to_yuv_matrix, yuv_to_rgb_matrix,
 };

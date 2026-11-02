@@ -313,11 +313,14 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi for import + bind",
     },
-    // Vulkan video codec layer at `runtime/streamlib-engine/src/vulkan/video/`
-    // is covered by the engine-vulkan PathPrefix entry above. The codec
-    // layer was folded from the former `libs/vulkan-video` sibling crate
-    // into the engine; it sits above `vulkan/rhi/` and migrates toward
-    // engine-RHI-only Vulkan access as the RHI grows codec primitives.
+    // Vulkan Video encode — the RHI's codec tier, minted on the engine's
+    // device or on the owned device a codec module encodes on. Decode stays
+    // under the engine-vulkan PathPrefix entry above.
+    AllowEntry {
+        path: "runtime/streamlib-vulkan-video/",
+        kind: AllowKind::PathPrefix,
+        rationale: "Vulkan Video encode tier of the RHI, over any VulkanVideoCodecDevice",
+    },
     //
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
@@ -458,9 +461,11 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi",
     },
-    // Codec layer's Cargo deps are inherited from the engine — codec
-    // moved into `runtime/streamlib-engine/src/vulkan/video/`, sharing the
-    // engine's `vulkanalia.workspace = true` line.
+    AllowEntry {
+        path: "runtime/streamlib-vulkan-video/",
+        kind: AllowKind::PathPrefix,
+        rationale: "Vulkan Video encode tier of the RHI",
+    },
     //
     // Subprocess cdylibs are intentionally NOT allowlisted post-#572 —
     // their `Cargo.toml`s no longer declare `vulkanalia`, and any
@@ -584,10 +589,14 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "consumer-rhi import-side carve-out chains ImportMemoryFdInfoKHR",
     },
-    // Codec layer at `runtime/streamlib-engine/src/vulkan/video/` is
-    // covered by the engine-vulkan PathPrefix entry above. Interior
-    // re-plumbing onto engine RHI primitives is the Vulkan Video RHI
-    // Coupling milestone's ongoing work.
+    // The Vulkan Video encode tier builds its RGB → NV12 compute pipeline on
+    // whichever device it encodes on — the engine's, or a codec module's
+    // owned device, where no engine kernel exists.
+    AllowEntry {
+        path: "runtime/streamlib-vulkan-video/",
+        kind: AllowKind::PathPrefix,
+        rationale: "Vulkan Video encode tier of the RHI builds its own conversion pipeline",
+    },
     //
     // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
     // privileged-vk surface lives in `streamlib-consumer-rhi`'s
