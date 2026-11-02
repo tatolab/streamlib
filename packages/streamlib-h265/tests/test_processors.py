@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`H265Encoder` as a graph and a helper see it, with no GPU.
+"""`H265Encoder` and `H265Decoder` as a graph and a helper see them, with no GPU.
 
-The encode itself needs Vulkan Video and runs in the GPU rig. What runs here is
+The coding itself needs Vulkan Video and runs in the GPU rig. What runs here is
 everything around it: the config a graph delivers, the entry point the node
 catalog reads, the ports a started encoder lends its thread, and a stop that
 ends the thread inside its budget even when the owned device is refused.
@@ -19,8 +19,9 @@ from importlib.metadata import distribution
 import pytest
 
 from helper_process_link_wiring import wire_one_link
-from tatolab.h265 import H265Encoder, H265EncoderConfig
+from tatolab.h265 import H265Decoder, H265DecoderConfig, H265Encoder, H265EncoderConfig
 from tatolab.h265.processors import (
+    DECODING_THREAD_JOIN_TIMEOUT_SECONDS,
     ENCODED_VIDEO_OUTPUT_PORT,
     ENCODING_THREAD_JOIN_TIMEOUT_SECONDS,
     VIDEO_INPUT_PORT,
@@ -66,17 +67,32 @@ def test_an_encoder_added_with_no_config_takes_every_default():
     assert constructed._config == H265EncoderConfig()
 
 
-def test_the_distribution_declares_the_encoder_for_the_node_catalog():
+def test_every_decoder_config_key_reaches_the_decoder_as_its_config_object():
+    constructed = construct_processor_instance(
+        H265Decoder, {"max_width": 1920, "max_height": 1088}, None
+    )
+
+    assert isinstance(constructed, H265Decoder)
+    assert constructed._config == H265DecoderConfig(max_width=1920, max_height=1088)
+
+
+def test_a_decoder_added_with_no_config_takes_every_default():
+    constructed = construct_processor_instance(H265Decoder, {}, None)
+    assert constructed._config == H265DecoderConfig()
+
+
+def test_the_distribution_declares_both_nodes_for_the_node_catalog():
     declared = {
         entry_point.name: entry_point
         for entry_point in distribution("tatolab-h265").entry_points
         if entry_point.group == "tatolab.nodes"
     }
 
-    assert set(declared) == {"H265Encoder"}
-    entry_point = declared["H265Encoder"]
-    assert entry_point.value == f"{H265Encoder.__module__}:{H265Encoder.__qualname__}"
-    assert entry_point.load() is H265Encoder
+    assert set(declared) == {"H265Decoder", "H265Encoder"}
+    for node_class in (H265Decoder, H265Encoder):
+        entry_point = declared[node_class.__qualname__]
+        assert entry_point.value == f"{node_class.__module__}:{node_class.__qualname__}"
+        assert entry_point.load() is node_class
 
 
 class EncoderWiredBetweenASourceAndASink:
@@ -174,3 +190,85 @@ def test_an_encoder_never_started_stops_and_tears_down_cleanly(encoder_wired):
     context = encoder_wired.encoder_context
     encoder.stop(context)
     encoder.teardown(context)
+
+
+class DecoderWiredBetweenASourceAndASink:
+    """An upstream writing `encoded_video` into the decoder, and its `video` read downstream."""
+
+    def __init__(self, request: pytest.FixtureRequest) -> None:
+        unique = f"h265decwired{os.getpid()}_{request.node.name}"
+        source_outputs = _engine.open_node_link_data_access_for_helper_process()
+        decoder_links = _engine.open_node_link_data_access_for_helper_process()
+        sink_inputs = _engine.open_node_link_data_access_for_helper_process()
+        source_outputs.declare_ports([], [ENCODED_VIDEO_OUTPUT_PORT])
+        decoder_links.declare_ports([ENCODED_VIDEO_OUTPUT_PORT], [VIDEO_INPUT_PORT])
+        wire_one_link(
+            source_outputs,
+            ENCODED_VIDEO_OUTPUT_PORT,
+            decoder_links,
+            ENCODED_VIDEO_OUTPUT_PORT,
+            f"{unique}/encoded",
+            f"{unique}_decoder/notify",
+        )
+        wire_one_link(
+            decoder_links,
+            VIDEO_INPUT_PORT,
+            sink_inputs,
+            VIDEO_INPUT_PORT,
+            f"{unique}/video",
+            f"{unique}_sink/notify",
+        )
+        self.source = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, source_outputs, "runtime-under-test", "source-under-test"
+        )
+        self.decoder_context = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, decoder_links, "runtime-under-test", "decoder-under-test"
+        )
+        self.sink = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, sink_inputs, "runtime-under-test", "sink-under-test"
+        )
+
+
+@pytest.fixture
+def decoder_wired(request, monkeypatch) -> DecoderWiredBetweenASourceAndASink:
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    monkeypatch.delenv(RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE, raising=False)
+    return DecoderWiredBetweenASourceAndASink(request)
+
+
+def test_a_started_decoder_lends_both_ports_so_python_cannot_reach_them(decoder_wired):
+    decoder = H265Decoder(H265DecoderConfig())
+    context = decoder_wired.decoder_context
+    decoder.start(context)
+    try:
+        with pytest.raises(Exception, match=VIDEO_INPUT_PORT):
+            context.outputs.write(VIDEO_INPUT_PORT, b"from python")
+        with pytest.raises(Exception, match=ENCODED_VIDEO_OUTPUT_PORT):
+            context.inputs.read(ENCODED_VIDEO_OUTPUT_PORT)
+    finally:
+        decoder.stop(context)
+
+
+def test_a_decoder_whose_device_is_refused_drains_and_stops_inside_its_budget(decoder_wired):
+    """No device UUID is named, so the owned device is refused; the thread keeps
+    draining `encoded_video` so upstream sees a live consumer, and nothing is written."""
+    decoder = H265Decoder(H265DecoderConfig())
+    context = decoder_wired.decoder_context
+    decoder.start(context)
+    for _ in range(3):
+        decoder_wired.source.outputs.write(ENCODED_VIDEO_OUTPUT_PORT, b"\x25\x00\x00\x01\x65")
+    time.sleep(0.3)
+
+    stop_began = time.monotonic()
+    decoder.stop(context)
+
+    assert time.monotonic() - stop_began < DECODING_THREAD_JOIN_TIMEOUT_SECONDS + 0.5
+    assert decoder._decoding_thread is None
+    assert decoder_wired.sink.inputs.read(VIDEO_INPUT_PORT) is None
+
+
+def test_a_decoder_never_started_stops_and_tears_down_cleanly(decoder_wired):
+    decoder = H265Decoder(H265DecoderConfig())
+    context = decoder_wired.decoder_context
+    decoder.stop(context)
+    decoder.teardown(context)

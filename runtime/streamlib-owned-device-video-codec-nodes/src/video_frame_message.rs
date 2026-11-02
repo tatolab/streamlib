@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The `VideoFrame` record a `video` input carries, read as far as the
-//! encoder needs it, and its colour translated to H.273 enumerants.
+//! The `VideoFrame` record on a `video` port: read as far as an encoder needs
+//! it, written as a decoder publishes it, and its colour translated to and
+//! from H.273 enumerants.
 
 use serde::Deserialize;
 use streamlib_consumer_rhi::H273ColorVui;
@@ -50,9 +51,9 @@ impl VideoFrameColorInfo {
     /// `ColorInfo` vocabulary is refused naming its axis.
     pub fn to_h273_color_vui(&self) -> Result<H273ColorVui, String> {
         Ok(H273ColorVui {
-            primaries: axis_byte("primaries", self.primaries.as_deref(), primaries_byte_named)?,
-            transfer: axis_byte("transfer", self.transfer.as_deref(), transfer_byte_named)?,
-            matrix: axis_byte("matrix", self.matrix.as_deref(), matrix_byte_named)?,
+            primaries: axis_byte("primaries", self.primaries.as_deref(), PRIMARIES_WIRE_NAMES)?,
+            transfer: axis_byte("transfer", self.transfer.as_deref(), TRANSFER_WIRE_NAMES)?,
+            matrix: axis_byte("matrix", self.matrix.as_deref(), MATRIX_WIRE_NAMES)?,
             full_range: match self.range.as_deref() {
                 None => None,
                 Some("full") => Some(true),
@@ -70,11 +71,11 @@ impl VideoFrameColorInfo {
 fn axis_byte(
     axis_name: &str,
     wire_name: Option<&str>,
-    byte_named: fn(&str) -> Option<u8>,
+    wire_names: &[(&str, u8)],
 ) -> Result<Option<u8>, String> {
     wire_name
         .map(|wire_name| {
-            byte_named(wire_name).ok_or_else(|| {
+            byte_named(wire_names, wire_name).ok_or_else(|| {
                 format!(
                     "colour `{axis_name}` is {wire_name:?}, which is not an H.273 {axis_name} name"
                 )
@@ -83,62 +84,151 @@ fn axis_byte(
         .transpose()
 }
 
-fn primaries_byte_named(wire_name: &str) -> Option<u8> {
-    Some(match wire_name {
-        "bt709" => primaries::BT709,
-        "bt470_m" => primaries::BT470_M,
-        "bt470_bg" => primaries::BT470_BG,
-        "smpte170m" => primaries::SMPTE170M,
-        "smpte240m" => primaries::SMPTE240M,
-        "film" => primaries::FILM,
-        "bt2020" => primaries::BT2020,
-        "smpte428" => primaries::SMPTE428,
-        "smpte431" => primaries::SMPTE431,
-        "smpte432" => primaries::SMPTE432,
-        "ebu3213" => primaries::EBU3213,
-        _ => return None,
-    })
+/// `ColorInfo.primaries` wire names and the H.273 enumerants they stand for.
+const PRIMARIES_WIRE_NAMES: &[(&str, u8)] = &[
+    ("bt709", primaries::BT709),
+    ("bt470_m", primaries::BT470_M),
+    ("bt470_bg", primaries::BT470_BG),
+    ("smpte170m", primaries::SMPTE170M),
+    ("smpte240m", primaries::SMPTE240M),
+    ("film", primaries::FILM),
+    ("bt2020", primaries::BT2020),
+    ("smpte428", primaries::SMPTE428),
+    ("smpte431", primaries::SMPTE431),
+    ("smpte432", primaries::SMPTE432),
+    ("ebu3213", primaries::EBU3213),
+];
+
+/// `ColorInfo.transfer` wire names and the H.273 enumerants they stand for.
+const TRANSFER_WIRE_NAMES: &[(&str, u8)] = &[
+    ("bt709", transfer::BT709),
+    ("gamma22", transfer::GAMMA22),
+    ("gamma28", transfer::GAMMA28),
+    ("smpte170m", transfer::SMPTE170M),
+    ("smpte240m", transfer::SMPTE240M),
+    ("linear", transfer::LINEAR),
+    ("log100", transfer::LOG100),
+    ("log100_sqrt10", transfer::LOG100_SQRT10),
+    ("xvycc", transfer::XVYCC),
+    ("bt1361", transfer::BT1361),
+    ("srgb", transfer::SRGB),
+    ("bt2020_ten_bit", transfer::BT2020_TEN_BIT),
+    ("bt2020_twelve_bit", transfer::BT2020_TWELVE_BIT),
+    ("smpte2084", transfer::SMPTE2084),
+    ("smpte428", transfer::SMPTE428),
+    ("arib_std_b67", transfer::ARIB_STD_B67),
+];
+
+/// `ColorInfo.matrix` wire names and the H.273 enumerants they stand for.
+const MATRIX_WIRE_NAMES: &[(&str, u8)] = &[
+    ("identity", matrix::IDENTITY),
+    ("bt709", matrix::BT709),
+    ("fcc", matrix::FCC),
+    ("bt470_bg", matrix::BT470_BG),
+    ("smpte170m", matrix::SMPTE170M),
+    ("smpte240m", matrix::SMPTE240M),
+    ("ycgco", matrix::YCGCO),
+    ("bt2020_ncl", matrix::BT2020_NCL),
+    ("bt2020_cl", matrix::BT2020_CL),
+    ("smpte2085", matrix::SMPTE2085),
+    ("chroma_ncl", matrix::CHROMA_NCL),
+    ("chroma_cl", matrix::CHROMA_CL),
+    ("ictcp", matrix::ICTCP),
+];
+
+fn byte_named(wire_names: &[(&str, u8)], wire_name: &str) -> Option<u8> {
+    wire_names
+        .iter()
+        .find(|(name, _)| *name == wire_name)
+        .map(|&(_, byte)| byte)
 }
 
-fn transfer_byte_named(wire_name: &str) -> Option<u8> {
-    Some(match wire_name {
-        "bt709" => transfer::BT709,
-        "gamma22" => transfer::GAMMA22,
-        "gamma28" => transfer::GAMMA28,
-        "smpte170m" => transfer::SMPTE170M,
-        "smpte240m" => transfer::SMPTE240M,
-        "linear" => transfer::LINEAR,
-        "log100" => transfer::LOG100,
-        "log100_sqrt10" => transfer::LOG100_SQRT10,
-        "xvycc" => transfer::XVYCC,
-        "bt1361" => transfer::BT1361,
-        "srgb" => transfer::SRGB,
-        "bt2020_ten_bit" => transfer::BT2020_TEN_BIT,
-        "bt2020_twelve_bit" => transfer::BT2020_TWELVE_BIT,
-        "smpte2084" => transfer::SMPTE2084,
-        "smpte428" => transfer::SMPTE428,
-        "arib_std_b67" => transfer::ARIB_STD_B67,
-        _ => return None,
-    })
+fn wire_name_of_byte(wire_names: &[(&'static str, u8)], byte: u8) -> Option<&'static str> {
+    wire_names
+        .iter()
+        .find(|(_, named_byte)| *named_byte == byte)
+        .map(|&(name, _)| name)
 }
 
-fn matrix_byte_named(wire_name: &str) -> Option<u8> {
-    Some(match wire_name {
-        "identity" => matrix::IDENTITY,
-        "bt709" => matrix::BT709,
-        "fcc" => matrix::FCC,
-        "bt470_bg" => matrix::BT470_BG,
-        "smpte170m" => matrix::SMPTE170M,
-        "smpte240m" => matrix::SMPTE240M,
-        "ycgco" => matrix::YCGCO,
-        "bt2020_ncl" => matrix::BT2020_NCL,
-        "bt2020_cl" => matrix::BT2020_CL,
-        "smpte2085" => matrix::SMPTE2085,
-        "chroma_ncl" => matrix::CHROMA_NCL,
-        "chroma_cl" => matrix::CHROMA_CL,
-        "ictcp" => matrix::ICTCP,
-        _ => return None,
-    })
+/// A colour's `ColorInfo` wire names, an axis H.273 leaves unspecified or the
+/// vocabulary does not name left `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoFrameColorInfoWireNames {
+    pub primaries: Option<&'static str>,
+    pub transfer: Option<&'static str>,
+    pub matrix: Option<&'static str>,
+    pub range: Option<&'static str>,
+}
+
+impl VideoFrameColorInfoWireNames {
+    /// The wire names `color_vui`'s enumerants stand for.
+    pub fn of_h273_color_vui(color_vui: &H273ColorVui) -> Self {
+        Self {
+            primaries: color_vui
+                .primaries
+                .and_then(|byte| wire_name_of_byte(PRIMARIES_WIRE_NAMES, byte)),
+            transfer: color_vui
+                .transfer
+                .and_then(|byte| wire_name_of_byte(TRANSFER_WIRE_NAMES, byte)),
+            matrix: color_vui
+                .matrix
+                .and_then(|byte| wire_name_of_byte(MATRIX_WIRE_NAMES, byte)),
+            range: color_vui
+                .full_range
+                .map(|full_range| if full_range { "full" } else { "limited" }),
+        }
+    }
+}
+
+/// The `VideoFrame` a decoder publishes: a picture named by the surface it
+/// sits in, stamped with the media frame it decoded from.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodedVideoFrameRecord<'surface> {
+    pub surface_id: &'surface str,
+    pub width: u32,
+    pub height: u32,
+    pub timestamp_ns: i64,
+    pub color_info: VideoFrameColorInfoWireNames,
+}
+
+#[derive(serde::Serialize)]
+struct DecodedVideoFrameOnTheWire<'surface> {
+    surface_id: &'surface str,
+    width: u32,
+    height: u32,
+    timestamp_ns: i64,
+    color_info: Option<ColorInfoOnTheWire>,
+}
+
+#[derive(serde::Serialize)]
+struct ColorInfoOnTheWire {
+    primaries: Option<&'static str>,
+    transfer: Option<&'static str>,
+    matrix: Option<&'static str>,
+    range: Option<&'static str>,
+}
+
+impl DecodedVideoFrameRecord<'_> {
+    /// The msgpack map `tatolab.stream.VideoFrame.from_bytes` reads; a
+    /// colour with no axis named is written as nil.
+    pub fn to_msgpack(&self) -> Vec<u8> {
+        let color_info = self.color_info;
+        let wire = DecodedVideoFrameOnTheWire {
+            surface_id: self.surface_id,
+            width: self.width,
+            height: self.height,
+            timestamp_ns: self.timestamp_ns,
+            color_info: (color_info != VideoFrameColorInfoWireNames::default()).then_some(
+                ColorInfoOnTheWire {
+                    primaries: color_info.primaries,
+                    transfer: color_info.transfer,
+                    matrix: color_info.matrix,
+                    range: color_info.range,
+                },
+            ),
+        };
+        rmp_serde::to_vec_named(&wire).expect("a VideoFrame of strings and integers serializes")
+    }
 }
 
 #[cfg(test)]
@@ -231,5 +321,58 @@ mod tests {
     #[test]
     fn bytes_that_are_not_a_video_frame_are_refused() {
         assert!(VideoFrameMessage::from_msgpack(b"\x01").is_err());
+    }
+
+    #[test]
+    fn a_decoded_frame_reads_back_as_a_video_frame_with_its_colour() {
+        let record = DecodedVideoFrameRecord {
+            surface_id: "pool-texture-3",
+            width: 320,
+            height: 180,
+            timestamp_ns: 7,
+            color_info: VideoFrameColorInfoWireNames::of_h273_color_vui(&H273ColorVui {
+                primaries: Some(primaries::BT709),
+                transfer: Some(transfer::BT709),
+                matrix: Some(matrix::SMPTE170M),
+                full_range: Some(false),
+            }),
+        }
+        .to_msgpack();
+
+        let frame = VideoFrameMessage::from_msgpack(&record).unwrap();
+
+        assert_eq!(frame.surface_id, "pool-texture-3");
+        assert_eq!(
+            (frame.width, frame.height, frame.timestamp_ns),
+            (320, 180, 7)
+        );
+        let color_info = frame.color_info.unwrap();
+        assert_eq!(color_info.matrix.as_deref(), Some("smpte170m"));
+        assert_eq!(color_info.range.as_deref(), Some("limited"));
+    }
+
+    #[test]
+    fn every_wire_name_round_trips_through_its_enumerant() {
+        for wire_names in [PRIMARIES_WIRE_NAMES, TRANSFER_WIRE_NAMES, MATRIX_WIRE_NAMES] {
+            for &(name, byte) in wire_names {
+                assert_eq!(wire_name_of_byte(wire_names, byte), Some(name));
+            }
+        }
+    }
+
+    #[test]
+    fn a_decoded_frame_with_no_colour_writes_nil() {
+        let record = DecodedVideoFrameRecord {
+            surface_id: "s",
+            width: 2,
+            height: 2,
+            timestamp_ns: 0,
+            color_info: VideoFrameColorInfoWireNames::default(),
+        }
+        .to_msgpack();
+        assert_eq!(
+            VideoFrameMessage::from_msgpack(&record).unwrap().color_info,
+            None
+        );
     }
 }

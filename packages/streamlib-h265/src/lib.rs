@@ -4,15 +4,16 @@
 //! The native half of `tatolab-h265` — the module `tatolab.h265.processors`
 //! imports as `tatolab.h265._native`.
 //!
-//! The engine never calls anything here. `H265Encoder` lends its `video`
-//! input and `encoded_video` output to a thread of this wheel's Rust through
-//! the module host table; the thread reads, encodes on a Vulkan device it
-//! owns and writes with no Python attached.
+//! The engine never calls anything here. `H265Encoder` and `H265Decoder` lend
+//! their ports to a thread of this wheel's Rust through the module host table;
+//! the thread reads, codes on a Vulkan device it owns and writes with no
+//! Python attached.
 
 use std::time::Duration;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use streamlib_owned_device_video_codec_nodes::video_decoder_settings::VideoDecoderSettings;
 use streamlib_owned_device_video_codec_nodes::video_encoder_settings::VideoEncoderSettings;
 use streamlib_owned_device_video_codec_nodes::{VideoCodecNodeIdentity, VideoCodecNodeThread};
 use tatolab_module_sdk::ModuleHost;
@@ -74,8 +75,47 @@ impl H265EncoderThread {
     }
 }
 
+/// `H265Decoder`'s decoding thread, started over the module host table its
+/// node lent `encoded_video` and `video` through.
+#[pyclass]
+struct H265DecoderThread {
+    decoding_thread: VideoCodecNodeThread,
+}
+
+#[pymethods]
+impl H265DecoderThread {
+    /// Start decoding the media frames `encoded_video` receives onto `video`.
+    #[new]
+    #[pyo3(signature = (module_host_table, *, max_width=None, max_height=None))]
+    fn start(
+        module_host_table: &Bound<'_, PyAny>,
+        max_width: Option<u32>,
+        max_height: Option<u32>,
+    ) -> PyResult<Self> {
+        let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        let decoding_thread = VideoCodecNodeThread::start_decoder(
+            VideoCodecNodeIdentity::H265_DECODER,
+            module_host,
+            VideoDecoderSettings {
+                max_width,
+                max_height,
+            },
+        )
+        .map_err(PyRuntimeError::new_err)?;
+        Ok(Self { decoding_thread })
+    }
+
+    /// Ask the thread to stop and wait up to `timeout_seconds` for it: `True`
+    /// when it ended.
+    fn stop_and_join(&self, python: Python<'_>, timeout_seconds: f64) -> bool {
+        let timeout = Duration::try_from_secs_f64(timeout_seconds).unwrap_or(Duration::ZERO);
+        python.detach(|| self.decoding_thread.stop_and_join(timeout))
+    }
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<H265EncoderThread>()?;
+    module.add_class::<H265DecoderThread>()?;
     Ok(())
 }

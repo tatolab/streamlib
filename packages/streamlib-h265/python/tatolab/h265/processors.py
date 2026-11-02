@@ -1,13 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The processor this wheel supplies.
+"""The processors this wheel supplies.
 
-`H265Encoder` lends its `video` input and its `encoded_video` output to a thread
-of this wheel's Rust through the module host table. The thread checks each
-published frame out over surface-share, encodes it on a Vulkan device the helper
-owns — on the runtime's GPU, never the runtime's own device — and writes media
-frames with no Python attached. The engine is never on the data path.
+`H265Encoder` and `H265Decoder` lend their ports to a thread of this wheel's Rust
+through the module host table. The thread codes on a Vulkan device the helper
+owns — on the runtime's GPU, never the runtime's own device — and reads and
+writes with no Python attached. The engine is never on the data path.
 """
 
 from __future__ import annotations
@@ -22,9 +21,11 @@ from . import _native
 VIDEO_INPUT_PORT = "video"
 ENCODED_VIDEO_OUTPUT_PORT = "encoded_video"
 
-#: How long `stop()` waits for the encoding thread. Its own wait for a frame
-#: is bounded at a tenth of a second; an encode in flight finishes first.
+#: How long `stop()` waits for the coding thread. Its own wait for a message
+#: is bounded at a tenth of a second; an encode or decode in flight finishes
+#: first.
 ENCODING_THREAD_JOIN_TIMEOUT_SECONDS = 2.0
+DECODING_THREAD_JOIN_TIMEOUT_SECONDS = ENCODING_THREAD_JOIN_TIMEOUT_SECONDS
 
 
 @dataclasses.dataclass
@@ -121,3 +122,89 @@ class H265Encoder:
         if not self._encoding_thread.stop_and_join(ENCODING_THREAD_JOIN_TIMEOUT_SECONDS):
             log.warn("H265Encoder: the encoding thread is still finishing an encode")
         self._encoding_thread = None
+
+
+@dataclasses.dataclass
+class H265DecoderConfig:
+    """What an `H265Decoder` is configured with; every key is optional."""
+
+    max_width: Annotated[
+        "int | None",
+        "Upper bound on the coded width the decoded picture buffer is allocated "
+        "for, together with `max_height` or not at all. Absent: sized from the "
+        "stream's first SPS.",
+    ] = None
+    max_height: Annotated[
+        "int | None", "Upper bound on the coded height, paired with `max_width`."
+    ] = None
+
+
+@node(
+    execution="manual",
+    description="Decodes H.265 media frames to published video textures on a Vulkan device the module owns",
+)
+class H265Decoder:
+    """H.265 media frames in, video frames out, decoded with Vulkan Video on Linux.
+
+    `encoded_video` takes media frames in the layout `H265Encoder` publishes — a
+    QUIC varint timestamp, then one Annex-B access unit, a keyframe opening a
+    group — from any producer; a message that is not one is refused by name.
+    The decoder enters the stream at a group start and, after a read reports a
+    loss, discards to the next one, so it never publishes a picture built from
+    references it did not see. A keyframe whose parameter sets differ from the
+    ones before it reconfigures the decoder.
+
+    `video` publishes a `VideoFrame` on an RGBA texture from this node's output
+    pool at the conformance-windowed extent, carrying the media frame's
+    timestamp and the `color_info` the picture was converted with: the SPS
+    VUI's, its matrix and range filled when the stream leaves them out (BT.709
+    for HD, BT.601 for SD, limited range). The host converts each picture from
+    the NV12 buffer the decoder exports.
+
+    The decoder runs on a Vulkan device this helper creates on the runtime's
+    GPU, so a fault in the video engine ends this helper's stream and nothing
+    else. A device without Vulkan Video decode refuses the device once, and
+    every media frame after is discarded with no exception reaching Python.
+    """
+
+    def __init__(self, config: H265DecoderConfig) -> None:
+        self._config = config
+        self._decoding_thread: "_native.H265DecoderThread | None" = None
+
+    @node.input(delivery_profile="ordered")
+    def encoded_video(self) -> None:
+        """H.265 media frames to decode."""
+
+    @node.output()
+    def video(self) -> None:
+        """Decoded video frames."""
+
+    def start(self, ctx: RuntimeContextFullAccess) -> None:
+        """Lend both ports to a decoding thread of this wheel's Rust.
+
+        The owned device is created on that thread, so its start-up never
+        spends the helper's start-up budget.
+        """
+        module_host_table = ctx.open_module_host_table(
+            input_ports=[ENCODED_VIDEO_OUTPUT_PORT], output_ports=[VIDEO_INPUT_PORT]
+        )
+        self._decoding_thread = _native.H265DecoderThread(
+            module_host_table,
+            max_width=self._config.max_width,
+            max_height=self._config.max_height,
+        )
+
+    def stop(self, ctx: RuntimeContextFullAccess) -> None:
+        del ctx
+        self._stop_the_decoding_thread()
+
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
+        del ctx
+        self._stop_the_decoding_thread()
+
+    def _stop_the_decoding_thread(self) -> None:
+        if self._decoding_thread is None:
+            return
+        if not self._decoding_thread.stop_and_join(DECODING_THREAD_JOIN_TIMEOUT_SECONDS):
+            log.warn("H265Decoder: the decoding thread is still finishing a decode")
+        self._decoding_thread = None

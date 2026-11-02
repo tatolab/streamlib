@@ -13,21 +13,27 @@ use streamlib_video_bitstream::VideoCodecElementaryStream;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
 use tatolab_module_sdk::{ModuleHost, ModuleHostInputPort, ModuleHostOutputPort};
 
+pub mod encoded_video_group_entry_gate;
 pub mod encoded_video_publication;
 pub mod hang_legacy_container_media_frame;
 #[cfg(target_os = "linux")]
+pub mod owned_device_video_decoder;
+#[cfg(target_os = "linux")]
 pub mod owned_device_video_encoder;
+pub mod video_decoder_settings;
 pub mod video_encoder_settings;
 pub mod video_frame_message;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
+use crate::video_decoder_settings::VideoDecoderSettings;
 use crate::video_encoder_settings::VideoEncoderSettings;
 use crate::video_frame_message::VideoFrameMessage;
 
-/// The input port an encoder's frames arrive on.
-pub const VIDEO_INPUT_PORT: &str = "video";
-/// The output port an encoder's media frames are written to.
-pub const ENCODED_VIDEO_OUTPUT_PORT: &str = "encoded_video";
+/// The port decoded video frames travel on: an encoder's input, a decoder's
+/// output.
+pub const VIDEO_PORT: &str = "video";
+/// The port media frames travel on: an encoder's output, a decoder's input.
+pub const ENCODED_VIDEO_PORT: &str = "encoded_video";
 
 /// How long one wait for a message lasts before the stop flag is read again.
 const INPUT_PORT_WAIT: Duration = Duration::from_millis(100);
@@ -49,6 +55,16 @@ impl VideoCodecNodeIdentity {
     /// `tatolab.h265:H265Encoder`.
     pub const H265_ENCODER: Self = Self {
         node_type_name: "H265Encoder",
+        elementary_stream: VideoCodecElementaryStream::H265,
+    };
+    /// `tatolab.h264:H264Decoder`.
+    pub const H264_DECODER: Self = Self {
+        node_type_name: "H264Decoder",
+        elementary_stream: VideoCodecElementaryStream::H264,
+    };
+    /// `tatolab.h265:H265Decoder`.
+    pub const H265_DECODER: Self = Self {
+        node_type_name: "H265Decoder",
         elementary_stream: VideoCodecElementaryStream::H265,
     };
 
@@ -83,10 +99,10 @@ impl VideoCodecNodeThread {
         settings: VideoEncoderSettings,
     ) -> Result<Self, String> {
         let video_input = module_host
-            .open_input_port(VIDEO_INPUT_PORT)
+            .open_input_port(VIDEO_PORT)
             .map_err(|refusal| refusal.to_string())?;
         let encoded_video_output = module_host
-            .open_output_port(ENCODED_VIDEO_OUTPUT_PORT)
+            .open_output_port(ENCODED_VIDEO_PORT)
             .map_err(|refusal| refusal.to_string())?;
         forward_this_modules_tracing_records_to(&module_host);
         Self::spawn(node, move |stop_requested| {
@@ -95,6 +111,32 @@ impl VideoCodecNodeThread {
                 &module_host,
                 &video_input,
                 &encoded_video_output,
+                settings,
+                stop_requested,
+            );
+        })
+    }
+
+    /// Start a decoder thread decoding the media frames `encoded_video`
+    /// receives onto `video`.
+    pub fn start_decoder(
+        node: VideoCodecNodeIdentity,
+        module_host: ModuleHost,
+        settings: VideoDecoderSettings,
+    ) -> Result<Self, String> {
+        let encoded_video_input = module_host
+            .open_input_port(ENCODED_VIDEO_PORT)
+            .map_err(|refusal| refusal.to_string())?;
+        let video_output = module_host
+            .open_output_port(VIDEO_PORT)
+            .map_err(|refusal| refusal.to_string())?;
+        forward_this_modules_tracing_records_to(&module_host);
+        Self::spawn(node, move |stop_requested| {
+            decode_until_stopped(
+                node,
+                &module_host,
+                &encoded_video_input,
+                &video_output,
                 settings,
                 stop_requested,
             );
@@ -253,5 +295,99 @@ fn encode_until_stopped(
                 }
             }
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+type VideoDecoderOnThisPlatform = owned_device_video_decoder::OwnedDeviceVideoDecoder;
+
+#[cfg(target_os = "linux")]
+fn open_the_decoder(
+    node: VideoCodecNodeIdentity,
+    module_host: &ModuleHost,
+    settings: VideoDecoderSettings,
+) -> Result<VideoDecoderOnThisPlatform, String> {
+    VideoDecoderOnThisPlatform::open(node, module_host.clone(), settings)
+}
+
+#[cfg(not(target_os = "linux"))]
+struct VideoDecoderOnThisPlatform;
+
+#[cfg(not(target_os = "linux"))]
+impl VideoDecoderOnThisPlatform {
+    fn decode_and_publish(
+        &mut self,
+        _media_frame: &tatolab_module_sdk::ModuleHostReadMessage,
+        _video_output: &ModuleHostOutputPort,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn report_at_teardown(&self) {}
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_the_decoder(
+    node: VideoCodecNodeIdentity,
+    _module_host: &ModuleHost,
+    _settings: VideoDecoderSettings,
+) -> Result<VideoDecoderOnThisPlatform, String> {
+    Err(format!(
+        "{} decodes with Vulkan Video, on Linux only",
+        node.node_type_name
+    ))
+}
+
+/// Read, decode and publish until the node stops. A decoder that cannot open
+/// keeps draining `encoded_video`, so upstream still sees a live consumer.
+fn decode_until_stopped(
+    node: VideoCodecNodeIdentity,
+    module_host: &ModuleHost,
+    encoded_video_input: &ModuleHostInputPort,
+    video_output: &ModuleHostOutputPort,
+    settings: VideoDecoderSettings,
+    stop_requested: &AtomicBool,
+) {
+    let node_type_name = node.node_type_name;
+    let mut decoder = match open_the_decoder(node, module_host, settings) {
+        Ok(decoder) => Some(decoder),
+        Err(refusal) => {
+            tracing::error!("{refusal}; every media frame is discarded");
+            None
+        }
+    };
+    let mut media_frames_refused: u64 = 0;
+    while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
+        if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
+            tracing::error!("{node_type_name}: waiting for a media frame was refused: {refusal}");
+            break;
+        }
+        loop {
+            let media_frame = match encoded_video_input.read() {
+                Ok(Some(media_frame)) => media_frame,
+                Ok(None) => break,
+                Err(refusal) => {
+                    tracing::error!(
+                        "{node_type_name}: reading `encoded_video` was refused: {refusal}"
+                    );
+                    return;
+                }
+            };
+            let Some(decoder) = decoder.as_mut() else {
+                continue;
+            };
+            if let Err(refusal) = decoder.decode_and_publish(&media_frame, video_output) {
+                media_frames_refused += 1;
+                if media_frames_refused.is_power_of_two() {
+                    tracing::error!(
+                        media_frames_refused,
+                        "{refusal}; discarding to the next group start"
+                    );
+                }
+            }
+        }
+    }
+    if let Some(decoder) = decoder.as_ref() {
+        decoder.report_at_teardown();
     }
 }
