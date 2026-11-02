@@ -38,7 +38,7 @@
 //! "I'm reaching past the curated boundary; I know what I'm doing."
 //!
 //! Engine-internal `core::*` modules (`compiler`,
-//! `runtime_hooks`, etc.) are `pub(crate)` in the engine, so
+//! `signals`, etc.) are `pub(crate)` in the engine, so
 //! `streamlib::engine_internal::core::<internal>` does not compile
 //! by construction — even Tier 3 cannot reach module paths the
 //! engine has marked private. Items inside those modules that
@@ -67,7 +67,7 @@ pub mod sdk {
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
     // Engine internals (`compiler`, `config`,
-    // `logging`, `observability`, `runtime_hooks`, `signals`)
+    // `logging`, `signals`)
     // are `pub(crate)` in the engine crate (see
     // `core/mod.rs`) — those module paths are not reachable here OR
     // via `engine_internal::*` (Tier 3) by construction. Items inside
@@ -138,9 +138,6 @@ pub mod sdk {
 
     /// Logging pipeline.
     pub use streamlib_engine::logging;
-
-    /// `inventory` re-export — required by macro-emitted paths.
-    pub use streamlib_engine::inventory;
 
     /// `serde_json` re-export — required by macro-emitted paths.
     pub use streamlib_engine::serde_json;
@@ -249,16 +246,8 @@ pub mod sdk {
 /// ```
 ///
 /// ```compile_fail
-/// // `core::observability` is `pub(crate)` in streamlib-engine.
-/// // Importing the module path itself fails because the module is
-/// // crate-private — locks the visibility downgrade independent of
-/// // which items the module currently re-exports.
-/// use streamlib::engine_internal::core::observability;
-/// ```
-///
-/// ```compile_fail
-/// // `core::runtime_hooks` is `pub(crate)` in streamlib-engine.
-/// use streamlib::engine_internal::core::runtime_hooks::RuntimeInitHook;
+/// // `core::signals` is `pub(crate)` in streamlib-engine.
+/// use streamlib::engine_internal::core::signals;
 /// ```
 ///
 /// Items inside engine-internal modules that genuinely need

@@ -295,50 +295,6 @@ impl TextureRingInner {
         Ok(())
     }
 
-    /// Copy a host-visible pixel buffer's contents into a ring slot's
-    /// pre-allocated texture, identified by `(slot_index, surface_id)`
-    /// rather than a [`TextureRingSlot`] reference.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn copy_pixel_buffer_to_slot_by_index(
-        &self,
-        slot_index: u32,
-        surface_id: &str,
-        pixel_buffer: &crate::core::rhi::PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        let idx = slot_index as usize;
-        let resources = self.upload_resources.get(idx).ok_or_else(|| {
-            Error::GpuError(format!(
-                "TextureRing::copy_pixel_buffer_to_slot: slot_index {} out of range (ring has {} slots)",
-                slot_index,
-                self.upload_resources.len()
-            ))
-        })?;
-        let slot = self.slots.get(idx).ok_or_else(|| {
-            Error::GpuError(format!(
-                "TextureRing::copy_pixel_buffer_to_slot: slot_index {} out of range (ring has {} slots)",
-                slot_index,
-                self.slots.len()
-            ))
-        })?;
-        use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
-        let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
-        let upload = unsafe {
-            self.gpu.device().inner.upload_buffer_to_image_amortized(
-                resources.command_buffer(),
-                resources.fence(),
-                src_buffer,
-                slot.texture.vulkan_inner(),
-                width,
-                height,
-            )
-        }?;
-        self.gpu
-            .update_texture_registration_layout(surface_id, upload.final_texture_layout);
-        Ok(())
-    }
-
     /// Number of slots in the ring.
     pub fn len(&self) -> usize {
         self.slots.len()

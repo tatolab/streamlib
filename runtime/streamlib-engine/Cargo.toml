@@ -89,7 +89,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
 crossbeam-channel = "0.5"
-inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 pin-project-lite = "0.2"  # Safe pin projection for the future a stream's log route wraps
 crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
