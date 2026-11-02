@@ -547,6 +547,16 @@ fn refusal_of_a_registration_answer(operation: &str, answer: &serde_json::Value)
     Ok(())
 }
 
+/// A looked-up pixel buffer and what its registration says its pixels are.
+#[cfg(target_os = "linux")]
+pub(crate) struct PixelBufferWithItsPlaneLayout {
+    pub(crate) pixel_buffer: PixelBuffer,
+    pub(crate) pixel_format: PixelFormat,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) planes: crate::core::rhi::PixelPlanesWithinOneAllocation,
+}
+
 /// Surface metadata stored alongside the cached pixel buffer.
 #[derive(Debug, Clone)]
 pub struct CachedSurface {
@@ -820,6 +830,40 @@ impl SurfaceStoreInner {
         tracing::debug!("SurfaceStore: Checked in as '{}'", surface_id);
 
         Ok(surface_id)
+    }
+
+    /// Check `pixel_buffer`'s memory in as a `width` × `height`
+    /// `pixel_format` surface laid out as `planes` — the registration a
+    /// helper's foreign-allocation adoption makes.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn check_in_with_a_pixel_plane_layout(
+        &self,
+        pixel_buffer: &PixelBuffer,
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        planes: &crate::core::rhi::PixelPlanesWithinOneAllocation,
+    ) -> Result<String> {
+        let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
+        let mut request = pixel_buffer_check_in_payload(
+            &self.runtime_id,
+            PixelBufferShapeOnTheWire {
+                width,
+                height,
+                format: pixel_format,
+            },
+            &exported_planes,
+        );
+        planes.write_surface_share_fields(&mut request);
+        let response = self.send_surface_share_request_owning_fds(
+            "check_in",
+            &request,
+            exported_planes.plane_fds,
+        )?;
+        if let Some(refusal) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(Error::Configuration(format!("check_in: {refusal}")));
+        }
+        surface_id_of_check_in_answer(&response)
     }
 
     /// Check out a surface by ID via Unix socket.
@@ -1245,6 +1289,78 @@ impl SurfaceStoreInner {
             consume_done.is_some(),
         );
         Ok(())
+    }
+
+    /// Look up a pixel buffer together with the format, extent and plane
+    /// layout its registration states — a tight layout when it states none.
+    ///
+    /// Bypasses the lookup cache: that cache keeps no geometry, and a caller
+    /// of this keeps what it resolves for as long as it reads the surface.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn lookup_pixel_buffer_with_its_plane_layout(
+        &self,
+        surface_id: &str,
+    ) -> Result<PixelBufferWithItsPlaneLayout> {
+        let request = serde_json::json!({
+            "op": "lookup",
+            "surface_id": surface_id,
+        });
+        let connection = self.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
+        })?;
+        let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
+            stream,
+            &request,
+            &[],
+            streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
+        )
+        .map_err(|e| Error::Configuration(format!("Unix socket lookup failed: {}", e)))?;
+        drop(connection);
+        let pixel_buffer = pixel_buffer_imported_from_surface_share_reply(
+            "lookup",
+            &response,
+            adopt_reply_fds(received_fds),
+        )?;
+        let stated_u32 = |key: &str| {
+            response
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(0)
+        };
+        let width = stated_u32("width");
+        let height = stated_u32("height");
+        let pixel_format = PixelFormat::parse_wire_name(
+            response
+                .get("format")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+        )
+        .map_err(|unknown_format| {
+            Error::Configuration(format!("lookup of '{surface_id}': {unknown_format}"))
+        })?;
+        use crate::core::rhi::PixelPlanesWithinOneAllocation;
+        let stated = match PixelPlanesWithinOneAllocation::from_surface_share_fields(&response)? {
+            Some(stated) => stated,
+            None => PixelPlanesWithinOneAllocation::tightly_packed(pixel_format, width, height)?,
+        };
+        let planes = PixelPlanesWithinOneAllocation::new(
+            pixel_format,
+            width,
+            height,
+            pixel_buffer.plane_size(0),
+            stated.plane_offsets_bytes().to_vec(),
+            stated.plane_strides_bytes().to_vec(),
+            stated.written_by_a_foreign_device(),
+        )?;
+        Ok(PixelBufferWithItsPlaneLayout {
+            pixel_buffer,
+            pixel_format,
+            width,
+            height,
+            planes,
+        })
     }
 
     /// Lookup a buffer from the surface-share service via Unix socket.
@@ -2360,6 +2476,41 @@ impl SurfaceStore {
             ));
         }
         self.host_inner().lookup_buffer(pool_id)
+    }
+
+    /// Look up a pixel buffer with the format, extent and plane layout its
+    /// registration states.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn lookup_pixel_buffer_with_its_plane_layout(
+        &self,
+        surface_id: &str,
+    ) -> Result<PixelBufferWithItsPlaneLayout> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::lookup_pixel_buffer_with_its_plane_layout: null handle".into(),
+            ));
+        }
+        self.host_inner()
+            .lookup_pixel_buffer_with_its_plane_layout(surface_id)
+    }
+
+    /// See [`SurfaceStoreInner::check_in_with_a_pixel_plane_layout`].
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn check_in_with_a_pixel_plane_layout(
+        &self,
+        pixel_buffer: &PixelBuffer,
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        planes: &crate::core::rhi::PixelPlanesWithinOneAllocation,
+    ) -> Result<String> {
+        self.host_inner().check_in_with_a_pixel_plane_layout(
+            pixel_buffer,
+            pixel_format,
+            width,
+            height,
+            planes,
+        )
     }
 
     /// Release a checked-out surface by its surface_id.

@@ -56,6 +56,7 @@ mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod surface_color_conversion;
 mod surface_copy;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,6 +72,7 @@ pub(crate) use linux::{
     CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
     HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
     HelperForeignSurfaceUnregisterDebt, OpaqueFdAllocationExportDescription,
+    foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
@@ -632,6 +634,9 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// answer — so no two doors disagree about one frame.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
+    /// The surfaces a `convert_surface_into` named as its source, each of
+    /// which the parent resolved and holds until this helper releases it.
+    color_conversion_sources_the_parent_resolved: Mutex<std::collections::HashSet<String>>,
 }
 
 impl HelperProcessGpuExchangeClient {
@@ -697,6 +702,9 @@ impl HelperProcessGpuExchangeClient {
             cpu_readback_exports_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             write_back_answers_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
+            color_conversion_sources_the_parent_resolved: Mutex::new(
+                std::collections::HashSet::new(),
+            ),
         }
     }
 

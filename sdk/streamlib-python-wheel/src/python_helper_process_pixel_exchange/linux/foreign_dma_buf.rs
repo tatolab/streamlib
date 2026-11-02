@@ -7,7 +7,7 @@ use std::sync::Arc;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use streamlib::sdk::rhi::PixelFormat;
+use streamlib::sdk::rhi::{PixelFormat, PixelPlanesWithinOneAllocation};
 
 use crate::python_helper_process_pixel_exchange::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
@@ -27,6 +27,17 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
     /// here — so a failure is logged, never raised.
     fn drop(&mut self) {
         Python::attach(|python| {
+            if let Err(release_failure) = self
+                .exchange_client
+                .release_the_color_conversion_source_the_parent_resolved(python, &self.surface_id)
+            {
+                tracing::warn!(
+                    "handing the parent the release of adopted surface {}'s conversion source \
+                     failed ({release_failure}); the parent holds its import until this node \
+                     stops",
+                    self.surface_id
+                );
+            }
             let released = python.detach(|| {
                 self.exchange_client
                     .unregister_foreign_surface(&self.surface_id)
@@ -42,15 +53,124 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
     }
 }
 
+/// `DRM_FORMAT_MOD_LINEAR`: rows laid out one after another at the stated
+/// pitch, the only modifier a buffer read through a plane layout can carry.
+const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+
+/// The allocation size and plane layout an `import_dma_buf` call describes.
+///
+/// A stated layout needs the allocation's byte size beside it. Without one, a
+/// single plane's pitch is the byte size spread over whole rows, and several
+/// planes sit tightly packed.
+pub(crate) fn foreign_dma_buf_plane_layout(
+    pixel_format: PixelFormat,
+    width: u32,
+    height: u32,
+    byte_size: Option<u64>,
+    plane_offsets: Option<Vec<u64>>,
+    plane_strides: Option<Vec<u64>>,
+    drm_format_modifier: u64,
+) -> PyResult<(u64, PixelPlanesWithinOneAllocation)> {
+    if drm_format_modifier != DRM_FORMAT_MOD_LINEAR {
+        return Err(PyValueError::new_err(format!(
+            "import_dma_buf reads linear buffers only; drm_format_modifier \
+             {drm_format_modifier:#x} is a tiled or compressed layout"
+        )));
+    }
+    if width == 0 || height == 0 {
+        return Err(PyValueError::new_err(
+            "import_dma_buf needs a non-zero width and height; the fd carries no geometry \
+             of its own",
+        ));
+    }
+    let layout_refused =
+        |refusal: streamlib::sdk::error::Error| PyValueError::new_err(refusal.to_string());
+    let (allocation_byte_size, plane_offsets, plane_strides) = match (plane_offsets, plane_strides)
+    {
+        (Some(plane_offsets), Some(plane_strides)) => {
+            let allocation_byte_size = byte_size.ok_or_else(|| {
+                PyValueError::new_err(
+                    "import_dma_buf with plane_offsets and plane_strides needs byte_size, \
+                         the size of the allocation the planes sit in",
+                )
+            })?;
+            (allocation_byte_size, plane_offsets, plane_strides)
+        }
+        (None, None) if pixel_format.plane_count() == 1 => {
+            let allocation_byte_size = match byte_size {
+                Some(allocation_byte_size) => allocation_byte_size,
+                None => PixelPlanesWithinOneAllocation::tightly_packed_byte_size(
+                    pixel_format,
+                    width,
+                    height,
+                )
+                .map_err(layout_refused)?,
+            };
+            if allocation_byte_size == 0 || !allocation_byte_size.is_multiple_of(u64::from(height))
+            {
+                return Err(PyValueError::new_err(format!(
+                    "import_dma_buf byte_size {allocation_byte_size} is not a whole number \
+                         of {height} rows; state plane_strides when the last row is unpadded"
+                )));
+            }
+            (
+                allocation_byte_size,
+                vec![0],
+                vec![allocation_byte_size / u64::from(height)],
+            )
+        }
+        (None, None) => {
+            let tight = PixelPlanesWithinOneAllocation::tightly_packed(pixel_format, width, height)
+                .map_err(layout_refused)?;
+            let allocation_byte_size = match byte_size {
+                Some(allocation_byte_size) => allocation_byte_size,
+                None => PixelPlanesWithinOneAllocation::tightly_packed_byte_size(
+                    pixel_format,
+                    width,
+                    height,
+                )
+                .map_err(layout_refused)?,
+            };
+            (
+                allocation_byte_size,
+                tight.plane_offsets_bytes().to_vec(),
+                tight.plane_strides_bytes().to_vec(),
+            )
+        }
+        _ => {
+            return Err(PyValueError::new_err(
+                "import_dma_buf takes plane_offsets and plane_strides together or neither",
+            ));
+        }
+    };
+    let planes = PixelPlanesWithinOneAllocation::new(
+        pixel_format,
+        width,
+        height,
+        allocation_byte_size,
+        plane_offsets,
+        plane_strides,
+        true,
+    )
+    .map_err(layout_refused)?;
+    Ok((allocation_byte_size, planes))
+}
+
 impl HelperProcessGpuExchangeClient {
     /// Adopt a foreign DMA-BUF fd as a surface this graph can resolve.
     ///
     /// The fd crosses to the surface-share service over SCM_RIGHTS on a
     /// `check_in` (the kernel and the service each dup it — the caller keeps
-    /// ownership of the original), the service mints a surface id, and the
-    /// checkout of that id lands this process's own mapping of the memory.
-    /// The returned surface carries the unregister debt: dropping the last
-    /// share removes the service entry the adoption created.
+    /// ownership of the original), with the plane layout of the pixels inside
+    /// it and the mark that a foreign device writes it; the service mints a
+    /// surface id, and the checkout of that id lands this process's own
+    /// mapping of the memory. The returned surface carries the unregister
+    /// debt: dropping the last share removes the service entry the adoption
+    /// created.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one stated property of the foreign allocation"
+    )]
     pub(crate) fn import_foreign_dma_buf(
         self: &Arc<Self>,
         python: Python<'_>,
@@ -58,37 +178,25 @@ impl HelperProcessGpuExchangeClient {
         width: u32,
         height: u32,
         pixel_format: PixelFormat,
-        plane_byte_size: u64,
+        allocation_byte_size: u64,
+        planes: &PixelPlanesWithinOneAllocation,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        if width == 0 || height == 0 {
-            return Err(PyValueError::new_err(
-                "import_dma_buf needs a non-zero width and height; the fd carries no geometry \
-                 of its own",
-            ));
-        }
-        if plane_byte_size == 0 || !plane_byte_size.is_multiple_of(u64::from(height)) {
-            return Err(PyValueError::new_err(format!(
-                "import_dma_buf byte_size {plane_byte_size} is not a whole number of {height} \
-                 rows; every consumer derives the row pitch from it"
-            )));
-        }
-        let bytes_per_row = plane_byte_size / u64::from(height);
+        let mut check_in_request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.foreign_surface_registration_runtime_id,
+            "width": width,
+            "height": height,
+            "format": pixel_format.wire_name(),
+            "resource_type": "pixel_buffer",
+            "handle_type": "dma_buf",
+            "plane_sizes": [allocation_byte_size],
+            "plane_offsets": [0u64],
+            "plane_strides": [planes.plane_strides_bytes()[0]],
+        });
+        planes.write_surface_share_fields(&mut check_in_request);
         let checked_out = python.detach(|| {
-            let (check_in_response, _no_fds_back) = self.surface_share_request_with_fds(
-                &serde_json::json!({
-                    "op": "check_in",
-                    "runtime_id": self.foreign_surface_registration_runtime_id,
-                    "width": width,
-                    "height": height,
-                    "format": pixel_format.wire_name(),
-                    "resource_type": "pixel_buffer",
-                    "handle_type": "dma_buf",
-                    "plane_sizes": [plane_byte_size],
-                    "plane_offsets": [0u64],
-                    "plane_strides": [bytes_per_row],
-                }),
-                &[foreign_dma_buf_fd],
-            )?;
+            let (check_in_response, _no_fds_back) =
+                self.surface_share_request_with_fds(&check_in_request, &[foreign_dma_buf_fd])?;
             if let Some(check_in_error) = check_in_response
                 .get("error")
                 .and_then(|value| value.as_str())

@@ -891,6 +891,14 @@ impl HostVulkanTexture {
             .contains(vk::ImageUsageFlags::TRANSFER_SRC)
     }
 
+    /// Whether the image was created with STORAGE usage — the capability a
+    /// compute kernel writing it as a storage image requires.
+    pub fn supports_storage_write(&self) -> bool {
+        self.vk_image_meta
+            .vk_image_usage_flags
+            .contains(vk::ImageUsageFlags::STORAGE)
+    }
+
     /// Whether the image was created with TRANSFER_DST usage — the
     /// capability a copy that writes it (`vkCmdCopyBufferToImage`)
     /// requires (VUID-vkCmdCopyBufferToImage-dstImage-01997).

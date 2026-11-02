@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
+use streamlib::sdk::rhi::PixelPlanesWithinOneAllocation;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 
 use super::{
@@ -24,7 +25,9 @@ mod texture;
 pub(crate) use export_staging::{
     CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
 };
-pub(crate) use foreign_dma_buf::HelperForeignSurfaceUnregisterDebt;
+pub(crate) use foreign_dma_buf::{
+    HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
+};
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
 
@@ -258,10 +261,7 @@ impl HelperCheckedOutPixelSurface {
             )));
         };
         let exported = duplicate_first_plane_fd_for_export(exportable_plane_fds, "surface")?;
-        Ok((
-            exported.into_raw_fd(),
-            self.bytes_per_row * u64::from(self.height),
-        ))
+        Ok((exported.into_raw_fd(), self.consumer_buffer.plane_size(0)))
     }
 
     /// The OPAQUE_FD memory fd plus the allocation-stable shape a foreign
@@ -587,16 +587,32 @@ impl HelperProcessGpuExchangeClient {
                 plane_sizes.len(),
             )));
         }
-        // The allocation's row pitch, padding included — the same derivation
-        // the engine-side view uses, so the strides agree across processes.
+        // The allocation's row pitch, padding included: the stated pitch when
+        // the registration states a plane layout, else the plane spread over
+        // whole rows — the same derivation the engine-side view uses, so the
+        // strides agree across processes.
         let plane0_size = plane_sizes.first().copied().unwrap_or(0);
-        if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
-            return Err(PyRuntimeError::new_err(format!(
-                "surface {surface_id:?} reports plane size {plane0_size}, not a whole number of \
-                 {height} rows"
-            )));
-        }
-        let bytes_per_row = plane0_size / u64::from(height);
+        let stated_plane_layout = PixelPlanesWithinOneAllocation::from_surface_share_fields(
+            response,
+        )
+        .map_err(|malformed_layout| {
+            PyRuntimeError::new_err(format!(
+                "surface {surface_id:?} states a malformed plane layout: \
+                         {malformed_layout}"
+            ))
+        })?;
+        let bytes_per_row = match stated_plane_layout {
+            Some(stated_plane_layout) => stated_plane_layout.plane_strides_bytes()[0],
+            None => {
+                if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "surface {surface_id:?} reports plane size {plane0_size}, not a whole \
+                         number of {height} rows"
+                    )));
+                }
+                plane0_size / u64::from(height)
+            }
+        };
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let (consumer_buffer, memory_flavour) = match pixel_buffer_handle_type {

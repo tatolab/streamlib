@@ -11,9 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from types import TracebackType
-from typing import Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from ._runtime_lend import runtime_backed_protocol
+
+if TYPE_CHECKING:
+    from .video_frame import ColorInfo
 
 _EscalateResult = TypeVar("_EscalateResult")
 
@@ -116,6 +119,27 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
         never rewritten, and at the cap, or growing past the device's memory
         budget, the call raises by name.
+        """
+        ...
+
+    def convert_surface_into(
+        self,
+        source_surface_id: str,
+        destination_surface: GpuSurfaceHandle,
+        color_info: ColorInfo | None = None,
+    ) -> None:
+        """Convert a YCbCr pixel buffer (`nv12_*` or `yuyv`) into an RGBA texture.
+
+        The destination is an `rgba8_unorm` texture of the source's extent,
+        allocated with `"storage_binding"` usage; the conversion scales
+        nothing. `color_info` names the source's primaries, transfer, matrix
+        and range, and an axis left `None` takes the YCbCr default (BT.709,
+        limited range). The source's transfer curve is kept. The source is
+        read through the plane layout it was registered with, so a padded
+        `import_dma_buf` frame converts where it sits. Returns once the
+        destination's next reader would see the converted pixels. Another
+        source format, a destination of another format, extent or usage, and
+        an unknown colour name each raise naming the reason.
         """
         ...
 
@@ -425,18 +449,26 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         height: int,
         format: str = "bgra",
         byte_size: int | None = None,
+        plane_offsets: Sequence[int] | None = None,
+        plane_strides: Sequence[int] | None = None,
+        drm_format_modifier: int = 0,
     ) -> GpuSurfaceHandle:
-        """Adopt a foreign single-plane DMA-BUF fd as a surface this graph can
-        resolve.
+        """Adopt a foreign DMA-BUF fd as a surface this graph can resolve.
 
         The fd crosses to the engine's surface-share service over SCM_RIGHTS —
         the caller keeps ownership and may close it once this returns. The
         returned handle maps the same memory and travels under a freshly minted
-        surface id; closing its last holder removes the registration. When
-        `byte_size` is omitted a tight plane is assumed — pass the exporter's
-        own byte size whenever the buffer carries row padding. The fd must
-        reference host-mappable linear memory (a pixel-buffer export); a
-        tiled or device-local exporter's fd fails at the Vulkan import.
+        surface id; closing its last holder removes the registration.
+
+        `plane_offsets` and `plane_strides` state, per plane of `format`, the
+        byte offset and row pitch inside the `byte_size`-byte allocation — a
+        V4L2 `VIDIOC_EXPBUF` frame's NV12 luma and chroma, say — and require
+        `byte_size`. Without them a single plane's pitch is `byte_size /
+        height` (a tight plane when `byte_size` is omitted) and several planes
+        sit tightly packed. Only linear buffers are read:
+        `drm_format_modifier` other than `0` (`DRM_FORMAT_MOD_LINEAR`) raises.
+        The fd must reference host-mappable linear memory; a device-local
+        exporter's fd fails at the Vulkan import.
         """
         ...
 
