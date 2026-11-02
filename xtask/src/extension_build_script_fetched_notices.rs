@@ -128,6 +128,13 @@ const EXTENSIONS_WHOSE_BUILD_SCRIPTS_FETCH_SOURCES: &[ExtensionWhoseBuildScriptF
                 "COPYING",
             ),
             rive_runtime_dependency(
+                "VulkanMemoryAllocator",
+                "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+                "MIT",
+                "GPUOpen-LibrariesAndSDKs_VulkanMemoryAllocator_",
+                "LICENSE.txt",
+            ),
+            rive_runtime_dependency(
                 "miniaudio",
                 "https://github.com/rive-app/miniaudio",
                 "Unlicense or MIT-0",
