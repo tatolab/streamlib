@@ -12,15 +12,16 @@ pub struct PublishedVideoFrame<'surface> {
     pub height: u32,
     pub timestamp_ns: i64,
     pub frames_per_second: u32,
+    pub texture_layout: i32,
 }
 
 impl PublishedVideoFrame<'_> {
-    /// The message bytes: `surface_id`, `width`, `height`, `timestamp_ns` and
-    /// `fps`.
+    /// The message bytes: `surface_id`, `width`, `height`, `timestamp_ns`,
+    /// `fps` and `texture_layout`.
     pub fn to_msgpack(&self) -> Vec<u8> {
         let mut record = Vec::with_capacity(96);
         let write_failure = "writing msgpack into a Vec cannot fail";
-        rmp::encode::write_map_len(&mut record, 5).expect(write_failure);
+        rmp::encode::write_map_len(&mut record, 6).expect(write_failure);
         rmp::encode::write_str(&mut record, "surface_id").expect(write_failure);
         rmp::encode::write_str(&mut record, self.surface_id).expect(write_failure);
         rmp::encode::write_str(&mut record, "width").expect(write_failure);
@@ -32,6 +33,8 @@ impl PublishedVideoFrame<'_> {
         rmp::encode::write_str(&mut record, "fps").expect(write_failure);
         rmp::encode::write_uint(&mut record, u64::from(self.frames_per_second))
             .expect(write_failure);
+        rmp::encode::write_str(&mut record, "texture_layout").expect(write_failure);
+        rmp::encode::write_sint(&mut record, i64::from(self.texture_layout)).expect(write_failure);
         record
     }
 }
@@ -48,6 +51,7 @@ mod tests {
             height: 1080,
             timestamp_ns: 123_456_789,
             frames_per_second: 60,
+            texture_layout: 5,
         };
         let record = rmpv::decode::read_value(&mut frame.to_msgpack().as_slice())
             .expect("the record decodes");
@@ -65,5 +69,6 @@ mod tests {
         assert_eq!(entry("height").as_u64(), Some(1080));
         assert_eq!(entry("timestamp_ns").as_i64(), Some(123_456_789));
         assert_eq!(entry("fps").as_u64(), Some(60));
+        assert_eq!(entry("texture_layout").as_i64(), Some(5));
     }
 }

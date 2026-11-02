@@ -9,8 +9,8 @@
 //!
 //! A checkout named by `TATOLAB_RIVE_RUNTIME_DIRECTORY` is used as it is;
 //! otherwise the pinned revision is fetched into `OUT_DIR`. The build needs
-//! `git`, `ninja`, `clang`, `make`, `python3`, `glslangValidator` and
-//! `spirv-opt` on `PATH`.
+//! `git`, `ninja`, `clang`, `make`, `python3`, `glslangValidator`,
+//! `spirv-opt`, `nm` and `objcopy` on `PATH`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +32,9 @@ const RIVE_BUILD_ARGUMENTS: [&str; 8] = [
     "--with-pic",
     "--no-lto",
 ];
+
+const RIVE_RENDERER_STATIC_LIBRARY: &str = "librive_pls_renderer.a";
+const RIVE_RENDERER_VMA_SYMBOL_PREFIX: &str = "tatolab_rive_";
 
 const BRIDGE_SOURCES: [&str; 3] = [
     "native/premake5.lua",
@@ -79,7 +82,60 @@ fn main() {
         .expect("rive-runtime's build/build_rive.sh runs");
     assert!(status.success(), "rive-runtime's build failed: {status}");
 
-    link_every_static_library_in(&bridge_workspace.join(relative_build_output));
+    let build_output = bridge_workspace.join(relative_build_output);
+    give_the_rive_renderer_its_own_vma_symbols(&build_output.join(RIVE_RENDERER_STATIC_LIBRARY));
+    link_every_static_library_in(&build_output);
+}
+
+/// Rename every VMA symbol in the Rive renderer's archive, definitions and
+/// references alike, so its VMA (built with `VMA_DYNAMIC_VULKAN_FUNCTIONS=1`,
+/// which rive-runtime's allocator setup relies on) never resolves to the
+/// consumer RHI's VMA (built with it off) in this one shared library.
+/// Idempotent: a symbol already carrying the prefix is left alone.
+fn give_the_rive_renderer_its_own_vma_symbols(renderer_static_library: &Path) {
+    let symbol_listing = Command::new("nm")
+        .args(["--format=posix", "--no-sort"])
+        .arg(renderer_static_library)
+        .output()
+        .expect("nm runs");
+    assert!(
+        symbol_listing.status.success(),
+        "nm failed on {}: {}",
+        renderer_static_library.display(),
+        String::from_utf8_lossy(&symbol_listing.stderr)
+    );
+    let mut vma_symbols: Vec<&str> = std::str::from_utf8(&symbol_listing.stdout)
+        .expect("nm lists symbols as UTF-8")
+        .lines()
+        .filter(|line| !line.ends_with(':'))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|symbol| {
+            !symbol.starts_with(RIVE_RENDERER_VMA_SYMBOL_PREFIX)
+                && (symbol.contains("vma") || symbol.contains("Vma") || symbol.contains("VMA"))
+        })
+        .collect();
+    vma_symbols.sort_unstable();
+    vma_symbols.dedup();
+    if vma_symbols.is_empty() {
+        return;
+    }
+    let symbol_renames: String = vma_symbols
+        .iter()
+        .map(|symbol| format!("{symbol} {RIVE_RENDERER_VMA_SYMBOL_PREFIX}{symbol}\n"))
+        .collect();
+    let symbol_renames_file = renderer_static_library.with_extension("vma-symbol-renames");
+    std::fs::write(&symbol_renames_file, symbol_renames)
+        .expect("the VMA symbol renames are written");
+    let status = Command::new("objcopy")
+        .arg(format!("--redefine-syms={}", symbol_renames_file.display()))
+        .arg(renderer_static_library)
+        .status()
+        .expect("objcopy runs");
+    assert!(
+        status.success(),
+        "objcopy could not rename the VMA symbols of {}: {status}",
+        renderer_static_library.display()
+    );
 }
 
 fn fetch_the_pinned_rive_runtime_revision(checkout: &Path) -> PathBuf {

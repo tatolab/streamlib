@@ -364,7 +364,7 @@ impl RiveSourceFrameLoop {
         let drawn = self.draw_into_checked_out_texture(&surface_id, checked_out, elapsed_seconds);
         let released =
             release_check_out_on_surface_share(&self.surface_share_connection, &surface_id);
-        drawn?;
+        let published_layout = drawn?;
         released?;
         let record = PublishedVideoFrame {
             surface_id: &surface_id,
@@ -372,6 +372,7 @@ impl RiveSourceFrameLoop {
             height: self.settings.height,
             timestamp_ns: self.module_host.monotonic_now_ns(),
             frames_per_second: self.settings.frame_rate,
+            texture_layout: published_layout,
         };
         self.video_output_port
             .write(&record.to_msgpack(), Some(record.timestamp_ns), true)
@@ -385,7 +386,7 @@ impl RiveSourceFrameLoop {
         surface_id: &str,
         checked_out: streamlib_surface_client::CheckedOutTexture,
         elapsed_seconds: f32,
-    ) -> Result<(), String> {
+    ) -> Result<i32, String> {
         let pool_slot = pool_slot_of_a_published_frame_id(surface_id).to_owned();
         if !self.render_targets_by_pool_slot.contains_key(&pool_slot) {
             let render_target = self
@@ -413,7 +414,8 @@ impl RiveSourceFrameLoop {
             &self.surface_share_connection,
             surface_id,
             published_layout.0,
-        )
+        )?;
+        Ok(published_layout.0)
     }
 }
 
