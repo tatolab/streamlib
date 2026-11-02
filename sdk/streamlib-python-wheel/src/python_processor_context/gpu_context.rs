@@ -44,6 +44,8 @@ use super::{
     escalate_scope_cannot_cross_the_process_boundary_error,
     gpu_unreachable_from_a_helper_process_error,
 };
+#[cfg(target_os = "linux")]
+use crate::python_helper_process_pixel_exchange::foreign_dma_buf_plane_layout;
 
 pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(failure.to_string())
@@ -360,6 +362,35 @@ impl PythonGpuContextLimitedAccess {
             return exchange_client.surface_can_take_write_back(python, surface_id);
         }
         let _ = (python, surface_id);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Convert `source_surface_id`'s YCbCr pixels (NV12 or YUYV) into
+    /// `destination_surface`, an `rgba8_unorm` texture of the same extent
+    /// allocated with `storage_binding` usage, returning once the
+    /// destination's next reader would see them.
+    ///
+    /// `color_info` names the source's primaries, transfer, matrix and range;
+    /// an axis it leaves unset takes the engine's YCbCr default. The source's
+    /// transfer curve is kept.
+    #[pyo3(signature = (source_surface_id, destination_surface, color_info = None))]
+    fn convert_surface_into(
+        &self,
+        python: Python<'_>,
+        source_surface_id: &str,
+        destination_surface: &PythonGpuSurfaceHandle,
+        color_info: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.convert_surface_into(
+                python,
+                source_surface_id,
+                &destination_surface.surface_id()?,
+                color_info,
+            );
+        }
+        let _ = (python, source_surface_id, destination_surface, color_info);
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
@@ -861,6 +892,35 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
+    /// Convert `source_surface_id`'s YCbCr pixels (NV12 or YUYV) into
+    /// `destination_surface`, an `rgba8_unorm` texture of the same extent
+    /// allocated with `storage_binding` usage, returning once the
+    /// destination's next reader would see them.
+    ///
+    /// `color_info` names the source's primaries, transfer, matrix and range;
+    /// an axis it leaves unset takes the engine's YCbCr default. The source's
+    /// transfer curve is kept.
+    #[pyo3(signature = (source_surface_id, destination_surface, color_info = None))]
+    fn convert_surface_into(
+        &self,
+        python: Python<'_>,
+        source_surface_id: &str,
+        destination_surface: &PythonGpuSurfaceHandle,
+        color_info: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.convert_surface_into(
+                python,
+                source_surface_id,
+                &destination_surface.surface_id()?,
+                color_info,
+            );
+        }
+        let _ = (python, source_surface_id, destination_surface, color_info);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
     /// Copy `source_surface_id`'s pixels into `destination_surface`, same
     /// format and extent, returning once the destination's next reader would
     /// see them.
@@ -1051,8 +1111,25 @@ impl PythonGpuContextFullAccess {
     /// Import a foreign DMA-BUF file descriptor as a surface this graph can
     /// resolve. The caller keeps ownership of `fd` — the kernel dups it on
     /// the SCM_RIGHTS crossing — and may close it once this returns.
+    ///
+    /// `plane_offsets` and `plane_strides` state where each plane of `format`
+    /// sits inside the `byte_size`-byte allocation; without them one plane's
+    /// pitch is `byte_size / height` and several planes sit tightly packed.
     #[cfg(target_os = "linux")]
-    #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
+    #[pyo3(signature = (
+        fd,
+        width,
+        height,
+        format = "bgra",
+        byte_size = None,
+        plane_offsets = None,
+        plane_strides = None,
+        drm_format_modifier = 0,
+    ))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one stated property of the foreign allocation"
+    )]
     fn import_dma_buf(
         &self,
         python: Python<'_>,
@@ -1061,31 +1138,30 @@ impl PythonGpuContextFullAccess {
         height: u32,
         format: &str,
         byte_size: Option<u64>,
+        plane_offsets: Option<Vec<u64>>,
+        plane_strides: Option<Vec<u64>>,
+        drm_format_modifier: u64,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
-        if pixel_format.plane_count() != 1 {
-            return Err(PyValueError::new_err(format!(
-                "import_dma_buf adopts one plane behind one fd; {format:?} carries \
-                 {} planes",
-                pixel_format.plane_count()
-            )));
-        }
+        let (allocation_byte_size, planes) = foreign_dma_buf_plane_layout(
+            pixel_format,
+            width,
+            height,
+            byte_size,
+            plane_offsets,
+            plane_strides,
+            drm_format_modifier,
+        )
+        .map_err(PyValueError::new_err)?;
         if let Some(exchange_client) = &self.helper_process_exchange_client {
-            // A tight single plane when the caller states no size — the
-            // exporter's own byte size is the honest input whenever padding
-            // is in play, because a stride cannot be conjured from an fd.
-            let plane_byte_size = byte_size.unwrap_or_else(|| {
-                u64::from(width)
-                    * u64::from(pixel_format.bits_per_pixel().div_ceil(8))
-                    * u64::from(height)
-            });
             let checked_out = exchange_client.import_foreign_dma_buf(
                 python,
                 fd,
                 width,
                 height,
                 pixel_format,
-                plane_byte_size,
+                allocation_byte_size,
+                &planes,
             )?;
             return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
                 HelperCheckedOutSurface::PixelBuffer(checked_out),
@@ -1104,7 +1180,20 @@ impl PythonGpuContextFullAccess {
         unused_variables,
         reason = "the Python-visible parameter names are the API; stubtest compares them"
     )]
-    #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the Python-visible parameters are the API; stubtest compares them"
+    )]
+    #[pyo3(signature = (
+        fd,
+        width,
+        height,
+        format = "bgra",
+        byte_size = None,
+        plane_offsets = None,
+        plane_strides = None,
+        drm_format_modifier = 0,
+    ))]
     fn import_dma_buf(
         &self,
         fd: i32,
@@ -1112,6 +1201,9 @@ impl PythonGpuContextFullAccess {
         height: u32,
         format: &str,
         byte_size: Option<u64>,
+        plane_offsets: Option<Vec<u64>>,
+        plane_strides: Option<Vec<u64>>,
+        drm_format_modifier: u64,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         Err(fd_shaped_raw_handle_is_linux_only_error("import_dma_buf"))
     }

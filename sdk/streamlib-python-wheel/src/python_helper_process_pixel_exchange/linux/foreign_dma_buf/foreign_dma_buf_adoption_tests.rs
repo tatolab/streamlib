@@ -234,3 +234,138 @@ fn a_pixel_buffer_of_an_unknown_handle_type_is_refused_by_name() {
         "the refusal must name the surface and the handle type: {refusal:?}"
     );
 }
+
+/// A V4L2-shaped NV12 frame: 64-byte rows padded to 128, chroma starting
+/// past an aligned luma plane, the allocation ending on chroma's last row.
+fn a_padded_nv12_layout() -> (u64, PixelPlanesWithinOneAllocation) {
+    let chroma_offset = 128 * u64::from(ADOPTED_HEIGHT) + 256;
+    let allocation_byte_size = chroma_offset + 128 * (u64::from(ADOPTED_HEIGHT) / 2 - 1) + 64;
+    foreign_dma_buf_plane_layout(
+        PixelFormat::Nv12FullRange,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        Some(allocation_byte_size),
+        Some(vec![0, chroma_offset]),
+        Some(vec![128, 128]),
+        0,
+    )
+    .expect("the padded NV12 layout is accepted")
+}
+
+/// The stated plane layout and the foreign-writer mark ride the check_in and
+/// come back on the checkout, so the parent's converter reads the frame
+/// through the pitch and offsets its exporter chose.
+#[test]
+fn an_adopted_padded_nv12_frame_checks_out_with_its_plane_layout() {
+    let share = SurfaceShareUnderTest::start("adoption-nv12-layout");
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
+    let (allocation_byte_size, planes) = a_padded_nv12_layout();
+    let foreign_fd = a_foreign_memory_fd();
+
+    let mut check_in = check_in_request();
+    check_in["format"] = PixelFormat::Nv12FullRange.wire_name().into();
+    check_in["plane_sizes"] = vec![allocation_byte_size].into();
+    check_in["plane_strides"] = vec![128u64].into();
+    planes.write_surface_share_fields(&mut check_in);
+    let (check_in_response, _no_fds) = exchange_client
+        .surface_share_request_with_fds(&check_in, &[foreign_fd.as_raw_fd()])
+        .expect("the check_in round trip completes");
+    let adopted_surface_id = check_in_response
+        .get("surface_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| panic!("check_in answers with a surface_id: {check_in_response}"))
+        .to_string();
+
+    let (check_out_response, received_fds) = exchange_client
+        .check_out_surface(&adopted_surface_id)
+        .expect("the adopted surface checks out");
+    assert_eq!(
+        PixelPlanesWithinOneAllocation::from_surface_share_fields(&check_out_response)
+            .expect("the echoed layout parses"),
+        Some(planes),
+    );
+    drop(received_fds);
+    let _ = exchange_client.release_check_out(&adopted_surface_id);
+}
+
+#[test]
+fn an_unstated_single_plane_layout_spreads_the_byte_size_over_whole_rows() {
+    let (allocation_byte_size, planes) = foreign_dma_buf_plane_layout(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        Some(ADOPTED_BYTE_SIZE * 2),
+        None,
+        None,
+        0,
+    )
+    .expect("a whole number of padded rows is accepted");
+    assert_eq!(allocation_byte_size, ADOPTED_BYTE_SIZE * 2);
+    assert_eq!(
+        planes.plane_strides_bytes(),
+        &[2 * 4 * u64::from(ADOPTED_WIDTH)]
+    );
+    assert!(planes.written_by_a_foreign_device());
+}
+
+#[test]
+fn an_unstated_nv12_layout_is_tightly_packed() {
+    let (allocation_byte_size, planes) = foreign_dma_buf_plane_layout(
+        PixelFormat::Nv12VideoRange,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        None,
+        None,
+        None,
+        0,
+    )
+    .expect("tight NV12 is accepted");
+    let luma_byte_size = u64::from(ADOPTED_WIDTH * ADOPTED_HEIGHT);
+    assert_eq!(allocation_byte_size, luma_byte_size * 3 / 2);
+    assert_eq!(planes.plane_offsets_bytes(), &[0, luma_byte_size]);
+}
+
+#[test]
+fn a_stated_layout_without_its_byte_size_is_refused() {
+    let refusal = foreign_dma_buf_plane_layout(
+        PixelFormat::Nv12FullRange,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        None,
+        Some(vec![0, 4096]),
+        Some(vec![128, 128]),
+        0,
+    )
+    .expect_err("a layout without the allocation it sits in must be refused");
+    assert!(refusal.contains("byte_size"), "{refusal:?}");
+}
+
+#[test]
+fn offsets_without_strides_are_refused() {
+    let refusal = foreign_dma_buf_plane_layout(
+        PixelFormat::Nv12FullRange,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        Some(ADOPTED_BYTE_SIZE),
+        Some(vec![0, 1024]),
+        None,
+        0,
+    )
+    .expect_err("half a layout must be refused");
+    assert!(refusal.contains("together"), "{refusal:?}");
+}
+
+#[test]
+fn a_tiled_modifier_is_refused_by_value() {
+    let refusal = foreign_dma_buf_plane_layout(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        None,
+        None,
+        None,
+        0x0100_0000_0000_0001,
+    )
+    .expect_err("a tiled buffer must be refused");
+    assert!(refusal.contains("0x100000000000001"), "{refusal:?}");
+}
