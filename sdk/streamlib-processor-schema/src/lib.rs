@@ -16,7 +16,6 @@ pub mod exposed_name_cast;
 pub mod processor_class_import_path;
 pub mod processor_class_short_name;
 pub mod processor_schema;
-pub mod processor_schema_parser;
 
 pub use execution_config::ExecutionConfig;
 pub use process_execution::ProcessExecution;
@@ -45,4 +44,3 @@ pub use processor_schema::{
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
     ProcessorStateField, RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
 };
-pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};

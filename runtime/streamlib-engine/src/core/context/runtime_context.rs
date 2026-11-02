@@ -260,14 +260,6 @@ impl RuntimeContext {
         Arc::clone(&self.runtime_ops)
     }
 
-    /// Borrow the runtime-operations `Arc` directly. Engine-internal.
-    /// The Arc itself lives for the lifetime of the
-    /// `RuntimeContext`, so the borrow is sound for any caller that
-    /// holds an `&RuntimeContext`.
-    pub(crate) fn runtime_operations_ref(&self) -> &Arc<dyn RuntimeOperations> {
-        &self.runtime_ops
-    }
-
     /// Get the shared tokio runtime handle.
     ///
     /// Use this to spawn async tasks without creating your own runtime.
@@ -549,11 +541,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
         unsafe { &*(self.handle as *const RuntimeContext) }
     }
 
-    /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
-    pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
-        self.host_base().audio_clock()
-    }
-
     /// Per-runtime surface-sharing socket, for a spawn host to hand its child.
     ///
     /// The child's `streamlib-surface-client` dials it to import a surface
@@ -663,11 +650,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// See [`RuntimeContextFullAccess::host_base`].
     pub(crate) fn host_base(&self) -> &RuntimeContext {
         unsafe { &*(self.handle as *const RuntimeContext) }
-    }
-
-    /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
-    pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
-        self.host_base().audio_clock()
     }
 }
 

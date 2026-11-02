@@ -17,7 +17,6 @@ pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
-pub mod check_no_inventory_submit;
 pub mod check_no_tatolab_namespace_package_init;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
@@ -188,7 +187,6 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         "check-no-in-process-placement",
         check_no_in_process_placement::run,
     ),
-    ("check-no-inventory-submit", check_no_inventory_submit::run),
     (
         "check-no-escalate-in-lifecycle",
         check_no_escalate_in_lifecycle::run,
@@ -512,14 +510,6 @@ enum Commands {
     /// See `docs/decisions/helper-process-placement-only.md`.
     CheckNoInProcessPlacement,
 
-    /// CI gate for the all-dynamic registration rule. Fails on any
-    /// `inventory::submit!(FactoryRegistration { ... })` in live code —
-    /// the `#[processor]` macro emits none, and the pattern would bypass the
-    /// dynamic-load model. `RuntimeInitHookRegistration`
-    /// inventory submissions are unaffected — only `FactoryRegistration`
-    /// is flagged.
-    CheckNoInventorySubmit,
-
     /// CI gate for the escalate-from-lifecycle ban. Fails when
     /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
     /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
@@ -745,7 +735,6 @@ fn main() -> Result<()> {
         Commands::CheckNoInProcessPlacement => {
             check_no_in_process_placement::run(&workspace_root()?)?
         }
-        Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }

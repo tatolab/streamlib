@@ -478,12 +478,6 @@ impl SubprocessBridge {
             parent_side: Arc::clone(&self.parent_side),
         }
     }
-
-    /// Count of escalate-acquired handles the host still holds. Used by
-    /// teardown logging and tests.
-    pub(crate) fn registry(&self) -> &Arc<EscalateHandleRegistry> {
-        &self.registry
-    }
 }
 
 /// How links wired after a subprocess's setup command reach it: `wire_link`
