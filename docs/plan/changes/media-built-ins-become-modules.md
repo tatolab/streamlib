@@ -1,8 +1,7 @@
 # media-built-ins-become-modules
 
-> **Proposed, not approved.** Drafted 2026-11-02 from the owner's direction in the
-> code-bloat-review project thread. The direction itself is the owner's; every
-> `[NEEDS DECISION]` block below is open, and nothing here is DECIDED until the owner says so.
+> **Approved by the owner, 2026-11-02**, with its six decisions as recommended ("I approve your
+> decisions and recommendations").
 
 The runtime ships its media nodes as built-ins: Rust statically linked into `tatolabd`, reaching
 Python only as generated classes. The owner retires that shape. In the owner's words
@@ -115,7 +114,7 @@ across the language boundary.
   extension"** (`:534-537`): it is owed now, as `tatolab-module-sdk`.
 - **§Packages & extension model, "the CPython ABI is the only binary boundary"**
   (`:477-485`, `:505-506`): the host table is a second, narrow boundary — data-plane verbs and
-  plain handles only, never an RHI object. See `[NEEDS DECISION] D2`.
+  plain handles only, never an RHI object. See D2.
 - **§Processor model, built-in node type** (`:1495-1504`) and the generated classes
   (`:764-770`): media classes leave `tatolab.stream`; a module node's type is its own import
   path, e.g. `tatolab.camera:CameraSource`.
@@ -128,7 +127,10 @@ across the language boundary.
 - **§Media I/O, device permission** (`:2941`): "only the runtime process opens devices, never
   a processor interpreter" becomes "a device is opened by the node that uses it, in its own
   process, under the stream's capture-prompting policy".
-- **§Media I/O, `match_device`** (`:2643-2656`): see `[NEEDS DECISION] D4`.
+- **§Media I/O, the virtual camera** (`:2099-2110`): `VirtualCameraSink` is an extension wheel
+  like every other device node; installing the runtime alone no longer gives other
+  applications a camera (D5).
+- **§Media I/O, `match_device`** (`:2643-2656`): a device stream request carries a requested format, so a speaker needs no `match_device`; the sentinel stays engine-internal (D4).
 
 ## REMOVED
 
@@ -141,6 +143,8 @@ across the language boundary.
 - REMOVED: runtime/streamlib-media-builtins/src/h265_decoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/opus_encoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/opus_decoder.rs
+- REMOVED: runtime/streamlib-media-builtins/src/test_pattern_source.rs
+- REMOVED: runtime/streamlib-media-builtins/src/virtual_camera_sink.rs
 - REMOVED: tatolab.stream:CameraSource
 - REMOVED: tatolab.stream:MicrophoneSource
 - REMOVED: tatolab.stream:SpeakerSink
@@ -150,14 +154,16 @@ across the language boundary.
 - REMOVED: tatolab.stream:H265Decoder
 - REMOVED: tatolab.stream:OpusEncoder
 - REMOVED: tatolab.stream:OpusDecoder
+- REMOVED: tatolab.stream:TestPatternSource
+- REMOVED: tatolab.stream:VirtualCameraSink
 
-`TestPatternSource`, `VirtualCameraSink` and `RelayTrackSource` are not in this list until
-`D5` settles them. The engine's device backends, colour converter and Vulkan Video port are not
-in it either; where each lands is `D3` and `D4`.
+`RelayTrackSource` stays in the runtime as transport (D5). The engine's audio device arms and
+colour converter stay and are exported (D4); the Vulkan Video port leaves the engine for the
+crates D3 names, and its removal bullets are written when that tracer is ticketed.
 
 ## Decisions
 
-**[NEEDS DECISION] D1 — Confirm the direction in five sentences.**
+**Decided D1 — The direction, in five sentences** (owner, 2026-11-02).
 1. The runtime ships no media nodes; it is a general-purpose engine.
 2. Camera, microphone, speaker and codecs become Python nodes with native Rust halves, built as
    a third party would build them.
@@ -166,7 +172,7 @@ in it either; where each lands is `D3` and `D4`.
    private shortcut.
 5. TypeScript, when unpaused, follows the same model with the same native halves.
 
-**[NEEDS DECISION] D2 — The host table.** The plan rejected a narrow native ABI for
+**Decided D2 — The host table: (a)** (owner, 2026-11-02). The plan rejected a narrow native ABI for
 extensions; the plugin ABI was deleted in #1804. Options: (a) the versioned capsule table above,
 implemented once in the lent wheel, data-plane only, guarded by a lint that refuses RHI types in
 it; (b) no table: native threads take the GIL for every port write, uncontended because one
@@ -177,7 +183,7 @@ data plane. Unlike the plugin ABI, the engine never calls module code, nothing i
 the runtime, only plain data and generation-checked handles cross, and a version is accepted
 by minor, never by exact build.
 
-**[NEEDS DECISION] D3 — Where video codecs run.** (a) The module's native half owns its own
+**Decided D3 — Video codecs run on a device the module owns: (a)** (owner, 2026-11-02). (a) The module's native half owns its own
 Vulkan device on the runtime's GPU, matched by UUID, with video queues, and imports frames
 through `export_opaque_fd`. The Vulkan Video port moves out of the engine into an owned-device
 tier of `streamlib-consumer-rhi` plus a `streamlib-vulkan-video` crate, both published; `rhi.md`'s
@@ -187,13 +193,13 @@ first codec tracer's cost table (memory and startup of a second device, timeslic
 and 4 encoders). A driver fault in the video engine then ends one helper instead of the
 runtime's device. VideoToolbox and Opus go into their modules under either option.
 
-**[NEEDS DECISION] D4 — The audio device code and `match_device`.** Keep the PipeWire, ALSA
+**Decided D4 — The audio device arms stay in the engine and are exported; a device stream takes a requested format** (owner, 2026-11-02). Keep the PipeWire, ALSA
 and CoreAudio arms in the engine and export them through the host table (one device path,
 recommended), or move them into the audio module. Separately: give `AudioDeviceStreamRequest` a
 requested format so a speaker needs no `match_device` (recommended), or export settling
 `match_device` from a helper.
 
-**[NEEDS DECISION] D5 — The other built-ins.** `TestPatternSource` meets no criterion and can
+**Decided D5 — Test pattern and virtual camera move last; the relay reader stays** (owner, 2026-11-02). `TestPatternSource` meets no criterion and can
 be Python plus GLSL; the scaffold, the codec PSNR rig and about fifteen runtime test streams use
 it, so it moves last. `VirtualCameraSink` is a built-in so that installing the runtime alone
 gives other applications a camera. `RelayTrackSource` is "the only way a graph reads a relay"
@@ -201,7 +207,7 @@ and pins its MoQ crates to `tatolabd`'s publisher. **Recommendation:** move the 
 and the virtual camera last, keep the relay reader in the runtime as a transport, not a media
 node.
 
-**[NEEDS DECISION] D6 — Recorded graphs.** Recorded and golden graphs carry
+**Decided D6 — Golden graphs are re-recorded with each module's type** (owner, 2026-11-02). Recorded and golden graphs carry
 `tatolab.stream:CameraSource`. Pre-1.0 allows no shim. **Recommendation:** re-record every
 golden graph with the module's type in the change that moves each node, and let an old
 persisted graph refuse by name naming the module to install.
