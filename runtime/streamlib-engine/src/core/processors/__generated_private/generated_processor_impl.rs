@@ -72,6 +72,8 @@ enum HowALinkReachesTheFarSide {
 struct RecordedLinksAndHowTheNextReachesTheFarSide {
     input_links: Vec<JsonValue>,
     output_links: Vec<JsonValue>,
+    answer_cells_of_links_handed_over_past_the_setup_command:
+        Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
 }
 
@@ -83,12 +85,52 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         }
     }
 
+    fn record_a_link_handed_over_past_the_setup_command(
+        &mut self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: JsonValue,
+        answer_cell: Arc<OutOfProcessLinkWireReply>,
+    ) {
+        self.answer_cells_of_links_handed_over_past_the_setup_command
+            .push((link_id_of(&link_wiring), answer_cell));
+        self.links_facing(port_direction).push(link_wiring);
+    }
+
+    /// Forget every link handed over past the setup command that its far side
+    /// never opened, so a new far side is never handed a link `graph` reads
+    /// `error`.
+    fn forget_every_link_its_far_side_never_opened(&mut self) {
+        let never_opened: Vec<String> = self
+            .answer_cells_of_links_handed_over_past_the_setup_command
+            .drain(..)
+            .filter(|(_, answer_cell)| {
+                answer_cell.the_far_sides_answer()
+                    != Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
+            })
+            .filter_map(|(link_id, _)| link_id)
+            .collect();
+        let never_opened_by_its_far_side = |link_wiring: &JsonValue| {
+            link_id_of(link_wiring).is_some_and(|link_id| never_opened.contains(&link_id))
+        };
+        self.input_links
+            .retain(|link| !never_opened_by_its_far_side(link));
+        self.output_links
+            .retain(|link| !never_opened_by_its_far_side(link));
+    }
+
     fn as_setup_command_ports(&self) -> JsonValue {
         serde_json::json!({
             "inputs": self.input_links,
             "outputs": self.output_links,
         })
     }
+}
+
+fn link_id_of(link_wiring: &JsonValue) -> Option<String> {
+    link_wiring
+        .get("link_id")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
 }
 
 impl LinkAwaitingHandoverBehindTheSetupCommand {
@@ -156,6 +198,7 @@ impl OutOfProcessLinkWiringEnvelope {
                 RecordedLinksAndHowTheNextReachesTheFarSide {
                     input_links: Vec::new(),
                     output_links: Vec::new(),
+                    answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
                 },
@@ -184,7 +227,7 @@ impl OutOfProcessLinkWiringEnvelope {
     ///
     /// Named per spawn rather than per processor, so a spawn never opens a
     /// board an earlier one's dead writer still holds. The envelope keeps the
-    /// board until the processor is removed, whatever becomes of the child.
+    /// board until the next spawn's replaces it, and the counts it held after.
     pub fn create_the_loss_count_board_for_this_helper_spawn(
         &self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -253,7 +296,11 @@ impl OutOfProcessLinkWiringEnvelope {
                     &link_wiring,
                     Arc::clone(&answer_cell),
                 )?;
-                recorded.links_facing(port_direction).push(link_wiring);
+                recorded.record_a_link_handed_over_past_the_setup_command(
+                    port_direction,
+                    link_wiring,
+                    Arc::clone(&answer_cell),
+                );
                 Ok(Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
@@ -282,6 +329,9 @@ impl OutOfProcessLinkWiringEnvelope {
             .lock();
         recorded.input_links.retain(|link| !carries_link(link));
         recorded.output_links.retain(|link| !carries_link(link));
+        recorded
+            .answer_cells_of_links_handed_over_past_the_setup_command
+            .retain(|(handed_over_link_id, _)| handed_over_link_id.as_deref() != Some(link_id));
         self.loss_counts.forget_link(link_id);
         match &mut recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => {
@@ -397,9 +447,11 @@ impl OutOfProcessLinkWiringEnvelope {
                 Arc::clone(&waiting_link.answer_cell),
             );
             match handed_over {
-                Ok(()) => recorded
-                    .links_facing(waiting_link.port_direction)
-                    .push(waiting_link.link_wiring),
+                Ok(()) => recorded.record_a_link_handed_over_past_the_setup_command(
+                    waiting_link.port_direction,
+                    waiting_link.link_wiring,
+                    waiting_link.answer_cell,
+                ),
                 Err(handover_failure) => waiting_link.refuse_because(&handover_failure.to_string()),
             }
         }
@@ -431,7 +483,9 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 
     /// Reopen the envelope for a new far side standing in for one that died:
-    /// every link recorded so far rides the new far side's setup command.
+    /// every link the dead far side opened, or that rode its setup command,
+    /// rides the new far side's setup command; one it never opened stays
+    /// refused and is forgotten.
     pub fn reopen_for_a_new_far_side_in_place_of_one_that_died(&self) {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
@@ -451,6 +505,7 @@ impl OutOfProcessLinkWiringEnvelope {
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => {}
         }
+        recorded.forget_every_link_its_far_side_never_opened();
     }
 
     /// The `ports` payload a setup command sent now would carry.
@@ -1106,13 +1161,14 @@ mod tests {
         );
     }
 
-    /// A new helper standing in for one that died is handed every link the
-    /// node holds on its own setup command, those wired before the death and
-    /// those wired past the dead helper's setup alike.
+    /// A new helper standing in for one that died is handed, on its own setup
+    /// command, every link the dead helper opened, those that rode its setup
+    /// command and those handed over past it alike, and never one it was handed
+    /// and never opened, which `graph` reads `error`.
     ///
     /// Fail-without-fix: leave the envelope refusing and the new helper's setup
     /// command is refused; clear the recorded links on reopen and it opens no
-    /// port.
+    /// port; keep every recorded link and the unopened one rides along.
     #[test]
     fn a_reopened_envelope_hands_a_new_far_side_every_link_the_dead_one_held() {
         let envelope =
@@ -1125,7 +1181,15 @@ mod tests {
                 RecordingOutOfProcessFarSideLinkDelivery::default(),
             )
             .expect("the dead helper's setup command went out");
-        record(&envelope, PortDirection::Output, "L-past-setup");
+        envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Output,
+                link_wiring_entry("L-past-setup", "port"),
+            )
+            .expect("a far side that is not gone takes the link")
+            .expect("a link past the setup command waits on the far side's answer")
+            .note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        record(&envelope, PortDirection::Output, "L-never-opened");
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
             "the helper process died".to_string(),
         );

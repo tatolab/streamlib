@@ -802,6 +802,7 @@ fn run_manual_mode(
     let mut restart_backoff = ChildProcessRestartBackoff::new();
     let mut current_helper_process_started_at = Instant::now();
     let mut next_helper_process_restart_at: Option<Instant> = None;
+    let mut helper_process_stopped_answering_at: Option<Instant> = None;
 
     loop {
         // Check for shutdown
@@ -815,6 +816,9 @@ fn run_manual_mode(
 
         if is_paused && !was_paused {
             dispatch_on_pause(id, processor, runtime_ctx);
+            // A pause that landed while the node read `Restarting` set the
+            // gate but could not move the state.
+            state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
             was_paused = true;
         } else if !is_paused && was_paused {
             dispatch_on_resume(id, processor, runtime_ctx);
@@ -833,14 +837,28 @@ fn run_manual_mode(
                     Ok(()) => {
                         state.note_a_helper_process_restart();
                         current_helper_process_started_at = Instant::now();
+                        helper_process_stopped_answering_at = None;
                         if pause_gate.load(Ordering::Acquire) {
                             dispatch_on_pause(id, processor, runtime_ctx);
                             was_paused = true;
-                            state.transition_to(ProcessorState::Paused);
+                            state.transition_to_only_from(
+                                ProcessorState::Restarting,
+                                ProcessorState::Paused,
+                            );
                         } else {
                             was_paused = false;
-                            state.transition_to(ProcessorState::Running);
+                            state.transition_to_only_from(
+                                ProcessorState::Restarting,
+                                ProcessorState::Running,
+                            );
                         }
+                    }
+                    Err(_) if shutdown_rx.try_recv().is_ok() => {
+                        tracing::info!(
+                            "[{}] Received shutdown signal while its helper process restarted",
+                            id
+                        );
+                        break;
                     }
                     Err(restart_refusal) => {
                         next_helper_process_restart_at = after_a_helper_process_death(
@@ -878,6 +896,7 @@ fn run_manual_mode(
                 why_the_helper_process_died_on_its_own,
             ) {
                 (_, Some(exit_reason)) => {
+                    helper_process_stopped_answering_at = None;
                     next_helper_process_restart_at = after_a_helper_process_death(
                         id,
                         state,
@@ -888,9 +907,18 @@ fn run_manual_mode(
                     already_reported_failure = next_helper_process_restart_at.is_none();
                 }
                 (true, None) => {
-                    tracing::error!("[{}] Processor failed unrecoverably", id);
-                    state.fail_with("its helper process stopped answering the engine");
-                    already_reported_failure = true;
+                    // A helper that is exiting closes its escalate socket
+                    // before its process can be collected; only one still
+                    // there after the grace has stopped answering.
+                    let stopped_answering_at =
+                        *helper_process_stopped_answering_at.get_or_insert_with(Instant::now);
+                    if stopped_answering_at.elapsed()
+                        >= GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED
+                    {
+                        tracing::error!("[{}] Processor failed unrecoverably", id);
+                        state.fail_with("its helper process stopped answering the engine");
+                        already_reported_failure = true;
+                    }
                 }
                 (false, None) => {}
             }
@@ -922,6 +950,11 @@ fn run_manual_mode(
         }
     }
 }
+
+/// How long a helper process whose escalate socket closed gets to exit before
+/// it is taken to have stopped answering rather than to be dying.
+const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Duration =
+    Duration::from_secs(5);
 
 /// Start a new helper process in place of one that died on its own, under a
 /// fresh full-access grant as the processor's first `setup()` and `start()`
