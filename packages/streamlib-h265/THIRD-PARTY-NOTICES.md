@@ -23,7 +23,7 @@ not reproduced below.
 
 ## Overview
 
-- **MIT License** — 53 crates
+- **MIT License** — 59 crates
 - **Apache License 2.0** — 4 crates
 - **ISC License** — 1 crate
 - **Unicode License v3** — 1 crate
@@ -501,7 +501,7 @@ THIS SOFTWARE.
 
 Used by:
 
-- [cc 1.10.0](https://github.com/rust-lang/cc-rs)
+- [cc 1.11.0](https://github.com/rust-lang/cc-rs)
 - [cfg-if 1.0.5](https://github.com/rust-lang/cfg-if)
 - [find-msvc-tools 0.1.15](https://github.com/rust-lang/cc-rs)
 
@@ -931,12 +931,18 @@ Used by:
 
 - [block2 0.6.2](https://github.com/madsmtm/objc2)
 - [dispatch2 0.3.1](https://github.com/madsmtm/objc2)
+- [objc2-core-audio-types 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-audio 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-core-foundation 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-graphics 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-media 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-video 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-encode 4.1.0](https://github.com/madsmtm/objc2)
 - [objc2-exception-helper 0.1.1](https://github.com/madsmtm/objc2)
 - [objc2-foundation 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-io-surface 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-metal 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-video-toolbox 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2 0.6.5](https://github.com/madsmtm/objc2)
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
 
