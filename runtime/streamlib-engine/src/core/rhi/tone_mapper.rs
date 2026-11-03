@@ -184,8 +184,8 @@ impl RhiToneMapper {
     }
 
     /// Apply the tone curve to `src` into `dst` end-to-end. Builds the
-    /// kernel (if needed), binds, dispatches via its own command buffer
-    /// + fence + queue submit, and waits before returning. Caller is
+    /// kernel (if needed), binds, dispatches via its own command buffer,
+    /// fence and queue submit, and waits before returning. Caller is
     /// responsible for ensuring `src` and `dst` are in
     /// [`crate::core::rhi::VulkanLayout::GENERAL`] (the storage-image
     /// binding requirement). For consumers that need layout transitions

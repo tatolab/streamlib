@@ -177,12 +177,15 @@ pub fn tracked_files_under_scan_roots(
         .collect())
 }
 
+/// A gate that walks the source tree under the given root and reports violations.
+type SourceWalkingGate = fn(&Path) -> Result<()>;
+
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
 /// lets one process run all sixteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
-const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
+const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     ("lint-logging", lint_logging::run),
     ("check-boundaries", check_boundaries::run),
     ("check-vendored-trees", check_vendored_trees::run),
