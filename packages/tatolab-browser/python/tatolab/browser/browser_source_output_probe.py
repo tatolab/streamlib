@@ -7,7 +7,8 @@ It reads the page's frames, audio and events, and sends the page a `data`
 message every `frames_between_data_messages` frames. A page that answers each
 one by publishing `{"data_painted": <the message's sent_ns>}` from the first
 animation frame after it handled the event lets the probe report how long a
-`data` message takes to reach the page's paint and come back.
+`data` message takes to reach the page's next animation frame callback and come
+back; it does not wait for that frame's paint to reach `video`.
 """
 
 from __future__ import annotations
@@ -41,12 +42,16 @@ class BrowserSourceOutputProbeConfig:
     ] = 30
 
     def __post_init__(self) -> None:
-        for field_name in ("frames_between_reports", "frames_between_data_messages"):
+        fewest_frames_by_field_name = {
+            "frames_between_reports": 2,
+            "frames_between_data_messages": 1,
+        }
+        for field_name, fewest_frames in fewest_frames_by_field_name.items():
             frames = getattr(self, field_name)
-            if not isinstance(frames, int) or isinstance(frames, bool) or frames < 1:
+            if not isinstance(frames, int) or isinstance(frames, bool) or frames < fewest_frames:
                 raise ValueError(
                     f"BrowserSourceOutputProbeConfig: {field_name} is a whole number of "
-                    f"frames, at least 1, got {frames!r}"
+                    f"frames, at least {fewest_frames}, got {frames!r}"
                 )
 
 

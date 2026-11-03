@@ -70,6 +70,7 @@ accepted = ["MIT"]
 
 # `libbz2-rs-sys` is under bzip2's own permissive licence. It reaches only
 # `tatolab-browser`'s closure, as a build dependency that unpacks the CEF
-# archive, and is accepted for that crate alone.
+# archive. The table matches by crate name, so the acceptance holds for
+# `libbz2-rs-sys` in every closure this file configures.
 [libbz2-rs-sys]
 accepted = ["bzip2-1.0.6"]

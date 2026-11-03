@@ -31,7 +31,11 @@ const PAGE_BRIDGE_BOOTSTRAP_SCRIPT: &str = r#"(() => {
     if (typeof object !== "object" || object === null || Array.isArray(object)) {
       throw new TypeError("tatolab.publish takes one plain object, published as one map");
     }
-    publishJson(JSON.stringify(object));
+    const json = JSON.stringify(object);
+    if (typeof json !== "string" || json[0] !== "{") {
+      throw new TypeError("tatolab.publish takes one plain object, published as one map");
+    }
+    publishJson(json);
   };
   Object.defineProperty(window, "tatolab", {
     value: Object.freeze({ publish }),
