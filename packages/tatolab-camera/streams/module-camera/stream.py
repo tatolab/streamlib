@@ -7,9 +7,10 @@ Watch it at http://127.0.0.1:4446/watch/<machine>/main. The probe's reports
 land in the project's log.
 """
 
-from tatolab.stream import Exposure, H264Encoder, StreamBuilder, stream
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from tatolab.camera import CameraSource, CaptureToDownstreamLatencyProbe
+from tatolab.h264 import H264Encoder
 
 # A V4L2 node such as `/dev/video0` on Linux, an AVFoundation unique ID on macOS;
 # `None` opens the first camera found.

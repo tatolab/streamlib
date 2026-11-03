@@ -557,13 +557,16 @@ jobs:
       # the engine has moved past cannot hide the engine's own result.
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.
+      # Its tests wire the H.264 module's nodes, so the module's wheel, built
+      # here once, joins the venv; the H.264 steps below reuse it.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
         working-directory: packages/streamlib-webrtc
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
+          (cd ../streamlib-h264 && uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist")
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` and pyright do not reach a non-member.
@@ -681,9 +684,7 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist"
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
 
       - name: "Extension: streamlib-h264 formatting, crate tests, clippy and types"
         working-directory: packages/streamlib-h264
@@ -1100,7 +1101,7 @@ jobs:
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: "Extension: crate tests and clippy"

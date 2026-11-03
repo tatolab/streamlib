@@ -15,7 +15,6 @@ from pathlib import Path
 
 from tatolab.stream import (
     Exposure,
-    H264Encoder,
     StreamBuilder,
     stream,
 )
@@ -23,6 +22,7 @@ from tatolab.stream import (
 from lower_third_title_ticker import LowerThirdTitleTicker
 from tatolab.camera import CameraSource
 from tatolab.compositor import AlphaOverCompositor
+from tatolab.h264 import H264Encoder
 from tatolab.rive import RiveSource
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.

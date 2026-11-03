@@ -58,13 +58,14 @@ include = ["python", "tests"]
 # The package is checked from source, not from an install, so `tests/` needs the
 # package root on the search path. Its helper-side tests import `tatolab.runtime`,
 # which no venv of a package holds — they borrow it from the runtime unit's lend —
-# so pyright reads it from the engine's own source and stub in this checkout. The live
-# streams import the microphone and speaker modules, read from their source and stubs.
+# so pyright reads it from the engine's own source and stub in this checkout. The
+# streams import the microphone, speaker and H.264 modules, read from their source and stubs.
 extraPaths = [
     "python",
     "../../sdk/streamlib-python-wheel/python",
     "../tatolab-microphone/python",
     "../tatolab-speaker/python",
+    "../streamlib-h264/python",
 ]
 # Checked at the version floor rather than whatever interpreter the venv happens
 # to be — `requires-python` is the promise.
