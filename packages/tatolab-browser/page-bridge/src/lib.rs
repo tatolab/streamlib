@@ -75,16 +75,13 @@ fn javascript_string_literal(text: &str) -> String {
 /// naming the helper whose life each child is bound to.
 pub const BROWSER_HELPER_PID_SWITCH_NAME: &str = "tatolab-browser-helper-pid";
 
-/// Ends this process when the browser helper that launched it dies, so a
-/// helper killed outright takes its CEF children with it.
-///
-/// The watch is armed before the parent check, so a helper that died before
-/// this process ran is caught by the check and one that dies after by the
-/// watch.
+/// Ends this process when the browser helper that launched it dies.
 pub fn die_with_the_browser_helper() {
     let Some(browser_helper_pid) = browser_helper_pid_named_in(std::env::args()) else {
         return;
     };
+    // Armed before the parent check: a helper that died earlier fails the
+    // check, and one that dies later fires the watch.
     arm_the_browser_helper_exit_watch(browser_helper_pid);
     // SAFETY: getppid takes nothing and cannot fail.
     if unsafe { libc::getppid() } != browser_helper_pid {
