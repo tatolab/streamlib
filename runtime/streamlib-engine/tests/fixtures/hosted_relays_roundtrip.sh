@@ -104,6 +104,7 @@ compgen -G "/dev/dri/renderD*" >/dev/null \
 . "$SCRIPT_DIR/fixture_runtime_unit.sh"
 require_the_runtime_unit
 require_the_fixture_venv
+require_the_codec_modules_in_the_fixture_venv
 refuse_while_a_runtime_answers_at_the_local_api_socket \
     || cannot_run "a runtime already holds this machine; this run starts its own"
 

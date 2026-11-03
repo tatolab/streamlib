@@ -82,9 +82,10 @@ venvPath = "."
 venv = ".venv"
 
 # The scaffold template tree, checked as the app it becomes: rooted at the app
-# directory, so `stream.py`'s `nodes` import resolves, and at the Python version
-# the scaffold pins.
+# directory, so `stream.py`'s `nodes` import resolves, with the `tatolab-h264`
+# module it depends on read from this checkout, and at the Python version the
+# scaffold pins.
 [[tool.pyright.executionEnvironments]]
 root = "scaffold_template"
-extraPaths = ["."]
+extraPaths = [".", "../../packages/streamlib-h264/python"]
 pythonVersion = "3.12"

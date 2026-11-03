@@ -23,7 +23,7 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
-from tatolab.stream import H264Encoder, TestPatternSource
+from tatolab.stream import TestPatternSource
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -155,7 +155,7 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
         TestPatternSource.type,
         "nodes.halftone_lens_effect:HalftoneLensEffect",
         "nodes.brightness_meter:BrightnessMeter",
-        H264Encoder.type,
+        "tatolab.h264.processors:H264Encoder",
     ]
     assert stream_graph["exposed"] == [
         {"node": "h264encoder", "port": "encoded_video", "level": "public"}

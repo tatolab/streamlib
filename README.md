@@ -176,9 +176,9 @@ begun unloading runs to the end.
 `stream.py` is wiring and nothing else:
 
 ```python
+from tatolab.h264 import H264Encoder
 from tatolab.stream import (
     Exposure,
-    H264Encoder,
     StreamBuilder,
     TestPatternSource,
     stream,
@@ -210,7 +210,7 @@ H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser p
 or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
 pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s `CameraSource`, as the comment says,
 to run your camera through the same effect. A built-in's `config` is a `TypedDict` —
-`TestPatternSourceConfig`, `H264EncoderConfig` — so a type checker catches a misspelled key. `expose` without a level
+`TestPatternSourceConfig`, `OpusEncoderConfig` — so a type checker catches a misspelled key. `expose` without a level
 makes an output private, readable by other streams and code on this machine.
 
 Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
@@ -679,7 +679,6 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 | Built-in | |
 |---|---|
 | `TestPatternSource` | Color bars, for a machine with no camera. |
-| `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
 | `OpusEncoder`, `OpusDecoder` | libopus. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
 
@@ -688,7 +687,10 @@ The microphone and speaker are modules: `pip install tatolab-microphone tatolab-
 Each runs in its own helper process and moves its samples on a native thread over the
 engine's audio backend, so no interpreter sits in the sample path either. The camera is one too:
 `pip install tatolab-camera`, then `from tatolab.camera import CameraSource` — V4L2 on Linux and
-AVFoundation on macOS, each frame imported to the GPU with no CPU copy.
+AVFoundation on macOS, each frame imported to the GPU with no CPU copy. So are the hardware
+video codecs: `pip install tatolab-h264 tatolab-h265`, then `from tatolab.h264 import H264Encoder,
+H264Decoder` and `from tatolab.h265 import H265Encoder, H265Decoder` — Vulkan Video on a device
+the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on `tatolab-h264`.
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
 model-input tensor kernel, and the monotonic clock every node shares.

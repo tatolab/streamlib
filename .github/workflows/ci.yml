@@ -304,7 +304,7 @@ jobs:
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track -p streamlib-relay-track-reader
-          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,tatolab-module-sdk/pyo3
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3
           --lib --bins --tests
 
       - name: Save the compile-fail tests' build
@@ -445,7 +445,6 @@ jobs:
       # The stream package with its test group and nothing of the runtime, so a
       # stream test that reaches for the runtime fails to import; built and
       # installed, not editable. 3.10 is the floor `requires-python` promises.
-      # A scaffolded stream compiles and type-checks with no runtime installed.
       - name: Stream package tests (Python 3.10)
         run: |
           (
@@ -455,25 +454,7 @@ jobs:
             .venv/bin/pytest tests -q
             uvx pyright@1.1.411
           )
-          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
-          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
-          cd "$RUNNER_TEMP/scaffold"
-          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
-          import importlib.util
-          import sys
-
-          import stream
-          from tatolab.stream import compile_stream_to_graph
-
-          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
-          graph = compile_stream_to_graph(stream.main)
-          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
-          assert runtime_modules_loaded == [], runtime_modules_loaded
-          print([node["type"] for node in graph["nodes"]])
-          EOF
-          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
       - name: Cache the Linux bundled Vulkan driver build
         if: steps.restore.outputs.cache-hit != 'true'
@@ -694,15 +675,15 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v
 
-      # The H.264 module encodes with Vulkan Video, which only the Linux lane
-      # builds; its GPU encode runs in the rig.
+      # Its GPU encode runs in the rig.
       - name: "Extension: build streamlib-h264 into a venv holding tatolab-stream"
         working-directory: packages/streamlib-h264
         run: |
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+          uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist"
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
 
       - name: "Extension: streamlib-h264 formatting, crate tests, clippy and types"
         working-directory: packages/streamlib-h264
@@ -718,6 +699,31 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.h264._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      # A scaffolded stream compiles and type-checks with no runtime installed,
+      # in what a user's `uv sync` gives it: `tatolab-stream`, the H.264 module
+      # and numpy.
+      - name: Scaffolded stream compiles and type-checks (Python 3.10)
+        run: |
+          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
+          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
+            "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl 'numpy>=2.1'
+          cd "$RUNNER_TEMP/scaffold"
+          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib.util
+          import sys
+
+          import stream
+          from tatolab.stream import compile_stream_to_graph
+
+          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
+          graph = compile_stream_to_graph(stream.main)
+          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
+          assert runtime_modules_loaded == [], runtime_modules_loaded
+          print([node["type"] for node in graph["nodes"]])
+          EOF
+          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
       # The H.265 module shares the H.264 module's encoder body; the same holds.
       - name: "Extension: build streamlib-h265 into a venv holding tatolab-stream"
@@ -856,12 +862,13 @@ jobs:
             --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
             --lib \
             --test avfoundation_camera_captures_through_the_video_device_seam \
-            --test videotoolbox_arm_round_trips_the_psnr_references \
             --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing \
             --test coreaudio_arm_plays_what_it_is_given \
             --test coreaudio_arm_hears_the_room_through_the_built_in_microphone \
             --test coreaudio_arm_hears_what_it_plays \
             --test coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap --no-run
+          cargo test --locked -p streamlib-owned-device-video-codec-nodes --features hardware-tests \
+            --test videotoolbox_sessions_round_trip_the_psnr_references --no-run
 
       # The source-walking gates evaluate `cfg` for macOS as well as Linux, so
       # `apple/` is linted here. Their prescriptions name Linux calls Darwin
@@ -1064,11 +1071,26 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+      # The H.264 module on VideoToolbox: the wheel the scaffold below depends
+      # on, its stub against the binary, and its GPU-free tests.
+      - name: "Extension: build streamlib-h264 into a venv holding tatolab-stream"
+        working-directory: packages/streamlib-h264
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist"
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
+          .venv/bin/python -m mypy.stubtest tatolab.h264._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
       - name: The scaffolded stream runs on the driver the lend carries
         run: |
-          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           bash scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh \
-            "$GITHUB_WORKSPACE/target/tatolab-runtime" "$RUNNER_TEMP/tatolab-stream-dist"
+            "$GITHUB_WORKSPACE/target/tatolab-runtime" "$RUNNER_TEMP/tatolab-stream-dist" \
+            "$RUNNER_TEMP/tatolab-h264-dist"
 
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.

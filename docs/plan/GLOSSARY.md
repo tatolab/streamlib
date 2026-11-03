@@ -66,8 +66,8 @@ also brings a capability.
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
-**Built-in**: a first-party native processor shipped inside the runtime, never on pip (display,
-audio, the seven codec blocks, the virtual camera) — added and configured from
+**Built-in**: a first-party native processor shipped inside the runtime, never on pip (the test
+pattern, the Opus codec blocks, the virtual camera) — added and configured from
 Python through the class `tatolab.stream` carries generated for it, its type that class's import
 path (`tatolab.stream:TestPatternSource`), never where its native code lives; its per-frame path
 never enters an interpreter. Since the 2026-09-04 extension-model pivot, not the default home
@@ -156,9 +156,9 @@ the **local relay** `tatolabd` runs as a child for every machine, and the hosted
 machine joins for an internet address. Never the runtime. _Avoid_: "gateway", "tower",
 "router", "endpoint".
 
-**Codec block**: one of the codec built-ins — encoder or decoder inside the runtime
-(`H264Encoder`, `OpusDecoder`, ...), configured like any built-in; its per-frame path never
-enters an interpreter. There is no muxer: a stream's last mile is a MoQ client's. The next
+**Codec block**: an encoder or decoder node — the video codecs as the `tatolab-h264` and
+`tatolab-h265` modules (`H264Encoder`, `H265Decoder`, ...), the Opus pair still built-ins —
+configured like any node; its per-frame path never enters an interpreter. There is no muxer: a stream's last mile is a MoQ client's. The next
 codec follows the built-in criterion and is not a codec block by default. _Avoid_: "codec
 processor" (user-authored shape), "codec plugin" (pre-pivot).
 
@@ -285,7 +285,7 @@ token's expiry), because they correlate with the outside world. Never on the dat
 monotonic timestamp. _Avoid_: "system time", "real time".
 
 **Engine primitive**: a hardware capability the engine owns and exposes through its
-handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), texture rings, codec sessions, the audio clock, color resolution. Built-ins and
+handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), texture rings, the audio clock, color resolution. Built-ins and
 external code compose primitives; they never reimplement them.
 
 **Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, an

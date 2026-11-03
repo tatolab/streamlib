@@ -140,6 +140,22 @@ require_the_audio_modules_in_the_fixture_venv() {
     fi
 }
 
+# Builds the H.264 and H.265 modules from this checkout into the fixture venv
+# when it cannot import them, exiting 1 when they do not build. A fixture stream
+# that encodes or decodes video imports them, as any stream would.
+require_the_codec_modules_in_the_fixture_venv() {
+    if "$FIXTURE_PYTHON" -c 'import tatolab.h264, tatolab.h265' >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "building tatolab-h264 and tatolab-h265 into $FIXTURE_VENV_DIRECTORY" >&2
+    if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet \
+        "$FIXTURE_REPOSITORY_ROOT/packages/streamlib-h264" \
+        "$FIXTURE_REPOSITORY_ROOT/packages/streamlib-h265" >&2; then
+        echo "ERROR: the codec modules did not build into $FIXTURE_VENV_DIRECTORY" >&2
+        exit 1
+    fi
+}
+
 # Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`,
 # `expose`).
 tatolab_observation_verb() {

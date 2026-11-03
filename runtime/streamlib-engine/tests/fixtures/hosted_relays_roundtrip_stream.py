@@ -11,6 +11,7 @@ run --dir` and reads both tracks back off each hosted relay.
 """
 
 import tatolab.stream
+from tatolab.h264 import H264Encoder
 from tatolab.stream import Exposure, StreamBuilder, stream
 
 # The colour rig's GOP, so its h264 baseline scores what is read back here.
@@ -25,11 +26,9 @@ def the_test_pattern_encoded_with_one_port_public_and_one_private(
         tatolab.stream.TestPatternSource, name="test_pattern"
     )
     encoder_config = {"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS}
-    public_encoder = stream_builder.add(
-        tatolab.stream.H264Encoder, name="encoder", config=encoder_config
-    )
+    public_encoder = stream_builder.add(H264Encoder, name="encoder", config=encoder_config)
     private_encoder = stream_builder.add(
-        tatolab.stream.H264Encoder, name="private_encoder", config=encoder_config
+        H264Encoder, name="private_encoder", config=encoder_config
     )
 
     stream_builder.connect(test_pattern.output("video"), public_encoder.input("video"))

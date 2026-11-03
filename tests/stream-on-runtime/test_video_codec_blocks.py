@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The four hardware video codec built-ins, built-in class to decoded frame.
+"""The four hardware video codec modules, node class to decoded frame.
 
 The load tests need no device: `tatolabd` loads the graph and its start is
 then refused at the GPU. The graph tests start the engine and need a hardware
-encoder and decoder — Vulkan Video queues on Linux, VideoToolbox on macOS — so
+encoder and decoder — Vulkan Video on Linux, VideoToolbox on macOS — so
 they carry `requires_gpu` like every other graph test here, and
 `rig_only_capability`, since the software device has no Vulkan Video.
 
@@ -28,14 +28,9 @@ from block_wiring_streams import (
     h265_round_trip_exposing_the_decoded_port,
 )
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
-from tatolab.stream import (
-    H264Decoder,
-    H264Encoder,
-    H265Decoder,
-    H265Encoder,
-    VideoFrame,
-    compile_stream_to_graph,
-)
+from tatolab.h264 import H264Decoder, H264Encoder
+from tatolab.h265 import H265Decoder, H265Encoder
+from tatolab.stream import VideoFrame, compile_stream_to_graph
 from video_codec_blocks_probes import DECODED_STAMPS_REPORTED, ENCODED_FRAMES_REPORTED
 from video_codec_blocks_streams import (
     an_h264_decoder_alone,
@@ -68,6 +63,11 @@ ANNEX_B_START_CODES = ([0, 0, 0, 1], [0, 0, 1])
 FOUR_CODEC_MARKERS = [H264Encoder, H264Decoder, H265Encoder, H265Decoder]
 
 
+def node_type_of(codec_node_class: type) -> str:
+    """The `<module>:<qualname>` a node class compiles to."""
+    return f"{codec_node_class.__module__}:{codec_node_class.__qualname__}"
+
+
 ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS = {
     H264Encoder: an_h264_encoder_alone,
     H264Decoder: an_h264_decoder_alone,
@@ -86,8 +86,8 @@ CODEC_ROUND_TRIPS = {
         "probed_stream": an_h264_round_trip_with_probes,
         "marker_classes": (H264Encoder, H264Decoder),
         "rendered_types": {
-            "H264Encoder": "tatolab.stream:H264Encoder",
-            "H264Decoder": "tatolab.stream:H264Decoder",
+            "H264Encoder": "tatolab.h264.processors:H264Encoder",
+            "H264Decoder": "tatolab.h264.processors:H264Decoder",
         },
     },
     "h265": {
@@ -95,14 +95,14 @@ CODEC_ROUND_TRIPS = {
         "probed_stream": an_h265_round_trip_with_probes,
         "marker_classes": (H265Encoder, H265Decoder),
         "rendered_types": {
-            "H265Encoder": "tatolab.stream:H265Encoder",
-            "H265Decoder": "tatolab.stream:H265Decoder",
+            "H265Encoder": "tatolab.h265.processors:H265Encoder",
+            "H265Decoder": "tatolab.h265.processors:H265Decoder",
         },
     },
 }
 
 
-# ---- built-in class semantics (no GPU) -------------------------------------
+# ---- node class semantics (no GPU) -----------------------------------------
 
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
@@ -111,7 +111,7 @@ def test_node_name_defaults_to_the_type_name(
 ):
     graph = compile_stream_to_graph(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
     (codec_node,) = [
-        node for node in graph["nodes"] if node["type"] == marker_class.type
+        node for node in graph["nodes"] if node["type"] == node_type_of(marker_class)
     ]
     assert codec_node["name"] == marker_class.__name__.lower()
 
@@ -148,7 +148,7 @@ def start_the_codec_round_trip(
 
 
 def the_codec_nodes_rendered_types(live_graph: dict, codec: str) -> "dict[str, str]":
-    """The `type` `graph` renders for the two codec nodes, keyed by the built-in
+    """The `type` `graph` renders for the two codec nodes, keyed by the node
     class each was added as."""
     marker_classes = CODEC_ROUND_TRIPS[codec]["marker_classes"]
     compiled_graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["probed_stream"])
@@ -156,7 +156,7 @@ def the_codec_nodes_rendered_types(live_graph: dict, codec: str) -> "dict[str, s
         node["name"]: marker_class.__name__
         for node in compiled_graph["nodes"]
         for marker_class in marker_classes
-        if node["type"] == marker_class.type
+        if node["type"] == node_type_of(marker_class)
     }
     return {
         marker_class_name_by_node_name[node["name"]]: node["type"]
@@ -171,8 +171,8 @@ def the_codec_nodes_rendered_types(live_graph: dict, codec: str) -> "dict[str, s
 def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", codec
 ):
-    """The whole surface, end to end: built-in class → native registration →
-    hardware encode and decode in `tatolabd` → decoded bags read by a Python
+    """The whole surface, end to end: module node class → helper process →
+    hardware encode and decode in its helper → decoded bags read by a Python
     processor in its own processor interpreter.
 
     The pattern publishes 320×180, both codecs code it at 320×192, and the
@@ -182,7 +182,7 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     than re-stamped at publication is the sibling test's, which has the
     encoded side's frame-header stamps to compare against."""
     tatolabd = start_the_codec_round_trip(start_tatolabd_running_stream, codec)
-    # The import path the built-in class resolved to is what identifies the
+    # The import path the node class resolved to is what identifies the
     # node, read back off the live graph the run loaded.
     rendered_types = the_codec_nodes_rendered_types(
         tatolabd.local_api_client().call_tool(

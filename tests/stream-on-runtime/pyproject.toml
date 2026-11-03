@@ -20,6 +20,9 @@ dependencies = [
     "tatolab-compositor",
     # The camera node the camera, cast-claim and device-exchange fixtures add.
     "tatolab-camera",
+    # The video codec nodes the codec, relay and scaffold fixtures add.
+    "tatolab-h264",
+    "tatolab-h265",
     "pytest>=7.0",
     "numpy>=2.1",
     # The official MCP Python SDK, whose streamable-HTTP client drives a
@@ -52,6 +55,8 @@ tatolab-microphone = { path = "../../packages/tatolab-microphone" }
 tatolab-speaker = { path = "../../packages/tatolab-speaker" }
 tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = true }
 tatolab-camera = { path = "../../packages/tatolab-camera" }
+tatolab-h264 = { path = "../../packages/streamlib-h264" }
+tatolab-h265 = { path = "../../packages/streamlib-h265" }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's
