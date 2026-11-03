@@ -78,11 +78,32 @@ retires nothing.
   render target, with the acquire and release semaphores the engine already uses for
   surface-share. The renderer's own C++ makes its Vulkan calls on that device. Rust outside
   the RHI still never names `vulkanalia`.
-- **`packages/tatolab-browser`.** A CEF offscreen browser runs in the node's helper. Its
-  subprocesses execute a small `tatolab-browser-subprocess` binary that ships in the wheel,
-  never `sys.executable`.
-  - Each frame is imported zero-copy where the platform allows it, otherwise written from host
-    memory, and published from CEF's paint thread through the host table.
+- **Supervised shared services.** `tatolabd` supervises a shared native service the way it
+  supervises the local relay: its own process group, bound to `tatolabd`'s life, restarted
+  under the engine's one child-process restart policy (`helper-process-restart`) with its
+  crash-loop limit. A node's
+  helper takes a lease on a service over the escalate channel; the lease ends when the node
+  stops or its helper dies. The service starts at the first lease and stops a short grace
+  after the last. The scope a lease resolves to is one runtime rule: the machine. A service
+  runs no Python, so it is not a processor placement.
+- **The browser host.** One CEF offscreen browser per machine, every `BrowserSource` in every
+  stream one tab in it, each running stream its own CEF profile (cookies, storage, cache).
+  Its source lives in `packages/tatolab-browser` and links no engine crate. An xtask stages it
+  per OS into the runtime unit, beside `tatolabd` as the relay is, with CEF stripped of debug
+  symbols; an OS whose unit lacks it refuses `BrowserSource` by name. On macOS the host owns
+  its own main thread. CEF's subprocesses execute a small `tatolab-browser-subprocess`
+  binary, never `sys.executable`, and each page keeps its own renderer process.
+  - The host hands each tab's frames to its node zero-copy where the platform allows it (a
+    DMA-BUF on Linux, an IOSurface on macOS, through the surface-share service), otherwise
+    through host memory, and the node publishes them through the host table.
+  - The host logs each tab under its stream's id, into that stream's project log.
+  - A tab whose renderer dies is logged and its page reloaded; a host that restarts reopens
+    every tab.
+- **`packages/tatolab-browser`'s wheel** is the node side: `BrowserSource` and the client that
+  asks the host for a tab, over a versioned tab protocol that refuses a mismatch by name.
+  Stream code is unchanged: `BrowserSource` keeps its config keys and ports, and a stream
+  never names the host.
+- **`BrowserSource`'s contract:**
   - Config: `url`, `width`, `height`, `frame_rate`, `transparent_background`.
   - Each `data` message is a msgpack map and reaches the page as
     `window.dispatchEvent(new CustomEvent("tatolab:data", {detail}))`.
@@ -108,6 +129,8 @@ retires nothing.
 
 - **§Packages & extension model**, the first-party module list: add `tatolab.browser`,
   `tatolab.rive` and `tatolab.compositor`.
+- **§Packages & extension model** and **§Distribution & versioning**: the runtime unit carries the browser
+  host per OS beside the relay, and `tatolabd` supervises both, as ADDED states.
 - **§GPU** (the consumer RHI): the owned-device tier serves video codecs and embedded
   renderers. The external-renderer accessor is the single place raw Vulkan handles leave the
   RHI. It is named for that purpose, never for general use.
@@ -145,9 +168,25 @@ next thing a third party asks for.
 Chosen (a): without it, the lower-third demo needs custom GPU code, which defeats the point
 for marketers.
 
+**B4 DECIDED (owner, 2026-11-03): where CEF runs.**
+- (a) **One shared browser host per machine, a tab per node, shipped in the runtime unit and
+  supervised like the relay.** Pages share one Chromium core and GPU process, as OBS's browser
+  sources do; the host owns the main thread CEF needs on macOS; one version per machine. A
+  crash in the host's core takes every page down until the host restarts.
+- (b) **A host per stream or per project.** Smaller blast radius, but a Chromium per stream or
+  project, and per project still had to key on the browser version in each venv.
+- (c) **A CEF per node, in the node's helper**, with the helper lending its main thread on
+  macOS. Pages are isolated from each other, at a few hundred MB of resident memory each.
+
+Chosen (a): stacking overlays is the marketer's use, page code never runs in the host core,
+and stripped CEF adds about 120–130 MB to the runtime download, OBS's size class.
+Rejected: a CEF per node in the node's helper — it costs a whole Chromium per page (owner, 2026-11-03).
+
 **Assumed, not asked:**
-- CEF ships inside platform wheels on the repo-hosted PEP 503 index, which has no PyPI-style
-  size cap.
+- A browser node whose host is restarting publishes nothing until its tab is back; it is not
+  failed until the host's crash-loop limit is reached.
+- A stream composed into another and flattened is one running stream, with one profile.
+- Restarting a helper that dies is a separate engine change (owner, 2026-11-03), not this one.
 - Mouse and keyboard input into the page is later work.
 - Overlays composite on the GPU through `tatolab-compositor`. Page inputs are for a page that
   mixes media itself, and they pay one readback copy per input frame; the GPU compositor stays
@@ -164,9 +203,18 @@ for marketers.
    - Done: a 1080p page animates at 60 fps on the dev box.
    - Done: a `data` message changes the page within one frame.
    - Done: `kill -9` of the helper takes CEF's subprocesses with it.
-2. **Browser source, zero copy.** `OnAcceleratedPaint`, imported through
-   `surface_import_dma_buf` on Linux and `import_iosurface` on macOS (after #3046).
+2. **Shared browser host, zero copy, Linux and macOS.** The host's supervision and service
+   leases in the runtime; the browser host staged into the runtime unit with a tab
+   per node and a profile per stream; `OnAcceleratedPaint` handed to each node and imported
+   through `surface_import_dma_buf` on Linux and `import_iosurface` on macOS, with the
+   host-memory path as the fallback where the platform cannot share a buffer.
    - Done: copies per frame are counted and recorded against bullet 1, on NVIDIA and on macOS.
+   - Done: memory and CPU for 1, 2, 4 and 8 pages are measured and recorded against bullet
+     1's one-browser-per-node shape.
+   - Done: the runtime unit's download size with the host is recorded per OS.
+   - Done: `kill -9` of the host restarts it and its tabs; a crash loop fails the nodes.
+   - Done: a renderer killed under a tab is logged and the page reloads.
+   - Done: `BrowserSource` runs on macOS, with the `Build (macOS)` lane green.
 3. **Rive source.** The external-renderer device in `streamlib-consumer-rhi`, and
    `tatolab-rive` on it.
    - Done: a reference `.riv` renders at 1080p60 with zero copies per frame.
@@ -182,4 +230,4 @@ for marketers.
      the node publishes the result at 1080p30 on the dev box.
    - Done: added latency per input is measured and recorded.
 
-Order: 1, then 2 and 3 in parallel, then 4, then 5. Bullet 2's macOS half waits on #3046.
+Order: 1, then 2 and 3 in parallel, then 4, then 5.
