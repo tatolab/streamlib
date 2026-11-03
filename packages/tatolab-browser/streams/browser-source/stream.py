@@ -11,7 +11,8 @@ round trip. Watch it at http://127.0.0.1:4446/watch/<machine>/main.
 
 from pathlib import Path
 
-from tatolab.stream import Exposure, H264Encoder, StreamBuilder, stream
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from tatolab.browser import BrowserSource, BrowserSourceOutputProbe
 

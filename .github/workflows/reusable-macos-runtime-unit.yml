@@ -157,10 +157,17 @@ jobs:
       # The MVP sentence on a clean machine: `tatolab new`'s sample stream run on
       # the machine's `tatolabd` on the Vulkan driver the lend carries. The
       # runtime takes the machine lock with nothing made by root first.
+      # The scaffold depends on the H.264 module, which a user's `uv sync`
+      # installs beside `tatolab-stream`.
+      - name: Build the tatolab-h264 wheel the scaffold depends on
+        working-directory: packages/streamlib-h264
+        run: uvx maturin@1.9.6 build --release --out "$RUNNER_TEMP/tatolab-h264-dist"
+
       - name: The scaffolded stream runs on the driver the lend carries
         run: >-
           bash scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh
           "$GITHUB_WORKSPACE/target/tatolab-runtime" sdk/tatolab-stream/dist
+          "$RUNNER_TEMP/tatolab-h264-dist"
 
       - name: Keep the wheel for a clean-machine run
         uses: actions/upload-artifact@v6

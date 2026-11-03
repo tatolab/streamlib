@@ -29,6 +29,7 @@ own default device).
 import os
 
 import tatolab.stream
+from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.microphone import MicrophoneSource
 from tatolab.speaker import SpeakerSink
 from tatolab.opus import OpusDecoder, OpusEncoder
@@ -80,7 +81,7 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
         tatolab.stream.TestPatternSource, name="test_pattern"
     )
     video_encoder = stream_builder.add(
-        tatolab.stream.H264Encoder,
+        H264Encoder,
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
         name="video_encoder",
     )
@@ -108,7 +109,7 @@ def the_same_input_played_back_over_whep_through_the_decoders(
         ),
         name="player",
     )
-    video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
+    video_decoder = stream_builder.add(H264Decoder, name="video_decoder")
     audio_decoder = stream_builder.add(OpusDecoder, name="audio_decoder")
     speaker = stream_builder.add(SpeakerSink, name="speaker")
 

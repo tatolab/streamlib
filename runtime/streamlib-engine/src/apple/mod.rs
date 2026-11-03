@@ -18,6 +18,5 @@ pub mod responsible_gui_application;
 pub mod surface_share;
 
 pub mod thread_priority;
-pub(crate) mod videotoolbox_video_codec_backend;
 
 pub use audio_clock::CoreAudioClock;

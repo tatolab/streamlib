@@ -24,20 +24,20 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0015-every-key-every-built-in-and-the-audio-camera-and-opus-modules.json",
-        "bd0ade9c6386a1ebdec74a31023ee3f3c863645cb1339352ff07ff0e38c9eb19",
+        "0019-every-key-every-built-in-and-the-audio-camera-opus-and-codec-modules.json",
+        "945a20498a90778ea2eb07be4a29e4e5125fb65b4937545631c2329d50c07b4d",
     ),
     (
-        "0016-every-key-with-exposure-levels-and-the-audio-camera-and-opus-modules.json",
-        "7815007feaeca43f50c328433ae0f48652409c570e32291f9d5fb6bfad8f39b2",
+        "0020-every-key-with-exposure-levels-and-the-audio-camera-opus-and-codec-modules.json",
+        "ddb949c446e9f00a283cd6b03f4072054563bccfa6ae8209bf97847a7f5151b3",
     ),
     (
-        "0017-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-and-opus-modules.json",
-        "57a43d8fa90c7c1f7f314fed7aac497757be9dbb12e0b00cc1872d1f2dbe0555",
+        "0021-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-opus-and-codec-modules.json",
+        "15f198022e490916489c76fe6b078b7018a74ebb3e06d0baffe2ec18c30d0356",
     ),
     (
-        "0018-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-and-opus-modules.json",
-        "82e4bc7f63959da1d80b41fe39fc009e95e152c697bbdb2892734532b4133256",
+        "0022-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-opus-and-codec-modules.json",
+        "a4e477790918cfa4fd3c24f605e73b442614d9611ae243def383bea660452428",
     ),
 ];
 
@@ -204,6 +204,10 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
             "tatolab.speaker:SpeakerSink",
             "tatolab.opus:OpusEncoder",
             "tatolab.opus:OpusDecoder",
+            "tatolab.h264:H264Encoder",
+            "tatolab.h264:H264Decoder",
+            "tatolab.h265:H265Encoder",
+            "tatolab.h265:H265Decoder",
         ] {
             assert!(
                 node_types

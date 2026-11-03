@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from h264_module_stand_in import write_the_h264_module_stand_in_into
 from tatolab.stream._cross_floor_check import (
     check_app_directory_for_floor_bindings,
     render_cross_floor_warning_block,
@@ -236,11 +237,13 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
     assert template_text("python-version").strip() == "3.12"
 
 
-def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
-    """`new` raises the `tatolab-stream` floor to the version of the runtime that writes it;
-    the template's own floor keeps PyPI's 0.0.0 placeholder out of a resolve of the tree."""
-    assert 'dependencies = ["tatolab-stream>=0.54.2", "numpy>=2.1"]\n' in template_text(
-        "pyproject.toml"
+def test_the_scaffold_depends_on_tatolab_stream_the_h264_module_and_numpy_only():
+    """`new` raises the `tatolab-stream` and `tatolab-h264` floors to the version of the
+    runtime that writes it; the template's own floors keep PyPI's 0.0.0 placeholder out of
+    a resolve of the tree."""
+    assert (
+        'dependencies = ["tatolab-stream>=0.54.2", "tatolab-h264>=0.68.13", "numpy>=2.1"]\n'
+        in template_text("pyproject.toml")
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
 
 
@@ -251,9 +254,11 @@ def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
 
 
 def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
-    """The compile `tatolab run` makes, over the template tree as `new` lays it out."""
+    """The compile `tatolab run` makes, over the template tree as `new` lays it out, with
+    the `tatolab.h264` the project's `uv sync` installs."""
     app_directory = tmp_path.resolve() / "demo"
     shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
+    write_the_h264_module_stand_in_into(app_directory)
 
     finished = subprocess.run(
         [sys.executable, "-m", "tatolab.stream._project_stream_compile_entry", "--verb", "dev"],
@@ -295,7 +300,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                 },
                 {
                     "name": "h264encoder",
-                    "type": "tatolab.stream:H264Encoder",
+                    "type": "tatolab.h264.processors:H264Encoder",
                     "config": {},
                 },
             ],

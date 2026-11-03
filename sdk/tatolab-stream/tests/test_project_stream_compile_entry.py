@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
+from h264_module_stand_in import write_the_h264_module_stand_in_into
 
 COMPILE_ENTRY_MODULE = "tatolab.stream._project_stream_compile_entry"
 SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_template"
@@ -38,17 +39,16 @@ MINIMAL_STREAM_SOURCE = (
 APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
 FRONT_STREAM_SOURCE = (
-    "from tatolab.stream import H264Encoder, StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
     "def front(stream_builder: StreamBuilder) -> None:\n"
-    '    """Front pattern, encoded to H.264.\n'
+    '    """Front pattern, exposed.\n'
     "\n"
     '    The second paragraph is not listed."""\n'
     "    source = stream_builder.add(TestPatternSource)\n"
-    "    encoder = stream_builder.add(H264Encoder)\n"
-    '    stream_builder.connect(source.output("video"), encoder.input("video"))\n'
+    '    stream_builder.expose(source.output("video"))\n'
 )
 TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
     "\n"
@@ -62,15 +62,9 @@ FRONT_STREAM_GRAPH = {
     "stream": "front",
     "nodes": [
         {"name": "testpatternsource", "type": "tatolab.stream:TestPatternSource", "config": {}},
-        {"name": "h264encoder", "type": "tatolab.stream:H264Encoder", "config": {}},
     ],
-    "links": [
-        {
-            "source": {"node": "testpatternsource", "port": "video"},
-            "target": {"node": "h264encoder", "port": "video"},
-        }
-    ],
-    "exposed": [],
+    "links": [],
+    "exposed": [{"node": "testpatternsource", "port": "video", "level": "private"}],
 }
 BACK_STREAM_GRAPH = {
     "stream": "back",
@@ -704,7 +698,7 @@ def test_every_stream_is_compiled_in_definition_order_with_its_description(
         "streams": [
             {
                 "stream_function": "stream:front",
-                "description": "Front pattern, encoded to H.264.\n\nThe second paragraph is not listed.",
+                "description": "Front pattern, exposed.\n\nThe second paragraph is not listed.",
                 "stream_graph": FRONT_STREAM_GRAPH,
             },
             {"stream_function": "stream:back", "description": None, "stream_graph": BACK_STREAM_GRAPH},
@@ -842,7 +836,7 @@ def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_
     assert document["project_directory"] == str(anchor_directory)
 
     assert "defines no @stream function named `side`" in message
-    assert "    front — Front pattern, encoded to H.264.\n" in message
+    assert "    front — Front pattern, exposed.\n" in message
     assert "    back" in message
 
 
@@ -1066,6 +1060,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tm
     """
     app_directory = tmp_path.resolve() / "demo"
     shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
+    write_the_h264_module_stand_in_into(app_directory)
     (app_directory / "nodes" / "halftone_lens_effect.py").write_text(
         "def process(self ctx:\n    this does not parse\n"
     )

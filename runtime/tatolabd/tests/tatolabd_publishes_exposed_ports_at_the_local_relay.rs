@@ -19,8 +19,6 @@
 ))]
 
 mod common;
-#[path = "../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
-mod rig_only_capability_skip;
 
 use std::time::Duration;
 
@@ -30,7 +28,6 @@ use common::{
     call_a_tool_over_the_local_api, the_local_apis_answer_to_get,
     the_staged_local_relay_executable, the_stream_id_of_the_function,
 };
-use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib_relay_adapter_local::LocalRelayListener;
 use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_track_reader::{
@@ -977,138 +974,6 @@ fn a_relay_track_source_reading_paired_writes_keeps_every_group() {
                 .windows(2)
                 .all(|pair| pair[1] == pair[0] + 1),
             "each message is its own group, none skipped: {group_sequences:?}"
-        );
-    });
-    publishing.runtime.interrupt_and_expect_a_clean_exit();
-}
-
-/// Whether this machine has no Vulkan Video encode and decode, printing the
-/// skip line when so.
-fn this_machine_lacks_vulkan_video() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let device = streamlib::sdk::engine::host_rhi::HostVulkanDevice::new()
-            .expect("a Vulkan device comes up on this machine");
-        rig_only_capability_skip::skip_unless_this_machine_has(
-            rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
-            device.supports_video_encode() && device.supports_video_decode(),
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    false
-}
-
-/// A stream encoding H.264 behind a private port: the test pattern into
-/// `H264Encoder`, whose `encoded_video` is private.
-fn a_stream_encoding_h264_on_a_private_port(stream_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "stream": stream_id,
-        "nodes": [
-            {"name": "testpattern", "type": "tatolab.stream:TestPatternSource",
-             "config": {"width": 320, "height": 240}},
-            {"name": "encoder", "type": "tatolab.stream:H264Encoder", "config": {}},
-        ],
-        "links": [{
-            "source": {"node": "testpattern", "port": "video"},
-            "target": {"node": "encoder", "port": "video"},
-        }],
-        "exposed": [{"node": "encoder", "port": "encoded_video", "level": "private"}],
-    })
-}
-
-/// Stream B decodes stream A's private H.264 port: a `RelayTrackSource` at the
-/// loopback listener feeds `H264Decoder`, which publishes pictures. The source
-/// carries the encoder's `VideoEntry`, and restates each media frame's own
-/// timestamp — the hang container's varint — on this machine's clock, so the
-/// spacing of the stamps it writes is the spacing of the varints.
-#[test]
-fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
-    if this_machine_lacks_vulkan_video() {
-        return;
-    }
-    const ENCODING_STREAM: &str = "camera-rig";
-    let mut publishing = TatolabdPublishingTheStream::start_with_the_streams(&[
-        (
-            ENCODING_STREAM,
-            a_stream_encoding_h264_on_a_private_port(ENCODING_STREAM),
-        ),
-        (
-            READER_STREAM,
-            a_reader_stream_holding_one_unexposed_writer(),
-        ),
-    ]);
-    publishing.add_a_relay_track_source_reading_the_port_of(
-        "fromcamera",
-        ENCODING_STREAM,
-        "encoder",
-        "encoded_video",
-    );
-    publishing.call(
-        "add_node",
-        serde_json::json!({
-            "stream": publishing.stream_id_of(READER_STREAM),
-            "type": "tatolab.stream:H264Decoder", "name": "decoder",
-        }),
-    );
-    publishing.call(
-        "connect",
-        serde_json::json!({
-            "stream": publishing.stream_id_of(READER_STREAM),
-            "from_node": "fromcamera", "from_port": "track",
-            "to_node": "decoder", "to_port": "encoded_video",
-        }),
-    );
-    publishing.expose_in_the_reader_stream("fromcamera", "track");
-    publishing.expose_in_the_reader_stream("decoder", "video");
-
-    let deadline = std::time::Instant::now() + MOQ_BUDGET;
-    while publishing.bags_written_by(READER_STREAM, "decoder", "video") < 30 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the decoder fed by the relay source published fewer than 30 pictures in {MOQ_BUDGET:?}"
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
-
-    let reader_at_loopback =
-        publishing.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
-    publishing.async_runtime.block_on(async {
-        let objects = reader_at_loopback
-            .the_next_objects_of("fromcamera/track", 20)
-            .await;
-        let varint_timestamps_ns: Vec<u128> = objects
-            .iter()
-            .map(|object| {
-                u128::from(
-                    read_hang_legacy_container_media_frame(&object.payload)
-                        .expect("the source writes the encoder's media frames as received")
-                        .timestamp_microseconds,
-                ) * 1_000
-            })
-            .collect();
-        assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
-            &objects
-                .iter()
-                .map(|object| object.timestamp_ns)
-                .collect::<Vec<_>>(),
-            &varint_timestamps_ns,
-            "the source restating the encoder's media frames",
-        );
-
-        let catalog = reader_at_loopback
-            .the_catalog_once(
-                |catalog| catalog.video.renditions.contains_key("fromcamera/track"),
-                "the reader stream's catalog lists the source's video entry",
-            )
-            .await;
-        let video_entry = &catalog.video.renditions["fromcamera/track"];
-        assert!(
-            video_entry.codec.to_string().starts_with("avc1."),
-            "the source carries the encoder's entry: {video_entry:?}"
-        );
-        assert_eq!(
-            (video_entry.coded_width, video_entry.coded_height),
-            (Some(320), Some(240))
         );
     });
     publishing.runtime.interrupt_and_expect_a_clean_exit();

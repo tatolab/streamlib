@@ -43,7 +43,6 @@ STREAM_GRAPH_BUILDER_SOURCE = (
 )
 
 TEST_PATTERN_SOURCE_TYPE = "tatolab.stream:TestPatternSource"
-H264_ENCODER_TYPE = "tatolab.stream:H264Encoder"
 VIRTUAL_CAMERA_SINK_TYPE = "tatolab.stream:VirtualCameraSink"
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
@@ -118,7 +117,7 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
     second_inverter = stream_builder.add(FrameInverter)
-    encoder = stream_builder.add(tatolab.stream.H264Encoder, config={"bitrate_bps": 4_000_000})
+    camera = stream_builder.add(tatolab.stream.VirtualCameraSink, config={"name": "Rig Camera"})
     stream_builder.connect(source.output("video"), inverter.input("video_from_upstream"))
     stream_builder.connect(
         inverter.output("video_to_downstream"),
@@ -132,7 +131,7 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
         source.output("Video"),
         second_inverter.input("video_from_upstream"),
     )
-    stream_builder.connect(second_inverter.output("video_to_downstream"), encoder.input("Video"))
+    stream_builder.connect(second_inverter.output("video_to_downstream"), camera.input("Video"))
     stream_builder.expose(inverter.output("video_to_downstream"))
     stream_builder.expose(second_inverter.output("VIDEO_TO_DOWNSTREAM"))
 
@@ -140,7 +139,7 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
 @stream
 def two_markers(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.TestPatternSource)
-    stream_builder.add(tatolab.stream.H264Encoder)
+    stream_builder.add(tatolab.stream.VirtualCameraSink)
 
 
 @stream
@@ -377,7 +376,7 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
     assert compile_stream_to_graph(two_markers)["nodes"] == [
         {"name": "testpatternsource", "type": TEST_PATTERN_SOURCE_TYPE, "config": {}},
-        {"name": "h264encoder", "type": H264_ENCODER_TYPE, "config": {}},
+        {"name": "virtualcamerasink", "type": VIRTUAL_CAMERA_SINK_TYPE, "config": {}},
     ]
 
 
@@ -951,9 +950,9 @@ def test_a_stream_compiles_to_its_graph() -> None:
             {"name": "backup-meter", "type": BRIGHTNESS_READER_TYPE, "config": {}},
             {"name": "frameinverter-2", "type": FRAME_INVERTER_TYPE, "config": {}},
             {
-                "name": "h264encoder",
-                "type": H264_ENCODER_TYPE,
-                "config": {"bitrate_bps": 4_000_000},
+                "name": "virtualcamerasink",
+                "type": VIRTUAL_CAMERA_SINK_TYPE,
+                "config": {"name": "Rig Camera"},
             },
         ],
         "links": [
@@ -975,7 +974,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
             },
             {
                 "source": {"node": "frameinverter-2", "port": "video_to_downstream"},
-                "target": {"node": "h264encoder", "port": "video"},
+                "target": {"node": "virtualcamerasink", "port": "video"},
             },
         ],
         "exposed": [

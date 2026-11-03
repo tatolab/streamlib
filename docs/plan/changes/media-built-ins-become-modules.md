@@ -140,9 +140,13 @@ across the language boundary.
 - REMOVED: runtime/streamlib-media-builtins/src/speaker_sink.rs
   Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/h264_encoder.rs
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/h264_decoder.rs
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/h265_encoder.rs
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/h265_decoder.rs
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: runtime/streamlib-media-builtins/src/opus_encoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/opus_decoder.rs
 - REMOVED: runtime/streamlib-media-builtins/src/test_pattern_source.rs
@@ -153,17 +157,45 @@ across the language boundary.
 - REMOVED: tatolab.stream:SpeakerSink
   Gone with the speaker module (tracer bullet 6); the gate passes for it.
 - REMOVED: tatolab.stream:H264Encoder
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: tatolab.stream:H264Decoder
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: tatolab.stream:H265Encoder
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: tatolab.stream:H265Decoder
+  Gone with the codec modules (tracer bullet 5); the gate passes for it.
 - REMOVED: tatolab.stream:OpusEncoder
 - REMOVED: tatolab.stream:OpusDecoder
 - REMOVED: tatolab.stream:TestPatternSource
 - REMOVED: tatolab.stream:VirtualCameraSink
+- REMOVED: runtime/streamlib-media-builtins/src/published_surface_to_encoded_frame_encoder.rs
+  The engine-side encoder node body the four codec built-ins shared; gone with them.
+- REMOVED: runtime/streamlib-media-builtins/src/encoded_frame_to_published_surface_decoder.rs
+  The engine-side decoder node body; gone with the codec built-ins.
+- REMOVED: runtime/streamlib-media-builtins/src/hardware_video_codec_processor_identity.rs
+- REMOVED: runtime/streamlib-engine/src/core/context/video_codec_backend.rs
+  The engine's video codec seam; the codec modules code on their own device or VideoToolbox.
+- REMOVED: runtime/streamlib-engine/src/core/context/refusing_null_video_codec_backend.rs
+- REMOVED: runtime/streamlib-engine/src/vulkan/video/
+  The engine's Vulkan Video arm; the port lives in `streamlib-vulkan-video` on a device the module owns.
+- REMOVED: runtime/streamlib-engine/src/apple/videotoolbox_video_codec_backend/
+  The engine's VideoToolbox arm; the sessions live in `streamlib-owned-device-video-codec-nodes`.
+- REMOVED: runtime/streamlib-engine/src/vulkan/rhi/vulkan_video_codec_device.rs
+- REMOVED: runtime/streamlib-engine/src/vulkan/rhi/video_profile_test_fixture.rs
+- REMOVED: create_encoder_session
+  `GpuContext`'s encoder and decoder session verbs; nothing in the engine mints a codec session.
+- REMOVED: create_decoder_session
+- REMOVED: VideoCodecBackend
+- REMOVED: HardwareVideoEncoderConfig
+- REMOVED: HardwareVideoDecoderConfig
+- REMOVED: runtime/streamlib-engine/tests/videotoolbox_arm_round_trips_the_psnr_references.rs
+  Ported to `videotoolbox_sessions_round_trip_the_psnr_references` in the codec module crate.
+- REMOVED: runtime/streamlib-engine/tests/owned_device_h264_encode_round_trips_the_psnr_references.rs
+  Ported to `owned_device_codecs_round_trip_the_psnr_references`, H.264 and H.265, in the codec module crate.
 
 `RelayTrackSource` stays in the runtime as transport (D5). The engine's audio device arms and
-colour converter stay and are exported (D4); the Vulkan Video port leaves the engine for the
-crates D3 names, and its removal bullets are written when that tracer is ticketed.
+colour converter stay and are exported (D4); the Vulkan Video port has left the engine for the
+crates D3 names, and the engine's device creates graphics, transfer and compute queues only.
 
 ## Decisions
 

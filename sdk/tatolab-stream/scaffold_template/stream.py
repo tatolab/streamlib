@@ -13,9 +13,9 @@ Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
+from tatolab.h264 import H264Encoder
 from tatolab.stream import (
     Exposure,
-    H264Encoder,
     StreamBuilder,
     TestPatternSource,
     stream,

@@ -16,7 +16,6 @@ mod one_off_acquisitions_counted_for_one_native_node;
 pub(crate) mod one_off_acquisitions_held_for_one_node;
 mod processor_output_pixel_buffer_pool_of_one_native_node;
 pub(crate) mod processor_output_surface_pool;
-mod refusing_null_video_codec_backend;
 mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod shared_pool_entry_freeing;
@@ -37,7 +36,6 @@ pub(crate) mod texture_registration;
 mod texture_ring;
 mod time_context;
 mod video_capture_instant_resolver;
-mod video_codec_backend;
 mod video_device_backend;
 
 pub use audio_clock::{
@@ -104,13 +102,6 @@ pub use texture_ring::{
 pub use time_context::TimeContext;
 pub(crate) use video_capture_instant_resolver::{
     DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
-};
-pub use video_codec_backend::{
-    DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
-    SharedVideoCodecBackend, VideoCodecBackend, VideoCodecElementaryStream,
-    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest, VideoEncodeKnobs,
-    VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
-    probe_video_codec_backend,
 };
 pub(crate) use video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
 pub use video_device_backend::{

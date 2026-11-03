@@ -7,19 +7,22 @@
 # the runtime unit's lend carries:
 #
 #   scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh \
-#     <runtime-unit-root> <tatolab-stream-wheel-directory>
+#     <runtime-unit-root> <tatolab-stream-wheel-directory> <tatolab-h264-wheel-directory>
 #
-# The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`,
-# from the wheel directory because no index carries this version yet, and the
-# numpy the scaffold declares — and no runtime. Passes when `tatolabd` opened
+# The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`
+# and the `tatolab-h264` module, from the wheel directories because no index
+# carries this version yet, and the numpy the scaffold declares — and no
+# runtime. Passes when `tatolabd` opened
 # the lend's Vulkan loader, the source wrote frames by the stream's `graph`, and
 # the encoder encoded or refused by name. Needs a Mac with no Vulkan driver of
 # its own, or the claim is not proven.
 
 set -eu
 
-runtime_unit_root="${1:?usage: $(basename "$0") <runtime-unit-root> <tatolab-stream-wheel-directory>}"
-tatolab_stream_wheel_directory="${2:?usage: $(basename "$0") <runtime-unit-root> <tatolab-stream-wheel-directory>}"
+usage="usage: $(basename "$0") <runtime-unit-root> <tatolab-stream-wheel-directory> <tatolab-h264-wheel-directory>"
+runtime_unit_root="${1:?$usage}"
+tatolab_stream_wheel_directory="${2:?$usage}"
+tatolab_h264_wheel_directory="${3:?$usage}"
 tatolabd_executable="$runtime_unit_root/bin/tatolabd"
 tatolab_executable="$runtime_unit_root/bin/tatolab"
 
@@ -45,10 +48,12 @@ done
 # load finds an interpreter that runs and syncs nothing.
 mkdir -p /tmp/scaffold-check
 python3 -m venv /tmp/scaffold-check/.venv
-# `--no-index` keeps `tatolab-stream` to this run's build, so its one
-# dependency comes from PyPI first.
+# `--no-index` keeps `tatolab-stream` and `tatolab-h264` to this run's build,
+# so the one dependency of theirs no wheel directory holds comes from PyPI first.
 /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
-/tmp/scaffold-check/.venv/bin/pip install --no-index --find-links "$tatolab_stream_wheel_directory" tatolab-stream
+/tmp/scaffold-check/.venv/bin/pip install --no-index \
+  --find-links "$tatolab_stream_wheel_directory" --find-links "$tatolab_h264_wheel_directory" \
+  tatolab-stream tatolab-h264
 /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
 if /tmp/scaffold-check/.venv/bin/python -c '
 import importlib.util, sys
@@ -129,14 +134,12 @@ if [ -z "$frames_written" ] || [ "$frames_written" -lt 60 ]; then
 fi
 echo "TestPatternSource.video wrote $frames_written frames"
 # The encoder either encodes, or — on a runner with no encoder — refuses
-# naming itself while the stream stays loaded. Its own count, logged at
-# teardown: `graph` counts a port's writes only once something reads
-# it, and nothing subscribes to the track here.
-frames_encoded="$(grep -o 'H264Encoder: teardown .*frames_encoded=[0-9]*' /tmp/tatolabd.log \
-  | grep -o 'frames_encoded=[0-9]*' | cut -d= -f2 | sort -n | tail -1)"
-if [ -n "$frames_encoded" ] && [ "$frames_encoded" -gt 0 ]; then
-  echo "H264Encoder encoded $frames_encoded frames"
-elif grep -q 'H264Encoder: failed to mint the encoder session' /tmp/tatolabd.log; then
+# naming itself while the stream stays loaded. Read from the module's own log:
+# `graph` counts a port's writes only once something reads it, and nothing
+# subscribes to the track here.
+if grep -q 'H264Encoder: first frame encoded' /tmp/tatolabd.log; then
+  echo "H264Encoder encoded its first frame"
+elif grep -q 'H264Encoder: .*; every frame is discarded' /tmp/tatolabd.log; then
   echo "H264Encoder refused by name on a runner with no encoder; the stream stayed loaded"
 else
   echo "::error::H264Encoder neither encoded a frame nor refused by name"

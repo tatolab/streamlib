@@ -116,6 +116,7 @@ fi
 
 require_the_runtime_unit
 require_the_fixture_venv
+require_the_codec_modules_in_the_fixture_venv
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"

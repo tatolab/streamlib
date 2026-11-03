@@ -55,9 +55,8 @@ from played_media_stand_ins import (
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
+from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.stream import (
-    H264Decoder,
-    H264Encoder,
     Message,
     StreamBuilder,
     compile_stream_to_graph,

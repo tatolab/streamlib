@@ -122,14 +122,12 @@ SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
 SCAFFOLDED_EFFECT_NODE_NAME = "halftonelenseffect"
 SCAFFOLDED_ENCODER_NODE_NAME = "h264encoder"
 SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
-# What the scaffold's encoder logs on a device with no H.264 encoder, the
-# software device among them: a named refusal, while the stream stays loaded.
-SCAFFOLDED_ENCODER_REFUSAL = "H264Encoder: failed to mint the encoder session"
-# The encoder's own count, logged at teardown. `graph` counts a port's writes
-# only once something reads it, and nothing subscribes to the track here.
-SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN = re.compile(
-    r"H264Encoder: teardown .*frames_encoded=(\d+)"
-)
+# What the scaffold's encoder module logs on a device with no H.264 encoder,
+# the software device among them: a named refusal, while the stream stays loaded.
+SCAFFOLDED_ENCODER_REFUSAL = re.compile(r"H264Encoder: .*; every frame is discarded")
+# The encoder's own record of its first access unit. `graph` counts a port's
+# writes only once something reads it, and nothing subscribes to the track here.
+SCAFFOLDED_ENCODER_FIRST_FRAME_ENCODED = "H264Encoder: first frame encoded"
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
 # How long a loaded stream's source has to write its first bag on `video`.
@@ -640,11 +638,10 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
     )
-    frames_encoded = [
-        int(count)
-        for count in SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN.findall(stream_output)
-    ]
-    assert any(frames_encoded) or SCAFFOLDED_ENCODER_REFUSAL in stream_output, (
+    assert (
+        SCAFFOLDED_ENCODER_FIRST_FRAME_ENCODED in stream_output
+        or SCAFFOLDED_ENCODER_REFUSAL.search(stream_output) is not None
+    ), (
         f"the scaffolded encoder neither encoded an access unit nor refused by name; standard "
         f"error ended:\n{tatolabd.recent_stderr()}"
     )
@@ -721,12 +718,8 @@ def assert_the_effect_carried_live_video(
     what editing the write-combined mapping in place through a strided view
     produced.
     """
-    process_failures_but_the_encoders_refusal = [
-        line
-        for line in output.splitlines()
-        if "process() failed" in line and SCAFFOLDED_ENCODER_REFUSAL not in line
-    ]
-    assert not process_failures_but_the_encoders_refusal, (
+    process_failures = [line for line in output.splitlines() if "process() failed" in line]
+    assert not process_failures, (
         f"{what_ran}: a node failed a live frame; standard error ended:\n"
         f"{tatolabd.recent_stderr()}"
     )

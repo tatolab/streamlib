@@ -26,28 +26,28 @@ pub(in super::super) fn handle_convert_surface_into(
         request_id: _,
         source_surface_id,
         destination_surface_id,
-        source_color,
+        ycbcr_side_color,
     } = request;
     let EscalateRequestColorInfoAxisNames {
         primaries,
         transfer,
         matrix,
         range,
-    } = source_color;
+    } = ycbcr_side_color;
     let converted = h273_color_vui_from_color_info_axis_names(
         primaries.as_deref(),
         transfer.as_deref(),
         matrix.as_deref(),
         range.as_deref(),
     )
-    .and_then(|source_color| {
+    .and_then(|ycbcr_side_color| {
         registry
             .surface_color_conversion_session()
             .convert_surface_into(
                 sandbox.host_inner(),
                 &source_surface_id,
                 &destination_surface_id,
-                &source_color,
+                &ycbcr_side_color,
             )
     });
     match converted {

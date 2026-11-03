@@ -52,6 +52,9 @@ Version 1.3 adds playback through the same backend:
 Version 1.4 adds the macOS twin of the DMA-BUF import: an `IOSurfaceRef`, such
 as a camera's or a decoder's, adopted as a surface written by a foreign device,
 which the colour conversion reads where it sits.
+Version 1.5 lends native code the surface a message names by id, such as an
+upstream node's frame, and on macOS converts an RGBA texture into an adopted
+NV12 IOSurface, the direction a VideoToolbox encoder feeds from.
 
 Version 1.5 adds a write from host memory, for a renderer that paints into CPU
 memory and cannot share a GPU buffer: `bgra32` or `rgba32` rows at any stride

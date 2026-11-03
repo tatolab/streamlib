@@ -55,13 +55,15 @@ from stream_runs_on_tatolabd import (
     stream_id_of_a_one_stream_project,
 )
 from tatolab.stream import (
-    H264Encoder,
     RelayTrackSource,
     TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
 )
 from tatolab.stream._built_in_node import BuiltInNode
+
+#: The H.264 encoder module's node type, which the suite venv installs.
+H264_ENCODER_MODULE_TYPE = "tatolab.h264.processors:H264Encoder"
 
 EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
     exported
@@ -104,7 +106,7 @@ def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder"
             {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
             {
                 "name": "h264encoder",
-                "type": H264Encoder.type,
+                "type": H264_ENCODER_MODULE_TYPE,
                 "config": {"keyframe_interval_seconds": 2, "fps": 30},
             },
         ],
@@ -278,7 +280,7 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
             "nodes": [
                 {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
                 {"name": "loadedframerelay", "type": DESCRIBED_NODE_TYPE, "config": {}},
-                {"name": "h264encoder", "type": H264Encoder.type, "config": {}},
+                {"name": "h264encoder", "type": H264_ENCODER_MODULE_TYPE, "config": {}},
             ],
             "links": [
                 {

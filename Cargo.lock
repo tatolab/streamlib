@@ -5606,7 +5606,6 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib-engine",
- "streamlib-video-bitstream",
  "tempfile",
 ]
 
@@ -5791,7 +5790,6 @@ dependencies = [
  "objc2-foundation",
  "objc2-io-surface",
  "objc2-metal",
- "objc2-video-toolbox",
  "parking_lot",
  "petgraph",
  "pin-project-lite",
@@ -5817,8 +5815,6 @@ dependencies = [
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
- "streamlib-video-bitstream",
- "streamlib-vulkan-video",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "tempfile",
@@ -5894,8 +5890,15 @@ dependencies = [
 name = "streamlib-owned-device-video-codec-nodes"
 version = "0.68.14"
 dependencies = [
+ "objc2-core-foundation",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-io-surface",
+ "objc2-video-toolbox",
+ "png",
  "rmp-serde",
  "serde",
+ "streamlib",
  "streamlib-consumer-rhi",
  "streamlib-surface-client",
  "streamlib-video-bitstream",
@@ -6077,7 +6080,6 @@ version = "0.68.14"
 dependencies = [
  "libc",
  "streamlib-consumer-rhi",
- "streamlib-error",
  "streamlib-video-bitstream",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -6193,7 +6195,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "pyo3",
  "tracing",

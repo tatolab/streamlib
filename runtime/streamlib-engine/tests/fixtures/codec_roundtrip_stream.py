@@ -24,11 +24,13 @@ import os
 import urllib.request
 
 import tatolab.stream
+from tatolab.h264 import H264Decoder, H264Encoder
+from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.stream import StreamBuilder, stream
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
-    "h264": (tatolab.stream.H264Encoder, tatolab.stream.H264Decoder),
-    "h265": (tatolab.stream.H265Encoder, tatolab.stream.H265Decoder),
+    "h264": (H264Encoder, H264Decoder),
+    "h265": (H265Encoder, H265Decoder),
 }
 
 # Stated rather than left to the encoder's own default, so the baseline is

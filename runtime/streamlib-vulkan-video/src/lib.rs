@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Vulkan Video encode on any device that names its queues and allocator
-//! through [`VulkanVideoCodecDevice`]: the engine's own device, or the
+//! Vulkan Video encode and decode on a device that names its queues and
+//! allocator through [`VulkanVideoCodecDevice`]: the
 //! [`streamlib_consumer_rhi::OwnedVulkanVideoCodecDevice`] a codec module
 //! owns in its helper process. Linux only; elsewhere the crate is empty.
 //!

@@ -20,6 +20,9 @@ dependencies = [
     "tatolab-compositor",
     # The camera node the camera, cast-claim and device-exchange fixtures add.
     "tatolab-camera",
+    # The video codec nodes the codec, relay and scaffold fixtures add.
+    "tatolab-h264",
+    "tatolab-h265",
     # The Opus nodes the codec and wiring fixtures add.
     "tatolab-opus",
     "pytest>=7.0",
@@ -54,6 +57,8 @@ tatolab-microphone = { path = "../../packages/tatolab-microphone" }
 tatolab-speaker = { path = "../../packages/tatolab-speaker" }
 tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = true }
 tatolab-camera = { path = "../../packages/tatolab-camera" }
+tatolab-h264 = { path = "../../packages/streamlib-h264" }
+tatolab-h265 = { path = "../../packages/streamlib-h265" }
 tatolab-opus = { path = "../../packages/tatolab-opus" }
 
 [tool.pytest.ini_options]

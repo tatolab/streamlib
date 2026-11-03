@@ -1671,9 +1671,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   snapshot answer on both floors, and every ray-tracing kernel and acceleration-structure
   constructor — in Rust, and from Python at `setup()` through the escalate pre-check — refuses
   with one typed message naming the tier and its extension. Vulkan Video on macOS is
-  compile-time absent, the codec seam routing to VideoToolbox (§Media I/O); on a Linux device
-  without it, session construction refuses with `Error::GpuError` naming the missing
-  direction, classified for all seven codec operations. A kernel whose SPIR-V declares a
+  compile-time absent, the codec modules coding on VideoToolbox there (§Media I/O); on a Linux
+  device without it, the module's session construction refuses naming the missing direction. A kernel whose SPIR-V declares a
   subgroup operation the driver does not serve, or uses one in a stage it does not serve,
   refuses at `create_*_kernel` naming the driver, the operation and the stage (MoltenVK serves
   none in vertex, measured) — the one class of GLSL construct found that MoltenVK cannot serve.
@@ -2688,11 +2687,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stereo) is the plainest case the window contract exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
   audio-port-window-contract — SHIPPED #2034; package-split-and-lend — SHIPPED #2684]
-- **DECIDED** — Codec blocks are native built-ins beside the camera:
-  `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` — instantiated and configured the one way a
-  built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
-  interpreter, serving Python and Rust apps alike. Video blocks are built on the video
-  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. The runtime decodes no
+- **DECIDED** — The video codecs are module wheels:
+  `H264Encoder` and `H264Decoder` ship as `tatolab-h264` (`tatolab.h264`), `H265Encoder` and
+  `H265Decoder` as `tatolab-h265` (`tatolab.h265`), Python nodes in their own helper processes
+  whose native halves code on a native thread and reach their ports through the module host
+  table, as the Opus pair is in `tatolab-opus`. Each is
+  configured the one way a node is configured (`stream_builder.add(H264Encoder)`), per-frame
+  paths never entering an interpreter. A graph naming a former video built-in type is refused
+  naming the module to install. The scaffold depends on `tatolab-h264`. On Linux a video
+  module codes on a Vulkan device its helper owns, matched to the runtime's GPU
+  (`streamlib-vulkan-video` over `streamlib-consumer-rhi`'s owned-device tier); on macOS on
+  VideoToolbox; the engine's own device creates no video queue. The runtime decodes no
   JPEG anywhere. AV1 and VP9 remain ported but unexposed until a consumer demands them.
   The four name the shipped set, not a rule: the next codec follows the built-in criterion in
   §Packages & extension model.
@@ -2712,13 +2717,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   its one consumer was a drone video path, and robotics is out of scope (owner, 2026-10-04).
   Rejected: a muxer built-in writing a stream's tracks to a file — a stream's last mile is
   the user's, through any MoQ client of a relay, never the runtime's (owner, 2026-10-17).
-- **DECIDED** — The video codec backend seam has the video device seam's shape: a
-  `VideoCodecBackend` opening a `VideoEncodeSession` or `VideoDecodeSession`, probed once per
-  process through the shared walk and logged once, no dial, a refusing backend naming
-  platform, direction and stream where no arm exists. It is the only way to a session —
-  `GpuContext`'s session mints are crate-private — and decode hands back pictures already in
-  pooled pixel buffers, as capture does. The four video blocks are platform-free above it and
-  register on both floors. The VideoToolbox arm is hardware-only — a hardware codec block
+- **DECIDED** — The video codec node bodies are shared by both modules in
+  `streamlib-owned-device-video-codec-nodes`, one encode body and one decode body per
+  platform, specialised by a codec identity; the engine holds no codec session and no codec
+  seam. The VideoToolbox arm is hardware-only — a hardware codec block
   never falls back to software — runs without reordering, sets the sync-point cadence in
   seconds and frames, and maps `bitrate_bps` to average bitrate, constant quality otherwise.
   Encode never wraps the pooled frame, since CoreVideo wraps no `'RGBA'` IOSurface: the
@@ -2758,8 +2760,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A decoder publishes the display window, never the coded picture. Both
   codecs pad up to a block size — H.264 to the 16-sample macroblock, H.265 to the
   64-sample CTU — so a 1920×1080 source is coded at 1920×1088 by both, and only the
-  window the SPS carries brings it back. Deriving that window is the engine's decode
-  session's job and not a built-in's, let alone a consumer's: a consumer handed the
+  window the SPS carries brings it back. Deriving that window is the decode
+  session's job (`streamlib-vulkan-video`, and CoreMedia's clean aperture on macOS) and not a
+  node's, let alone a consumer's: a consumer handed the
   coded extent cannot tell which of the two numbers it holds, and the padding rows are
   edge-replicated garbage. One helper derives it for both codecs, the session keeps the
   coded extent (parameter sets, DPB) separate from what it publishes, and a malformed
@@ -2768,7 +2771,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   RGBA path and stays coded on the raw NV12 path, which is a direct DPB readback.
   [codec-blocks — SHIPPED #2086]
 - **DECIDED** — Proof precedes surface: encode → decode is proven through the engine-owned
-  rig (`runtime/streamlib-engine/tests/fixtures/`) before any codec block's API lands. The rig
+  rig (`runtime/streamlib-engine/tests/fixtures/`, its streams importing the codec modules)
+  before any codec block's API lands, and the PSNR references round trip in the codec node
+  crate's own hardware tests on both floors
+  (`runtime/streamlib-owned-device-video-codec-nodes/tests/`). The rig
   is two streams on `tatolabd`, as a deployment builds it (owner, 2026-10-19): the sender
   (`TestPatternSource` → the encoder) exposes the encoder's port, and the receiver reads that
   track at the local relay through `RelayTrackSource` and decodes it. The rig reads the
@@ -2818,18 +2824,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   sustained decoder lag reappears, re-run that scenario on the rig rather than assuming it
   fixed.
   [codec-blocks — SHIPPED #2084, #2085, #2086]
-- **DECIDED** — The four video blocks reach Python as classes generated into
-  `tatolab/stream/_built_in_nodes.py` from their descriptors, beside `CameraSource` — a processor
-  extension owns none of this, being an ordinary Python node class the runtime never has to
-  know about (extension-model). A block's `type` is `tatolab.stream:<Class>`. Configured the
-  one way a built-in is configured — `stream_builder.add(H265Encoder)`,
-  `stream_builder.add(H264Encoder, config={"keyframe_interval_seconds": 2})`, its keys
-  checked by pyright against the generated `TypedDict` — and resolving on both floors,
-  since the codec seam made the blocks platform-free and they register everywhere.
-  `tatolabd` links all four and registers them with the other built-ins. The Rust
-  descriptor's doc, carried into the generated class, is where a
-  block's config keys and port names are written down, as it is for every built-in, and
-  it states the engine's own behavior rather than an aspiration — the encoder's
+- **DECIDED** — The four video nodes reach Python as the modules' own `@node` classes
+  (`tatolab.h264.processors:H264Encoder` is the type a graph carries). Configured the one way
+  a node is configured — `stream_builder.add(H265Encoder)`,
+  `stream_builder.add(H264Encoder, config={"keyframe_interval_seconds": 2})`, its keys the
+  module's config dataclass — and resolving on both floors. `tatolabd` links none of them.
+  The class's docstring and config dataclass are where a node's config keys and port names
+  are written down, and it states the engine's own behavior rather than an aspiration — the encoder's
   `width`/`height` guardrails that a mismatching frame wins against with a warning, its
   lazy session mint from the first frame, the decoder's eager mint at `setup()` — which
   refuses there by name where no hardware decoder exists, and on macOS holds

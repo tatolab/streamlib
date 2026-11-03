@@ -453,19 +453,47 @@ impl ModuleHost {
         })
     }
 
-    /// Convert `source`'s YCbCr pixels, described by `source_color`, into the
-    /// RGBA texture `destination`, returning once its next reader sees them.
+    /// Lend native code the surface a message names by `surface_id`, such
+    /// as an upstream node's frame, to convert from; dropping the lend leaves
+    /// the surface its publisher's.
+    pub fn lend_surface_a_message_names(
+        &self,
+        surface_id: &str,
+    ) -> Result<ModuleHostSurface, ModuleHostError> {
+        let mut lent_surface = ModuleHostTableSurfaceHandle { value: 0 };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`.
+        let status = unsafe {
+            (self.module_host_table.surface_lend_by_surface_id)(
+                self.module_host_table.node_host,
+                ModuleHostTableUtf8::of(surface_id),
+                &mut lent_surface,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_lend_by_surface_id", status, &error_message)?;
+        Ok(ModuleHostSurface {
+            module_host: self.clone(),
+            handle: lent_surface,
+        })
+    }
+
+    /// Convert between a YCbCr surface and an RGBA texture of the same extent,
+    /// returning once `destination`'s next reader sees the result:
+    /// `ycbcr_side_color` describes whichever side is YCbCr. A YCbCr source
+    /// converts into an RGBA texture; on macOS an RGBA texture also converts
+    /// into an adopted NV12 IOSurface.
     pub fn convert_surface_into(
         &self,
         source: &ModuleHostSurface,
         destination: &ModuleHostSurface,
-        source_color: &ModuleHostColorInfo<'_>,
+        ycbcr_side_color: &ModuleHostColorInfo<'_>,
     ) -> Result<(), ModuleHostError> {
         let table_color = ModuleHostTableColorInfo {
-            primaries: ModuleHostTableUtf8::of(source_color.primaries.unwrap_or("")),
-            transfer: ModuleHostTableUtf8::of(source_color.transfer.unwrap_or("")),
-            matrix: ModuleHostTableUtf8::of(source_color.matrix.unwrap_or("")),
-            range: ModuleHostTableUtf8::of(source_color.range.unwrap_or("")),
+            primaries: ModuleHostTableUtf8::of(ycbcr_side_color.primaries.unwrap_or("")),
+            transfer: ModuleHostTableUtf8::of(ycbcr_side_color.transfer.unwrap_or("")),
+            matrix: ModuleHostTableUtf8::of(ycbcr_side_color.matrix.unwrap_or("")),
+            range: ModuleHostTableUtf8::of(ycbcr_side_color.range.unwrap_or("")),
         };
         let mut error_message = ModuleHostTableErrorMessage::empty();
         // SAFETY: as in `import_dma_buf`; both surfaces are this host's.

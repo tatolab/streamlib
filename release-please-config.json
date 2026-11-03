@@ -66,6 +66,16 @@
           "type": "toml",
           "path": "packages/tatolab-opus/pyproject.toml",
           "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/streamlib-h265/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/streamlib-h265/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }

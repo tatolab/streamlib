@@ -43,7 +43,7 @@ include = [{ path = "tatolab/browser/cef/**/*", format = "wheel" }]
 
 [tool.pyright]
 include = ["python", "streams"]
-extraPaths = ["python"]
+extraPaths = ["python", "../streamlib-h264/python"]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."

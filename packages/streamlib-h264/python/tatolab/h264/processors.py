@@ -56,10 +56,10 @@ class H264EncoderConfig:
 
 @node(
     execution="manual",
-    description="Encodes published video surfaces to H.264 on a Vulkan device the module owns",
+    description="Encodes published video surfaces to H.264 on Vulkan Video or VideoToolbox",
 )
 class H264Encoder:
-    """Video frames in, H.264 media frames out, encoded with Vulkan Video on Linux.
+    """Video frames in, H.264 media frames out, encoded with Vulkan Video or VideoToolbox.
 
     `video` takes 8-bit RGBA or BGRA frames, buffer-backed (camera, test
     pattern) or texture-backed (a GPU effect, a decoder); any other format is
@@ -72,10 +72,13 @@ class H264Encoder:
     frame's dimensions and re-mints when the upstream extent changes; a write
     the channel refuses makes the next frame a keyframe.
 
-    The encoder runs on a Vulkan device this helper creates on the runtime's
-    GPU, so a fault in the video engine ends this helper's stream and nothing
-    else. A device without Vulkan Video encode refuses the device once, and
-    every frame after is discarded with no exception reaching Python.
+    On Linux the encoder runs on a Vulkan device this helper creates on the
+    runtime's GPU, so a fault in the video engine ends this helper's stream and
+    nothing else; a device without Vulkan Video encode refuses the device once.
+    On macOS it runs on VideoToolbox's hardware encoder, the runtime converting
+    each frame into an NV12 IOSurface for it, and refuses `effort_level`.
+    Either way a refused encoder discards every frame after with no exception
+    reaching Python.
     """
 
     def __init__(self, config: H264EncoderConfig) -> None:
@@ -142,10 +145,10 @@ class H264DecoderConfig:
 
 @node(
     execution="manual",
-    description="Decodes H.264 media frames to published video textures on a Vulkan device the module owns",
+    description="Decodes H.264 media frames to published video textures on Vulkan Video or VideoToolbox",
 )
 class H264Decoder:
-    """H.264 media frames in, video frames out, decoded with Vulkan Video on Linux.
+    """H.264 media frames in, video frames out, decoded with Vulkan Video or VideoToolbox.
 
     `encoded_video` takes media frames in the layout `H264Encoder` publishes — a
     QUIC varint timestamp, then one Annex-B access unit, a keyframe opening a
@@ -160,12 +163,14 @@ class H264Decoder:
     timestamp and the `color_info` the picture was converted with: the SPS
     VUI's, its matrix and range filled when the stream leaves them out (BT.709
     for HD, BT.601 for SD, limited range). The host converts each picture from
-    the NV12 buffer the decoder exports.
+    the NV12 buffer the decoder exports on Linux, or the NV12 IOSurface
+    VideoToolbox decodes into on macOS.
 
-    The decoder runs on a Vulkan device this helper creates on the runtime's
-    GPU, so a fault in the video engine ends this helper's stream and nothing
-    else. A device without Vulkan Video decode refuses the device once, and
-    every media frame after is discarded with no exception reaching Python.
+    On Linux the decoder runs on a Vulkan device this helper creates on the
+    runtime's GPU, so a fault in the video engine ends this helper's stream and
+    nothing else; a device without Vulkan Video decode refuses the device once.
+    On macOS it runs on VideoToolbox's hardware decoder. Either way a refused
+    decoder discards every media frame after with no exception reaching Python.
     """
 
     def __init__(self, config: H264DecoderConfig) -> None:

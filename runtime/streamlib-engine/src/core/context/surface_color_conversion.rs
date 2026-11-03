@@ -3,7 +3,8 @@
 
 //! The engine's colour converter run on surfaces named by id: a YCbCr pixel
 //! buffer — a camera's imported DMA-BUF, a decoder's output — converted into
-//! an RGBA texture a stream publishes.
+//! an RGBA texture a stream publishes, and on macOS an RGBA texture converted
+//! into an adopted NV12 IOSurface an encoder reads.
 
 use std::collections::HashMap;
 
@@ -45,8 +46,19 @@ struct SurfaceColorConversionSource {
     planes: PixelPlanesWithinOneAllocation,
 }
 
-/// One caller's conversions: the surface-share sources it has named, a
-/// converter per source format, and the recorder they dispatch on.
+/// An adopted NV12 IOSurface an RGBA texture converts into: its pages
+/// imported as a storage buffer, and the format its registration states.
+#[cfg(target_os = "macos")]
+struct AdoptedNv12IOSurfaceConversionDestination {
+    imported_iosurface: crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer,
+    pixel_format: PixelFormat,
+    width: u32,
+    height: u32,
+}
+
+/// One caller's conversions: the surface-share sources and NV12 destinations
+/// it has named, a converter per source or destination format, and the
+/// recorder they dispatch on.
 ///
 /// Owned by one helper's escalate registry, so the converters' staged bindings
 /// are never shared with another node's conversions, and what a helper
@@ -55,23 +67,44 @@ struct SurfaceColorConversionSource {
 pub(crate) struct SurfaceColorConversionSession {
     sources_by_surface_id: HashMap<String, SurfaceColorConversionSource>,
     color_converters_by_source_format: HashMap<PixelFormat, RhiColorConverter>,
+    #[cfg(target_os = "macos")]
+    nv12_iosurface_destinations_by_surface_id:
+        HashMap<String, AdoptedNv12IOSurfaceConversionDestination>,
+    #[cfg(target_os = "macos")]
+    rgba_to_nv12_color_converters_by_destination_format: HashMap<PixelFormat, RhiColorConverter>,
     conversion_recorder: Option<RhiCommandRecorder>,
 }
 
 impl SurfaceColorConversionSession {
-    /// Convert `source_surface_id`'s YCbCr pixels, described by
-    /// `source_color`, into the RGBA texture `destination_surface_id`, keeping
-    /// the source's transfer curve, and return once the destination's next
-    /// reader sees them — with the registration whose layout the conversion
-    /// settled, under the id it resolved under, for the caller to publish.
+    /// Convert between `source_surface_id` and `destination_surface_id`,
+    /// keeping the transfer curve, and return once the destination's next
+    /// reader sees the result — with the texture registration whose layout
+    /// the conversion settled, under the id it resolved under, for the caller
+    /// to publish. `ycbcr_side_color` describes whichever side is YCbCr: a
+    /// YCbCr source converting into an RGBA texture, or on macOS an RGBA
+    /// texture converting into an adopted NV12 IOSurface.
     pub(crate) fn convert_surface_into(
         &mut self,
         gpu: &GpuContext,
         source_surface_id: &str,
         destination_surface_id: &str,
-        source_color: &H273ColorVui,
+        ycbcr_side_color: &H273ColorVui,
     ) -> Result<(String, TextureRegistration)> {
         gpu.refuse_a_retired_frame_id(source_surface_id)?;
+        #[cfg(target_os = "macos")]
+        if self.converts_into_an_adopted_nv12_iosurface(
+            gpu,
+            source_surface_id,
+            destination_surface_id,
+        )? {
+            return self.convert_an_rgba_texture_into_an_adopted_nv12_iosurface(
+                gpu,
+                source_surface_id,
+                destination_surface_id,
+                ycbcr_side_color,
+            );
+        }
+        let source_color = ycbcr_side_color;
         let mut pooled_frame_source_of_this_conversion;
         let source = match pooled_frame_held_in_this_process(gpu, source_surface_id)? {
             Some(pooled_frame_source) => {
@@ -300,10 +333,200 @@ impl SurfaceColorConversionSession {
         self.sources_by_surface_id.contains_key(surface_id)
     }
 
-    /// Forget what this session resolved for `surface_id`, answering whether
-    /// it held anything.
-    pub(crate) fn forget_source(&mut self, surface_id: &str) -> bool {
-        self.sources_by_surface_id.remove(surface_id).is_some()
+    /// Forget what this session resolved for `surface_id`, as a source or a
+    /// destination, answering whether it held anything.
+    pub(crate) fn forget_resolved_surface(&mut self, surface_id: &str) -> bool {
+        let forgot_a_source = self.sources_by_surface_id.remove(surface_id).is_some();
+        #[cfg(target_os = "macos")]
+        let forgot_a_destination = self
+            .nv12_iosurface_destinations_by_surface_id
+            .remove(surface_id)
+            .is_some();
+        #[cfg(not(target_os = "macos"))]
+        let forgot_a_destination = false;
+        forgot_a_source || forgot_a_destination
+    }
+
+    /// Whether `destination_surface_id` is an adopted NV12 IOSurface, resolved
+    /// and kept the first time a conversion names it. A source this session
+    /// already reads as YCbCr, or a pooled YCbCr frame, never asks the surface
+    /// store.
+    #[cfg(target_os = "macos")]
+    fn converts_into_an_adopted_nv12_iosurface(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+        destination_surface_id: &str,
+    ) -> Result<bool> {
+        if self
+            .nv12_iosurface_destinations_by_surface_id
+            .contains_key(destination_surface_id)
+        {
+            return Ok(true);
+        }
+        let source_is_a_pooled_ycbcr_frame =
+            crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
+                && gpu
+                    .pooled_backing_held_in_this_process(source_surface_id)
+                    .is_some_and(|pixel_buffer| {
+                        matches!(
+                            pixel_buffer.format(),
+                            PixelFormat::Nv12VideoRange
+                                | PixelFormat::Nv12FullRange
+                                | PixelFormat::Yuyv422
+                                | PixelFormat::Uyvy422
+                        )
+                    });
+        if self.sources_by_surface_id.contains_key(source_surface_id)
+            || source_is_a_pooled_ycbcr_frame
+        {
+            return Ok(false);
+        }
+        let Some(store) = gpu.surface_store() else {
+            return Ok(false);
+        };
+        let Ok(registration) =
+            store.lookup_iosurface_registration_without_importing_it(destination_surface_id)
+        else {
+            return Ok(false);
+        };
+        if !matches!(
+            registration.pixel_format,
+            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
+        ) {
+            return Ok(false);
+        }
+        let imported_iosurface = gpu.import_iosurface_as_storage_buffer(&registration.iosurface)?;
+        self.nv12_iosurface_destinations_by_surface_id.insert(
+            destination_surface_id.to_string(),
+            AdoptedNv12IOSurfaceConversionDestination {
+                imported_iosurface,
+                pixel_format: registration.pixel_format,
+                width: registration.width,
+                height: registration.height,
+            },
+        );
+        Ok(true)
+    }
+
+    /// Convert the RGBA texture `source_surface_id` — or an RGBA pixel buffer,
+    /// refreshed into a texture first — into the adopted NV12 IOSurface
+    /// `destination_surface_id` in `ycbcr_side_color`'s matrix, and
+    /// return once the surface's CPU and media-engine readers see it — with
+    /// the source's registration, whose layout the conversion settled.
+    #[cfg(target_os = "macos")]
+    fn convert_an_rgba_texture_into_an_adopted_nv12_iosurface(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+        destination_surface_id: &str,
+        ycbcr_side_color: &H273ColorVui,
+    ) -> Result<(String, TextureRegistration)> {
+        const LAYOUT_THE_CONVERSION_SAMPLES_IN: VulkanLayout =
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+        let destination = self
+            .nv12_iosurface_destinations_by_surface_id
+            .get(destination_surface_id)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "surface {destination_surface_id} was resolved and is gone"
+                ))
+            })?;
+        let source = gpu.resolve_texture_registration_by_surface_id(
+            source_surface_id,
+            None,
+            destination.width,
+            destination.height,
+        )?;
+        let source_texture = source.texture();
+        if (source_texture.width(), source_texture.height())
+            != (destination.width, destination.height)
+        {
+            return Err(Error::GpuError(format!(
+                "texture {source_surface_id} is {}x{} and IOSurface {destination_surface_id} is \
+                 {}x{}; the conversion scales nothing",
+                source_texture.width(),
+                source_texture.height(),
+                destination.width,
+                destination.height
+            )));
+        }
+        let destination_is_full_range = destination.pixel_format == PixelFormat::Nv12FullRange;
+        if let Some(stated_full_range) = ycbcr_side_color.full_range
+            && stated_full_range != destination_is_full_range
+        {
+            return Err(Error::GpuError(format!(
+                "IOSurface {destination_surface_id} is {:?} and the conversion was asked for {} \
+                 range",
+                destination.pixel_format,
+                if stated_full_range { "full" } else { "limited" }
+            )));
+        }
+        let resolved_color = crate::core::color::ResolveH273ColorVuiDefaults::resolve_defaults(
+            &H273ColorVui {
+                full_range: Some(destination_is_full_range),
+                ..*ycbcr_side_color
+            },
+            ColorSpaceKind::Yuv,
+        );
+        let color_converter = match self
+            .rgba_to_nv12_color_converters_by_destination_format
+            .get(&destination.pixel_format)
+        {
+            Some(color_converter) => color_converter,
+            None => self
+                .rgba_to_nv12_color_converters_by_destination_format
+                .entry(destination.pixel_format)
+                .or_insert(
+                    gpu.create_color_converter(PixelFormat::Rgba32, destination.pixel_format)?,
+                ),
+        };
+        let destination_storage_buffer = destination.imported_iosurface.storage_buffer();
+        let kernel = color_converter.prepare_image_to_nv12_buffer(
+            source_texture,
+            destination_storage_buffer,
+            destination.imported_iosurface.nv12_source_layout()?,
+            &resolved_color,
+        )?;
+        let (dispatch_group_x, dispatch_group_y) =
+            RhiColorConverter::image_to_nv12_buffer_dispatch_group_counts(
+                source_texture.width(),
+                source_texture.height(),
+            );
+        let recorder = match self.conversion_recorder.as_mut() {
+            Some(recorder) => recorder,
+            None => self
+                .conversion_recorder
+                .insert(gpu.create_command_recorder("surface_color_conversion")?),
+        };
+        recorder.begin()?;
+        let recorded = (|| -> Result<()> {
+            recorder.record_image_barrier(
+                source_texture,
+                source.current_layout(),
+                LAYOUT_THE_CONVERSION_SAMPLES_IN,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::SHADER_SAMPLED_READ,
+            )?;
+            recorder.record_dispatch(&kernel, dispatch_group_x, dispatch_group_y, 1)?;
+            recorder.record_buffer_barrier(
+                destination_storage_buffer,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanStage::HOST,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::HOST_READ,
+            )
+        })();
+        if let Err(record_failure) = recorded {
+            recorder.abort_recording();
+            return Err(record_failure);
+        }
+        recorder.submit()?;
+        source.update_layout(LAYOUT_THE_CONVERSION_SAMPLES_IN);
+        recorder.wait_for_completion()?;
+        Ok((source_surface_id.to_string(), source))
     }
 }
 

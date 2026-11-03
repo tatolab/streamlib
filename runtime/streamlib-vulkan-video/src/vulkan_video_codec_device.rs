@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The device a codec session is minted on: the engine's own, or one a codec
-//! module owns.
+//! The device a codec session is minted on: one a codec module owns.
 
 use std::sync::{Arc, MutexGuard};
 

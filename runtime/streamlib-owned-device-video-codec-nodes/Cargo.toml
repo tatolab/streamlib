@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-owned-device-video-codec-nodes"
-description = "The H.264 and H.265 encoder node bodies the tatolab-h264 and tatolab-h265 modules run on a Vulkan device they own, reading and writing their ports through the module host table"
+description = "The H.264 and H.265 encoder and decoder node bodies the tatolab-h264 and tatolab-h265 modules run, on a Vulkan Video device they own on Linux and on VideoToolbox on macOS, reading and writing their ports through the module host table"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ name = "streamlib_owned_device_video_codec_nodes"
 path = "src/lib.rs"
 
 [dependencies]
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.2.0" }
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.6.0" }
 serde.workspace = true
 rmp-serde.workspace = true
 tracing.workspace = true
@@ -25,6 +25,27 @@ streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.14" }
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.14" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation.workspace = true
+objc2-core-media.workspace = true
+objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
+objc2-io-surface.workspace = true
+objc2-video-toolbox = { workspace = true, features = ["std", "VTSession", "VTCompressionSession", "VTCompressionProperties", "VTDecompressionSession", "VTDecompressionProperties", "VTErrors", "objc2-core-media", "objc2-core-video"] }
+
+[features]
+# Gates the round trips that code on a real hardware encoder and decoder:
+# `cargo test -p streamlib-owned-device-video-codec-nodes --features hardware-tests`.
+hardware-tests = []
+
+[dev-dependencies]
+# Reads the checked-in PSNR references the round trips score against.
+png = "0.17"
+
+# The runtime's device, whose exported memory a Linux round trip imports onto
+# the owned encode device as a module receives a frame.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk" }
 
 [lints]
 workspace = true

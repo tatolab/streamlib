@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 7
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 3
 
 
 @pytest.mark.parametrize(
@@ -55,17 +55,17 @@ def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
 
 
 @stream
-def a_test_pattern_into_an_h264_encoder(stream_builder: tatolab.stream.StreamBuilder) -> None:
+def a_test_pattern_into_a_virtual_camera(stream_builder: tatolab.stream.StreamBuilder) -> None:
     source = stream_builder.add(_built_in_nodes.TestPatternSource, config={"width": 640})
-    encoder = stream_builder.add(_built_in_nodes.H264Encoder)
-    stream_builder.connect(source.output("video"), encoder.input("video"))
+    camera = stream_builder.add(_built_in_nodes.VirtualCameraSink)
+    stream_builder.connect(source.output("video"), camera.input("video"))
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = compile_stream_to_graph(a_test_pattern_into_an_h264_encoder)
+    graph = compile_stream_to_graph(a_test_pattern_into_a_virtual_camera)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
         ("testpatternsource", "tatolab.stream:TestPatternSource"),
-        ("h264encoder", "tatolab.stream:H264Encoder"),
+        ("virtualcamerasink", "tatolab.stream:VirtualCameraSink"),
     ]
     assert graph["nodes"][0]["config"] == {"width": 640}

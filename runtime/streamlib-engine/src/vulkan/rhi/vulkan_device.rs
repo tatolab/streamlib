@@ -142,12 +142,6 @@ pub struct HostVulkanDevice {
     /// The subgroup operations and stages the driver serves, checked against
     /// each kernel's shaders at construction.
     subgroup_operation_support: VulkanSubgroupOperationSupport,
-    supports_video_encode: bool,
-    supports_video_decode: bool,
-    video_encode_queue_family_index: Option<u32>,
-    video_encode_queue: Option<vk::Queue>,
-    video_decode_queue_family_index: Option<u32>,
-    video_decode_queue: Option<vk::Queue>,
     compute_queue_family_index: Option<u32>,
     compute_queue: Option<vk::Queue>,
     /// VMA allocator for all GPU memory allocation. Option for controlled drop order.
@@ -263,15 +257,8 @@ pub struct HostVulkanDevice {
     graphics_queue_mutex: Mutex<()>,
     /// Per-queue mutex for the dedicated transfer queue.
     transfer_queue_mutex: Mutex<()>,
-    /// Per-queue mutex for the video encode queue (if available).
-    video_encode_queue_mutex: Mutex<()>,
-    /// Per-queue mutex for the video decode queue (if available).
-    video_decode_queue_mutex: Mutex<()>,
     /// Per-queue mutex for the dedicated compute queue (if available).
     compute_queue_mutex: Mutex<()>,
-    /// Device-level mutex for the codec layer's resource creation: video
-    /// sessions, query pools, DPB, bitstream and encode-staging allocations.
-    device_mutex: Mutex<()>,
     /// One tiny allocation per export pool, kept for the device's life so
     /// NVIDIA's per-handle-type export state never sees "no live allocation
     /// of this handle type" once a swapchain exists — not even after the
@@ -279,6 +266,67 @@ pub struct HostVulkanDevice {
     /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md`.
     #[cfg(target_os = "linux")]
     export_pool_sentinels: Vec<ExportPoolSentinel>,
+}
+
+/// The queue families the engine device is created with: graphics, a
+/// transfer-only family when the device has one, and a compute family without
+/// graphics when it has one. Video queues belong to the codec modules' own
+/// devices, so a family that codes video is never chosen for transfer or compute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HostVulkanQueueFamilySelection {
+    graphics_queue_family_index: u32,
+    transfer_queue_family_index: u32,
+    compute_queue_family_index: Option<u32>,
+}
+
+impl HostVulkanQueueFamilySelection {
+    fn from_queue_families(
+        queue_families: &[vk::QueueFamilyProperties],
+    ) -> std::result::Result<Self, VulkanDevicePassOverReason> {
+        let index_of_first_family_where = |accepts: &dyn Fn(vk::QueueFlags) -> bool| {
+            queue_families
+                .iter()
+                .position(|family| accepts(family.queue_flags))
+                .map(|index| index as u32)
+        };
+        let video_queue_flags = vk::QueueFlags::VIDEO_DECODE_KHR | vk::QueueFlags::VIDEO_ENCODE_KHR;
+        let graphics_queue_family_index =
+            index_of_first_family_where(&|flags| flags.contains(vk::QueueFlags::GRAPHICS))
+                .ok_or(VulkanDevicePassOverReason::NoGraphicsQueueFamily)?;
+        let transfer_queue_family_index = index_of_first_family_where(&|flags| {
+            flags.contains(vk::QueueFlags::TRANSFER)
+                && !flags.intersects(
+                    vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | video_queue_flags,
+                )
+        })
+        .unwrap_or(graphics_queue_family_index);
+        let compute_queue_family_index = index_of_first_family_where(&|flags| {
+            flags.contains(vk::QueueFlags::COMPUTE)
+                && !flags.intersects(vk::QueueFlags::GRAPHICS | video_queue_flags)
+        });
+        Ok(Self {
+            graphics_queue_family_index,
+            transfer_queue_family_index,
+            compute_queue_family_index,
+        })
+    }
+
+    /// Each chosen family once, graphics first: one `VkDeviceQueueCreateInfo` each.
+    fn distinct_queue_family_indices(&self) -> Vec<u32> {
+        let mut distinct_queue_family_indices = vec![self.graphics_queue_family_index];
+        for family_index in [
+            Some(self.transfer_queue_family_index),
+            self.compute_queue_family_index,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !distinct_queue_family_indices.contains(&family_index) {
+                distinct_queue_family_indices.push(family_index);
+            }
+        }
+        distinct_queue_family_indices
+    }
 }
 
 /// Single-COLOR-aspect / single-mip / single-layer subresource range —
@@ -633,32 +681,14 @@ impl HostVulkanDevice {
         // impl to land in plain-array shape.
         let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
 
-        // 6. Find graphics queue family
+        // 6. The queue families the engine device is created with.
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-
-        let queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-            .map(|(idx, _)| idx as u32)
-            .ok_or(VulkanDevicePassOverReason::NoGraphicsQueueFamily)?;
-
-        // 6b. Find dedicated transfer queue family (TRANSFER-only, no GRAPHICS/COMPUTE).
-        //     Dedicated transfer queues use independent DMA engines for parallel data movement.
-        //     Falls back to graphics queue if no dedicated transfer queue is available.
-        let transfer_queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, props)| {
-                let has_transfer = props.queue_flags.contains(vk::QueueFlags::TRANSFER);
-                let no_graphics = !props.queue_flags.contains(vk::QueueFlags::GRAPHICS);
-                let no_compute = !props.queue_flags.contains(vk::QueueFlags::COMPUTE);
-                has_transfer && no_graphics && no_compute
-            })
-            .map(|(idx, _)| idx as u32)
-            .unwrap_or(queue_family_index);
-
+        let HostVulkanQueueFamilySelection {
+            graphics_queue_family_index: queue_family_index,
+            transfer_queue_family_index,
+            compute_queue_family_index,
+        } = HostVulkanQueueFamilySelection::from_queue_families(&queue_families)?;
         if transfer_queue_family_index != queue_family_index {
             tracing::info!(
                 "Dedicated transfer queue family found: {} (graphics: {})",
@@ -668,44 +698,6 @@ impl HostVulkanDevice {
         } else {
             tracing::info!("No dedicated transfer queue — using graphics queue for transfers");
         }
-
-        // 6c. Find video encode queue family (VIDEO_ENCODE_BIT_KHR).
-        //     Dedicated encode queues have independent hardware encode engines.
-        let video_encode_queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR))
-            .map(|(idx, _)| idx as u32);
-
-        if let Some(ve_family) = video_encode_queue_family_index {
-            tracing::info!("Video encode queue family found: {}", ve_family);
-        } else {
-            tracing::info!("No video encode queue family available");
-        }
-
-        // 6d. Find video decode queue family (VIDEO_DECODE_BIT_KHR).
-        let video_decode_queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR))
-            .map(|(idx, _)| idx as u32);
-
-        if let Some(vd_family) = video_decode_queue_family_index {
-            tracing::info!("Video decode queue family found: {}", vd_family);
-        } else {
-            tracing::info!("No video decode queue family available");
-        }
-
-        // 6e. Find dedicated compute queue family (COMPUTE but not GRAPHICS).
-        let compute_queue_family_index = queue_families
-            .iter()
-            .enumerate()
-            .find(|(_, props)| {
-                props.queue_flags.contains(vk::QueueFlags::COMPUTE)
-                    && !props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-            })
-            .map(|(idx, _)| idx as u32);
-
         if let Some(cq_family) = compute_queue_family_index {
             tracing::info!("Dedicated compute queue family found: {}", cq_family);
         } else {
@@ -714,59 +706,20 @@ impl HostVulkanDevice {
 
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
-        let mut queue_create_infos = vec![
+        let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = HostVulkanQueueFamilySelection {
+            graphics_queue_family_index: queue_family_index,
+            transfer_queue_family_index,
+            compute_queue_family_index,
+        }
+        .distinct_queue_family_indices()
+        .into_iter()
+        .map(|family_index| {
             vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(queue_family_index)
+                .queue_family_index(family_index)
                 .queue_priorities(&queue_priorities)
-                .build(),
-        ];
-
-        // Request separate video encode/decode queues if they're different families
-        let mut requested_families = vec![queue_family_index];
-        if transfer_queue_family_index != queue_family_index
-            && !requested_families.contains(&transfer_queue_family_index)
-        {
-            requested_families.push(transfer_queue_family_index);
-            queue_create_infos.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(transfer_queue_family_index)
-                    .queue_priorities(&queue_priorities)
-                    .build(),
-            );
-        }
-        if let Some(ve_family) = video_encode_queue_family_index
-            && !requested_families.contains(&ve_family)
-        {
-            requested_families.push(ve_family);
-            queue_create_infos.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(ve_family)
-                    .queue_priorities(&queue_priorities)
-                    .build(),
-            );
-        }
-        if let Some(vd_family) = video_decode_queue_family_index
-            && !requested_families.contains(&vd_family)
-        {
-            requested_families.push(vd_family);
-            queue_create_infos.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(vd_family)
-                    .queue_priorities(&queue_priorities)
-                    .build(),
-            );
-        }
-        if let Some(cq_family) = compute_queue_family_index
-            && !requested_families.contains(&cq_family)
-        {
-            requested_families.push(cq_family);
-            queue_create_infos.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(cq_family)
-                    .queue_priorities(&queue_priorities)
-                    .build(),
-            );
-        }
+                .build()
+        })
+        .collect();
 
         // Device extensions
         let mut device_extensions: Vec<*const c_char> = Vec::new();
@@ -980,97 +933,8 @@ impl HostVulkanDevice {
         // VK_KHR_dynamic_rendering is core since Vulkan 1.3 — no extension string needed.
         // Feature struct (PhysicalDeviceDynamicRenderingFeatures) is still enabled below.
 
-        // On Linux, check for Vulkan Video encode extensions
         // VK_KHR_synchronization2 is core since Vulkan 1.3 — no extension string needed.
         // Feature struct (PhysicalDeviceSynchronization2Features) is still enabled below.
-
-        #[cfg(target_os = "linux")]
-        let has_video_encode = {
-            let has_video_queue = available_device_ext_names.contains(&c"VK_KHR_video_queue");
-            let has_video_encode_queue =
-                available_device_ext_names.contains(&c"VK_KHR_video_encode_queue");
-            let has_video_encode_h264 =
-                available_device_ext_names.contains(&c"VK_KHR_video_encode_h264");
-            let has_video_encode_h265 =
-                available_device_ext_names.contains(&c"VK_KHR_video_encode_h265");
-
-            let all_present = has_video_queue
-                && has_video_encode_queue
-                && has_video_encode_h264
-                && video_encode_queue_family_index.is_some();
-
-            if all_present {
-                device_extensions.push(c"VK_KHR_video_queue".as_ptr());
-                device_extensions.push(c"VK_KHR_video_encode_queue".as_ptr());
-                device_extensions.push(c"VK_KHR_video_encode_h264".as_ptr());
-                if has_video_encode_h265 {
-                    device_extensions.push(c"VK_KHR_video_encode_h265".as_ptr());
-                    tracing::info!("Vulkan Video encode extensions enabled (H.264 + H.265)");
-                } else {
-                    tracing::info!("Vulkan Video encode extensions enabled (H.264 only)");
-                }
-            } else {
-                tracing::info!(
-                    "Vulkan Video encode not available (queue={}, encode_queue={}, h264={}, h265={}, queue_family={})",
-                    has_video_queue,
-                    has_video_encode_queue,
-                    has_video_encode_h264,
-                    has_video_encode_h265,
-                    video_encode_queue_family_index.is_some()
-                );
-            }
-
-            // Enable video_maintenance1 and push_descriptor if video encode is available
-            // (required by the vulkan/video codec layer's encoder/decoder).
-            if all_present {
-                let video_maint1_ext = c"VK_KHR_video_maintenance1";
-                if available_device_ext_names.contains(&video_maint1_ext) {
-                    device_extensions.push(video_maint1_ext.as_ptr());
-                }
-                let push_desc_ext = c"VK_KHR_push_descriptor";
-                if available_device_ext_names.contains(&push_desc_ext) {
-                    device_extensions.push(push_desc_ext.as_ptr());
-                }
-            }
-
-            all_present
-        };
-
-        // Check for Vulkan Video decode extensions
-        #[cfg(target_os = "linux")]
-        let has_video_decode = {
-            let has_video_queue = available_device_ext_names.contains(&c"VK_KHR_video_queue");
-            let has_video_decode_queue =
-                available_device_ext_names.contains(&c"VK_KHR_video_decode_queue");
-            let has_video_decode_h264 =
-                available_device_ext_names.contains(&c"VK_KHR_video_decode_h264");
-            let has_video_decode_h265 =
-                available_device_ext_names.contains(&c"VK_KHR_video_decode_h265");
-
-            let all_present = has_video_queue
-                && has_video_decode_queue
-                && has_video_decode_h264
-                && video_decode_queue_family_index.is_some();
-
-            if all_present {
-                // VK_KHR_video_queue already enabled by encode block above (if present)
-                if !has_video_encode {
-                    device_extensions.push(c"VK_KHR_video_queue".as_ptr());
-                }
-                device_extensions.push(c"VK_KHR_video_decode_queue".as_ptr());
-                device_extensions.push(c"VK_KHR_video_decode_h264".as_ptr());
-                if has_video_decode_h265 {
-                    device_extensions.push(c"VK_KHR_video_decode_h265".as_ptr());
-                    tracing::info!("Vulkan Video decode extensions enabled (H.264 + H.265)");
-                } else {
-                    tracing::info!("Vulkan Video decode extensions enabled (H.264 only)");
-                }
-            } else {
-                tracing::info!("Vulkan Video decode not available");
-            }
-
-            all_present
-        };
 
         #[cfg(target_os = "linux")]
         let supports_external_memory = has_external_memory;
@@ -1148,20 +1012,9 @@ impl HostVulkanDevice {
             0
         };
 
-        #[cfg(target_os = "linux")]
-        let supports_video_encode = has_video_encode;
-        #[cfg(not(target_os = "linux"))]
-        let supports_video_encode = false;
-
-        #[cfg(target_os = "linux")]
-        let supports_video_decode = has_video_decode;
-        #[cfg(not(target_os = "linux"))]
-        let supports_video_decode = false;
-
         // Dynamic rendering, timeline semaphores and synchronization2 are the
         // promoted-1.3 core the engine is written against; requesting them is
-        // not optional on any platform. Synchronization2 is also a mandatory
-        // dependency of VK_KHR_video_encode_queue. A device that refuses one
+        // not optional on any platform. A device that refuses one
         // fails creation with FEATURE_NOT_PRESENT rather than being quietly
         // served a device the engine's call sites cannot use.
         let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeatures::builder()
@@ -1176,12 +1029,6 @@ impl HostVulkanDevice {
         let mut synchronization2_features = vk::PhysicalDeviceSynchronization2Features::builder()
             .synchronization2(true)
             .build();
-
-        #[cfg(target_os = "linux")]
-        let mut video_maintenance1_features =
-            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder()
-                .video_maintenance1(true)
-                .build();
 
         // samplerYcbcrConversion is required to create NV12 image views / samplers
         // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the codec layer's path.
@@ -1243,10 +1090,6 @@ impl HostVulkanDevice {
                 .push_next(&mut synchronization2_features)
                 .push_next(&mut vulkan_1_1_features);
             #[cfg(target_os = "linux")]
-            if supports_video_encode || supports_video_decode {
-                builder = builder.push_next(&mut video_maintenance1_features);
-            }
-            #[cfg(target_os = "linux")]
             if has_ray_tracing_pipeline {
                 builder = builder
                     .push_next(&mut buffer_device_address_features)
@@ -1295,22 +1138,6 @@ impl HostVulkanDevice {
 
         // 8a2. Get the transfer queue (may be same as graphics if no dedicated transfer family)
         let transfer_queue = unsafe { device.get_device_queue(transfer_queue_family_index, 0) };
-
-        // 8b. Get the video encode queue (if available)
-        let video_encode_queue = if supports_video_encode {
-            video_encode_queue_family_index
-                .map(|ve_family| unsafe { device.get_device_queue(ve_family, 0) })
-        } else {
-            None
-        };
-
-        // 8c. Get the video decode queue (if available)
-        let video_decode_queue = if supports_video_decode {
-            video_decode_queue_family_index
-                .map(|vd_family| unsafe { device.get_device_queue(vd_family, 0) })
-        } else {
-            None
-        };
 
         // 8d. Get the dedicated compute queue (if available)
         let compute_queue = compute_queue_family_index
@@ -1561,12 +1388,6 @@ impl HostVulkanDevice {
             has_ray_tracing_pipeline,
             ray_tracing_properties,
             subgroup_operation_support,
-            supports_video_encode,
-            supports_video_decode,
-            video_encode_queue_family_index,
-            video_encode_queue,
-            video_decode_queue_family_index,
-            video_decode_queue,
             compute_queue_family_index,
             compute_queue,
             allocator: Some(allocator),
@@ -1608,10 +1429,7 @@ impl HostVulkanDevice {
             queue_submission_completion_timelines: Some(queue_submission_completion_timelines),
             graphics_queue_mutex: Mutex::new(()),
             transfer_queue_mutex: Mutex::new(()),
-            video_encode_queue_mutex: Mutex::new(()),
-            video_decode_queue_mutex: Mutex::new(()),
             compute_queue_mutex: Mutex::new(()),
-            device_mutex: Mutex::new(()),
             #[cfg(target_os = "linux")]
             export_pool_sentinels: Vec::new(),
         };
@@ -2952,36 +2770,6 @@ impl HostVulkanDevice {
         self.supports_cross_device_dma_buf_probe
     }
 
-    /// Whether Vulkan Video encode extensions are available.
-    pub fn supports_video_encode(&self) -> bool {
-        self.supports_video_encode
-    }
-
-    /// Get the video encode queue family index (if available).
-    pub fn video_encode_queue_family_index(&self) -> Option<u32> {
-        self.video_encode_queue_family_index
-    }
-
-    /// Get the video encode queue (if available).
-    pub fn video_encode_queue(&self) -> Option<vk::Queue> {
-        self.video_encode_queue
-    }
-
-    /// Whether this device supports Vulkan Video decode.
-    pub fn supports_video_decode(&self) -> bool {
-        self.supports_video_decode
-    }
-
-    /// Get the video decode queue family index (if available).
-    pub fn video_decode_queue_family_index(&self) -> Option<u32> {
-        self.video_decode_queue_family_index
-    }
-
-    /// Get the video decode queue (if available).
-    pub fn video_decode_queue(&self) -> Option<vk::Queue> {
-        self.video_decode_queue
-    }
-
     /// Get the dedicated compute queue family index (if available).
     pub fn compute_queue_family_index(&self) -> Option<u32> {
         self.compute_queue_family_index
@@ -3006,10 +2794,6 @@ impl HostVulkanDevice {
             Some(HostVulkanSubmissionQueue::Graphics)
         } else if queue == self.transfer_queue {
             Some(HostVulkanSubmissionQueue::Transfer)
-        } else if self.video_encode_queue == Some(queue) {
-            Some(HostVulkanSubmissionQueue::VideoEncode)
-        } else if self.video_decode_queue == Some(queue) {
-            Some(HostVulkanSubmissionQueue::VideoDecode)
         } else if self.compute_queue == Some(queue) {
             Some(HostVulkanSubmissionQueue::Compute)
         } else {
@@ -3022,8 +2806,6 @@ impl HostVulkanDevice {
         match self.submission_queue_for(queue) {
             Some(HostVulkanSubmissionQueue::Graphics) | None => &self.graphics_queue_mutex,
             Some(HostVulkanSubmissionQueue::Transfer) => &self.transfer_queue_mutex,
-            Some(HostVulkanSubmissionQueue::VideoEncode) => &self.video_encode_queue_mutex,
-            Some(HostVulkanSubmissionQueue::VideoDecode) => &self.video_decode_queue_mutex,
             Some(HostVulkanSubmissionQueue::Compute) => &self.compute_queue_mutex,
         }
     }
@@ -3154,11 +2936,6 @@ impl HostVulkanDevice {
             .and_then(VulkanValidationMessenger::counts)
     }
 
-    /// Acquire the device-level mutex for resource creation operations.
-    pub fn lock_device(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.device_mutex.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// `vkDeviceWaitIdle` with the threading discipline the Vulkan spec
     /// requires. Per the spec, `vkDeviceWaitIdle` is externally
     /// synchronized over **every `VkQueue` the device owns** — calling
@@ -3167,14 +2944,12 @@ impl HostVulkanDevice {
     /// `UNASSIGNED-Threading-MultipleThreads-Write`. Acquires all
     /// per-queue mutexes (in a fixed lock order so there's no deadlock
     /// against [`Self::submit_to_queue`] / [`Self::present_to_queue`],
-    /// each of which takes only a single queue mutex) and then the
-    /// device mutex before calling through.
+    /// each of which takes only a single queue mutex) before calling through.
     ///
     /// Every in-tree consumer should reach `vkDeviceWaitIdle` through
     /// this helper, not raw `self.device().device_wait_idle()`.
     pub fn wait_idle(&self) -> Result<()> {
-        // Fixed lock order: graphics → transfer → compute → video-encode →
-        // video-decode → device. `submit_to_queue` / `present_to_queue`
+        // Fixed lock order: graphics → transfer → compute. `submit_to_queue` / `present_to_queue`
         // only ever take ONE queue mutex, so any order here is deadlock-
         // safe against them; this order matches struct-field declaration
         // for readability.
@@ -3190,15 +2965,6 @@ impl HostVulkanDevice {
             .compute_queue_mutex
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let _ve = self
-            .video_encode_queue_mutex
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _vd = self
-            .video_decode_queue_mutex
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _dev = self.device_mutex.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { self.device.device_wait_idle() }
             .map_err(|e| Error::GpuError(format!("device_wait_idle failed: {e}")))
     }
@@ -4689,6 +4455,59 @@ unsafe impl Sync for HostVulkanDevice {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_engine_device_requests_no_video_queue_family() {
+        let family_of = |queue_flags: vk::QueueFlags| vk::QueueFamilyProperties {
+            queue_flags,
+            queue_count: 1,
+            ..Default::default()
+        };
+        let queue_families_of_a_discrete_gpu_with_video_engines = [
+            family_of(
+                vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
+            ),
+            family_of(vk::QueueFlags::TRANSFER),
+            family_of(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER),
+            family_of(vk::QueueFlags::TRANSFER | vk::QueueFlags::VIDEO_DECODE_KHR),
+            family_of(vk::QueueFlags::TRANSFER | vk::QueueFlags::VIDEO_ENCODE_KHR),
+        ];
+
+        let selection = super::HostVulkanQueueFamilySelection::from_queue_families(
+            &queue_families_of_a_discrete_gpu_with_video_engines,
+        )
+        .expect("a graphics family is present");
+
+        assert_eq!(selection.distinct_queue_family_indices(), vec![0, 1, 2]);
+        for family_index in selection.distinct_queue_family_indices() {
+            assert!(
+                !queue_families_of_a_discrete_gpu_with_video_engines[family_index as usize]
+                    .queue_flags
+                    .intersects(
+                        vk::QueueFlags::VIDEO_DECODE_KHR | vk::QueueFlags::VIDEO_ENCODE_KHR
+                    ),
+                "family {family_index} is a video family"
+            );
+        }
+    }
+
+    #[test]
+    fn a_device_whose_only_transfer_only_family_codes_video_transfers_on_graphics() {
+        let family_of = |queue_flags: vk::QueueFlags| vk::QueueFamilyProperties {
+            queue_flags,
+            queue_count: 1,
+            ..Default::default()
+        };
+        let selection = super::HostVulkanQueueFamilySelection::from_queue_families(&[
+            family_of(
+                vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
+            ),
+            family_of(vk::QueueFlags::TRANSFER | vk::QueueFlags::VIDEO_DECODE_KHR),
+        ])
+        .expect("a graphics family is present");
+
+        assert_eq!(selection.distinct_queue_family_indices(), vec![0]);
+    }
+
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::core::test_support::rig_only_capability_skip::{
@@ -4969,10 +4788,10 @@ mod tests {
         };
 
         println!(
-            "Graphics queue family: {}, transfer: {}, video_encode: {:?}",
+            "Graphics queue family: {}, transfer: {}, compute: {:?}",
             device.queue_family_index(),
             device.transfer_queue_family_index(),
-            device.video_encode_queue_family_index(),
+            device.compute_queue_family_index(),
         );
     }
 

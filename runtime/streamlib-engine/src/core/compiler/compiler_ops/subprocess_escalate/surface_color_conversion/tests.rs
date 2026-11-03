@@ -178,7 +178,7 @@ fn convert_through_the_escalate_op(
     registry: &EscalateHandleRegistry,
     source_surface_id: &str,
     destination_surface_id: &str,
-    source_color: EscalateRequestColorInfoAxisNames,
+    ycbcr_side_color: EscalateRequestColorInfoAxisNames,
 ) -> Result<(), String> {
     let response = handle_escalate_op(
         &GpuContextLimitedAccess::new(gpu.clone()),
@@ -188,7 +188,7 @@ fn convert_through_the_escalate_op(
             request_id: "convert-1".into(),
             source_surface_id: source_surface_id.into(),
             destination_surface_id: destination_surface_id.into(),
-            source_color,
+            ycbcr_side_color,
         }),
     )
     .expect("convert_surface_into is request/response");

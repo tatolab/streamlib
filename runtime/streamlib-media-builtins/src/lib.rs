@@ -11,18 +11,12 @@
 
 pub mod audio_block;
 pub(crate) mod consecutive_failure_report_schedule;
+#[cfg(target_os = "linux")]
 pub(crate) mod cumulative_count_report_threshold;
-pub mod encoded_frame_to_published_surface_decoder;
-pub mod h264_decoder;
-pub mod h264_encoder;
-pub mod h265_decoder;
-pub mod h265_encoder;
 pub mod h273_color_vui_translation;
-pub mod hardware_video_codec_processor_identity;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub(crate) mod processor_thread_join;
-pub mod published_surface_to_encoded_frame_encoder;
 pub mod relay_track_source;
 pub(crate) mod test_pattern_frame_renderer;
 #[cfg(test)]
@@ -33,12 +27,6 @@ pub mod video_frame;
 pub mod virtual_camera_sink;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
-pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
-pub use h264_decoder::H264Decoder;
-pub use h264_encoder::H264Encoder;
-pub use h265_decoder::H265Decoder;
-pub use h265_encoder::H265Encoder;
-pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
@@ -71,6 +59,10 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
         "tatolab.speaker:SpeakerSink",
         "tatolab-speaker",
     ),
+    ("H264Encoder", "tatolab.h264:H264Encoder", "tatolab-h264"),
+    ("H264Decoder", "tatolab.h264:H264Decoder", "tatolab-h264"),
+    ("H265Encoder", "tatolab.h265:H265Encoder", "tatolab-h265"),
+    ("H265Decoder", "tatolab.h265:H265Decoder", "tatolab-h265"),
     ("OpusEncoder", "tatolab.opus:OpusEncoder", "tatolab-opus"),
     ("OpusDecoder", "tatolab.opus:OpusDecoder", "tatolab-opus"),
 ];
@@ -83,10 +75,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
-    PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
     PROCESSOR_REGISTRY.register::<relay_track_source::RelayTrackSource::Processor>();
 
     for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
@@ -181,25 +169,17 @@ mod built_in_node_type_tests {
             mode: CatalogDataTrackMode::Snapshot,
             mime: Some("application/msgpack".to_string()),
         });
-        for (class_name, output_port) in [
-            ("TestPatternSource", "video"),
-            ("H264Decoder", "video"),
-            ("H265Decoder", "video"),
-        ] {
-            let descriptor = PROCESSOR_REGISTRY
-                .descriptor(&ProcessorClassImportPath::of_built_in_node(class_name))
-                .unwrap_or_else(|| panic!("{class_name} is registered"));
-            let declared_entry = descriptor
-                .outputs
-                .iter()
-                .find(|port| port.name == output_port)
-                .and_then(|port| port.catalog_entry.clone());
-            assert_eq!(
-                declared_entry,
-                Some(msgpack_snapshot_entry.clone()),
-                "{class_name}.{output_port}"
-            );
-        }
+        let descriptor = PROCESSOR_REGISTRY
+            .descriptor(&ProcessorClassImportPath::of_built_in_node(
+                "TestPatternSource",
+            ))
+            .expect("TestPatternSource is registered");
+        let declared_entry = descriptor
+            .outputs
+            .iter()
+            .find(|port| port.name == "video")
+            .and_then(|port| port.catalog_entry.clone());
+        assert_eq!(declared_entry, Some(msgpack_snapshot_entry));
     }
 
     /// Each built-in's config derives `deny_unknown_fields` by hand, so this is
@@ -262,7 +242,7 @@ mod built_in_node_type_tests {
     /// A graph recorded before a built-in moved to a module names its former
     /// type, and is refused naming the module's type and what to install.
     #[test]
-    fn the_former_camera_and_audio_built_ins_are_refused_naming_the_module_to_install() {
+    fn the_former_camera_audio_and_codec_built_ins_are_refused_naming_the_module_to_install() {
         register_media_builtin_processor_types();
 
         for (former_class_name, module_node_type, module_distribution) in [
@@ -283,6 +263,10 @@ mod built_in_node_type_tests {
             ),
             ("OpusEncoder", "tatolab.opus:OpusEncoder", "tatolab-opus"),
             ("OpusDecoder", "tatolab.opus:OpusDecoder", "tatolab-opus"),
+            ("H264Encoder", "tatolab.h264:H264Encoder", "tatolab-h264"),
+            ("H264Decoder", "tatolab.h264:H264Decoder", "tatolab-h264"),
+            ("H265Encoder", "tatolab.h265:H265Encoder", "tatolab-h265"),
+            ("H265Decoder", "tatolab.h265:H265Decoder", "tatolab-h265"),
         ] {
             let former_node_type = ProcessorClassImportPath::of_built_in_node(former_class_name);
             assert!(!PROCESSOR_REGISTRY.is_registered(&former_node_type));

@@ -70,20 +70,6 @@ impl From<streamlib_consumer_rhi::ConsumerRhiError> for VideoError {
 }
 
 /// The codec layer's result.
-#[cfg(feature = "engine-error-conversions")]
-impl From<streamlib_error::Error> for VideoError {
-    fn from(e: streamlib_error::Error) -> Self {
-        Self::Rhi(e.to_string())
-    }
-}
-
-#[cfg(feature = "engine-error-conversions")]
-impl From<VideoError> for streamlib_error::Error {
-    fn from(e: VideoError) -> Self {
-        Self::GpuError(e.to_string())
-    }
-}
-
 pub type VideoResult<T> = Result<T, VideoError>;
 
 #[cfg(test)]

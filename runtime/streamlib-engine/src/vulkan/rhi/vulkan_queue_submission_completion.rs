@@ -20,20 +20,12 @@ use crate::core::{Error, Result};
 pub(crate) enum HostVulkanSubmissionQueue {
     Graphics,
     Transfer,
-    VideoEncode,
-    VideoDecode,
     Compute,
 }
 
 impl HostVulkanSubmissionQueue {
-    const COUNT: usize = 5;
-    const ALL: [Self; Self::COUNT] = [
-        Self::Graphics,
-        Self::Transfer,
-        Self::VideoEncode,
-        Self::VideoDecode,
-        Self::Compute,
-    ];
+    const COUNT: usize = 3;
+    const ALL: [Self; Self::COUNT] = [Self::Graphics, Self::Transfer, Self::Compute];
 
     fn index(self) -> usize {
         self as usize
@@ -99,13 +91,7 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
         };
         Ok(Self {
             device: device.clone(),
-            timeline_per_queue: [
-                create_timeline()?,
-                create_timeline()?,
-                create_timeline()?,
-                create_timeline()?,
-                create_timeline()?,
-            ],
+            timeline_per_queue: [create_timeline()?, create_timeline()?, create_timeline()?],
         })
     }
 

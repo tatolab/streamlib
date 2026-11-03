@@ -158,27 +158,6 @@ jobs:
           from nodes.halftone_lens_effect import HalftoneLensEffect
           '
 
-      # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every
-      # earlier release is a candidate. This run's distributions are not there
-      # yet, so they join PyPI as find-links, and the scaffold must lock the
-      # `tatolab-stream` just built — one that capped the version or named
-      # another index would lock something else.
-      - name: A scaffolded stream locks the tatolab-stream this run built
-        run: |
-          set -euo pipefail
-          (cd /tmp/scaffold-check && UV_FIND_LINKS="$GITHUB_WORKSPACE/sdk/tatolab-stream/dist" uv lock)
-          built_stream_package_version="$(/tmp/scaffold-venv/bin/python -c \
-            "from importlib.metadata import version; print(version('tatolab-stream'))")"
-          locked_stream_package_version="$(python3 -c "
-          import tomllib
-          lock = tomllib.load(open('/tmp/scaffold-check/uv.lock', 'rb'))
-          print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
-          ")"
-          if [ "$locked_stream_package_version" != "$built_stream_package_version" ]; then
-            echo "::error::a scaffolded stream locks tatolab-stream $locked_stream_package_version, not the $built_stream_package_version this run built"
-            exit 1
-          fi
-
       # Every `pypi-distribution-*` artifact of this run is what publish-to-pypi
       # uploads.
       - name: Keep the distributions for the upload
@@ -230,6 +209,89 @@ jobs:
       extension_import_package_name: tatolab.speaker
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
+  # The codec modules: the scaffold depends on tatolab-h264, and tatolab-h265 is
+  # its H.265 twin.
+  build-tatolab-h264-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-h264
+      extension_distribution_name: tatolab-h264
+      extension_import_package_name: tatolab.h264
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
+  build-tatolab-h265-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-h265
+      extension_distribution_name: tatolab-h265
+      extension_import_package_name: tatolab.h265
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
+  # A user's `uv sync` resolves `tatolab-stream` and `tatolab-h264` from PyPI,
+  # where every earlier release is a candidate. This run's distributions are not
+  # there yet, so they join PyPI as find-links, and the scaffold must lock the
+  # ones just built — a scaffold that capped a version or named another index
+  # would lock something else.
+  lock-the-scaffold-against-this-runs-distributions:
+    name: A scaffolded stream locks the distributions this run built
+    needs:
+      - build-tatolab-stream-distribution
+      - build-tatolab-h264-distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+          sparse-checkout: sdk/tatolab-stream
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Collect the tatolab-stream and tatolab-h264 this run built
+        uses: actions/download-artifact@v7
+        with:
+          pattern: pypi-distribution-tatolab-{stream,h264-*}
+          path: /tmp/this-runs-distributions
+          merge-multiple: true
+
+      - name: The scaffold locks this run's tatolab-stream and tatolab-h264
+        run: |
+          set -euo pipefail
+          cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
+          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-distributions uv lock)
+          built_version="$(python3 -c "
+          import tomllib
+          print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
+          ")"
+          for distribution_name in tatolab-stream tatolab-h264; do
+            locked_version="$(python3 - "$distribution_name" <<'EOF'
+          import sys
+          import tomllib
+          lock = tomllib.load(open('/tmp/scaffold-check/uv.lock', 'rb'))
+          print(next(package['version'] for package in lock['package'] if package['name'] == sys.argv[1]))
+          EOF
+            )"
+            if [ "$locked_version" != "$built_version" ]; then
+              echo "::error::a scaffolded stream locks $distribution_name $locked_version, not the $built_version this run built"
+              exit 1
+            fi
+          done
 
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution
@@ -294,6 +356,9 @@ jobs:
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
+      - build-tatolab-h264-distribution
+      - build-tatolab-h265-distribution
+      - lock-the-scaffold-against-this-runs-distributions
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
       - check-the-linux-runtime-can-be-published

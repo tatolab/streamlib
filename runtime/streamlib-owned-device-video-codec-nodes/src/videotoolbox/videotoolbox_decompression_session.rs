@@ -1,18 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! One VideoToolbox decompression session behind the seam's decode shape.
+//! One VideoToolbox decompression session fed Annex-B access units.
 //!
 //! The session is built from the stream's parameter sets, so it opens at the
 //! first sync point and rebuilds when they change. Pictures come back on
-//! IOSurfaces and land in the pool through
-//! [`Biplanar420IOSurfaceToPooledRgbaConversion`], read from the top-left of
-//! the clean aperture — the parameter sets' conformance window.
+//! IOSurface-backed pixel buffers, read from the top-left of the clean
+//! aperture — the parameter sets' conformance window.
 
 use std::ffi::{c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use objc2_core_foundation::{CFDictionary, CFRetained, CFString, CFType};
 use objc2_core_media::{
@@ -21,35 +20,34 @@ use objc2_core_media::{
     CMVideoFormatDescriptionCreateFromHEVCParameterSets, kCMBlockBufferAssureMemoryNowFlag,
 };
 use objc2_core_video::{
-    CVImageBuffer, CVImageBufferGetCleanRect, CVPixelBuffer, CVPixelBufferGetIOSurface,
-    CVPixelBufferGetPixelFormatType, kCVPixelBufferIOSurfacePropertiesKey,
+    CVImageBuffer, CVImageBufferGetCleanRect, CVPixelBuffer, kCVPixelBufferIOSurfacePropertiesKey,
 };
 use objc2_video_toolbox::{
     VTDecodeFrameFlags, VTDecodeInfoFlags, VTDecompressionOutputCallbackRecord,
-    VTDecompressionSession, kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
+    VTDecompressionSession, VTIsHardwareDecodeSupported,
+    kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
 };
-use parking_lot::Mutex;
-
-use super::{
-    adopt_created_core_foundation_object, cf_dictionary_of_booleans, videotoolbox_call_failure,
-};
-use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
-use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
-use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
-use crate::core::color::{ColorSpaceKind, ResolveH273ColorVuiDefaults};
-use crate::core::context::{
-    DecodedVideoPictureInPooledPixelBuffer, GpuContextLimitedAccess, VideoCodecElementaryStream,
-    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
-};
-use crate::core::rhi::PixelFormat;
-use crate::core::{Error, Result};
+use streamlib_video_bitstream::VideoCodecElementaryStream;
 use streamlib_video_bitstream::annex_b_access_unit::{
     NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
     length_prefix_annex_b_access_unit,
 };
 
-/// A decoded picture's pixel buffer, handed from the VideoToolbox thread
-/// that decoded it to the one that lands it in the pool.
+use super::{
+    adopt_created_core_foundation_object, cf_dictionary_of_booleans, core_media_codec_type_of,
+    ensure_core_video_pixel_format_dictionary_is_initialised, videotoolbox_call_failure,
+};
+
+/// A decoded picture: the pixel buffer VideoToolbox decoded it into, and the
+/// extent of its clean aperture.
+pub struct DecodedVideoToolboxPicture {
+    pub pixel_buffer: CFRetained<CVPixelBuffer>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A decoded picture's pixel buffer, handed from the VideoToolbox thread that
+/// decoded it to the one that publishes it.
 struct DecodedPixelBufferHandedAcrossThreads(CFRetained<CVPixelBuffer>);
 
 // SAFETY: CoreVideo's retain and release are thread-safe, and the buffer is
@@ -60,21 +58,12 @@ unsafe impl Send for DecodedPixelBufferHandedAcrossThreads {}
 /// since the last collection, or the failure a frame answered.
 #[derive(Default)]
 struct DecodedImageBuffersAwaitingCollection {
-    decoded: Mutex<Vec<Result<DecodedPixelBufferHandedAcrossThreads>>>,
+    decoded: Mutex<Vec<Result<DecodedPixelBufferHandedAcrossThreads, String>>>,
 }
-
-/// A decompression session, driven from whichever thread holds it.
-struct VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime(
-    CFRetained<VTDecompressionSession>,
-);
-
-// SAFETY: a decompression session may be driven from any thread, one call at
-// a time, which the `&mut` receiver of every decode call guarantees.
-unsafe impl Send for VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime {}
 
 /// A decompression session and the format description it was built from.
 struct VideoToolboxDecompressionSessionForOneFormat {
-    decompression_session: VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime,
+    decompression_session: CFRetained<VTDecompressionSession>,
     format_description: CFRetained<CMFormatDescription>,
     /// The callback's refcon, held until after the session is invalidated.
     awaiting_collection: Arc<DecodedImageBuffersAwaitingCollection>,
@@ -86,54 +75,123 @@ impl Drop for VideoToolboxDecompressionSessionForOneFormat {
         // reach the callback; after the invalidate none runs, so the refcon
         // may drop with this struct.
         unsafe {
-            self.decompression_session.0.wait_for_asynchronous_frames();
-            self.decompression_session.0.invalidate();
+            self.decompression_session.wait_for_asynchronous_frames();
+            self.decompression_session.invalidate();
         }
     }
 }
 
-/// The conversion into the pool and the shape it was built for.
-struct PooledRgbaConversionForOneShape {
-    biplanar_420_to_pooled_rgba_conversion: Biplanar420IOSurfaceToPooledRgbaConversion,
-    source_pixel_format: PixelFormat,
-    picture_extent: (u32, u32),
-}
-
 /// A VideoToolbox decompression session fed one Annex-B access unit at a
-/// time.
-pub(super) struct VideoToolboxDecodeSession {
+/// time, driven from the thread that holds it.
+pub struct VideoToolboxDecompressionSession {
     elementary_stream: VideoCodecElementaryStream,
-    maximum_coded_extent: Option<VideoDecodeMaximumCodedExtent>,
+    /// The largest picture accepted, when the node caps it.
+    maximum_picture_extent: Option<(u32, u32)>,
     /// The stream's parameter sets, each kind as the latest access unit to
     /// carry that kind carried it.
     parameter_sets: ParameterSetsFromAnnexBAccessUnit,
     decompression_session_for_current_parameter_sets:
         Option<VideoToolboxDecompressionSessionForOneFormat>,
-    pooled_rgba_conversion: Option<PooledRgbaConversionForOneShape>,
-    /// Escalates to build the pool conversion and to import the IOSurfaces
-    /// pictures are decoded on.
-    gpu_context: GpuContextLimitedAccess,
-    /// The node the session decodes for, whose own output pool the pictures
-    /// are published from.
-    processor_id_of_the_decoding_node: String,
 }
 
-impl VideoToolboxDecodeSession {
-    /// A session with nothing decoded yet; the VideoToolbox session itself
-    /// opens at the stream's first parameter sets.
-    pub(super) fn open(
-        gpu_context: GpuContextLimitedAccess,
-        request: &VideoDecodeSessionRequest,
-    ) -> Self {
-        Self {
-            elementary_stream: request.elementary_stream,
-            maximum_coded_extent: request.maximum_coded_extent,
+// SAFETY: a decompression session may be driven from any thread, one call at a
+// time, which the `&mut` receiver of every decode call guarantees.
+unsafe impl Send for VideoToolboxDecompressionSession {}
+
+impl VideoToolboxDecompressionSession {
+    /// A session with nothing decoded yet, refused by name on a machine with
+    /// no hardware decoder for `elementary_stream`; the VideoToolbox session
+    /// itself opens at the stream's first parameter sets.
+    pub fn open(
+        elementary_stream: VideoCodecElementaryStream,
+        maximum_picture_extent: Option<(u32, u32)>,
+    ) -> Result<Self, String> {
+        // SAFETY: a CoreMedia codec type.
+        if !unsafe { VTIsHardwareDecodeSupported(core_media_codec_type_of(elementary_stream)) } {
+            return Err(format!(
+                "VideoToolbox has no hardware {elementary_stream:?} decoder on this machine"
+            ));
+        }
+        Ok(Self {
+            elementary_stream,
+            maximum_picture_extent,
             parameter_sets: ParameterSetsFromAnnexBAccessUnit::default(),
             decompression_session_for_current_parameter_sets: None,
-            pooled_rgba_conversion: None,
-            gpu_context,
-            processor_id_of_the_decoding_node: request.processor_id_of_the_decoding_node.clone(),
+        })
+    }
+
+    /// Decode one Annex-B access unit, answering the pictures it completed.
+    /// An access unit before the stream's first complete parameter sets
+    /// decodes nothing.
+    pub fn decode_annex_b_access_unit(
+        &mut self,
+        annex_b_access_unit_bytes: &[u8],
+    ) -> Result<Vec<DecodedVideoToolboxPicture>, String> {
+        let split =
+            length_prefix_annex_b_access_unit(annex_b_access_unit_bytes, self.elementary_stream);
+        self.take_in_parameter_sets(split.parameter_sets);
+        if split.length_prefixed_sample_bytes.is_empty() {
+            return Ok(Vec::new());
         }
+        let Some(session) =
+            self.open_or_reuse_decompression_session_for_current_parameter_sets()?
+        else {
+            tracing::debug!(
+                elementary_stream = ?self.elementary_stream,
+                "an access unit arrived before the stream's parameter sets; skipping it"
+            );
+            return Ok(Vec::new());
+        };
+        let sample_buffer = sample_buffer_of(
+            &split.length_prefixed_sample_bytes,
+            &session.format_description,
+        )?;
+        let mut info_flags = VTDecodeInfoFlags::empty();
+        // SAFETY: a live session and sample buffer. Without the asynchronous
+        // decompression flag the decode is synchronous, so the callback has
+        // run for this frame by the wait below.
+        let decode_os_status = unsafe {
+            session.decompression_session.decode_frame(
+                &sample_buffer,
+                VTDecodeFrameFlags::empty(),
+                std::ptr::null_mut(),
+                &mut info_flags,
+            )
+        };
+        // SAFETY: a live session.
+        unsafe { session.decompression_session.wait_for_asynchronous_frames() };
+        let collected = std::mem::take(
+            &mut *session
+                .awaiting_collection
+                .decoded
+                .lock()
+                .map_err(|_| "the decoded picture list was poisoned".to_string())?,
+        );
+        if decode_os_status != 0 {
+            return Err(videotoolbox_call_failure(
+                "VTDecompressionSessionDecodeFrame",
+                decode_os_status,
+            ));
+        }
+        collected
+            .into_iter()
+            .map(|decoded| {
+                let DecodedPixelBufferHandedAcrossThreads(pixel_buffer) = decoded?;
+                let (width, height) = clean_aperture_extent_of(&pixel_buffer)?;
+                self.refuse_a_picture_past_the_maximum_extent(width, height)?;
+                Ok(DecodedVideoToolboxPicture {
+                    pixel_buffer,
+                    width,
+                    height,
+                })
+            })
+            .collect()
+    }
+
+    /// Drop the session after a gap in the stream; the next group start
+    /// reopens it from the parameter sets held.
+    pub fn discard_in_flight_state_after_a_gap(&mut self) {
+        self.decompression_session_for_current_parameter_sets = None;
     }
 
     /// Take in the access unit's parameter sets, each kind it carried
@@ -168,7 +226,7 @@ impl VideoToolboxDecodeSession {
     /// `None` until a complete set has arrived.
     fn open_or_reuse_decompression_session_for_current_parameter_sets(
         &mut self,
-    ) -> Result<Option<&VideoToolboxDecompressionSessionForOneFormat>> {
+    ) -> Result<Option<&VideoToolboxDecompressionSessionForOneFormat>, String> {
         if self
             .decompression_session_for_current_parameter_sets
             .is_none()
@@ -189,159 +247,26 @@ impl VideoToolboxDecodeSession {
             .as_ref())
     }
 
-    /// Refuse a picture past the cap the request set. CoreMedia reports
-    /// every extent of a decoded stream already cropped to the conformance
-    /// window, and the coded extent is written only in the SPS, so this arm
-    /// holds the cap against the picture — at most one coding block short of
-    /// the coded extent the Vulkan arm sizes its picture buffer by.
-    fn refuse_a_picture_past_the_maximum_extent(&self, picture_extent: (u32, u32)) -> Result<()> {
-        let Some(maximum) = self.maximum_coded_extent else {
-            return Ok(());
-        };
-        let (picture_width, picture_height) = picture_extent;
-        if picture_width > maximum.max_coded_width || picture_height > maximum.max_coded_height {
-            return Err(Error::Configuration(format!(
-                "the {:?} stream's pictures are {picture_width}x{picture_height}, past the \
-                 decoder's {}x{} maximum",
-                self.elementary_stream, maximum.max_coded_width, maximum.max_coded_height
-            )));
+    /// Refuse a picture past the node's cap. CoreMedia reports every extent
+    /// of a decoded stream already cropped to the conformance window, so the
+    /// cap is held against the picture.
+    fn refuse_a_picture_past_the_maximum_extent(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        match self.maximum_picture_extent {
+            Some((maximum_width, maximum_height))
+                if width > maximum_width || height > maximum_height =>
+            {
+                Err(format!(
+                    "the {:?} stream's pictures are {width}x{height}, past the decoder's \
+                     {maximum_width}x{maximum_height} maximum",
+                    self.elementary_stream
+                ))
+            }
+            _ => Ok(()),
         }
-        Ok(())
-    }
-
-    /// Land one decoded image buffer in a pooled `Rgba32` pixel buffer at its
-    /// clean aperture's extent.
-    fn land_in_the_pool(
-        &mut self,
-        decoded: &CVPixelBuffer,
-    ) -> Result<DecodedVideoPictureInPooledPixelBuffer> {
-        let source_pixel_format =
-            PixelFormat::from_cv_pixel_format_type(CVPixelBufferGetPixelFormatType(decoded));
-        if !matches!(
-            source_pixel_format,
-            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
-        ) {
-            return Err(Error::NotSupported(format!(
-                "VideoToolbox decoded the {:?} stream into {source_pixel_format:?}; only 8-bit \
-                 biplanar 4:2:0 lands in the pool",
-                self.elementary_stream
-            )));
-        }
-        let iosurface = CVPixelBufferGetIOSurface(Some(decoded)).ok_or_else(|| {
-            Error::GpuError("VideoToolbox decoded a picture with no IOSurface".into())
-        })?;
-        let picture_extent = clean_aperture_extent_of(decoded)?;
-        self.refuse_a_picture_past_the_maximum_extent(picture_extent)?;
-        let decoded_picture_color_vui = core_video_pixel_buffer_color_to_h273_color_vui(decoded)
-            .with_decoded_picture_matrix_and_range_defaults(picture_extent.0, picture_extent.1);
-
-        if self.pooled_rgba_conversion.as_ref().is_some_and(|built| {
-            built.source_pixel_format != source_pixel_format
-                || built.picture_extent != picture_extent
-        }) {
-            self.pooled_rgba_conversion = None;
-        }
-        let pooled_rgba_conversion = match &mut self.pooled_rgba_conversion {
-            Some(built) => built,
-            None => self
-                .pooled_rgba_conversion
-                .insert(PooledRgbaConversionForOneShape {
-                    biplanar_420_to_pooled_rgba_conversion:
-                        Biplanar420IOSurfaceToPooledRgbaConversion::create(
-                            &self.gpu_context,
-                            &format!("VideoToolbox {:?} decoder", self.elementary_stream),
-                            source_pixel_format,
-                            picture_extent.0,
-                            picture_extent.1,
-                            &self.processor_id_of_the_decoding_node,
-                        )?,
-                    source_pixel_format,
-                    picture_extent,
-                }),
-        };
-        let (published_pixel_buffer_frame_id, pixel_buffer) = pooled_rgba_conversion
-            .biplanar_420_to_pooled_rgba_conversion
-            .convert_into_pooled_pixel_buffer(
-                &self.gpu_context,
-                &iosurface,
-                &decoded_picture_color_vui.resolve_defaults(ColorSpaceKind::Yuv),
-            )?;
-        Ok(DecodedVideoPictureInPooledPixelBuffer {
-            published_pixel_buffer_frame_id,
-            pixel_buffer,
-            width: picture_extent.0,
-            height: picture_extent.1,
-            decoded_picture_color_vui,
-        })
-    }
-}
-
-impl VideoDecodeSession for VideoToolboxDecodeSession {
-    fn decode_annex_b_access_unit(
-        &mut self,
-        annex_b_access_unit_bytes: &[u8],
-        decoded_pictures_in_completion_order: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
-    ) -> Result<()> {
-        let split =
-            length_prefix_annex_b_access_unit(annex_b_access_unit_bytes, self.elementary_stream);
-        self.take_in_parameter_sets(split.parameter_sets);
-        if split.length_prefixed_sample_bytes.is_empty() {
-            return Ok(());
-        }
-        let Some(session) =
-            self.open_or_reuse_decompression_session_for_current_parameter_sets()?
-        else {
-            tracing::debug!(
-                elementary_stream = ?self.elementary_stream,
-                "an access unit arrived before the stream's parameter sets; skipping it"
-            );
-            return Ok(());
-        };
-        let sample_buffer = sample_buffer_of(
-            &split.length_prefixed_sample_bytes,
-            &session.format_description,
-        )?;
-        let mut info_flags = VTDecodeInfoFlags::empty();
-        // SAFETY: a live session and sample buffer. Without the asynchronous
-        // decompression flag the decode is synchronous, so the callback has
-        // run for this frame by the wait below.
-        let decode_os_status = unsafe {
-            session.decompression_session.0.decode_frame(
-                &sample_buffer,
-                VTDecodeFrameFlags::empty(),
-                std::ptr::null_mut(),
-                &mut info_flags,
-            )
-        };
-        // SAFETY: a live session.
-        unsafe {
-            session
-                .decompression_session
-                .0
-                .wait_for_asynchronous_frames()
-        };
-        let collected = std::mem::take(&mut *session.awaiting_collection.decoded.lock());
-        if decode_os_status != 0 {
-            return Err(videotoolbox_call_failure(
-                "VTDecompressionSessionDecodeFrame",
-                decode_os_status,
-            ));
-        }
-        for decoded_image_buffer in collected {
-            let DecodedPixelBufferHandedAcrossThreads(decoded_image_buffer) = decoded_image_buffer?;
-            decoded_pictures_in_completion_order
-                .push(self.land_in_the_pool(&decoded_image_buffer)?);
-        }
-        Ok(())
-    }
-
-    fn discard_in_flight_state_after_a_gap(&mut self) {
-        self.decompression_session_for_current_parameter_sets = None;
-    }
-
-    fn reset_for_new_parameter_sets(&mut self) {
-        self.discard_in_flight_state_after_a_gap();
-        self.parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
     }
 }
 
@@ -350,7 +275,7 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
 fn format_description_from_parameter_sets(
     elementary_stream: VideoCodecElementaryStream,
     parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
-) -> Result<CFRetained<CMFormatDescription>> {
+) -> Result<CFRetained<CMFormatDescription>, String> {
     let (pointers, sizes): (Vec<NonNull<u8>>, Vec<usize>) = parameter_sets
         .in_configuration_record_order()
         .map(|parameter_set| {
@@ -398,10 +323,10 @@ fn format_description_from_parameter_sets(
             created_format_description.cast_mut(),
             create_os_status,
             |create_os_status| {
-                Error::Configuration(format!(
+                format!(
                     "CoreMedia refused the {elementary_stream:?} stream's parameter sets \
                      (OSStatus {create_os_status})"
-                ))
+                )
             },
         )
     }
@@ -412,7 +337,7 @@ fn format_description_from_parameter_sets(
 fn open_decompression_session(
     elementary_stream: VideoCodecElementaryStream,
     format_description: CFRetained<CMFormatDescription>,
-) -> Result<VideoToolboxDecompressionSessionForOneFormat> {
+) -> Result<VideoToolboxDecompressionSessionForOneFormat, String> {
     ensure_core_video_pixel_format_dictionary_is_initialised();
     let decoder_specification = cf_dictionary_of_booleans(&[(
         // SAFETY: a VideoToolbox-exported constant.
@@ -451,17 +376,15 @@ fn open_decompression_session(
             created_decompression_session,
             create_os_status,
             |create_os_status| {
-                Error::GpuError(format!(
+                format!(
                     "VideoToolbox has no hardware {elementary_stream:?} decoder for this stream \
                      (VTDecompressionSessionCreate answered OSStatus {create_os_status})"
-                ))
+                )
             },
         )?
     };
     Ok(VideoToolboxDecompressionSessionForOneFormat {
-        decompression_session: VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime(
-            decompression_session,
-        ),
+        decompression_session,
         format_description,
         awaiting_collection,
     })
@@ -471,7 +394,7 @@ fn open_decompression_session(
 fn sample_buffer_of(
     length_prefixed_sample: &[u8],
     format_description: &CMFormatDescription,
-) -> Result<CFRetained<CMSampleBuffer>> {
+) -> Result<CFRetained<CMSampleBuffer>, String> {
     let byte_count = length_prefixed_sample.len();
     let mut created_block_buffer: *mut CMBlockBuffer = std::ptr::null_mut();
     // SAFETY: a null memory block asks CoreMedia to allocate `byte_count`
@@ -538,14 +461,15 @@ fn sample_buffer_of(
 
 /// The extent of `decoded`'s clean aperture, which VideoToolbox sets from the
 /// parameter sets' conformance window. Refused unless it opens at the
-/// picture's top-left, where every conformance window this arm reads does.
-fn clean_aperture_extent_of(decoded: &CVImageBuffer) -> Result<(u32, u32)> {
+/// picture's top-left, where every conformance window this session reads
+/// does.
+fn clean_aperture_extent_of(decoded: &CVImageBuffer) -> Result<(u32, u32), String> {
     let clean_rect = CVImageBufferGetCleanRect(decoded);
     if clean_rect.origin.x != 0.0 || clean_rect.origin.y != 0.0 {
-        return Err(Error::NotSupported(format!(
+        return Err(format!(
             "the decoded picture's clean aperture opens at ({}, {}), not its top-left",
             clean_rect.origin.x, clean_rect.origin.y
-        )));
+        ));
     }
     Ok((
         clean_rect.size.width.round() as u32,
@@ -587,12 +511,10 @@ unsafe extern "C-unwind" fn decompression_output_callback(
             }))
         })
     }))
-    .unwrap_or_else(|_| {
-        Some(Err(Error::GpuError(
-            "the decompression output callback panicked".into(),
-        )))
-    });
-    if let Some(decoded) = decoded {
-        awaiting_collection.decoded.lock().push(decoded);
+    .unwrap_or_else(|_| Some(Err("the decompression output callback panicked".to_string())));
+    if let Some(decoded) = decoded
+        && let Ok(mut awaiting) = awaiting_collection.decoded.lock()
+    {
+        awaiting.push(decoded);
     }
 }

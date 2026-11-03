@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The surface verbs of the module host table: a foreign DMA-BUF or IOSurface
-//! import, a node output pool texture, the engine's colour conversion between
-//! them, and a write of host-memory pixels into a texture, each a round trip on
-//! the helper's native escalate channel or its surface-share socket, with no
-//! Python on either end.
+//! import, a node output pool texture, a lend of a surface a message names, the
+//! engine's colour conversion between them, and a write of host-memory pixels
+//! into a texture, each a round trip on the helper's native escalate channel or
+//! its surface-share socket, with no Python on either end.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,13 +32,16 @@ enum SurfaceLentToNativeCodeOrigin {
     AdoptedForeignSurface,
     /// A node output pool slot; the pool keeps it.
     NodeOutputPoolTexture,
+    /// A surface a message named, such as an upstream node's frame; it stays
+    /// its publisher's, and the parent never keeps it past a conversion.
+    NamedByAMessage,
 }
 
 struct SurfaceLentToNativeCode {
     surface_id: String,
     origin: SurfaceLentToNativeCodeOrigin,
-    /// The parent resolved it as a conversion source and holds it until told.
-    named_as_a_conversion_source: bool,
+    /// The parent resolved it for a conversion and holds it until told.
+    resolved_by_the_parent_for_a_conversion: bool,
 }
 
 /// One node's surfaces lent to native code, by the handle the table hands out,
@@ -87,7 +90,7 @@ impl SurfacesLentToNativeCode {
             SurfaceLentToNativeCode {
                 surface_id,
                 origin,
-                named_as_a_conversion_source: false,
+                resolved_by_the_parent_for_a_conversion: false,
             },
         );
         ModuleHostTableSurfaceHandle { value }
@@ -236,6 +239,20 @@ impl SurfacesLentToNativeCode {
         Err("surface_import_iosurface is macOS-only: an IOSurface is a macOS handle".to_string())
     }
 
+    /// Lend the surface `surface_id` names, as a message named it.
+    pub(super) fn lend_surface_a_message_names(
+        &self,
+        surface_id: &str,
+    ) -> Result<ModuleHostTableSurfaceHandle, String> {
+        if surface_id.is_empty() {
+            return Err("a lend by surface id names no surface id".to_string());
+        }
+        Ok(self.lend(
+            surface_id.to_string(),
+            SurfaceLentToNativeCodeOrigin::NamedByAMessage,
+        ))
+    }
+
     /// Take the next texture out of the node output pool `request` names.
     pub(super) fn acquire_texture_from_node_output_pool(
         &self,
@@ -287,36 +304,47 @@ impl SurfacesLentToNativeCode {
         ))
     }
 
-    /// Convert `source` into `destination` with the engine's colour converter.
+    /// Convert `source` into `destination` with the engine's colour converter;
+    /// `ycbcr_side_color` describes whichever side is YCbCr.
     pub(super) fn convert_surface_into(
         &self,
         source: ModuleHostTableSurfaceHandle,
         destination: ModuleHostTableSurfaceHandle,
-        source_color: &ModuleHostTableColorInfo,
+        ycbcr_side_color: &ModuleHostTableColorInfo,
     ) -> Result<(), String> {
         let source_surface_id = self.surface_id_of_a_handle(source)?;
         let destination_surface_id = self.surface_id_of_a_handle(destination)?;
-        let mut source_color_names = serde_json::Map::new();
+        let mut ycbcr_side_color_names = serde_json::Map::new();
         for (axis, name) in [
-            ("primaries", source_color.primaries),
-            ("transfer", source_color.transfer),
-            ("matrix", source_color.matrix),
-            ("range", source_color.range),
+            ("primaries", ycbcr_side_color.primaries),
+            ("transfer", ycbcr_side_color.transfer),
+            ("matrix", ycbcr_side_color.matrix),
+            ("range", ycbcr_side_color.range),
         ] {
             let name = color_axis_name(axis, name)?;
             if !name.is_empty() {
-                source_color_names.insert(axis.to_string(), name.into());
+                ycbcr_side_color_names.insert(axis.to_string(), name.into());
             }
         }
-        if let Some(lent) = self.surfaces_by_handle_value.lock().get_mut(&source.value) {
-            lent.named_as_a_conversion_source = true;
+        {
+            let mut surfaces_by_handle_value = self.surfaces_by_handle_value.lock();
+            if let Some(lent) = surfaces_by_handle_value.get_mut(&source.value)
+                && lent.origin != SurfaceLentToNativeCodeOrigin::NamedByAMessage
+            {
+                lent.resolved_by_the_parent_for_a_conversion = true;
+            }
+            if let Some(lent) = surfaces_by_handle_value.get_mut(&destination.value)
+                && lent.origin == SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface
+            {
+                lent.resolved_by_the_parent_for_a_conversion = true;
+            }
         }
         self.native_escalate_channel()?
             .request_from_parent(serde_json::json!({
                 "op": "convert_surface_into",
                 "source_surface_id": source_surface_id,
                 "destination_surface_id": destination_surface_id,
-                "source_color": source_color_names,
+                "ycbcr_side_color": ycbcr_side_color_names,
             }))
             .map(|_answer| ())
     }
@@ -424,7 +452,7 @@ impl SurfacesLentToNativeCode {
     }
 
     fn pay_what_a_released_surface_owes(&self, lent: SurfaceLentToNativeCode) {
-        if lent.named_as_a_conversion_source
+        if lent.resolved_by_the_parent_for_a_conversion
             && let Ok(native_escalate_channel) = self.native_escalate_channel()
             && let Err(release_failure) =
                 native_escalate_channel.request_from_parent(serde_json::json!({
@@ -433,7 +461,7 @@ impl SurfacesLentToNativeCode {
                 }))
         {
             tracing::warn!(
-                "the parent did not take the release of conversion source {} ({release_failure}); \
+                "the parent did not take the release of conversion surface {} ({release_failure}); \
                  it holds the import until this node stops",
                 lent.surface_id
             );
@@ -528,7 +556,7 @@ mod tests {
                 "result": "ok",
                 "handle_id": format!("pool-slot#{}", request["width"]),
             }),
-            Some("convert_surface_into") if request["source_color"]["range"] == "tv" => {
+            Some("convert_surface_into") if request["ycbcr_side_color"]["range"] == "tv" => {
                 serde_json::json!({"result": "err", "message": "unknown range \"tv\""})
             }
             _ => serde_json::json!({"result": "ok"}),
@@ -638,11 +666,50 @@ mod tests {
             serde_json::json!({"pool_key": "camera", "rotation_depth": 3})
         );
         assert_eq!(
-            requests[2]["source_color"],
+            requests[2]["ycbcr_side_color"],
             serde_json::json!({"matrix": "bt709", "range": "full"})
         );
         assert_eq!(requests[2]["source_surface_id"], "pool-slot#64");
         assert_eq!(requests[4]["handle_id"], "pool-slot#64");
+    }
+
+    #[test]
+    fn a_lent_frame_is_never_released_at_the_parent_and_an_adopted_destination_is() {
+        let (child_end, parent_end) = UnixStream::pair().expect("socketpair");
+        let parent = parent_answering(parent_end, answer_like_the_engine);
+        let surfaces = SurfacesLentToNativeCode::new(
+            Some(Arc::new(HelperProcessNativeEscalateChannel::over(
+                child_end,
+            ))),
+            None,
+        );
+
+        let upstream_frame = surfaces
+            .lend_surface_a_message_names("upstream-pool-slot#2")
+            .expect("the frame is lent");
+        let adopted_nv12_surface = surfaces.lend(
+            "adopted-iosurface".to_string(),
+            SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,
+        );
+        surfaces
+            .convert_surface_into(upstream_frame, adopted_nv12_surface, &color("limited"))
+            .expect("the conversion is answered ok");
+        surfaces.release(upstream_frame);
+        surfaces.release(adopted_nv12_surface);
+        assert!(
+            surfaces.lend_surface_a_message_names("").is_err(),
+            "an empty id names nothing"
+        );
+        drop(surfaces);
+
+        let requests = parent.join().expect("the parent stand-in");
+        let ops: Vec<&str> = requests
+            .iter()
+            .map(|request| request["op"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(ops, ["convert_surface_into", "release_handle"]);
+        assert_eq!(requests[0]["source_surface_id"], "upstream-pool-slot#2");
+        assert_eq!(requests[1]["handle_id"], "adopted-iosurface");
     }
 
     #[test]
