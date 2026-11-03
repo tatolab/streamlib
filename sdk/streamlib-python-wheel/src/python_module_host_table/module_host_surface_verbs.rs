@@ -490,6 +490,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     use super::*;
+    #[cfg(target_os = "linux")]
     use tatolab_module_sdk::module_host_table_abi::ModuleHostTableBytes;
 
     /// A parent stand-in that answers each request with `answer_for` and hands
