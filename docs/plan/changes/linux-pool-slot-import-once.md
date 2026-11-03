@@ -114,9 +114,11 @@ and the macOS per-slot cache (`ARCHITECTURE.md:1399-1401`, SHIPPED) are in place
 - **MODIFIED (helper code, `sdk/streamlib-python-wheel/src/python_helper_process_pixel_exchange/`):**
   - `HelperProcessGpuExchangeClient` gains a Linux per-slot import cache beside the macOS
     one, keyed by `pool_slot_key_of_surface_id`, holding each slot's import behind an `Arc`.
-  - `check_out_surface` sends `holds_pool_slot_import` from the cache; a reply with no fds
-    for a slot the cache no longer holds (it was evicted between request and reply) is
-    answered by checking out again without the flag, never by guessing.
+  - `check_out_surface` takes the slot's import out of the cache (a clone of its `Arc`)
+    before it sends `holds_pool_slot_import: true`, so an eviction during the request cannot
+    leave a fd-free reply with nothing to read: the frame uses the import it took, and the
+    eviction frees it when that frame drops. No path retries a check-out, so a frame never
+    holds two leases.
   - `HelperCheckedOutPixelSurface` (`mod.rs:324-325`) holds its Linux buffer as the slot's
     shared import, as the macOS arm holds `iosurface_pool_slot_import`; the texture and
     storage-buffer arms do the same.
