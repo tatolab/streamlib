@@ -218,6 +218,7 @@ pub struct AudioWindowToEncodedPacketEncoder {
 }
 
 impl AudioWindowToEncodedPacketEncoder {
+    /// An encoder that mints its libopus instance from the first window it is handed.
     pub fn new(config: OpusEncoderConfig) -> Self {
         Self {
             config,
@@ -236,6 +237,11 @@ impl AudioWindowToEncodedPacketEncoder {
             return Ok(None);
         }
         let interleaved_samples = read_window_as_interleaved_f32(window)?;
+        let mut media_frame =
+            hang_legacy_container_media_frame_bytes(window.first_sample_timestamp_ns, &[])
+                .map_err(|refusal| {
+                    OpusCodecRefusal(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}"))
+                })?;
 
         if let Some(stale) = self
             .minted
@@ -288,11 +294,7 @@ impl AudioWindowToEncodedPacketEncoder {
         let opus_packet_bytes = minted
             .instance
             .encode_interleaved_f32(&interleaved_samples, minted.highest_packet_bytes)?;
-        let media_frame = hang_legacy_container_media_frame_bytes(
-            window.first_sample_timestamp_ns,
-            &opus_packet_bytes,
-        )
-        .map_err(|refusal| OpusCodecRefusal(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}")))?;
+        media_frame.extend_from_slice(&opus_packet_bytes);
         self.packets_encoded += 1;
         Ok(Some(media_frame))
     }
@@ -441,6 +443,7 @@ mod tests {
         sample_rate: u32,
         channels: u32,
         dtype: AudioSampleDtype,
+        first_sample_timestamp_ns: i64,
     }
 
     impl OwnedAudioWindow {
@@ -459,6 +462,7 @@ mod tests {
                 sample_rate: OPUS_SAMPLE_RATE_HZ,
                 channels,
                 dtype: AudioSampleDtype::F32,
+                first_sample_timestamp_ns: 1_000,
             }
         }
 
@@ -469,7 +473,7 @@ mod tests {
                 channels: self.channels,
                 sample_count: WINDOW_SAMPLE_COUNT,
                 dtype: self.dtype,
-                first_sample_timestamp_ns: 1_000,
+                first_sample_timestamp_ns: self.first_sample_timestamp_ns,
             }
         }
     }
@@ -521,6 +525,22 @@ mod tests {
         let read = read_hang_legacy_container_media_frame(&media_frame).expect("a media frame");
         assert_eq!(read.timestamp_microseconds, 1);
         assert!(!read.codec_payload_bytes.is_empty());
+    }
+
+    #[test]
+    fn a_window_stamped_before_zero_is_refused_before_it_mints_or_encodes() {
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let mut stamped_before_zero = OwnedAudioWindow::of(2, 0);
+        stamped_before_zero.first_sample_timestamp_ns = -1_000;
+
+        let refusal = encode(&mut encoder, &stamped_before_zero)
+            .expect_err("a timestamp the container cannot carry is refused")
+            .to_string();
+
+        assert!(refusal.contains("-1000"), "{refusal}");
+        assert!(encoder.take_audio_entry_owed_to_the_port().is_none());
+        assert_eq!(encoder.packets_encoded(), 0);
+        assert!(encoder.minted.is_none());
     }
 
     #[test]

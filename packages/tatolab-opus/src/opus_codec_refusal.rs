@@ -15,6 +15,7 @@ use pyo3::exceptions::PyValueError;
 #[error("{0}")]
 pub struct OpusCodecRefusal(pub String);
 
+/// The result of a codec operation, refused with an [`OpusCodecRefusal`].
 pub type Result<T> = std::result::Result<T, OpusCodecRefusal>;
 
 impl From<OpusCodecRefusal> for PyErr {
@@ -49,6 +50,7 @@ pub struct OpusCodecNotice {
 }
 
 impl OpusCodecNotice {
+    /// A notice logged at the info level.
     pub fn info(message: String) -> Self {
         Self {
             level: OpusCodecNoticeLevel::Info,
@@ -56,6 +58,7 @@ impl OpusCodecNotice {
         }
     }
 
+    /// A notice logged at the warn level.
     pub fn warn(message: String) -> Self {
         Self {
             level: OpusCodecNoticeLevel::Warn,

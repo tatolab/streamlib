@@ -41,6 +41,8 @@ OPUS_SAMPLE_RATE_HZ = 48_000
 #: One 20 ms Opus frame at 48 kHz, in per-channel samples.
 SAMPLES_IN_ONE_OPUS_WINDOW = 960
 OPUS_CATALOG_CODEC_STRING = "opus"
+#: libopus takes its bitrate as a C `opus_int32`.
+_HIGHEST_BITRATE_BPS_LIBOPUS_TAKES = 2**31 - 1
 
 OpusEncoderApplication = Literal["audio", "voip", "lowdelay"]
 
@@ -96,11 +98,14 @@ class OpusEncoder:
     def __init__(self, config: OpusEncoderConfig) -> None:
         bitrate_bps = config.bitrate_bps
         if bitrate_bps is not None and (
-            isinstance(bitrate_bps, bool) or not isinstance(bitrate_bps, int) or bitrate_bps <= 0
+            isinstance(bitrate_bps, bool)
+            or not isinstance(bitrate_bps, int)
+            or not 0 < bitrate_bps <= _HIGHEST_BITRATE_BPS_LIBOPUS_TAKES
         ):
             raise ValueError(
-                f"OpusEncoder: `bitrate_bps` is {bitrate_bps!r}; it takes a positive count of "
-                "bits per second, or nothing for libopus's own choice"
+                f"OpusEncoder: `bitrate_bps` is {bitrate_bps!r}; it takes a count of bits per "
+                f"second from 1 to {_HIGHEST_BITRATE_BPS_LIBOPUS_TAKES}, or nothing for "
+                "libopus's own choice"
             )
         self._encoder = _native.AudioWindowToEncodedPacketEncoder(
             config.bitrate_bps, config.application

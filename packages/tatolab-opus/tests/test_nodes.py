@@ -80,6 +80,7 @@ def test_the_decoders_output_states_a_msgpack_snapshot_entry():
         ({"application": "surround"}, "surround"),
         ({"bitrate_bps": 0}, "bitrate_bps"),
         ({"bitrate_bps": True}, "bitrate_bps"),
+        ({"bitrate_bps": 2**32}, "bitrate_bps"),
     ],
 )
 def test_an_encoder_config_libopus_cannot_take_is_refused_by_name(config, refusal):

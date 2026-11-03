@@ -25,6 +25,7 @@ impl AudioSampleDtype {
         }
     }
 
+    /// The width in bytes of one sample of this dtype.
     pub fn bytes_per_sample(self) -> usize {
         match self {
             Self::F32 => 4,
