@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.16](https://github.com/tatolab/streamlib/compare/v0.68.15...v0.68.16) (2026-11-03)
+
+
+### Features
+
+* host-memory write on macOS, and CEF children bound to their helper ([#3102](https://github.com/tatolab/streamlib/issues/3102)) ([10aadf5](https://github.com/tatolab/streamlib/commit/10aadf5e143d0a1bfbffc63918dad41661961e1a))
+
 ## [0.68.15](https://github.com/tatolab/streamlib/compare/v0.68.14...v0.68.15) (2026-11-03)
 
 
