@@ -163,9 +163,10 @@ mod built_in_node_type_tests {
     fn every_built_in_is_registered_as_its_authored_name_in_the_stream_package() {
         let built_ins = every_built_in_registered_on_this_floor();
 
-        assert!(built_ins.contains(
-            &test_pattern_source::TestPatternSource::processor_class_import_path()
-        ));
+        assert!(
+            built_ins
+                .contains(&test_pattern_source::TestPatternSource::processor_class_import_path())
+        );
         let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
             .registered_processor_class_import_paths()
             .into_iter()

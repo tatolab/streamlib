@@ -311,11 +311,15 @@ enum CameraAccess {
 
 /// Why camera access refuses this capture, naming what to change.
 fn camera_access_refusal(status: AVAuthorizationStatus) -> CameraCaptureRefusal {
-    let launched_by = "the application that launched the runtime — your terminal, not Python";
+    let launched_by =
+        "the application that launched the runtime, such as your terminal, never Python";
     CameraCaptureRefusal(match status {
         AVAuthorizationStatus::Denied => format!(
             "Camera access is denied for {launched_by}. Turn it on in System Settings › Privacy \
-             & Security › Camera and run again."
+             & Security › Camera and run again. An application macOS never lets ask, such as a \
+             command-line tool built without the camera entitlement, is denied with no prompt \
+             and appears in no list: launch the runtime from Terminal or another application \
+             that can ask."
         ),
         AVAuthorizationStatus::NotDetermined => format!(
             "Camera access has not been asked for yet. The runtime re-loaded this stream on its \
