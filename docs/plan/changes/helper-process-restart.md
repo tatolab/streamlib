@@ -11,9 +11,11 @@ pending links and moves the node to `Error`, and nothing ever starts it again. T
 stream keeps running around a hole until the stream is re-run.
 
 **After this change:**
-- **A helper that dies on its own is started again**, after a backoff, as the same node: a fresh
-  interpreter re-imports the class, `setup()` runs with the node's current config, every link the
-  node holds is wired again, and the node runs. Its id, config, links and place in the graph never
+- **A helper that dies on its own is started again**, after a backoff, as the same node with a
+  new processor instance. The old instance died with its process; the new process re-imports the
+  class, constructs a new instance, runs its `setup()` with the node's current config, wires every
+  link the node holds again, and the node runs. No lifecycle call (`stop`, `on_pause`, `setup`)
+  ever reaches the dead instance. Its id, config, links and place in the graph never
   change, so nothing upstream or downstream is re-planned.
 - **A crash loop ends.** A helper that keeps dying soon after it starts is given up on: the node
   is `failed`, with the last death's reason, and the rest of the stream keeps running as it does
@@ -76,8 +78,9 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   exit of any status — and never one on the shutdown ladder, at node removal, at stream stop, or
   by the stream's watchdog. The death path runs as today (process group down, escalate socket shut,
   surface-share admission and iceoryx2 nodes reclaimed, pending links refused), then the node waits
-  its backoff and starts again as the same node: a fresh interpreter re-imports the class, `setup()`
-  runs with the node's current config, the setup command carries every link the node holds, `run`
+  its backoff and starts again as the same node with a new processor instance — the old one died
+  with its process: a fresh interpreter re-imports the class and constructs the instance, `setup()`
+  runs on it with the node's current config, the setup command carries every link the node holds, `run`
   follows, and each link reads `pending` until the new helper answers and then `wired`. A frame or
   message in flight at the death is lost and never replayed; a Python processor's in-memory state
   is gone, as it is at every start. A restart gets a fresh loss-count board, as every spawn does.

@@ -11,7 +11,9 @@ making a restart budget authorable.
 
 ## Decision
 
-- **A helper that dies on its own is restarted as the same node.** The death path runs in full
+- **A helper that dies on its own is restarted as the same node, with a new processor instance.**
+  The processor instance lives inside its helper process, so it dies with it; nothing is left to
+  pause, stop or set up again, and the restart constructs a new one in a new process. The death path runs in full
   first, so a restart never inherits the dead helper's process group, escalate socket, surface-share
   admission or iceoryx2 nodes. The node's id, config and links are kept; nothing around it is
   re-planned. Each helper is already one fresh interpreter, so a restart asks nothing new of a
