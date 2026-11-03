@@ -2,7 +2,8 @@
 
 > **Asked for by the owner, 2026-11-03:** "auto restarting is a missing feature … necessary", as
 > its own engine change, sharing one restart design with the local relay's supervisor and the
-> shared browser host (`browser-and-rive-source-modules`).
+> shared browser host (`browser-and-rive-source-modules`). The crash-loop limit and the retry path
+> were settled by the owner the same day (§Decided below).
 
 Today a Python processor whose helper process dies on its own stays down for the life of the
 stream. The engine notices the death, takes the helper's process group down, refuses the node's
@@ -142,23 +143,13 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   The relay's three constants move into `ChildProcessRestartBackoff`, so no second copy of the
   numbers survives.
 
-## [NEEDS DECISION] — the crash-loop limit's shape
+## Decided — how a crash loop ends (owner, 2026-11-03)
 
-- **A (recommended):** give up after 5 deaths in a row, each within 60 s of its start; a run of
-  60 s resets the count. A helper that crashes once an hour forever keeps coming back.
-- **B:** give up after 5 deaths within any 5-minute window, however long each run lasted.
-- **C:** never give up, like the relay.
-
-A matches the relay's existing reset rule, so the one type has one notion of "a run that counts
-as healthy". C makes a node whose `setup()` always raises spin forever at 30 s and hides it.
-
-## [NEEDS DECISION] — the retry path for a `failed` node
-
-- **A (recommended):** re-running the stream, as above. No new verb.
-- **B:** a control-plane verb that restarts one node (`restart_node` in MCP and the CLI), with a
-  fresh count.
-
-B is useful but is new control-plane surface; it can follow without changing anything here.
+A helper is given up on after 5 deaths in a row, each within 60 s of its start; a run of 60 s
+resets the count, so a helper that crashes rarely keeps coming back. A `failed` node is retried by
+re-running the stream; no verb restarts one node.
+Rejected: never giving up, as the relay does — a node whose `setup()` always raises would spin
+every 30 s and hide its failure (owner, 2026-11-03).
 
 ## Tickets (expected)
 
