@@ -6,11 +6,8 @@
 //! Sibling to [`crate::consecutive_failure_report_schedule`], and the
 //! distinction is what each one counts. That one folds in every attempt and
 //! knows a success ended a run. This one is handed a counter that only ever
-//! rises — blocks dropped at a device edge, bytes of silence a device was
-//! given — and answers whether the count has climbed far enough since the last
-//! report to be worth another.
-//!
-//! Both exist because an audio built-in loses at device cadence or not at all:
+//! rises, such as frames dropped at a device edge, and answers whether the
+//! count has climbed far enough since the last report to be worth another:
 //! reporting each loss buries the reason under the symptom, and reporting only
 //! the first hides a fault that never went away.
 

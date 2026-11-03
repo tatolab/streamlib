@@ -11,6 +11,7 @@
 
 pub mod audio_block;
 pub(crate) mod consecutive_failure_report_schedule;
+#[cfg(target_os = "linux")]
 pub(crate) mod cumulative_count_report_threshold;
 pub mod h273_color_vui_translation;
 #[cfg(test)]
