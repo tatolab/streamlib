@@ -55,7 +55,11 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
     let rive_runtime_directory = match std::env::var_os(RIVE_RUNTIME_DIRECTORY_ENVIRONMENT_VARIABLE)
     {
-        Some(named_checkout) => PathBuf::from(named_checkout),
+        Some(named_checkout) => {
+            let named_checkout = PathBuf::from(named_checkout);
+            stage_the_licence_of_a_named_checkout(&named_checkout, &out_dir.join("rive-runtime"));
+            named_checkout
+        }
         None => fetch_the_pinned_rive_runtime_revision(&out_dir.join("rive-runtime")),
     };
 
@@ -137,6 +141,16 @@ fn give_the_rive_renderer_its_own_vma_symbols(renderer_static_library: &Path) {
         "objcopy could not rename the VMA symbols of {}: {status}",
         renderer_static_library.display()
     );
+}
+
+/// Copy a named checkout's `LICENSE` to where a fetched checkout keeps it,
+/// so `cargo xtask generate-third-party-notices` reads one location either way.
+fn stage_the_licence_of_a_named_checkout(named_checkout: &Path, staged_licence_directory: &Path) {
+    std::fs::create_dir_all(staged_licence_directory)
+        .expect("the staged rive-runtime licence directory is created");
+    let licence = named_checkout.join("LICENSE");
+    std::fs::copy(&licence, staged_licence_directory.join("LICENSE"))
+        .unwrap_or_else(|copy_failure| panic!("copying {}: {copy_failure}", licence.display()));
 }
 
 fn fetch_the_pinned_rive_runtime_revision(checkout: &Path) -> PathBuf {

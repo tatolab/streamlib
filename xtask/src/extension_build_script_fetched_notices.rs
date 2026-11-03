@@ -186,17 +186,42 @@ fn extension_whose_build_script_fetches_sources(
         .find(|extension| extension.package_directory_name == package_directory_name)
 }
 
+/// The extension's Cargo target directory: `CARGO_TARGET_DIR` when set,
+/// otherwise its own `target/`.
+fn cargo_target_directory_of(extension_project_root: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(configured) => extension_project_root.join(configured),
+        None => extension_project_root.join("target"),
+    }
+}
+
+/// Every `build/` directory under a Cargo target directory: `<profile>/build`
+/// for a host build and `<triple>/<profile>/build` for a `--target` build.
+fn build_script_directories_under(target_directory: &Path) -> Vec<PathBuf> {
+    read_directory_entries(target_directory)
+        .into_iter()
+        .flat_map(|profile_or_triple| {
+            std::iter::once(profile_or_triple.join("build")).chain(
+                read_directory_entries(&profile_or_triple)
+                    .into_iter()
+                    .map(|profile| profile.join("build")),
+            )
+        })
+        .filter(|build_directory| build_directory.is_dir())
+        .collect()
+}
+
 /// The most recently written `OUT_DIR` of the extension's build script under
-/// its own `target/`, across every profile.
+/// its Cargo target directory, across every profile and target triple.
 fn newest_build_output_of(
     extension_project_root: &Path,
     extension: &ExtensionWhoseBuildScriptFetchesSources,
 ) -> Result<PathBuf> {
     let build_script_directory_prefix = format!("{}-", extension.package_directory_name);
-    let target_directory = extension_project_root.join("target");
+    let target_directory = cargo_target_directory_of(extension_project_root);
     let mut build_outputs: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-    for profile in read_directory_entries(&target_directory) {
-        for build_script_directory in read_directory_entries(&profile.join("build")) {
+    for build_directory in build_script_directories_under(&target_directory) {
+        for build_script_directory in read_directory_entries(&build_directory) {
             let is_this_extensions_build_script = build_script_directory
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -372,6 +397,23 @@ mod tests {
             .expect("render")
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_target_triple_build_is_found_beside_a_host_build() {
+        let target_directory = TempDir::new().unwrap();
+        let host_build = target_directory.path().join("release/build");
+        let triple_build = target_directory
+            .path()
+            .join("x86_64-unknown-linux-gnu/release/build");
+        fs::create_dir_all(&host_build).unwrap();
+        fs::create_dir_all(&triple_build).unwrap();
+
+        let mut found = build_script_directories_under(target_directory.path());
+        found.sort();
+        let mut expected = vec![host_build, triple_build];
+        expected.sort();
+        assert_eq!(found, expected);
     }
 
     #[test]
