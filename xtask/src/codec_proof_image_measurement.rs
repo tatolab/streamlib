@@ -203,7 +203,7 @@ impl Rgba8Image {
         let mut full_resolution_blue_difference = vec![0f32; pixel_count];
         let mut full_resolution_red_difference = vec![0f32; pixel_count];
 
-        for (index, pixel) in self.rgba_bytes.chunks_exact(4).enumerate() {
+        for (index, pixel) in self.rgba_bytes.as_chunks::<4>().0.iter().enumerate() {
             let [luma, blue_difference, red_difference] = BT709_LUMA_COEFFICIENTS
                 .rgb_to_yuv_full_range([
                     f32::from(pixel[0]),
@@ -236,7 +236,7 @@ impl Rgba8Image {
     /// Y PSNR of at least one reference below the fail floor, or the gate is
     /// passing because it measures nothing.
     pub fn with_injected_color_regression(mut self, regression: InjectedColorRegression) -> Self {
-        for pixel in self.rgba_bytes.chunks_exact_mut(4) {
+        for pixel in self.rgba_bytes.as_chunks_mut::<4>().0.iter_mut() {
             let [red, green, blue] = match regression {
                 InjectedColorRegression::SwapRedAndBlueChannels => {
                     [pixel[2], pixel[1], pixel[0]].map(f32::from)
@@ -686,13 +686,11 @@ fn widen_to_rgba8<const SOURCE_BYTES_PER_PIXEL: usize>(
     widen_one_pixel: impl Fn([u8; SOURCE_BYTES_PER_PIXEL]) -> [u8; 4],
 ) -> Vec<u8> {
     decoded
-        .chunks_exact(SOURCE_BYTES_PER_PIXEL)
+        .as_chunks::<SOURCE_BYTES_PER_PIXEL>()
+        .0
+        .iter()
         .take(pixel_count)
-        .flat_map(|source| {
-            let source: [u8; SOURCE_BYTES_PER_PIXEL] =
-                source.try_into().expect("chunks_exact yields exact widths");
-            widen_one_pixel(source)
-        })
+        .flat_map(|source| widen_one_pixel(*source))
         .collect()
 }
 

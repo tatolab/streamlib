@@ -235,7 +235,7 @@ fn sample_external_oes_through_surface(
         );
 
         gl::UseProgram(prog);
-        let loc = gl::GetUniformLocation(prog, b"u_tex\0".as_ptr() as *const _);
+        let loc = gl::GetUniformLocation(prog, c"u_tex".as_ptr());
         gl::Uniform1i(loc, 0);
         gl::ActiveTexture(gl::TEXTURE0);
         // Bind under the EXTERNAL_OES target — this is the binding the

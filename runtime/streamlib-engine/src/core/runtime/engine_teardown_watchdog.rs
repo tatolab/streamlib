@@ -277,6 +277,10 @@ mod tests {
                     &the_run_in_progress_record_beside(Path::new(&record_path)),
                 )
                 .expect("the run's record begins");
+            #[expect(
+                clippy::zombie_processes,
+                reason = "the stand-in outlives this process, which the test ends"
+            )]
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())
@@ -404,6 +408,10 @@ mod tests {
                 &the_run_in_progress_record_beside(Path::new(&record_path)),
             )
             .expect("the run's record begins");
+            #[expect(
+                clippy::zombie_processes,
+                reason = "the stand-in outlives this process, which the test ends"
+            )]
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())

@@ -717,7 +717,7 @@ fn a_mono_source_reaching_a_stereo_contract_is_duplicated_across_its_channels() 
     let windows = drain_every_ready_window(&mut stage);
     assert_eq!(windows.len(), 1);
     assert_eq!(windows[0].scalars.len(), 512, "256 frames × 2 channels");
-    for (frame, pair) in windows[0].scalars.chunks_exact(2).enumerate() {
+    for (frame, pair) in windows[0].scalars.as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(
             pair[0], pair[1],
             "both channels carry the same source sample"
@@ -778,7 +778,7 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
         read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
     assert_eq!(block.dtype, AudioBlockSampleDtype::I16);
     assert_eq!(block.interleaved_sample_bytes.len(), 256 * 2);
-    for scalar in block.interleaved_sample_bytes.chunks_exact(2) {
+    for scalar in block.interleaved_sample_bytes.as_chunks::<2>().0.iter() {
         assert_eq!(i16::from_le_bytes([scalar[0], scalar[1]]), 16_384);
     }
 }

@@ -1118,7 +1118,7 @@ mod tests {
             height,
         );
         assert!(
-            expected.chunks_exact(4).all(|px| px[3] == 255),
+            expected.as_chunks::<4>().0.iter().all(|px| px[3] == 255),
             "the reference conversion wrote every pixel"
         );
         assert_eq!(
@@ -1249,7 +1249,7 @@ mod image_to_yuyv_buffer_tests {
         let stride_bytes = (width * 2).next_multiple_of(64);
         assert!(stride_bytes > width * 2);
         let mut rgba = vec![0u8; (width * height * 4) as usize];
-        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let x = (i as u32) % width;
             let y = (i as u32) / width;
             px[0] = (x * 7 + y * 3) as u8;
@@ -1455,7 +1455,7 @@ mod image_to_nv12_buffer_tests {
         };
         let (width, height) = (37u32, 9u32);
         let mut rgba = vec![0u8; (width * height * 4) as usize];
-        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let x = (i as u32) % width;
             let y = (i as u32) / width;
             px[0] = (x * 7 + y * 3) as u8;

@@ -663,29 +663,23 @@ unsafe impl<'a> Sync for RuntimeContextFullAccess<'a> {}
 unsafe impl<'a> Send for RuntimeContextLimitedAccess<'a> {}
 unsafe impl<'a> Sync for RuntimeContextLimitedAccess<'a> {}
 
-#[cfg(test)]
-mod capability_view_tests {
-    use super::*;
+// The capability views are `!Clone`: stashing one in a processor field would
+// need a clone of the borrowed handle out of the `&ctx` parameter. Each line
+// below stops compiling, as an ambiguous impl, if a view gains `Clone`.
+mod _assert_capability_views_are_not_clone {
+    use super::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-    // Assert that the capability views cannot be cloned. Stashing a
-    // `RuntimeContextFullAccess` in a processor field would require cloning
-    // the borrowed handle out of the `&ctx` parameter; `!Clone` closes that
-    // door at compile time.
-    //
-    // These compile-fail tests will run as part of `cargo test --doc` once
-    // we move them onto public types in the doc-tests commit. Kept here
-    // as a reminder of the invariant for readers.
-    #[test]
-    fn full_access_and_limited_access_are_not_clone() {
-        fn is_not_clone<T>() -> bool {
-            // Using the common trick: this compiles regardless; the real
-            // enforcement is the `compile_fail` doc tests added in the
-            // doc-test commit.
-            true
-        }
-        assert!(is_not_clone::<RuntimeContextFullAccess<'_>>());
-        assert!(is_not_clone::<RuntimeContextLimitedAccess<'_>>());
+    trait AmbiguousIfClone<A> {
+        fn some_item() {}
     }
+    impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+    struct Invalid;
+    impl<T: Clone> AmbiguousIfClone<Invalid> for T {}
+
+    const _: fn() = || {
+        let _ = <RuntimeContextFullAccess<'static> as AmbiguousIfClone<_>>::some_item;
+        let _ = <RuntimeContextLimitedAccess<'static> as AmbiguousIfClone<_>>::some_item;
+    };
 }
 
 #[cfg(test)]

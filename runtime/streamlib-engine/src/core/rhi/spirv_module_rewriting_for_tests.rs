@@ -206,7 +206,9 @@ fn spirv_module_words(spirv: &[u8]) -> Vec<u32> {
         "a SPIR-V module is a whole number of 32-bit words"
     );
     spirv
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
         .collect()
 }

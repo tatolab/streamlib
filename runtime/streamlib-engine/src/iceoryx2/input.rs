@@ -3368,8 +3368,10 @@ mod tests {
             rmp_serde::from_slice(body).expect("the stage writes an audio block bag");
         let scalars = bag
             .interleaved_sample_bytes
-            .chunks_exact(4)
-            .map(|scalar| f32::from_le_bytes(scalar.try_into().expect("four bytes")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|scalar| f32::from_le_bytes(*scalar))
             .collect();
         (scalars, bag.sample_rate, bag.channels)
     }
