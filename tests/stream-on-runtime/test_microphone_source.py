@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.MicrophoneSource` — the audio built-in, built-in class to numpy view.
+"""`tatolab.microphone.MicrophoneSource` — the capture module, node class to numpy view.
 
 The load test needs no device: `tatolabd` loads the graph and its start is
 then refused at the GPU. The graph tests start the engine, which initializes a GPU context,
@@ -41,7 +41,7 @@ MICROPHONE_NODE_NAME = "microphonesource"
 DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 
 
-# ---- built-in class semantics (no GPU) -------------------------------------
+# ---- node class semantics (no GPU) -----------------------------------------
 
 
 def test_node_name_defaults_to_the_type_name(
@@ -54,20 +54,21 @@ def test_node_name_defaults_to_the_type_name(
     assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
-# ---- the native block in a real graph (GPU) --------------------------------
+# ---- the module in a real graph (GPU) --------------------------------------
 
 
 @pytest.mark.requires_gpu
 def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """The whole audio path, end to end: built-in class → native registration →
-    the probed backend capturing in `tatolabd` → an `AudioBlock` bag read as a
-    numpy view by a Python processor in its own processor interpreter.
+    """The whole audio path, end to end: the module's node class → its native
+    half capturing through the probed backend in its helper process → an
+    `AudioBlock` bag read as a numpy view by a Python processor in its own
+    processor interpreter.
 
     `stream_builder.add` with no `config` records `{}`, so this is also the
-    added-without-config proof: every field of a built-in's config struct
-    carries a serde default, so `{}` deserializes.
+    added-without-config proof: every field of the node's config class has a
+    default.
     """
     tatolabd = start_tatolabd_running_stream(microphone_into_an_audio_block_probe)
     readings = tatolabd.await_marker("BLOCKS_SEEN")

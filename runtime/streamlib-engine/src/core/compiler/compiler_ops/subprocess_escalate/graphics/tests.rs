@@ -794,17 +794,15 @@ fn every_blend_factor_and_blend_op_arm_reaches_the_rhi_attachment() {
 fn a_pipeline_state_the_kernel_cannot_build_is_refused() {
     let mut multisampled = baseline_pipeline_state();
     multisampled.multisample_samples = 4;
-    let message = graphics_pipeline_state_from_wire(multisampled)
-        .err()
-        .expect("MSAA must be refused");
+    let message =
+        graphics_pipeline_state_from_wire(multisampled).expect_err("MSAA must be refused");
     assert!(message.contains("single-sampled"), "{message}");
 
     let mut two_attachments = baseline_pipeline_state();
     two_attachments.attachment_color_formats =
         vec!["rgba8_unorm".to_string(), "rgba8_unorm".to_string()];
     let message = graphics_pipeline_state_from_wire(two_attachments)
-        .err()
-        .expect("two colour attachments must be refused");
+        .expect_err("two colour attachments must be refused");
     assert!(message.contains("exactly one"), "{message}");
 
     // The draw op refuses `depth_target_uuid` for the same reason; a
@@ -813,23 +811,20 @@ fn a_pipeline_state_the_kernel_cannot_build_is_refused() {
     let mut depth_testing = baseline_pipeline_state();
     depth_testing.depth_stencil_enabled = true;
     let message = graphics_pipeline_state_from_wire(depth_testing)
-        .err()
-        .expect("depth testing must be refused");
+        .expect_err("depth testing must be refused");
     assert!(message.contains("colour targets only"), "{message}");
 
     let mut depth_attachment = baseline_pipeline_state();
     depth_attachment.attachment_depth_format =
         Some(EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat);
     let message = graphics_pipeline_state_from_wire(depth_attachment)
-        .err()
-        .expect("a depth attachment must be refused");
+        .expect_err("a depth attachment must be refused");
     assert!(message.contains("colour targets only"), "{message}");
 
     let mut unowned_write_mask = baseline_pipeline_state();
     unowned_write_mask.color_write_mask = 0b1_0000;
     let message = graphics_pipeline_state_from_wire(unowned_write_mask)
-        .err()
-        .expect("a bit no channel owns must be refused");
+        .expect_err("a bit no channel owns must be refused");
     assert!(message.contains("no colour channel owns"), "{message}");
 
     // The draw op refuses `vertex_buffers` for the same reason. A
@@ -846,8 +841,7 @@ fn a_pipeline_state_the_kernel_cannot_build_is_refused() {
         },
     ];
     let message = graphics_pipeline_state_from_wire(buffer_fed_vertices)
-        .err()
-        .expect("a vertex binding no buffer can fill must be refused");
+        .expect_err("a vertex binding no buffer can fill must be refused");
     assert!(
         message.contains("no escalate op mints a VertexBuffer"),
         "{message}"
@@ -865,8 +859,7 @@ fn a_pipeline_state_the_kernel_cannot_build_is_refused() {
         },
     ];
     let message = graphics_pipeline_state_from_wire(unfed_attributes)
-        .err()
-        .expect("an attribute with no binding it could be fed from must be refused");
+        .expect_err("an attribute with no binding it could be fed from must be refused");
     assert!(message.contains("pulled from a"), "{message}");
     assert!(message.contains("gl_VertexIndex"), "{message}");
 }

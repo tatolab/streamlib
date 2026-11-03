@@ -1298,9 +1298,8 @@ impl HostVulkanTexture {
                 mem_requirements.memory_type_bits,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 unsafe { device.destroy_image(image, None) };
-                e
             })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
@@ -1385,9 +1384,8 @@ impl HostVulkanTexture {
                 mem_requirements.memory_type_bits,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 unsafe { device.destroy_image(image, None) };
-                e
             })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }
@@ -1616,10 +1614,10 @@ impl Clone for HostVulkanTexture {
 impl Drop for HostVulkanTexture {
     fn drop(&mut self) {
         // Destroy cached image view before the image it references
-        if let Some(&view) = self.cached_image_view.get() {
-            if let Some(vk_dev) = &self.vulkan_device {
-                unsafe { vk_dev.device().destroy_image_view(view, None) };
-            }
+        if let Some(&view) = self.cached_image_view.get()
+            && let Some(vk_dev) = &self.vulkan_device
+        {
+            unsafe { vk_dev.device().destroy_image_view(view, None) };
         }
 
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1875,7 +1873,7 @@ mod tests {
         if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
             return None;
         }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+        Some(unsafe { file_status.assume_init() }.st_ino)
     }
 
     /// The device-side half of the lookup's fd contract. A 4 KB buffer's
@@ -2287,7 +2285,7 @@ mod tests {
         use crate::vulkan::rhi::HostVulkanBuffer;
         let mut pixel_buffers = Vec::new();
         for i in 0..4 {
-            let buf = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (4 as u64))
+            let buf = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * 4_u64)
                 .unwrap_or_else(|e| panic!("pixel buffer [{i}] creation failed: {e}"));
             assert!(!buf.mapped_ptr().is_null());
             pixel_buffers.push(buf);

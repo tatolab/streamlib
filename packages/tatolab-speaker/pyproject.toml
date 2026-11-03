@@ -1,0 +1,56 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-speaker"
+version = "0.68.13"
+description = "The speaker node for Tatolab streams."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+# PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
+# dependency's, generated over this project's own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory <this directory>`.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+# The stream package and nothing of the engine: the node runs in a processor
+# interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
+dependencies = ["tatolab-stream>=0.47.0"]
+
+# The node catalog lists this in every stream whose environment installs this
+# distribution, before a graph names it.
+[project.entry-points."tatolab.nodes"]
+SpeakerSink = "tatolab.speaker:SpeakerSink"
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.speaker._native"
+features = ["pyo3/extension-module"]
+
+# The engine wheel's macOS floor, so this wheel installs wherever that one does.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "15.0"
+
+[tool.pyright]
+include = ["python", "tests"]
+# The helper-side tests import `tatolab.runtime`, which no venv of a package
+# holds — they borrow it from the runtime unit's lend — so pyright reads it from
+# the engine's own source and stub in this checkout.
+extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact; `mypy.stubtest` checks the stub against it.
+reportMissingModuleSource = "none"

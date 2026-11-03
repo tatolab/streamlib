@@ -57,6 +57,11 @@ struct SurfaceCheckOutLeaseTable {
     /// published. A checkout naming any other generation is refused: the
     /// frame that id named no longer exists.
     current_frame_generation_by_pool_slot: HashMap<String, u64>,
+
+    /// Pool slot key → the raw `VkImageLayout` a checkout holder released the
+    /// slot's image to the external queue family in, until the slot's owner
+    /// takes it to acquire the image back onto its own queue.
+    image_layout_released_by_a_check_out_holder_by_pool_slot: HashMap<String, i32>,
 }
 
 impl SurfaceCheckOutLeaseTable {
@@ -195,6 +200,44 @@ impl SurfaceCheckOutLeaseRegistry {
         self.readable_table()?
             .publish_frame_generation(pool_slot_key, frame_generation);
         Ok(())
+    }
+
+    /// Record that `holder`, while it holds a checkout lease on `surface_id`'s
+    /// slot, released the slot's image to the external queue family in
+    /// `released_image_layout`. Answers whether `holder` held a lease, and so
+    /// whether the release was recorded: a layout published by a connection
+    /// that holds no lease is not a cross-device release the owner acquires.
+    pub fn record_image_layout_a_check_out_holder_released_in(
+        &self,
+        surface_id: &str,
+        holder: SurfaceCheckOutLeaseHolderId,
+        released_image_layout: i32,
+    ) -> Result<bool> {
+        let lease_key = pool_slot_key_of_surface_id(surface_id);
+        let mut table = self.readable_table()?;
+        let holder_holds_a_lease = table
+            .outstanding_check_outs_by_surface_id
+            .get(lease_key)
+            .is_some_and(|holders| holders.contains_key(&holder));
+        if holder_holds_a_lease {
+            table
+                .image_layout_released_by_a_check_out_holder_by_pool_slot
+                .insert(lease_key.to_string(), released_image_layout);
+        }
+        Ok(holder_holds_a_lease)
+    }
+
+    /// Take the layout a checkout holder last released `surface_id`'s slot in,
+    /// if the slot's owner has not already taken it. Exactly one caller gets
+    /// it, so the owner's acquire barrier is recorded once per release.
+    pub fn take_image_layout_a_check_out_holder_released_in(
+        &self,
+        surface_id: &str,
+    ) -> Result<Option<i32>> {
+        Ok(self
+            .readable_table()?
+            .image_layout_released_by_a_check_out_holder_by_pool_slot
+            .remove(pool_slot_key_of_surface_id(surface_id)))
     }
 
     /// Drop one of `holder`'s leases on `surface_id`.
@@ -343,6 +386,56 @@ impl SurfaceCheckOutLeaseHandOff<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_release_by_the_lease_holder_is_taken_exactly_once() {
+        let registry = SurfaceCheckOutLeaseRegistry::new();
+        let child = registry.mint_holder_id();
+        registry.record_check_out_lease("frame-9", child).unwrap();
+
+        assert!(
+            registry
+                .record_image_layout_a_check_out_holder_released_in("frame-9", child, 2)
+                .unwrap()
+        );
+        assert_eq!(
+            registry
+                .take_image_layout_a_check_out_holder_released_in("frame-9")
+                .unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            registry
+                .take_image_layout_a_check_out_holder_released_in("frame-9")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_layout_published_without_a_lease_records_no_release() {
+        let registry = SurfaceCheckOutLeaseRegistry::new();
+        let holder = registry.mint_holder_id();
+        let other_holder = registry.mint_holder_id();
+        registry.record_check_out_lease("frame-3", holder).unwrap();
+
+        assert!(
+            !registry
+                .record_image_layout_a_check_out_holder_released_in("frame-3", other_holder, 2)
+                .unwrap()
+        );
+        assert!(
+            !registry
+                .record_image_layout_a_check_out_holder_released_in("frame-never-held", holder, 2)
+                .unwrap()
+        );
+        assert_eq!(
+            registry
+                .take_image_layout_a_check_out_holder_released_in("frame-3")
+                .unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn an_unknown_surface_is_checked_out_by_nobody() {

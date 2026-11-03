@@ -1251,7 +1251,6 @@ impl std::fmt::Debug for RhiCommandRecorder {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn rhi_command_recorder_is_send_sync() {
@@ -1271,7 +1270,7 @@ mod layout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, PixelFormat};
+    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer};
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -1334,8 +1333,7 @@ mod tests {
                 VulkanAccess::TRANSFER_WRITE,
                 VulkanAccess::HOST_READ,
             )
-            .err()
-            .expect("expected typed error");
+            .expect_err("expected typed error");
         let msg = format!("{err}");
         assert!(msg.contains("outside an active recording"), "got: {msg}");
     }
@@ -1352,7 +1350,7 @@ mod tests {
         };
         let mut rec = RhiCommandRecorder::new(&device, "double-begin").expect("create");
         rec.begin().expect("first begin");
-        let err = rec.begin().err().expect("expected typed error");
+        let err = rec.begin().expect_err("expected typed error");
         let msg = format!("{err}");
         assert!(msg.contains("already in progress"), "got: {msg}");
         // submit so Drop cleans up cleanly.
@@ -1370,7 +1368,7 @@ mod tests {
             None => return,
         };
         let mut rec = RhiCommandRecorder::new(&device, "no-begin-submit").expect("create");
-        let err = rec.submit().err().expect("expected typed error");
+        let err = rec.submit().expect_err("expected typed error");
         let msg = format!("{err}");
         assert!(msg.contains("without an active recording"), "got: {msg}");
     }

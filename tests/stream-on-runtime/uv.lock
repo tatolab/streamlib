@@ -1795,7 +1795,10 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "tatolab-compositor" },
+    { name = "tatolab-microphone" },
     { name = "tatolab-opus" },
+    { name = "tatolab-speaker" },
     { name = "tatolab-stream" },
 ]
 
@@ -1812,7 +1815,10 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "ruff", specifier = "==0.16.9" },
+    { name = "tatolab-compositor", editable = "../../packages/tatolab-compositor" },
+    { name = "tatolab-microphone", directory = "../../packages/tatolab-microphone" },
     { name = "tatolab-opus", directory = "../../packages/tatolab-opus" },
+    { name = "tatolab-speaker", directory = "../../packages/tatolab-speaker" },
     { name = "tatolab-stream", editable = "../../sdk/tatolab-stream" },
 ]
 
@@ -1835,8 +1841,33 @@ wheels = [
 ]
 
 [[package]]
+name = "tatolab-compositor"
+version = "0.1.0"
+source = { editable = "../../packages/tatolab-compositor" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest", specifier = ">=7.0" }]
+
+[[package]]
+name = "tatolab-microphone"
+version = "0.68.13"
+source = { directory = "../../packages/tatolab-microphone" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
+
+[[package]]
 name = "tatolab-opus"
-version = "0.68.7"
+version = "0.68.13"
 source = { directory = "../../packages/tatolab-opus" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1846,8 +1877,19 @@ dependencies = [
 requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
 
 [[package]]
+name = "tatolab-speaker"
+version = "0.68.13"
+source = { directory = "../../packages/tatolab-speaker" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
+
+[[package]]
 name = "tatolab-stream"
-version = "0.68.7"
+version = "0.68.13"
 source = { editable = "../../sdk/tatolab-stream" }
 dependencies = [
     { name = "msgpack" },

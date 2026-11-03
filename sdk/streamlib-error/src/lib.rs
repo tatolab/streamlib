@@ -141,14 +141,13 @@ pub enum Error {
     },
 
     #[error(
-        "`{node_type}` is no longer built into the runtime: it ships in the \
-         `{module_distribution}` module. Add `{module_distribution}` to the stream project's \
-         dependencies and name the node `{module_node_type}`"
+        "`{node_type}` is no longer a built-in node: it is `{module_node_type}`, a node \
+         `pip install {module_distribution}` gives the stream"
     )]
     BuiltInNodeTypeMovedToAModule {
         node_type: ProcessorClassImportPath,
+        module_node_type: ProcessorClassImportPath,
         module_distribution: String,
-        module_node_type: String,
     },
 
     #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]

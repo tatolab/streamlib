@@ -774,32 +774,6 @@ mod tests {
     }
 
     #[test]
-    fn a_recorded_graph_naming_a_built_in_that_moved_to_a_module_is_refused_naming_the_module() {
-        let former_built_in = ProcessorClassImportPath::of_built_in_node("OpusEncoder");
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "opusencoder", "type": former_built_in.to_string()}]
-        }))
-        .unwrap();
-
-        let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
-            .unwrap_err();
-
-        assert!(
-            matches!(&refusal, Error::BuiltInNodeTypeMovedToAModule { .. }),
-            "{refusal:?}"
-        );
-        assert_eq!(
-            refusal.to_string(),
-            format!(
-                "`{former_built_in}` is no longer built into the runtime: it ships in the \
-                 `tatolab-opus` module. Add `tatolab-opus` to the stream project's dependencies \
-                 and name the node `tatolab.opus:OpusEncoder`"
-            )
-        );
-    }
-
-    #[test]
     fn a_built_in_this_floor_compiles_out_is_refused_naming_this_floor_and_where_it_runs() {
         let compiled_out_here =
             ProcessorClassImportPath::of_built_in_node("GraphSnapshotTestCompiledOutHere");

@@ -25,7 +25,8 @@ port from the stream's SPS.
 
 It encodes with Vulkan Video on a device its own helper process creates on the runtime's GPU, so a
 fault in the video engine ends that one stream and never the runtime's device. Linux only;
-frames are buffer-backed `rgba32` surfaces such as the camera and test pattern publish.
+frames are 8-bit RGBA or BGRA, buffer-backed like the camera and test pattern publish or
+texture-backed like a GPU effect or a decoder publishes.
 
 `H265Decoder` takes media frames in that layout on `encoded_video`, entering the stream at a group
 start and, after a loss, discarding to the next one. `video` publishes a `VideoFrame` on an RGBA

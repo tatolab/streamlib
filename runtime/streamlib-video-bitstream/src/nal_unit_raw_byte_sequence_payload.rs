@@ -134,7 +134,7 @@ impl<'a> RbspBitstreamReader<'a> {
 
     /// Check if current position is byte-aligned.
     pub fn byte_aligned(&self) -> bool {
-        self.bit_offset % 8 == 0
+        self.bit_offset.is_multiple_of(8)
     }
 
     /// Read a fixed-pattern of `n` bits and verify it matches `expected`.

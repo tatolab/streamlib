@@ -1789,7 +1789,9 @@ fn create_shader_modules(
     for stage in descriptor.stages {
         let spirv: Vec<u32> = stage
             .spv
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
@@ -2321,8 +2323,7 @@ void main() {
             built.expect("a driver serving vertex-stage subgroup operations builds the kernel");
         } else {
             let refusal = built
-                .err()
-                .expect(
+                .expect_err(
                     "a driver not serving vertex-stage subgroup operations refuses at construction",
                 )
                 .to_string();
@@ -2383,8 +2384,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("one slot cannot carry two names");
+        .expect_err("one slot cannot carry two names");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0 is named `cam`")
@@ -2412,8 +2412,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        .expect_err("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = format!("{refusal}");
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
@@ -2438,8 +2437,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a name-stripped blob cannot be bound by name");
+        .expect_err("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
         assert!(
             msg.contains("carries no name") && msg.contains("glslc -g"),
@@ -2464,8 +2462,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("one name cannot identify two slots");
+        .expect_err("one name cannot identify two slots");
         let msg = format!("{err}");
         assert!(
             msg.contains("bindings 0 and 1 are both named `cameraTexture`")
@@ -2491,8 +2488,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a declared name the shader does not use must be refused");
+        .expect_err("a declared name the shader does not use must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("declared name `sourceTexture`")
@@ -2518,8 +2514,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("expected validation failure");
+        .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0")
@@ -2545,8 +2540,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("expected validation failure");
+        .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 1"),
@@ -2568,8 +2562,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("expected validation failure");
+        .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("missing"),
@@ -2597,8 +2590,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("expected validation failure");
+        .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("push-constant size mismatch"),
@@ -2623,8 +2615,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("expected validation failure");
+        .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("stage visibility"),
@@ -2655,8 +2646,7 @@ void main() {
         let mut descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         descriptor.descriptor_sets_in_flight = 0;
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
-            .err()
-            .expect("expected validation failure");
+            .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("descriptor_sets_in_flight"),
@@ -2682,8 +2672,7 @@ void main() {
         let pipeline_state = default_pipeline_state();
         let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
-            .err()
-            .expect("expected validation failure");
+            .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("Vertex stage"),
@@ -2707,8 +2696,7 @@ void main() {
         let mut descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         descriptor.push_constants = GraphicsPushConstants::NONE;
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
-            .err()
-            .expect("expected validation failure");
+            .expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("Fragment stage"),
@@ -2904,8 +2892,7 @@ void main() {
         // Ring depth is 2; index 2 must fail.
         let err = kernel
             .set_sampled_texture(2, 0, &stream_texture)
-            .err()
-            .expect("expected out-of-range error");
+            .expect_err("expected out-of-range error");
         let msg = format!("{err}");
         assert!(
             msg.contains("frame_index 2 out of range"),
@@ -2964,8 +2951,7 @@ void main() {
                 (16, 16),
                 OffscreenDraw::Draw(draw),
             )
-            .err()
-            .expect("expected missing-binding error");
+            .expect_err("expected missing-binding error");
         let msg = format!("{err}");
         assert!(
             msg.contains("not set before draw"),

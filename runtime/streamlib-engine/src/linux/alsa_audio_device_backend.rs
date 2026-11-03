@@ -30,7 +30,7 @@ use crate::core::context::{
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
-    DeviceStreamLivenessReport,
+    DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
 use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
@@ -111,12 +111,9 @@ const PREFERRED_SAMPLE_RATE: c_uint = 48_000;
 /// say so.
 const PREFERRED_CAPTURE_CHANNELS: c_uint = 1;
 
-/// Preferred playback channel count. Stereo rather than the capture side's
-/// mono because that is what a sink almost always is; `_near` lets a mono-only
-/// device say so. The two preferences differ because the devices do, and the
-/// read-side window stage reconciles them: a speaker's input port declares
-/// `audio_window = match_device`, so a mono capture reaching a stereo playback
-/// device is converted rather than refused.
+/// Preferred playback channel count where a request names none. Stereo rather
+/// than the capture side's mono because that is what a sink almost always is;
+/// `_near` lets a mono-only device say so.
 const PREFERRED_PLAYBACK_CHANNELS: c_uint = 2;
 
 /// Preferred period, ~10.7 ms at 48 kHz — a block small enough to be a useful
@@ -465,6 +462,7 @@ impl AlsaAudioDeviceBackend {
             opened_pcm.pcm,
             pcm_name,
             AlsaStreamDirection::Capture,
+            RequestedAudioStreamFormat::default(),
         )?;
         negotiate_capture_timestamp_contract(
             &self.entry_points,
@@ -487,8 +485,13 @@ impl AlsaAudioDeviceBackend {
         })
     }
 
-    /// Open and negotiate one playback stream, before any sample is written.
-    fn open_alsa_playback_stream(&self, pcm_name: &str) -> Result<AlsaAudioPlaybackStream> {
+    /// Open and negotiate one playback stream toward `requested_format`, before
+    /// any sample is written.
+    fn open_alsa_playback_stream(
+        &self,
+        pcm_name: &str,
+        requested_format: RequestedAudioStreamFormat,
+    ) -> Result<AlsaAudioPlaybackStream> {
         let opened_pcm =
             OpenedAlsaPcm::open(&self.entry_points, pcm_name, AlsaStreamDirection::Playback)?;
         let negotiated = negotiate_hardware_parameters(
@@ -496,6 +499,7 @@ impl AlsaAudioDeviceBackend {
             opened_pcm.pcm,
             pcm_name,
             AlsaStreamDirection::Playback,
+            requested_format,
         )?;
         negotiate_playback_start_contract(
             &self.entry_points,
@@ -637,7 +641,10 @@ impl AudioDeviceBackend for AlsaAudioDeviceBackend {
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioPlaybackStream>> {
         let pcm_name = request.device_id.as_deref().unwrap_or(DEFAULT_PCM_NAME);
-        Ok(Box::new(self.open_alsa_playback_stream(pcm_name)?))
+        Ok(Box::new(self.open_alsa_playback_stream(
+            pcm_name,
+            request.requested_format,
+        )?))
     }
 }
 
@@ -647,7 +654,10 @@ struct NegotiatedAlsaStream {
     period_sample_count: u32,
 }
 
-/// Settle the hardware parameters both directions share.
+/// Settle the hardware parameters both directions share, aiming at
+/// `requested_format` wherever it names a value and at the direction's
+/// preference elsewhere. A plug PCM such as `default` converts to whatever was
+/// aimed at; a raw device settles where it can, and the caller compares.
 ///
 /// The software pass is the caller's, because it is the half that differs: a
 /// capture stream states the timestamp contract there and a playback stream
@@ -657,6 +667,7 @@ fn negotiate_hardware_parameters(
     pcm: *mut c_void,
     pcm_name: &str,
     direction: AlsaStreamDirection,
+    requested_format: RequestedAudioStreamFormat,
 ) -> Result<NegotiatedAlsaStream> {
     let hardware_parameters = AlsaAllocatedObject::hardware_parameters(entry_points)?;
 
@@ -678,9 +689,16 @@ fn negotiate_hardware_parameters(
         },
     )?;
 
-    let sample_format = negotiate_sample_format(entry_points, pcm, hardware_parameters.pointer())?;
+    let sample_format = negotiate_sample_format(
+        entry_points,
+        pcm,
+        hardware_parameters.pointer(),
+        requested_format.sample_format,
+    )?;
 
-    let mut channels = direction.preferred_channels();
+    let mut channels = requested_format
+        .channels
+        .unwrap_or_else(|| direction.preferred_channels());
     entry_points.refuse_a_negative_return_code(format_args!("a channel count"), unsafe {
         (entry_points.snd_pcm_hw_params_set_channels_near)(
             pcm,
@@ -689,7 +707,9 @@ fn negotiate_hardware_parameters(
         )
     })?;
 
-    let mut sample_rate = PREFERRED_SAMPLE_RATE;
+    let mut sample_rate = requested_format
+        .sample_rate
+        .unwrap_or(PREFERRED_SAMPLE_RATE);
     entry_points.refuse_a_negative_return_code(format_args!("a sample rate"), unsafe {
         (entry_points.snd_pcm_hw_params_set_rate_near)(
             pcm,
@@ -782,17 +802,23 @@ fn negotiate_hardware_parameters(
     })
 }
 
-/// Take float samples if the device offers them, 16-bit integers otherwise —
-/// the two encodings `AudioBlock`'s `dtype` names.
+/// Take `requested_sample_format` if one was asked for; otherwise float samples
+/// if the device offers them, 16-bit integers else — the two encodings
+/// `AudioBlock`'s `dtype` names.
 fn negotiate_sample_format(
     entry_points: &AlsaLibraryEntryPoints,
     pcm: *mut c_void,
     hardware_parameters: *mut c_void,
+    requested_sample_format: Option<AudioSampleFormat>,
 ) -> Result<AudioSampleFormat> {
     for (alsa_format, sample_format) in [
         (SND_PCM_FORMAT_FLOAT_LE, AudioSampleFormat::F32),
         (SND_PCM_FORMAT_S16_LE, AudioSampleFormat::I16),
-    ] {
+    ]
+    .into_iter()
+    .filter(|&(_, sample_format)| {
+        requested_sample_format.is_none_or(|requested| requested == sample_format)
+    }) {
         // SAFETY: `pcm` is an open capture handle and `hardware_parameters` a
         // live libasound allocation.
         let format_set = unsafe {
@@ -802,11 +828,15 @@ fn negotiate_sample_format(
             return Ok(sample_format);
         }
     }
-    Err(Error::NotSupported(
-        "this ALSA device offers neither little-endian float nor little-endian 16-bit \
-         integer samples, and those are the two encodings an AudioBlock's dtype names"
-            .into(),
-    ))
+    Err(Error::NotSupported(match requested_sample_format {
+        Some(requested) => format!(
+            "this ALSA device does not offer the little-endian {requested:?} samples that were \
+             requested"
+        ),
+        None => "this ALSA device offers neither little-endian float nor little-endian 16-bit \
+                 integer samples, and those are the two encodings an AudioBlock's dtype names"
+            .to_string(),
+    }))
 }
 
 /// State the timestamp contract on a capture stream before it runs.
@@ -1187,9 +1217,9 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
 
-    // A PipeWire client is granted realtime by the daemon; an ALSA client has
-    // to ask. Failure is logged and the thread continues on `SCHED_OTHER`,
-    // which is what a container without rtkit gets.
+    // Realtime comes only from asking for it, through rtkit or `CAP_SYS_NICE`.
+    // Failure is logged and the thread continues on `SCHED_OTHER`, which is
+    // what a container without rtkit gets.
     if let Err(refusal) = apply_thread_priority(ThreadPriority::RealTime) {
         tracing::debug!(
             device = %device_name,
@@ -1546,9 +1576,9 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
 
-    // A PipeWire client is granted realtime by the daemon; an ALSA client has
-    // to ask. Failure is logged and the thread continues on `SCHED_OTHER`,
-    // which is what a container without rtkit gets.
+    // Realtime comes only from asking for it, through rtkit or `CAP_SYS_NICE`.
+    // Failure is logged and the thread continues on `SCHED_OTHER`, which is
+    // what a container without rtkit gets.
     if let Err(refusal) = apply_thread_priority(ThreadPriority::RealTime) {
         tracing::debug!(
             device = %device_name,

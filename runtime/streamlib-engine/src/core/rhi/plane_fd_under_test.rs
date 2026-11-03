@@ -20,7 +20,7 @@ fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
         return None;
     }
     // SAFETY: fstat returned 0, so it filled the buffer.
-    Some(unsafe { file_status.assume_init() }.st_ino as u64)
+    Some(unsafe { file_status.assume_init() }.st_ino)
 }
 
 impl PlaneFdUnderTest {

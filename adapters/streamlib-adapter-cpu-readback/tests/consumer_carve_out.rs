@@ -79,7 +79,7 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     // Allocate the host-side HOST_VISIBLE staging buffer. We keep an
     // independent Arc so we can export its DMA-BUF FD AFTER
     // registration without unwrapping the registration's vec.
-    let staging = HostVulkanBuffer::new(&host_device, (W as u64) * (H as u64) * (4 as u64))
+    let staging = HostVulkanBuffer::new(&host_device, (W as u64) * (H as u64) * 4_u64)
         .expect("HostVulkanBuffer::new");
     let staging_arc = Arc::new(staging);
 

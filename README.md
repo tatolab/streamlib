@@ -681,9 +681,13 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 |---|---|
 | `CameraSource` | V4L2 on Linux (zero-copy DMA-BUF when the device exports it), AVFoundation on macOS (zero-copy IOSurface import). |
 | `TestPatternSource` | Color bars, for a machine with no camera. |
-| `MicrophoneSource`, `SpeakerSink` | The machine's audio backend, as timestamped sample blocks. |
 | `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
+
+The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
+`from tatolab.microphone import MicrophoneSource` and `from tatolab.speaker import SpeakerSink`.
+Each runs in its own helper process and moves its samples on a native thread over the
+engine's audio backend, so no interpreter sits in the sample path either.
 
 Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
 libopus linked statically into the wheel.

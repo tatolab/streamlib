@@ -96,7 +96,7 @@ fn host_writes_subprocess_reads_round_trip() {
     // G=1, B=2, A=3) — independent of memory order. So [0.25, 0.5,
     // 0.75, 1.0] sets R=0.25, G=0.5, B=0.75, A=1.0 → memory bytes
     // [B=191, G=128, R=64, A=255].
-    let mismatch = bytes.chunks_exact(4).enumerate().find(|(_, px)| {
+    let mismatch = bytes.as_chunks::<4>().0.iter().enumerate().find(|(_, px)| {
         (px[0] as i32 - 191).abs() > 4
             || (px[1] as i32 - 128).abs() > 4
             || (px[2] as i32 - 64).abs() > 4

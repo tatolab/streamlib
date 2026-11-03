@@ -3763,7 +3763,7 @@ mod tests {
         let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
         let (dest, _, dest_input) = attach_mock_instance::<
             MockDeviceMatchedAudioConsumerProcessor::Processor,
-        >(&mut graph, &dest_unique_id.to_string());
+        >(&mut graph, dest_unique_id.as_ref());
         let dest_input = dest_input.expect("a windowed consumer holds input mailboxes");
 
         let (channel, notify_service) =

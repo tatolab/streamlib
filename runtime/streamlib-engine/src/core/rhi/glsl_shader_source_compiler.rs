@@ -531,8 +531,7 @@ void main() {
                 "sharpen",
                 "test.comp",
             )
-            .err()
-            .expect("a GLSL entry point other than `main` must be refused");
+            .expect_err("a GLSL entry point other than `main` must be refused");
         let message = format!("{err}");
         assert!(message.contains("sharpen"), "{message}");
         assert!(message.contains("main"), "{message}");
@@ -549,8 +548,7 @@ void main() {
                 DEFAULT_SHADER_ENTRY_POINT,
                 "blur.comp",
             )
-            .err()
-            .expect("a shader that does not compile must be refused");
+            .expect_err("a shader that does not compile must be refused");
         let message = format!("{err}");
         assert!(message.contains("blur.comp"), "{message}");
         assert!(message.contains(":2"), "{message}");
@@ -569,8 +567,7 @@ void main() {
                     DEFAULT_SHADER_ENTRY_POINT,
                     "broken.comp",
                 )
-                .err()
-                .expect("a broken shader must stay refused");
+                .expect_err("a broken shader must stay refused");
         }
         assert_eq!(compiler.invocation_count(), 2);
     }
@@ -578,8 +575,7 @@ void main() {
     #[test]
     fn an_unknown_stage_name_is_refused_naming_every_accepted_one() {
         let err = GlslCompilationTargetStage::from_wire_name("geometry")
-            .err()
-            .expect("`geometry` is not a stage this engine compiles for");
+            .expect_err("`geometry` is not a stage this engine compiles for");
         let message = format!("{err}");
         assert!(message.contains("geometry"), "{message}");
         for stage in GlslCompilationTargetStage::ALL {

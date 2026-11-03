@@ -88,7 +88,6 @@ pub struct HostVulkanDevice {
     queue_family_index: u32,
     transfer_queue_family_index: u32,
     transfer_queue: vk::Queue,
-    #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
     /// Whether the device is `VK_PHYSICAL_DEVICE_TYPE_CPU` — a software
@@ -735,38 +734,38 @@ impl HostVulkanDevice {
                     .build(),
             );
         }
-        if let Some(ve_family) = video_encode_queue_family_index {
-            if !requested_families.contains(&ve_family) {
-                requested_families.push(ve_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(ve_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(ve_family) = video_encode_queue_family_index
+            && !requested_families.contains(&ve_family)
+        {
+            requested_families.push(ve_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(ve_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
-        if let Some(vd_family) = video_decode_queue_family_index {
-            if !requested_families.contains(&vd_family) {
-                requested_families.push(vd_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(vd_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(vd_family) = video_decode_queue_family_index
+            && !requested_families.contains(&vd_family)
+        {
+            requested_families.push(vd_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(vd_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
-        if let Some(cq_family) = compute_queue_family_index {
-            if !requested_families.contains(&cq_family) {
-                requested_families.push(cq_family);
-                queue_create_infos.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(cq_family)
-                        .queue_priorities(&queue_priorities)
-                        .build(),
-                );
-            }
+        if let Some(cq_family) = compute_queue_family_index
+            && !requested_families.contains(&cq_family)
+        {
+            requested_families.push(cq_family);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(cq_family)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
         }
 
         // Device extensions
@@ -2869,7 +2868,6 @@ impl HostVulkanDevice {
     }
 
     /// Get the device name.
-    #[allow(dead_code)]
     pub fn name(&self) -> String {
         self.device_name.clone()
     }
@@ -2880,13 +2878,11 @@ impl HostVulkanDevice {
     }
 
     /// Get the Vulkan instance.
-    #[allow(dead_code)]
     pub fn instance(&self) -> &vulkanalia::Instance {
         &self.vulkan_instance.instance
     }
 
     /// Get the Vulkan physical device.
-    #[allow(dead_code)]
     pub fn physical_device(&self) -> vk::PhysicalDevice {
         self.physical_device
     }
@@ -2897,19 +2893,16 @@ impl HostVulkanDevice {
     }
 
     /// Get the graphics queue.
-    #[allow(dead_code)]
     pub fn queue(&self) -> vk::Queue {
         self.queue
     }
 
     /// Get the graphics queue family index.
-    #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
     }
 
     /// Get the dedicated transfer queue family index (falls back to graphics queue).
-    #[allow(dead_code)]
     pub fn transfer_queue_family_index(&self) -> u32 {
         self.transfer_queue_family_index
     }
@@ -2960,49 +2953,41 @@ impl HostVulkanDevice {
     }
 
     /// Whether Vulkan Video encode extensions are available.
-    #[allow(dead_code)]
     pub fn supports_video_encode(&self) -> bool {
         self.supports_video_encode
     }
 
     /// Get the video encode queue family index (if available).
-    #[allow(dead_code)]
     pub fn video_encode_queue_family_index(&self) -> Option<u32> {
         self.video_encode_queue_family_index
     }
 
     /// Get the video encode queue (if available).
-    #[allow(dead_code)]
     pub fn video_encode_queue(&self) -> Option<vk::Queue> {
         self.video_encode_queue
     }
 
     /// Whether this device supports Vulkan Video decode.
-    #[allow(dead_code)]
     pub fn supports_video_decode(&self) -> bool {
         self.supports_video_decode
     }
 
     /// Get the video decode queue family index (if available).
-    #[allow(dead_code)]
     pub fn video_decode_queue_family_index(&self) -> Option<u32> {
         self.video_decode_queue_family_index
     }
 
     /// Get the video decode queue (if available).
-    #[allow(dead_code)]
     pub fn video_decode_queue(&self) -> Option<vk::Queue> {
         self.video_decode_queue
     }
 
     /// Get the dedicated compute queue family index (if available).
-    #[allow(dead_code)]
     pub fn compute_queue_family_index(&self) -> Option<u32> {
         self.compute_queue_family_index
     }
 
     /// Get the dedicated compute queue (if available).
-    #[allow(dead_code)]
     pub fn compute_queue(&self) -> Option<vk::Queue> {
         self.compute_queue
     }
@@ -4753,7 +4738,7 @@ mod tests {
         if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
             return None;
         }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+        Some(unsafe { file_status.assume_init() }.st_ino)
     }
 
     /// The one exit of the import that is ours to close: no memory type

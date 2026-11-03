@@ -1214,7 +1214,7 @@ mod tests {
                     }
                     if relay_one(&subscriber, &publisher) {
                         count += 1;
-                        if relay_pause_every > 0 && count % relay_pause_every == 0 {
+                        if relay_pause_every > 0 && count.is_multiple_of(relay_pause_every) {
                             std::thread::sleep(Duration::from_millis(relay_pause_ms));
                         }
                     } else {
@@ -1518,10 +1518,10 @@ mod tests {
 
         let mut names = Vec::new();
         Node::<ipc::Service>::list(config, |node_state| {
-            if let NodeState::Alive(view) = node_state {
-                if let Some(details) = view.details() {
-                    names.push(details.name().as_str().to_string());
-                }
+            if let NodeState::Alive(view) = node_state
+                && let Some(details) = view.details()
+            {
+                names.push(details.name().as_str().to_string());
             }
             CallbackProgression::Continue
         })
@@ -2051,7 +2051,7 @@ mod tests {
         let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
 
         let first_node =
-            create_iceoryx2_node_in_domain(&first_root, &first_prefix, "streamlib-test/first")
+            create_iceoryx2_node_in_domain(&first_root, first_prefix, "streamlib-test/first")
                 .unwrap();
         let _service_in_the_first_domain = first_node
             .service_builder(&service_name)
@@ -2060,7 +2060,7 @@ mod tests {
             .expect("the first domain creates the service");
 
         let second_node =
-            create_iceoryx2_node_in_domain(&second_root, &second_prefix, "streamlib-test/second")
+            create_iceoryx2_node_in_domain(&second_root, second_prefix, "streamlib-test/second")
                 .unwrap();
         assert!(
             second_node
@@ -2077,17 +2077,14 @@ mod tests {
             .expect("the same service name creates afresh in a domain with its own shared memory");
         assert!(
             !names_of_the_live_nodes_in(
-                &iceoryx2_config_for_domain(&second_root, &second_prefix).unwrap()
+                &iceoryx2_config_for_domain(&second_root, second_prefix).unwrap()
             )
             .contains(&"streamlib-test/first".to_string())
         );
 
-        let another_node_in_the_first_domain = create_iceoryx2_node_in_domain(
-            &first_root,
-            &first_prefix,
-            "streamlib-test/first-again",
-        )
-        .unwrap();
+        let another_node_in_the_first_domain =
+            create_iceoryx2_node_in_domain(&first_root, first_prefix, "streamlib-test/first-again")
+                .unwrap();
         another_node_in_the_first_domain
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
@@ -2120,7 +2117,7 @@ mod tests {
         let max_subscribers = 2;
         let open_the_channel_in = |root: &std::path::Path, node_name: &str| {
             Iceoryx2Node::wrapping(
-                create_iceoryx2_node_in_domain(root, &shared_prefix, node_name).unwrap_or_else(
+                create_iceoryx2_node_in_domain(root, shared_prefix, node_name).unwrap_or_else(
                     |refusal| panic!("{node_name} opens a node in its domain: {refusal:?}"),
                 ),
             )

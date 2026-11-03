@@ -8,7 +8,6 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
-mod built_in_node_types_moved_to_modules;
 mod empty_config;
 mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
@@ -43,7 +42,3 @@ pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
-
-// Audio processors are not here: capture and playback ship as engine
-// built-ins in `streamlib-media-builtins` (`microphone_source.rs`,
-// `speaker_sink.rs`).

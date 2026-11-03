@@ -150,7 +150,7 @@ fn acquire_release_cycles_robust_under_concurrent_queue_submits() {
                 .acquire_write(&descriptor)
                 .expect("acquire_write under contention");
             let bytes = wg.view_mut().plane_mut(0).bytes_mut();
-            for chunk in bytes.chunks_exact_mut(4) {
+            for chunk in bytes.as_chunks_mut::<4>().0 {
                 chunk.copy_from_slice(&pattern);
             }
         }
@@ -160,7 +160,7 @@ fn acquire_release_cycles_robust_under_concurrent_queue_submits() {
             .expect("acquire_read under contention");
         let view = rg.view();
         let bytes = view.plane(0).bytes();
-        for chunk in bytes.chunks_exact(4) {
+        for chunk in bytes.as_chunks::<4>().0 {
             assert_eq!(
                 chunk, &pattern,
                 "iteration {i}: round-tripped bytes do not match host pattern"

@@ -8,7 +8,7 @@
 /// an empty Vec — the caller validates push-constant size separately
 /// against the kernel's declaration.
 pub(super) fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!(
             "expected even-length hex string, got {} characters",
             s.len()
@@ -27,7 +27,7 @@ pub(super) fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
             )),
         }
     };
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0 {
         out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
     }
     Ok(out)
@@ -54,13 +54,13 @@ mod tests {
 
     #[test]
     fn decode_hex_rejects_odd_length() {
-        let err = decode_hex("abc").err().expect("expected odd-length error");
+        let err = decode_hex("abc").expect_err("expected odd-length error");
         assert!(err.contains("even-length"), "got: {err}");
     }
 
     #[test]
     fn decode_hex_rejects_non_hex_character() {
-        let err = decode_hex("abxy").err().expect("expected non-hex error");
+        let err = decode_hex("abxy").expect_err("expected non-hex error");
         assert!(err.contains("non-hex"), "got: {err}");
     }
 }

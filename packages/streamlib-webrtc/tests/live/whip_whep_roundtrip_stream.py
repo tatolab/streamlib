@@ -29,6 +29,8 @@ own default device).
 import os
 
 import tatolab.stream
+from tatolab.microphone import MicrophoneSource
+from tatolab.speaker import SpeakerSink
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, stream
@@ -83,7 +85,7 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
         name="video_encoder",
     )
     microphone = stream_builder.add(
-        tatolab.stream.MicrophoneSource,
+        MicrophoneSource,
         config={"device_id": audio_capture_device} if audio_capture_device else {},
         name="microphone",
     )
@@ -108,7 +110,7 @@ def the_same_input_played_back_over_whep_through_the_decoders(
     )
     video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
     audio_decoder = stream_builder.add(OpusDecoder, name="audio_decoder")
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name="speaker")
+    speaker = stream_builder.add(SpeakerSink, name="speaker")
 
     stream_builder.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")

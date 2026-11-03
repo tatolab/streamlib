@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.68.13](https://github.com/tatolab/streamlib/compare/v0.68.12...v0.68.13) (2026-11-03)
+
+
+### Features
+
+* **rive:** Rive source on an external-renderer device in the consumer RHI ([#3086](https://github.com/tatolab/streamlib/issues/3086)) ([83e0ac2](https://github.com/tatolab/streamlib/commit/83e0ac2b5d67fcf7d00e0d8d5563cebf0070ddc1))
+
+## [0.68.12](https://github.com/tatolab/streamlib/compare/v0.68.11...v0.68.12) (2026-11-02)
+
+
+### Bug Fixes
+
+* **engine:** ask rtkit for realtime on PipeWire audio threads; move the microphone A/B onto the module and delete the proof wheel ([#3069](https://github.com/tatolab/streamlib/issues/3069)) ([f917759](https://github.com/tatolab/streamlib/commit/f91775962d1a3f7bcab2e39a0a195ef1cfa7a23e))
+
 ## [0.68.11](https://github.com/tatolab/streamlib/compare/v0.68.10...v0.68.11) (2026-11-02)
 
 

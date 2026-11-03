@@ -200,7 +200,9 @@ impl VulkanComputeKernelInner {
 
         let spirv: Vec<u32> = descriptor
             .spv
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
@@ -1675,8 +1677,7 @@ void main() {
             built.expect("a driver serving clustered operations builds the kernel");
         } else {
             let refusal = built
-                .err()
-                .expect("a driver not serving clustered operations refuses at construction")
+                .expect_err("a driver not serving clustered operations refuses at construction")
                 .to_string();
             assert!(refusal.contains(&support.driver_name), "{refusal}");
             assert!(
@@ -1751,8 +1752,7 @@ void main() {
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        .expect_err("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = refusal.to_string();
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
@@ -1922,7 +1922,7 @@ void main() {
                 push_constant_size: 4,
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("UniformBuffer"),
@@ -1954,7 +1954,7 @@ void main() {
                 push_constant_size: 4,
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 2"),
@@ -1985,7 +1985,7 @@ void main() {
                 push_constant_size: 4,
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 1"),
@@ -2011,7 +2011,7 @@ void main() {
                 push_constant_size: 16, // SPIR-V declares 4 bytes
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("push-constant size mismatch"),
@@ -2043,8 +2043,7 @@ void main() {
             .expect("push constants");
         let err = kernel
             .dispatch(1, 1, 1)
-            .err()
-            .expect("expected dispatch failure");
+            .expect_err("expected dispatch failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("not set before dispatch"),

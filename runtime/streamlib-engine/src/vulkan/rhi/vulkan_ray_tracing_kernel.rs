@@ -146,7 +146,9 @@ impl VulkanRayTracingKernelInner {
         for stage in descriptor.stages {
             let spirv: Vec<u32> = stage
                 .spv
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
@@ -186,7 +188,7 @@ impl VulkanRayTracingKernelInner {
 
         // Group create infos (one per declared group).
         let group_infos: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
-            descriptor.groups.iter().map(|g| group_to_vk(g)).collect();
+            descriptor.groups.iter().map(group_to_vk).collect();
 
         // Descriptor-set layout + pool + set (one set, mirrors compute kernel's shape).
         let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
@@ -1746,9 +1748,8 @@ fn upload_bytes_to_buffer(
 
     let queue = vulkan_device.queue();
     let queue_family = vulkan_device.queue_family_index();
-    let command_pool = create_command_pool(device, queue_family).map_err(|e| {
+    let command_pool = create_command_pool(device, queue_family).inspect_err(|_e| {
         unsafe { allocator.destroy_buffer(staging_buffer, staging_allocation) };
-        e
     })?;
     let cmd = match allocate_command_buffer(device, command_pool) {
         Ok(c) => c,
@@ -1958,8 +1959,7 @@ mod tests {
             &binding_validation_descriptor(&stages, &groups, &bindings),
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("one slot cannot carry two names");
+        .expect_err("one slot cannot carry two names");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0 is named `topLevelAS`")
@@ -1983,8 +1983,7 @@ mod tests {
             &binding_validation_descriptor(&stages, &groups, &bindings),
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        .expect_err("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = format!("{refusal}");
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
@@ -2005,8 +2004,7 @@ mod tests {
             &binding_validation_descriptor(&stages, &groups, &bindings),
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a name-stripped blob cannot be bound by name");
+        .expect_err("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
         assert!(
             msg.contains("carries no name") && msg.contains("glslc -g"),
@@ -2028,8 +2026,7 @@ mod tests {
             &binding_validation_descriptor(&stages, &groups, &bindings),
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("one name cannot identify two slots");
+        .expect_err("one name cannot identify two slots");
         let msg = format!("{err}");
         assert!(
             msg.contains("bindings 0 and 1 are both named `topLevelAS`")
@@ -2051,8 +2048,7 @@ mod tests {
             &binding_validation_descriptor(&stages, &groups, &bindings),
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
         )
-        .err()
-        .expect("a declared name the shader does not use must be refused");
+        .expect_err("a declared name the shader does not use must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("declared name `sceneTlas`")
@@ -2111,7 +2107,7 @@ mod tests {
                 max_recursion_depth: 1,
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         assert!(
             format!("{err}").contains("binding 1"),
             "expected error about missing binding 1, got: {err}"
@@ -2156,7 +2152,7 @@ mod tests {
                 max_recursion_depth: 1,
             },
         );
-        let err = result.err().expect("expected validation failure");
+        let err = result.expect_err("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("StorageBuffer"),
@@ -2188,8 +2184,7 @@ mod tests {
             &vertices,
             &[0, 1, 3],
         )
-        .err()
-        .expect("index 3 over three vertices cannot be built in silence");
+        .expect_err("index 3 over three vertices cannot be built in silence");
         let message = refusal.to_string();
         assert!(
             message.contains("index 3") && message.contains("outside the 3 supplied"),

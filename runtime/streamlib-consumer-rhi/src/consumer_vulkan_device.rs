@@ -164,6 +164,11 @@ pub struct ConsumerVulkanDevice {
     /// threads. One mutex covers the import queue and the video codec
     /// queue alike.
     queue_mutex: Mutex<()>,
+    /// The loader's `vkGetInstanceProcAddr`, valid while [`Self::entry`]
+    /// keeps the loader library open.
+    get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr,
+    /// The `VkPhysicalDeviceFeatures` the device was created with.
+    enabled_physical_device_features: vk::PhysicalDeviceFeatures,
 }
 
 /// Which way a Vulkan Video queue codes: pictures into a bitstream, or a
@@ -241,6 +246,27 @@ enum ConsumerVulkanDeviceQueues {
     /// That queue plus a Vulkan Video queue coding the given way.
     #[cfg(target_os = "linux")]
     ImportAndVideoCodec(VulkanVideoCodecDirection),
+    /// That queue, with the core rasterization features an embedded renderer
+    /// draws with enabled wherever the device supports them.
+    #[cfg(target_os = "linux")]
+    ExternalRenderer,
+}
+
+/// The core features a device for an embedded renderer enables out of
+/// `supported`: each one a vector renderer's pipelines may use, and none other.
+#[cfg(target_os = "linux")]
+fn physical_device_features_an_external_renderer_draws_with(
+    supported: &vk::PhysicalDeviceFeatures,
+) -> vk::PhysicalDeviceFeatures {
+    vk::PhysicalDeviceFeatures {
+        independent_blend: supported.independent_blend,
+        fill_mode_non_solid: supported.fill_mode_non_solid,
+        fragment_stores_and_atomics: supported.fragment_stores_and_atomics,
+        shader_clip_distance: supported.shader_clip_distance,
+        sampler_anisotropy: supported.sampler_anisotropy,
+        depth_bias_clamp: supported.depth_bias_clamp,
+        ..Default::default()
+    }
 }
 
 /// A physical device the Vulkan loader enumerates, as selection by
@@ -256,7 +282,7 @@ pub(crate) struct VulkanDeviceTheLoaderEnumerates {
 /// the loader's order.
 pub(crate) fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>>
 {
-    let (_entry, instance) = create_the_consumer_vulkan_instance()?;
+    let (_entry, instance, _get_instance_proc_addr) = create_the_consumer_vulkan_instance()?;
     Ok(physical_devices_the_loader_enumerates_on(&instance)?
         .into_iter()
         .map(|(_physical_device, enumerated_device)| enumerated_device)
@@ -302,13 +328,25 @@ pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<
 /// The loader's library, entry and the minimal instance a consumer device
 /// enumerates on: no surface extensions, since the consumer never renders to
 /// a window.
-fn create_the_consumer_vulkan_instance()
--> Result<(vulkanalia::Entry, VulkanInstanceDestroyedUnlessKept)> {
+fn create_the_consumer_vulkan_instance() -> Result<(
+    vulkanalia::Entry,
+    VulkanInstanceDestroyedUnlessKept,
+    vk::PFN_vkGetInstanceProcAddr,
+)> {
     let loader = crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
         ConsumerRhiError::Gpu(format!(
             "Failed to load the Vulkan loader library; tried:\n{not_found}"
         ))
     })?;
+    // SAFETY: the symbol is the loader's own `vkGetInstanceProcAddr`, and the
+    // library stays open for as long as the entry built on the same loader.
+    let get_instance_proc_addr = unsafe {
+        let untyped =
+            vulkanalia::loader::Loader::load(&loader, b"vkGetInstanceProcAddr").map_err(|e| {
+                ConsumerRhiError::Gpu(format!("the loader has no vkGetInstanceProcAddr: {e}"))
+            })?;
+        std::mem::transmute::<extern "system" fn(), vk::PFN_vkGetInstanceProcAddr>(untyped)
+    };
     let entry = unsafe { vulkanalia::Entry::new(loader) }
         .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
 
@@ -338,7 +376,11 @@ fn create_the_consumer_vulkan_instance()
 
     let instance = unsafe { entry.create_instance(&instance_info, None) }
         .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
-    Ok((entry, VulkanInstanceDestroyedUnlessKept(instance)))
+    Ok((
+        entry,
+        VulkanInstanceDestroyedUnlessKept(instance),
+        get_instance_proc_addr,
+    ))
 }
 
 /// Each physical device `instance` enumerates, in the loader's order, with
@@ -452,7 +494,7 @@ impl ConsumerVulkanDevice {
         vulkan_device_uuid_the_runtime_named: [u8; 16],
         queues: ConsumerVulkanDeviceQueues,
     ) -> Result<Self> {
-        let (entry, instance) = create_the_consumer_vulkan_instance()?;
+        let (entry, instance, get_instance_proc_addr) = create_the_consumer_vulkan_instance()?;
         let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
             physical_devices_the_loader_enumerates_on(&instance)?
                 .into_iter()
@@ -532,7 +574,8 @@ impl ConsumerVulkanDevice {
 
         #[cfg(target_os = "linux")]
         let video_codec_queue_family = match queues {
-            ConsumerVulkanDeviceQueues::ImportOnly => None,
+            ConsumerVulkanDeviceQueues::ImportOnly
+            | ConsumerVulkanDeviceQueues::ExternalRenderer => None,
             ConsumerVulkanDeviceQueues::ImportAndVideoCodec(direction) => {
                 let video_codec_queue_family_index = queue_families
                     .iter()
@@ -651,10 +694,23 @@ impl ConsumerVulkanDevice {
                 .video_maintenance1(true)
                 .build();
 
+        #[cfg(target_os = "linux")]
+        let enabled_physical_device_features = match queues {
+            ConsumerVulkanDeviceQueues::ExternalRenderer => {
+                physical_device_features_an_external_renderer_draws_with(&unsafe {
+                    instance.get_physical_device_features(physical_device)
+                })
+            }
+            _ => vk::PhysicalDeviceFeatures::default(),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let enabled_physical_device_features = vk::PhysicalDeviceFeatures::default();
+
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut device_create_info_builder = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
+            .enabled_features(&enabled_physical_device_features)
             .push_next(&mut sync2_features)
             .push_next(&mut timeline_features)
             .push_next(&mut dynamic_rendering_features)
@@ -720,7 +776,32 @@ impl ConsumerVulkanDevice {
             live_allocation_count: AtomicUsize::new(0),
             video_codec_queue,
             queue_mutex: Mutex::new(()),
+            get_instance_proc_addr,
+            enabled_physical_device_features,
         })
+    }
+
+    /// A consumer device an embedded renderer draws on: the import queue, with
+    /// the core features a vector renderer uses enabled wherever the device
+    /// on `vulkan_device_uuid_the_runtime_named` supports them.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn new_for_an_external_renderer_on_the_device_the_runtime_named(
+        vulkan_device_uuid_the_runtime_named: [u8; 16],
+    ) -> Result<Self> {
+        Self::new_with_queues_on_the_device_the_runtime_named(
+            vulkan_device_uuid_the_runtime_named,
+            ConsumerVulkanDeviceQueues::ExternalRenderer,
+        )
+    }
+
+    /// The loader's `vkGetInstanceProcAddr`, valid while this device lives.
+    pub(crate) fn get_instance_proc_addr(&self) -> vk::PFN_vkGetInstanceProcAddr {
+        self.get_instance_proc_addr
+    }
+
+    /// The `VkPhysicalDeviceFeatures` this device was created with.
+    pub(crate) fn enabled_physical_device_features(&self) -> &vk::PhysicalDeviceFeatures {
+        &self.enabled_physical_device_features
     }
 
     /// `VkPhysicalDeviceIDProperties::deviceUUID` for the selected
@@ -1718,7 +1799,7 @@ mod tests {
         match consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(d) => Some(Arc::new(d)),
             Err(e) => {
-                println!("Skipping test — ConsumerVulkanDevice unavailable: {e}");
+                tracing::warn!("skipping — ConsumerVulkanDevice unavailable: {e}");
                 None
             }
         }

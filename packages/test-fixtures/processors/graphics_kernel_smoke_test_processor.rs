@@ -14,22 +14,22 @@
 //!   1. `setup()` — nothing.
 //!   2. `start()` —
 //!      a. Construct a [`GraphicsKernelDescriptor`] for the embedded
-//!         vert+frag SPIR-V (centered triangle, push-constant
-//!         variant gate, single Rgba8Unorm color attachment) and
-//!         create the kernel via
-//!         `gpu_full_access().create_graphics_kernel(...)`.
+//!      vert+frag SPIR-V (centered triangle, push-constant
+//!      variant gate, single Rgba8Unorm color attachment) and
+//!      create the kernel via
+//!      `gpu_full_access().create_graphics_kernel(...)`.
 //!      b. Acquire a render-target `Texture` (Rgba8Unorm,
-//!         COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT) via
-//!         `gpu_limited_access().acquire_texture(...)`.
+//!      COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT) via
+//!      `gpu_limited_access().acquire_texture(...)`.
 //!      c. Stage push constants via
-//!         `kernel.set_push_constants_value(0, &variant)`.
+//!      `kernel.set_push_constants_value(0, &variant)`.
 //!      d. Drive `kernel.offscreen_render(...)` against the acquired
-//!         texture with a single CLEAR-load color target (including
-//!         the parallel-array color-target marshaling + the
-//!         `OffscreenDrawRepr` tagged-union encoding).
+//!      texture with a single CLEAR-load color target (including
+//!      the parallel-array color-target marshaling + the
+//!      `OffscreenDrawRepr` tagged-union encoding).
 //!      e. Write `OK` or `ERR:<message>` to the configured
-//!         `output_path` so the integration test can assert the
-//!         round-trip succeeded.
+//!      `output_path` so the integration test can assert the
+//!      round-trip succeeded.
 //!   3. `teardown()` — nothing; the kernel + texture drop naturally.
 //!
 //! What this locks: a regression that breaks any of

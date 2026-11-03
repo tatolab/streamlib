@@ -1,0 +1,32 @@
+[package]
+name = "tatolab-rive"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "A Rive animation as a stream source, as an extension wheel: rive-runtime draws each frame straight into the node's output texture, with no copy."
+repository = "https://github.com/tatolab/streamlib"
+license = "BUSL-1.1"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+# The module host table the frame thread acquires output textures, reads
+# `data` and publishes through, with no Python attached.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.2.0", features = ["pyo3"] }
+# The external-renderer device rive-runtime draws on, and the surface-share
+# checkout each output texture crosses to it by.
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.13" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.13" }
+rmp = "0.8.15"
+rmpv = "1.3.1"
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

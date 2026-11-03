@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-rive"
+version = "0.1.0"
+description = "A Rive animation as a stream source, as an extension wheel: rive-runtime draws each frame straight into the stream on the GPU, with no copy."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+# A minimum, never an exact pin, as a third party's package depends on it.
+dependencies = ["tatolab-stream>=0.68.7"]
+
+[project.entry-points."tatolab.nodes"]
+RiveSource = "tatolab.rive.rive_source:RiveSource"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.rive._native"
+features = ["pyo3/extension-module"]
+
+[tool.pyright]
+include = ["python", "streams"]
+extraPaths = ["python", "../tatolab-camera/python", "../tatolab-compositor/python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = "none"

@@ -16,13 +16,25 @@ use crate::core::context::{
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
-    DeviceStreamLivenessReport,
+    DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
+use crate::linux::thread_priority::{
+    apply_realtime_priority_to_thread_of_this_process, thread_of_this_process_is_realtime,
+};
 
 mod audio_shim {
     use std::ffi::{c_char, c_int, c_void};
+
+    /// Mirrors `struct StreamLibPipeWireRequestedAudioFormat`.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RequestedAudioFormat {
+        pub sample_rate: u32,
+        pub channels: u32,
+        pub sample_format: u32,
+    }
 
     /// Mirrors `struct StreamLibPipeWireNegotiatedAudioFormat`.
     #[repr(C)]
@@ -72,6 +84,7 @@ mod audio_shim {
             entry_points: *const *mut c_void,
             direction: c_int,
             device_id_or_null: *const c_char,
+            requested_format: *const RequestedAudioFormat,
             negotiated_format_out: *mut NegotiatedAudioFormat,
             failure_text: *mut c_char,
             failure_text_capacity: usize,
@@ -184,8 +197,11 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
-        let (opened, capture_stream_format) =
-            self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
+        let (opened, capture_stream_format) = self.open_audio_stream(
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            request,
+            RequestedAudioStreamFormat::default(),
+        )?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
         let capture_stream = PipeWireAudioCaptureStream {
@@ -211,8 +227,11 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioPlaybackStream>> {
-        let (opened, playback_stream_format) =
-            self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
+        let (opened, playback_stream_format) = self.open_audio_stream(
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            request,
+            request.requested_format,
+        )?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
         let playback_stream = PipeWireAudioPlaybackStream {
@@ -234,8 +253,9 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
 }
 
 impl PipeWireAudioDeviceBackend {
-    /// Open one stream in either direction and read back what PipeWire settled
-    /// on.
+    /// Open one stream in either direction toward `requested_format` and read
+    /// back what PipeWire settled on. A capture stream asks for nothing but the
+    /// scalar encoding, so it settles on the device's own rate and channels.
     ///
     /// One function for both because everything here is direction-blind: the
     /// device id is validated the same way, the shim is asked the same way, and
@@ -244,6 +264,7 @@ impl PipeWireAudioDeviceBackend {
         &self,
         direction: c_int,
         request: &AudioDeviceStreamRequest,
+        requested_format: RequestedAudioStreamFormat,
     ) -> Result<(OpenedPipeWireAudioStream, AudioStreamFormat)> {
         // The device paces this arm, so the request's deviceless pacing clock
         // is deliberately untouched: a graph whose audio is device-paced never
@@ -262,11 +283,20 @@ impl PipeWireAudioDeviceBackend {
             })
             .transpose()?;
 
+        let requested_format = audio_shim::RequestedAudioFormat {
+            sample_rate: requested_format.sample_rate.unwrap_or(0),
+            channels: requested_format.channels.unwrap_or(0),
+            sample_format: match requested_format.sample_format {
+                Some(AudioSampleFormat::I16) => audio_shim::SAMPLE_FORMAT_I16_LE,
+                Some(AudioSampleFormat::F32) | None => audio_shim::SAMPLE_FORMAT_F32_LE,
+            },
+        };
         let mut negotiated_format = audio_shim::NegotiatedAudioFormat::default();
         let mut failure_text = ShimFailureText::new();
         let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
         // SAFETY: the device id, if any, is a live `CString` for the length of
-        // this call; the format and failure out-parameters are owned locals.
+        // this call; the requested format and the format and failure
+        // out-parameters are owned locals.
         let opened = unsafe {
             audio_shim::streamlib_pipewire_audio_stream_open(
                 self.entry_points.as_ptr(),
@@ -274,6 +304,7 @@ impl PipeWireAudioDeviceBackend {
                 device_id
                     .as_ref()
                     .map_or(std::ptr::null(), |device_id| device_id.as_ptr()),
+                &requested_format,
                 &mut negotiated_format,
                 failure_text_ptr,
                 failure_text_capacity,
@@ -293,7 +324,55 @@ impl PipeWireAudioDeviceBackend {
             _entry_points: Arc::clone(&self.entry_points),
             audio_stream: opened,
         };
+        ask_for_realtime_on_every_pipewire_audio_thread_of_this_process();
         Ok((opened, stream_format_of(negotiated_format)?))
+    }
+}
+
+/// Kernel thread names (cut to 15 bytes) of the threads an audio stream's
+/// samples cross in this process: the shim's thread loop, which runs every
+/// `process` callback, and PipeWire's data loop, which feeds it.
+const PIPEWIRE_AUDIO_THREAD_NAMES: [&str; 2] = ["streamlib-audio", "pw-data-loop"];
+
+/// Ask for realtime scheduling on each PipeWire audio thread of this process
+/// that is not realtime yet.
+///
+/// PipeWire's default client config loads no realtime module, so a client's
+/// threads stay on `SCHED_OTHER` unless the client asks.
+fn ask_for_realtime_on_every_pipewire_audio_thread_of_this_process() {
+    let Ok(threads_of_this_process) = std::fs::read_dir("/proc/self/task") else {
+        return;
+    };
+    for thread_entry in threads_of_this_process.flatten() {
+        let Some(thread_id) = thread_entry
+            .file_name()
+            .to_str()
+            .and_then(|thread_id| thread_id.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Ok(thread_name) = std::fs::read_to_string(thread_entry.path().join("comm")) else {
+            continue;
+        };
+        let thread_name = thread_name.trim_end();
+        if !PIPEWIRE_AUDIO_THREAD_NAMES.contains(&thread_name)
+            || thread_of_this_process_is_realtime(thread_id)
+        {
+            continue;
+        }
+        match apply_realtime_priority_to_thread_of_this_process(thread_id) {
+            Ok(()) => tracing::info!(
+                thread_id,
+                thread_name,
+                "PipeWire audio thread scheduled realtime"
+            ),
+            Err(refusal) => tracing::debug!(
+                thread_id,
+                thread_name,
+                %refusal,
+                "PipeWire audio thread stays best-effort: realtime scheduling was refused"
+            ),
+        }
     }
 }
 
@@ -610,6 +689,28 @@ impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asking_for_realtime_on_a_pipewire_audio_thread_leaves_it_running_when_refused() {
+        let (asked_sender, asked_receiver) = std::sync::mpsc::channel::<()>();
+        let (thread_id_sender, thread_id_receiver) = std::sync::mpsc::channel::<u64>();
+        let audio_thread = std::thread::Builder::new()
+            .name("streamlib-audio".to_string())
+            .spawn(move || {
+                // SAFETY: `SYS_gettid` takes no arguments and cannot fail.
+                let thread_id = unsafe { libc::syscall(libc::SYS_gettid) } as u64;
+                thread_id_sender.send(thread_id).unwrap();
+                asked_receiver.recv().unwrap();
+            })
+            .unwrap();
+        thread_id_receiver.recv().unwrap();
+
+        ask_for_realtime_on_every_pipewire_audio_thread_of_this_process();
+
+        assert!(!audio_thread.is_finished());
+        asked_sender.send(()).unwrap();
+        audio_thread.join().unwrap();
+    }
 
     const RATE_48K_NUMERATOR: u32 = 1;
     const RATE_48K_DENOMINATOR: u32 = 48_000;

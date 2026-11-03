@@ -219,6 +219,18 @@ jobs:
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
+  build-tatolab-speaker-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-speaker
+      extension_distribution_name: tatolab-speaker
+      extension_import_package_name: tatolab.speaker
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution
     permissions:
@@ -280,6 +292,7 @@ jobs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
       - build-tatolab-microphone-distribution
+      - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball

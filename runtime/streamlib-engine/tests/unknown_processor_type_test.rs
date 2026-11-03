@@ -79,8 +79,7 @@ fn unknown_processor_type_leaves_failed_node_in_graph_with_error_state() {
     // traversal on miss) and this test fails — the graph stays empty.
     let _ = stream
         .add_processor(ProcessorSpec::new(ident.clone(), serde_json::json!({})))
-        .err()
-        .expect("registry miss should error");
+        .expect_err("registry miss should error");
 
     // Inspect the graph via the public `to_json` API — the failed node must
     // be visible with components.state == "Error".

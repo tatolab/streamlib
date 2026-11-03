@@ -102,12 +102,9 @@ pub fn send_message_with_fds(
 
         let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
         if cmsg_ptr.is_null() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "CMSG_FIRSTHDR returned null",
-            ));
+            return Err(std::io::Error::other("CMSG_FIRSTHDR returned null"));
         }
-        let fd_bytes = (fds.len() * std::mem::size_of::<RawFd>()) as libc::c_uint;
+        let fd_bytes = std::mem::size_of_val(fds) as libc::c_uint;
         unsafe {
             (*cmsg_ptr).cmsg_level = libc::SOL_SOCKET;
             (*cmsg_ptr).cmsg_type = libc::SCM_RIGHTS;
@@ -253,12 +250,8 @@ pub fn send_request_with_fds(
     fds: &[RawFd],
     max_response_fds: usize,
 ) -> std::io::Result<(serde_json::Value, Vec<RawFd>)> {
-    let request_bytes = serde_json::to_vec(request).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to serialize request: {}", e),
-        )
-    })?;
+    let request_bytes = serde_json::to_vec(request)
+        .map_err(|e| std::io::Error::other(format!("Failed to serialize request: {}", e)))?;
 
     send_message_with_fds(stream, &request_bytes, fds)?;
 

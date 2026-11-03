@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probe that reads the audio built-in's blocks from a processor interpreter.
+"""Probe that reads the microphone module's blocks from a processor interpreter.
 
 Reports what the `AudioBlock` cast saw for the first few blocks as one JSON
 marker line on `tatolabd`'s standard error — the boundary under test is native
-capture in `tatolabd` reaching a Python processor in its own interpreter, as
-numpy.
+capture in the microphone's helper process reaching a Python processor in its
+own interpreter, as numpy.
 """
 
 import json

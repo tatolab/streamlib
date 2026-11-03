@@ -63,7 +63,7 @@ use crate::core::context::{
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CaptureDeviceAccessPrompting, CapturedAudioBlockFromDevice,
     CapturedAudioBlockHandOff, DeviceBackendArmUnavailableReason, DeviceStreamFailureReason,
-    DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
+    DeviceStreamFailureRecorder, DeviceStreamLivenessReport, RequestedAudioStreamFormat,
 };
 use crate::core::logging::{
     ProjectLogRouteEntry, run_in_the_project_log_route_entry_when_there_is_one,
@@ -2661,11 +2661,40 @@ pub struct CoreAudioPlaybackStream {
     playback_control: Arc<Mutex<CoreAudioPlaybackControl>>,
 }
 
+/// The format a playback stream carries: the request's rate and channel count
+/// wherever it names them, which AUHAL's output side converts to the device's,
+/// else the device's own. The unit's client side is always float.
+fn playback_stream_format_for(
+    requested_format: RequestedAudioStreamFormat,
+    device_own_format: AudioStreamFormat,
+) -> Result<AudioStreamFormat> {
+    if let Some(sample_format) = requested_format.sample_format
+        && sample_format != AudioSampleFormat::F32
+    {
+        return Err(Error::Configuration(format!(
+            "the CoreAudio playback stream carries F32 samples, and {sample_format:?} samples \
+             were requested. Request F32, or omit the sample format."
+        )));
+    }
+    Ok(AudioStreamFormat {
+        sample_rate: requested_format
+            .sample_rate
+            .unwrap_or(device_own_format.sample_rate),
+        channels: requested_format
+            .channels
+            .unwrap_or(device_own_format.channels),
+        sample_format: AudioSampleFormat::F32,
+    })
+}
+
 impl CoreAudioPlaybackStream {
     fn open(request: &AudioDeviceStreamRequest) -> Result<Self> {
         let direction = CoreAudioStreamDirection::Playback;
         let device = resolve_requested_device(request, direction)?;
-        let stream_format = stream_format_of(&device, direction)?;
+        let stream_format = playback_stream_format_for(
+            request.requested_format,
+            stream_format_of(&device, direction)?,
+        )?;
         Self::open_on(
             device,
             stream_format,
@@ -2790,6 +2819,58 @@ impl Drop for CoreAudioPlaybackStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const A_DEVICE_AT_44_1_KHZ_IN_SIX_CHANNELS: AudioStreamFormat = AudioStreamFormat {
+        sample_rate: 44_100,
+        channels: 6,
+        sample_format: AudioSampleFormat::F32,
+    };
+
+    #[test]
+    fn a_playback_stream_carries_the_requested_rate_and_channels_for_auhal_to_convert() {
+        assert_eq!(
+            playback_stream_format_for(
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(48_000),
+                    channels: Some(2),
+                    sample_format: Some(AudioSampleFormat::F32),
+                },
+                A_DEVICE_AT_44_1_KHZ_IN_SIX_CHANNELS,
+            )
+            .expect("a float request is carried"),
+            AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+                sample_format: AudioSampleFormat::F32,
+            }
+        );
+    }
+
+    #[test]
+    fn a_playback_stream_asked_for_nothing_carries_the_devices_own_format() {
+        assert_eq!(
+            playback_stream_format_for(
+                RequestedAudioStreamFormat::default(),
+                A_DEVICE_AT_44_1_KHZ_IN_SIX_CHANNELS
+            )
+            .expect("an empty request is carried"),
+            A_DEVICE_AT_44_1_KHZ_IN_SIX_CHANNELS
+        );
+    }
+
+    #[test]
+    fn a_playback_stream_asked_for_i16_samples_is_refused_by_name() {
+        let refusal = playback_stream_format_for(
+            RequestedAudioStreamFormat {
+                sample_format: Some(AudioSampleFormat::I16),
+                ..RequestedAudioStreamFormat::default()
+            },
+            A_DEVICE_AT_44_1_KHZ_IN_SIX_CHANNELS,
+        )
+        .expect_err("the unit's client side is float")
+        .to_string();
+        assert!(refusal.contains("I16"), "{refusal}");
+    }
 
     #[test]
     fn a_device_with_no_latency_stamps_its_first_sample_at_the_cycles_host_time() {
@@ -3603,6 +3684,7 @@ mod microphone_permission_flow_against_the_default_input {
                 48_000, 512,
             ))),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat::default(),
         })
     }
 
@@ -3790,6 +3872,7 @@ mod following_the_device_against_the_default_devices {
                 48_000, 512,
             ))),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat::default(),
         }
     }
 

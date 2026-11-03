@@ -24,12 +24,8 @@ __all__ = [
     "H265DecoderConfig",
     "H265Encoder",
     "H265EncoderConfig",
-    "MicrophoneSource",
-    "MicrophoneSourceConfig",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
-    "SpeakerSink",
-    "SpeakerSinkConfig",
     "TestPatternSource",
     "TestPatternSourceConfig",
     "VirtualCameraSink",
@@ -311,48 +307,6 @@ class H265Encoder(BuiltInNode[H265EncoderConfig]):
     type: ClassVar[str] = "tatolab.stream:H265Encoder"
 
 
-class MicrophoneSourceConfig(TypedDict, total=False):
-    """`MicrophoneSource`'s config: the keys `stream_builder.add` takes."""
-
-    device_id: str | None
-    """Backend-named capture device. Absent: the backend's default device. A name the
-    backend cannot open raises rather than landing on a different device — a wrong
-    device id is a wiring error.
-
-    On the PipeWire backend, `<sink>.monitor` captures what that sink is playing — how a
-    graph records its own output, or a test closes a loop against a known signal.
-    """
-
-
-class MicrophoneSource(BuiltInNode[MicrophoneSourceConfig]):
-    """Captures audio from the machine's audio backend as timestamped sample blocks
-    (silence where no backend exists).
-
-    The backend chain is probed once per process with no configuration dial; where no
-    audio backend exists at all the blocks are silence, so a pipeline authored on a
-    workstation runs unchanged in a headless container. Blocks arrive on `audio` as bags
-    `AudioBlock` casts.
-
-    On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID; naming
-    one that is not attached is refused with the UIDs that are. Without a `device_id`
-    the stream follows the system default input as it changes, keeping the format it
-    opened with. A stream someone loads or starts asks for microphone access without
-    waiting: the graph starts, and blocks begin once the user allows it. A stream the
-    runtime re-loads on its own as it starts never asks, and is refused at `setup()`
-    until microphone access has been answered. macOS asks on behalf of the application
-    that launched the process — the terminal, not Python — so a refusal, or a prompt
-    left unanswered, names that application and the setting to change.
-
-    Outputs:
-        `audio`: Timestamped blocks of interleaved capture samples.
-            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-
-    Config: `MicrophoneSourceConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:MicrophoneSource"
-
-
 class _RelayTrackSourceConfigRequiredKeys(TypedDict):
     """The keys `RelayTrackSource`'s config cannot leave out."""
 
@@ -426,47 +380,6 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RelayTrackSource"
-
-
-class SpeakerSinkConfig(TypedDict, total=False):
-    """`SpeakerSink`'s config: the keys `stream_builder.add` takes."""
-
-    device_id: str | None
-    """Backend-named playback device. Absent: the backend's default device. A name the
-    backend cannot open raises rather than landing on a different device — a wrong
-    device id is a wiring error.
-    """
-
-
-class SpeakerSink(BuiltInNode[SpeakerSinkConfig]):
-    """Plays timestamped blocks of interleaved samples on the machine's audio backend
-    (discarding where no backend exists).
-
-    The backend chain is probed once per process with no configuration dial; where no
-    audio backend exists at all the samples are discarded, so a pipeline authored on a
-    workstation runs unchanged in a headless container.
-
-    `audio` takes bags in the `AudioBlock` shape and declares `audio_window =
-    match_device`, so the engine resamples every block to the device's rate and
-    re-frames it into device-period windows — `graph` renders the resolved values on the
-    port. Conversion is not unconditional: `dtype` must be `f32` or `i16`, and channels
-    convert N to 1 by averaging and 1 to N by duplicating, so a pair with neither side
-    mono (stereo into a five-channel device, say) is refused by name rather than mixed.
-    The device is never left waiting on the graph — a period the graph had no samples
-    for is silence, and the count of it is reported.
-
-    On macOS the backend is CoreAudio, `device_id` is a CoreAudio device UID, and the
-    device period is the device's own buffer size. Without a `device_id` playback
-    follows the system default output as it changes — plugging in headphones moves it
-    there.
-
-    Inputs:
-        `audio` (ordered): Timestamped blocks of interleaved samples to play.
-
-    Config: `SpeakerSinkConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:SpeakerSink"
 
 
 class TestPatternSourceConfig(TypedDict, total=False):

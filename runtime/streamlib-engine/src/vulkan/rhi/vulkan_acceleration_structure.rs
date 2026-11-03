@@ -198,13 +198,13 @@ impl VulkanAccelerationStructureInner {
                 indices.len()
             )));
         }
-        if vertices.len() % 3 != 0 {
+        if !vertices.len().is_multiple_of(3) {
             return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': vertex slice length {} is not a multiple of 3 (must be flat [x,y,z,...] layout)",
                 vertices.len()
             )));
         }
-        if indices.len() % 3 != 0 {
+        if !indices.len().is_multiple_of(3) {
             return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': index slice length {} is not a multiple of 3 (must be three indices per triangle)",
                 indices.len()

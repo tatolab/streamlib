@@ -49,7 +49,7 @@ fn register_one(
 ) -> Result<StreamlibSurface, String> {
     let host_device = Arc::clone(adapter.device());
     let pixel_buffer =
-        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * 4_u64)
             .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
     let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
         .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?;
@@ -141,7 +141,7 @@ fn duplicate_registration_returns_surface_already_registered() {
     // AdapterError variant survives back to this test (the local
     // `register_one` helper wraps errors in `String` for ergonomics).
     let pixel_buffer =
-        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * 4_u64)
             .expect("second pixel buffer");
     let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
         .expect("second produce_done");
