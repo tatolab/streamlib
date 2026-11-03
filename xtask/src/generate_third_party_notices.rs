@@ -47,6 +47,7 @@
 //! refuses it is `cargo deny check licenses`, which reads the same crate as
 //! `unlicensed`.
 
+use crate::extension_build_script_fetched_notices::render_the_appendix_of_sources_the_build_script_fetches;
 use crate::stage_local_relay::{
     LOCAL_RELAY_CRATE_FEATURES, LOCAL_RELAY_CRATE_NAME, LOCAL_RELAY_EXECUTABLE_FILE_NAME,
     PINNED_LOCAL_RELAY_CRATE_VERSION, stage_the_local_relay,
@@ -641,7 +642,17 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
                     &projects_compiled_in,
                 )?);
             }
-            projects_compiled_in.len()
+            let fetched_appendix =
+                render_the_appendix_of_sources_the_build_script_fetches(&project_root)?;
+            let projects_fetched = match fetched_appendix {
+                Some((appendix, project_count)) => {
+                    notices.push('\n');
+                    notices.push_str(&appendix);
+                    project_count
+                }
+                None => 0,
+            };
+            projects_compiled_in.len() + projects_fetched
         }
     };
 

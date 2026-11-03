@@ -235,6 +235,10 @@ pub struct CheckedOutTexture {
     pub current_image_layout: i32,
     pub vk_image_usage_flags: u32,
     pub memory: CheckedOutTextureMemory,
+    /// The producer's produce-done timeline, when the registration carries one.
+    pub produce_done_timeline_fd: Option<OwnedFd>,
+    /// The consumers' consume-done timeline, when the registration carries one.
+    pub consume_done_timeline_fd: Option<OwnedFd>,
 }
 
 impl CheckedOutTexture {
@@ -345,6 +349,8 @@ impl CheckedOutTexture {
             current_image_layout,
             vk_image_usage_flags,
             memory,
+            produce_done_timeline_fd: None,
+            consume_done_timeline_fd: None,
         })
     }
 }
@@ -388,8 +394,11 @@ pub fn check_out_surface_on_surface_share(
                 .map(CheckedOutSurface::PixelBuffer)
         }
         "texture" => {
-            CheckedOutTexture::from_check_out(surface_id, &response, check_out_fds.plane_fds)
-                .map(CheckedOutSurface::Texture)
+            let mut texture =
+                CheckedOutTexture::from_check_out(surface_id, &response, check_out_fds.plane_fds)?;
+            texture.produce_done_timeline_fd = check_out_fds.produce_done_fd;
+            texture.consume_done_timeline_fd = check_out_fds.consume_done_fd;
+            Ok(CheckedOutSurface::Texture(texture))
         }
         other => Err(format!(
             "surface {surface_id:?} is registered as resource type {other:?}; a pixel buffer or \

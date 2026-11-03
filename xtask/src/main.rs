@@ -23,6 +23,7 @@ pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
+pub mod extension_build_script_fetched_notices;
 pub mod generate_built_in_node_classes;
 pub mod generate_module_host_table_c_header;
 pub mod generate_third_party_notices;

@@ -42,6 +42,10 @@
 //!   Frames still cross by import; the codec's own sessions, reference
 //!   pictures and bitstream buffers are allocated on it by
 //!   `streamlib-vulkan-video`.
+//! - [`ConsumerVulkanDeviceForExternalRenderer`] — the owned-device tier
+//!   for an embedded renderer: the one place raw Vulkan handles leave the
+//!   RHI, for a third-party renderer's own code to draw into node output
+//!   textures imported as render targets.
 //!
 //! What does NOT live here: anything that calls `vkAllocateMemory`
 //! without an `VkImportMemoryFdInfoKHR` outside the owned-device tier,
@@ -66,6 +70,8 @@ mod runtime_vulkan_device_named_at_spawn;
 mod consumer_vulkan_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_device;
+#[cfg(target_os = "linux")]
+mod consumer_vulkan_device_for_external_renderer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_sync;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -110,6 +116,12 @@ pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 pub use consumer_vulkan_device::{
     ConsumerVulkanDevice, ConsumerVulkanVideoCodecQueue, VulkanVideoCodecDirection,
     vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
+};
+#[cfg(target_os = "linux")]
+pub use consumer_vulkan_device_for_external_renderer::{
+    ConsumerVulkanDeviceForExternalRenderer, ExternalRendererEnabledVulkanFeatures,
+    ExternalRendererFrame, ExternalRendererFrameRawVulkanHandles, ExternalRendererRawVulkanHandles,
+    ExternalRendererRenderTarget,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
