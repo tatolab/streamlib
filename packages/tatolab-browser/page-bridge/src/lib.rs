@@ -71,15 +71,107 @@ fn javascript_string_literal(text: &str) -> String {
     literal
 }
 
-/// Ends this process when the process that launched it dies, so a helper
-/// killed outright takes its CEF children with it.
-pub fn die_with_the_launching_process() {
+/// The switch the browser process appends to every child's command line,
+/// naming the helper whose life each child is bound to.
+pub const BROWSER_HELPER_PID_SWITCH_NAME: &str = "tatolab-browser-helper-pid";
+
+/// Ends this process when the browser helper that launched it dies, so a
+/// helper killed outright takes its CEF children with it.
+///
+/// The watch is armed before the parent check, so a helper that died before
+/// this process ran is caught by the check and one that dies after by the
+/// watch.
+pub fn die_with_the_browser_helper() {
+    let Some(browser_helper_pid) = browser_helper_pid_named_in(std::env::args()) else {
+        return;
+    };
+    arm_the_browser_helper_exit_watch(browser_helper_pid);
+    // SAFETY: getppid takes nothing and cannot fail.
+    if unsafe { libc::getppid() } != browser_helper_pid {
+        end_this_process_with_its_browser_helper();
+    }
+}
+
+fn browser_helper_pid_named_in(
+    command_line_arguments: impl IntoIterator<Item = String>,
+) -> Option<libc::pid_t> {
+    let switch_prefix = format!("--{BROWSER_HELPER_PID_SWITCH_NAME}=");
+    command_line_arguments.into_iter().find_map(|argument| {
+        argument
+            .strip_prefix(&switch_prefix)
+            .and_then(|pid_text| pid_text.parse().ok())
+    })
+}
+
+/// Exits at once, running no exit handlers, since CEF's threads may be live.
+fn end_this_process_with_its_browser_helper() -> ! {
+    // SAFETY: _exit ends the process and touches nothing else.
+    unsafe { libc::_exit(0) }
+}
+
+#[cfg(target_os = "linux")]
+fn arm_the_browser_helper_exit_watch(_browser_helper_pid: libc::pid_t) {
     // SAFETY: prctl with PR_SET_PDEATHSIG takes a signal number and touches
     // nothing else.
-    #[cfg(target_os = "linux")]
     unsafe {
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn arm_the_browser_helper_exit_watch(browser_helper_pid: libc::pid_t) {
+    // SAFETY: kqueue takes nothing and returns a descriptor or -1.
+    let exit_queue = unsafe { libc::kqueue() };
+    if exit_queue < 0 {
+        end_this_process_with_its_browser_helper();
+    }
+    let browser_helper_exit = libc::kevent {
+        ident: browser_helper_pid as libc::uintptr_t,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    // SAFETY: one change is registered from a live kevent and none is read.
+    let registered = unsafe {
+        libc::kevent(
+            exit_queue,
+            &browser_helper_exit,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if registered < 0 {
+        end_this_process_with_its_browser_helper();
+    }
+    std::thread::Builder::new()
+        .name("tatolab-browser-helper-exit-watch".to_string())
+        .spawn(move || {
+            let mut fired = std::mem::MaybeUninit::<libc::kevent>::zeroed();
+            loop {
+                // SAFETY: waits for one event into storage it owns, with no
+                // timeout.
+                let received = unsafe {
+                    libc::kevent(
+                        exit_queue,
+                        std::ptr::null(),
+                        0,
+                        fired.as_mut_ptr(),
+                        1,
+                        std::ptr::null(),
+                    )
+                };
+                if received > 0
+                    || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
+                {
+                    end_this_process_with_its_browser_helper();
+                }
+            }
+        })
+        .unwrap_or_else(|_| end_this_process_with_its_browser_helper());
 }
 
 wrap_v8_handler! {
@@ -181,6 +273,35 @@ wrap_app! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_browser_helper_pid_is_read_from_its_switch_and_nothing_else() {
+        let arguments = |listed: &[&str]| {
+            listed
+                .iter()
+                .map(|argument| argument.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            browser_helper_pid_named_in(arguments(&[
+                "tatolab-browser-subprocess",
+                "--type=renderer",
+                "--tatolab-browser-helper-pid=4242",
+            ])),
+            Some(4242)
+        );
+        assert_eq!(
+            browser_helper_pid_named_in(arguments(&[
+                "tatolab-browser-subprocess",
+                "--type=gpu-process"
+            ])),
+            None
+        );
+        assert_eq!(
+            browser_helper_pid_named_in(arguments(&["--tatolab-browser-helper-pid=not-a-pid"])),
+            None
+        );
+    }
 
     #[test]
     fn a_data_dispatch_names_the_dom_event_and_carries_the_detail_verbatim() {

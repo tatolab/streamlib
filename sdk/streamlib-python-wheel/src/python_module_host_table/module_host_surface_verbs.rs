@@ -48,8 +48,8 @@ struct SurfaceLentToNativeCode {
 /// and the channels their verbs ride.
 pub(super) struct SurfacesLentToNativeCode {
     surfaces_by_handle_value: Mutex<HashMap<u64, SurfaceLentToNativeCode>>,
-    /// Held across one host-memory write, so two never fill a staging mapping at once.
-    #[cfg(target_os = "linux")]
+    /// Held across one host-memory write, so two never fill the same rows at once.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     host_memory_write_in_progress: Mutex<()>,
     next_handle_value: AtomicU64,
     native_escalate_channel: Option<Arc<HelperProcessNativeEscalateChannel>>,
@@ -63,7 +63,7 @@ impl SurfacesLentToNativeCode {
     ) -> Self {
         Self {
             surfaces_by_handle_value: Mutex::new(HashMap::new()),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             host_memory_write_in_progress: Mutex::new(()),
             next_handle_value: AtomicU64::new(1),
             native_escalate_channel,
@@ -98,7 +98,7 @@ impl SurfacesLentToNativeCode {
 
     /// The surface id an output-pool texture's handle names; an imported
     /// foreign surface's handle is refused, because its pixels are its producer's.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn output_pool_texture_id_of_a_handle(
         &self,
         surface: ModuleHostTableSurfaceHandle,
@@ -357,23 +357,11 @@ impl SurfacesLentToNativeCode {
         destination: ModuleHostTableSurfaceHandle,
         pixels: &ModuleHostTableHostMemoryPixels,
     ) -> Result<(), String> {
-        use super::host_memory_pixel_rows::{FourBytePixelRows, copy_four_byte_pixel_rows};
+        use super::host_memory_pixel_rows::copy_four_byte_pixel_rows;
         use crate::python_helper_process_pixel_exchange::CpuReadbackCopyDirection;
-        use streamlib::sdk::rhi::PixelFormat;
 
         let destination_surface_id = self.output_pool_texture_id_of_a_handle(destination)?;
-        // SAFETY: the SDK hands views live for the call.
-        let (pixel_format_name, pixel_bytes) =
-            unsafe { (pixels.pixel_format.as_str(), pixels.pixels.as_slice()) };
-        let pixel_format_name = pixel_format_name
-            .map_err(|not_utf8| format!("a pixel format name is UTF-8: {not_utf8}"))?;
-        let source = FourBytePixelRows {
-            bytes: pixel_bytes,
-            format: PixelFormat::parse_wire_name(pixel_format_name)?,
-            width: pixels.width,
-            height: pixels.height,
-            row_stride_bytes: pixels.row_stride_bytes,
-        };
+        let source = four_byte_pixel_rows_handed_by_the_module(pixels)?;
         let native_escalate_channel = self.native_escalate_channel()?;
         let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
             "this helper was started without its surface-share socket, so it reaches no \
@@ -415,15 +403,85 @@ impl SurfacesLentToNativeCode {
         )
     }
 
-    /// Refuses by name: the host-visible staging this writes through is
-    /// Linux's.
-    #[cfg(not(target_os = "linux"))]
+    /// Write `pixels` over every pixel of `destination`: the rows straight into
+    /// the texture's IOSurface under its read-write lock, which its next reader
+    /// sees once the check-out is released.
+    #[cfg(target_os = "macos")]
+    pub(super) fn write_from_host_memory(
+        &self,
+        destination: ModuleHostTableSurfaceHandle,
+        pixels: &ModuleHostTableHostMemoryPixels,
+    ) -> Result<(), String> {
+        use super::host_memory_pixel_rows::copy_four_byte_pixel_rows;
+        use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+
+        let destination_surface_id = self.output_pool_texture_id_of_a_handle(destination)?;
+        let source = four_byte_pixel_rows_handed_by_the_module(pixels)?;
+        let surface_share_client = self.surface_share_client.as_ref().ok_or_else(|| {
+            "this helper was started without its surface-share connection, so it reaches no \
+             IOSurface to write host memory into"
+                .to_string()
+        })?;
+        let _only_write_through_this_nodes_surfaces = self.host_memory_write_in_progress.lock();
+        let checked_out = surface_share_client
+            .check_out_and_import(&destination_surface_id)
+            .map_err(|check_out_failure| check_out_failure.to_string())?;
+        let destination_view = match &checked_out {
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface
+                    .lock_the_iosurface_for_cpu_access_once(false)
+                    .map_err(|lock_failure| lock_failure.to_string())?;
+                texture_surface
+                    .host_visible_pixel_plane_view()
+                    .map_err(|view_failure| view_failure.to_string())?
+            }
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface
+                    .lock_the_iosurface_for_cpu_access_once(false)
+                    .map_err(|lock_failure| lock_failure.to_string())?;
+                pixel_surface.host_visible_pixel_plane_view()
+            }
+            HelperCheckedOutSurface::StorageBuffer(_) => {
+                return Err(format!(
+                    "surface {destination_surface_id} is a tensor, which takes no pixel rows"
+                ));
+            }
+        };
+        if destination_view.base_address.is_null() {
+            return Err(format!(
+                "surface {destination_surface_id}'s IOSurface has no host mapping to write into"
+            ));
+        }
+        let destination_byte_size =
+            destination_view.bytes_per_row as usize * destination_view.height as usize;
+        // SAFETY: the IOSurface holds `height` rows of `bytes_per_row` bytes at
+        // its base address, mapped for as long as the check-out lives; the
+        // read-write lock taken above and this node's write lock keep every
+        // other writer out until the check-out drops below.
+        let destination_bytes = unsafe {
+            std::slice::from_raw_parts_mut(destination_view.base_address, destination_byte_size)
+        };
+        copy_four_byte_pixel_rows(
+            &source,
+            destination_view.format,
+            destination_view.bytes_per_row,
+            destination_view.width,
+            destination_view.height,
+            destination_bytes,
+        )?;
+        drop(checked_out);
+        Ok(())
+    }
+
+    /// Refuses by name: a host-memory write reaches a texture through Linux's
+    /// staging or macOS's IOSurface.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(super) fn write_from_host_memory(
         &self,
         _destination: ModuleHostTableSurfaceHandle,
         _pixels: &ModuleHostTableHostMemoryPixels,
     ) -> Result<(), String> {
-        Err("surface_write_from_host_memory is served on Linux only".to_string())
+        Err("surface_write_from_host_memory is served on Linux and macOS".to_string())
     }
 
     /// The surface id a handle names, as a view the map keeps alive until the
@@ -502,6 +560,25 @@ impl Drop for SurfacesLentToNativeCode {
             self.pay_what_a_released_surface_owes(lent);
         }
     }
+}
+
+/// The pixel rows a module handed, read from its description.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn four_byte_pixel_rows_handed_by_the_module(
+    pixels: &ModuleHostTableHostMemoryPixels,
+) -> Result<super::host_memory_pixel_rows::FourBytePixelRows<'_>, String> {
+    // SAFETY: the SDK hands views live for the call.
+    let (pixel_format_name, pixel_bytes) =
+        unsafe { (pixels.pixel_format.as_str(), pixels.pixels.as_slice()) };
+    let pixel_format_name = pixel_format_name
+        .map_err(|not_utf8| format!("a pixel format name is UTF-8: {not_utf8}"))?;
+    Ok(super::host_memory_pixel_rows::FourBytePixelRows {
+        bytes: pixel_bytes,
+        format: streamlib::sdk::rhi::PixelFormat::parse_wire_name(pixel_format_name)?,
+        width: pixels.width,
+        height: pixels.height,
+        row_stride_bytes: pixels.row_stride_bytes,
+    })
 }
 
 fn color_axis_name(axis: &str, name: ModuleHostTableUtf8) -> Result<&str, String> {

@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 use cef::rc::Rc as _;
 use cef::*;
-use tatolab_browser_page_bridge::{PAGE_PUBLISH_PROCESS_MESSAGE_NAME, page_data_dispatch_script};
+use tatolab_browser_page_bridge::{
+    BROWSER_HELPER_PID_SWITCH_NAME, PAGE_PUBLISH_PROCESS_MESSAGE_NAME, page_data_dispatch_script,
+};
 use tatolab_module_sdk::{
     ModuleHost, ModuleHostHostMemoryPixels, ModuleHostInputPort, ModuleHostLogLevel,
     ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort,
@@ -369,6 +371,7 @@ fn initialize_cef(
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     remove_cef_cache_directories_whose_helper_has_exited(&std::env::temp_dir());
     let root_cache_directory = create_an_owner_only_cef_cache_directory()?;
+    remove_this_helpers_cef_cache_directory_when_it_exits(&root_cache_directory);
     let path_text = |path: &Path| CefString::from(path.to_string_lossy().as_ref());
     let settings = Settings {
         no_sandbox: 1,
@@ -444,6 +447,30 @@ fn process_is_alive(pid: libc::pid_t) -> bool {
     // SAFETY: signal 0 sends nothing; it only asks whether `pid` exists.
     let answer = unsafe { libc::kill(pid, 0) };
     answer == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// The CEF cache directory this helper holds, removed when it exits.
+static THIS_HELPERS_CEF_CACHE_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// Removes this helper's own CEF cache when its process exits normally, so the
+/// last helper to run leaves none behind; a helper killed outright leaves it to
+/// the next one to start.
+fn remove_this_helpers_cef_cache_directory_when_it_exits(cache_directory: &Path) {
+    extern "C" fn remove_this_helpers_cef_cache_directory() {
+        if let Some(cache_directory) = THIS_HELPERS_CEF_CACHE_DIRECTORY.get() {
+            let _ = std::fs::remove_dir_all(cache_directory);
+        }
+    }
+    if THIS_HELPERS_CEF_CACHE_DIRECTORY
+        .set(cache_directory.to_path_buf())
+        .is_ok()
+    {
+        // SAFETY: registers a handler that reads a set-once static and touches
+        // the filesystem only.
+        unsafe {
+            libc::atexit(remove_this_helpers_cef_cache_directory);
+        }
+    }
 }
 
 /// A fresh directory only this user can open, named unpredictably, under the
@@ -644,6 +671,15 @@ wrap_browser_process_handler! {
                 .send(CefThreadRequest::PumpWithin {
                     delay: Duration::from_millis(delay_ms.max(0) as u64),
                 });
+        }
+
+        fn on_before_child_process_launch(&self, command_line: Option<&mut CommandLine>) {
+            if let Some(command_line) = command_line {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from(BROWSER_HELPER_PID_SWITCH_NAME)),
+                    Some(&CefString::from(std::process::id().to_string().as_str())),
+                );
+            }
         }
     }
 }
