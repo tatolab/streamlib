@@ -6,10 +6,10 @@
 //! of the helper's own Python interpreter.
 
 use cef::args::Args;
-use tatolab_browser_page_bridge::{BrowserChildProcessApp, die_with_the_launching_process};
+use tatolab_browser_page_bridge::{BrowserChildProcessApp, die_with_the_browser_helper};
 
 fn main() {
-    die_with_the_launching_process();
+    die_with_the_browser_helper();
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
     let mut app = BrowserChildProcessApp::new();

@@ -799,7 +799,7 @@ impl HelperProcessGpuExchangeClient {
     /// `check_out` over the surface-share socket, then the import of
     /// whichever backing the registration names.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn check_out_and_import(
+    pub(crate) fn check_out_and_import(
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperCheckedOutSurface> {
