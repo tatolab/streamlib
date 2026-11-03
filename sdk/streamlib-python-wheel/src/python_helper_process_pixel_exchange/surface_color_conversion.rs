@@ -39,7 +39,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("op", "convert_surface_into")?;
         op.set_item("source_surface_id", source_surface_id)?;
         op.set_item("destination_surface_id", destination_surface_id)?;
-        op.set_item("source_color", source_color)?;
+        op.set_item("ycbcr_side_color", source_color)?;
         if let Some(named_by_a_conversion) = self
             .foreign_adoptions_and_whether_a_conversion_named_them
             .lock()

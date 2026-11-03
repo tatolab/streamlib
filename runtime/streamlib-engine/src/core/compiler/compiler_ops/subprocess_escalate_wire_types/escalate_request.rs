@@ -92,25 +92,27 @@ pub(crate) enum EscalateRequest {
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
 }
 
-/// Convert a YCbCr pixel buffer into an RGBA texture through the engine's
-/// colour converter, matrix and range only, keeping the source's transfer
-/// curve. The host records, submits and waits before it answers.
+/// Convert between a YCbCr surface and an RGBA texture through the engine's
+/// colour converter, matrix and range only, keeping the transfer curve: a
+/// YCbCr pixel buffer into an RGBA texture, or on macOS an RGBA texture into
+/// an NV12 IOSurface. The host records, submits and waits before it answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestConvertSurfaceInto {
-    /// An `rgba8_unorm` texture allocated with `storage_binding` usage, of
-    /// the source's extent.
+    /// An `rgba8_unorm` texture allocated with `storage_binding` usage, or on
+    /// macOS an adopted NV12 IOSurface, of the source's extent.
     pub(crate) destination_surface_id: String,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// The source's colour, as `ColorInfo` axis names; an absent axis is
-    /// unspecified and takes the engine's default for a YCbCr source.
-    pub(crate) source_color: EscalateRequestColorInfoAxisNames,
+    /// The YCbCr side's colour, as `ColorInfo` axis names; an absent axis is
+    /// unspecified and takes the engine's YCbCr default.
+    pub(crate) ycbcr_side_color: EscalateRequestColorInfoAxisNames,
 
     /// A pixel buffer in `nv12_video_range`, `nv12_full_range` or `yuyv422`,
-    /// laid out as its registration states.
+    /// laid out as its registration states, or on macOS an `rgba8_unorm`
+    /// texture.
     pub(crate) source_surface_id: String,
 }
 

@@ -14,8 +14,8 @@
 //! Python's GIL, except [`ModuleHostTable::output_port_set_catalog_entry`],
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
-//! channel, with no interpreter on either end, as does the IOSurface import
-//! minor 4 adds.
+//! channel, with no interpreter on either end, as do the IOSurface import
+//! minor 4 adds and the lend by surface id minor 5 adds.
 
 use std::ffi::{CStr, c_void};
 
@@ -24,7 +24,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 4;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 5;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -441,14 +441,17 @@ pub struct ModuleHostTable {
         error_message: *mut ModuleHostTableErrorMessage,
     )
         -> ModuleHostTableStatus,
-    /// Minor 2: convert a YCbCr pixel buffer into an RGBA texture of the same
-    /// extent with the engine's colour converter, returning once the
-    /// destination's next reader sees the result.
+    /// Minor 2: convert between a YCbCr surface and an RGBA texture of the
+    /// same extent with the engine's colour converter, returning once the
+    /// destination's next reader sees the result. `ycbcr_side_color`
+    /// describes whichever side is YCbCr. Minor 2 converts a YCbCr pixel
+    /// buffer into an RGBA texture; from minor 5 a macOS host also converts
+    /// an RGBA texture into an adopted NV12 IOSurface.
     pub surface_convert_into: unsafe extern "C" fn(
         node_host: *mut c_void,
         source: ModuleHostTableSurfaceHandle,
         destination: ModuleHostTableSurfaceHandle,
-        source_color: *const ModuleHostTableColorInfo,
+        ycbcr_side_color: *const ModuleHostTableColorInfo,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
     /// Minor 2: the surface id a message names `surface` by; valid until the
@@ -507,6 +510,16 @@ pub struct ModuleHostTable {
         node_host: *mut c_void,
         iosurface_import: *const ModuleHostTableIOSurfaceImport,
         imported_surface: *mut ModuleHostTableSurfaceHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 5: lend native code the surface a message names by
+    /// `surface_id`, such as an upstream node's frame, to convert from.
+    /// Releasing it gives back only the lend; the surface stays its
+    /// publisher's.
+    pub surface_lend_by_surface_id: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        surface_id: ModuleHostTableUtf8,
+        lent_surface: *mut ModuleHostTableSurfaceHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
 }
@@ -865,7 +878,16 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, surface_import_iosurface),
             16 + 29 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 30 * POINTER);
+    }
+
+    /// Minor 5 appends its lend by surface id after the minor 4 IOSurface import.
+    #[test]
+    fn the_v1_5_table_appends_its_lend_by_surface_id_after_every_v1_4_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, surface_lend_by_surface_id),
+            16 + 30 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 31 * POINTER);
     }
 
     #[test]

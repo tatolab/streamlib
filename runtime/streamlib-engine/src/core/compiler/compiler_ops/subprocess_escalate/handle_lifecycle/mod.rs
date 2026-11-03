@@ -287,12 +287,12 @@ pub(super) fn handle_release_handle(
     } = request;
     let removed_handle = registry.remove_handle(&handle_id);
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let forgot_a_color_conversion_source = registry
+    let forgot_a_color_conversion_surface = registry
         .surface_color_conversion_session()
-        .forget_source(&handle_id);
+        .forget_resolved_surface(&handle_id);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let forgot_a_color_conversion_source = false;
-    let removed = removed_handle.is_some() || forgot_a_color_conversion_source;
+    let forgot_a_color_conversion_surface = false;
+    let removed = removed_handle.is_some() || forgot_a_color_conversion_surface;
     if let Some(removed_handle) = removed_handle {
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }

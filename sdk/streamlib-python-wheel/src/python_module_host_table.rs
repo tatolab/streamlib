@@ -180,6 +180,7 @@ fn module_host_of_one_node(
                 audio_playback_stream_liveness,
                 audio_playback_stream_close,
                 surface_import_iosurface,
+                surface_lend_by_surface_id,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -703,22 +704,52 @@ unsafe extern "C" fn output_texture_acquire_from_node_output_pool(
     }
 }
 
-unsafe extern "C" fn surface_convert_into(
+unsafe extern "C" fn surface_lend_by_surface_id(
     node_host: *mut c_void,
-    source: ModuleHostTableSurfaceHandle,
-    destination: ModuleHostTableSurfaceHandle,
-    source_color: *const ModuleHostTableColorInfo,
+    surface_id: ModuleHostTableUtf8,
+    lent_surface: *mut ModuleHostTableSurfaceHandle,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
     // SAFETY: as in `surface_import_dma_buf`.
     let node_host = unsafe { node_host_of(node_host) };
-    let Some(source_color) = (unsafe { source_color.as_ref() }) else {
-        return unsafe { refuse(error_message, "no source colour description was handed") };
+    let Some(lent_surface) = (unsafe { lent_surface.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the lent surface") };
+    };
+    // SAFETY: the SDK hands a view live for the call.
+    let surface_id = match unsafe { surface_id.as_str() } {
+        Ok(surface_id) => surface_id,
+        Err(not_utf8) => {
+            return unsafe { refuse(error_message, &format!("a surface id is UTF-8: {not_utf8}")) };
+        }
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .lend_surface_a_message_names(surface_id)
+    {
+        Ok(handle) => {
+            *lent_surface = handle;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_convert_into(
+    node_host: *mut c_void,
+    source: ModuleHostTableSurfaceHandle,
+    destination: ModuleHostTableSurfaceHandle,
+    ycbcr_side_color: *const ModuleHostTableColorInfo,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: as in `surface_import_dma_buf`.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(ycbcr_side_color) = (unsafe { ycbcr_side_color.as_ref() }) else {
+        return unsafe { refuse(error_message, "no YCbCr colour description was handed") };
     };
     match node_host.surfaces_lent_to_native_code.convert_surface_into(
         source,
         destination,
-        source_color,
+        ycbcr_side_color,
     ) {
         Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
         Err(refusal) => unsafe { refuse(error_message, &refusal) },

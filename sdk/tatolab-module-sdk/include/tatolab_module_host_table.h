@@ -19,8 +19,8 @@
  * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
  * which attaches to the interpreter for its round trip to the parent. The
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
- * channel, with no interpreter on either end, as does the IOSurface import
- * minor 4 adds.
+ * channel, with no interpreter on either end, as do the IOSurface import
+ * minor 4 adds and the lend by surface id minor 5 adds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -41,7 +41,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(4)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(5)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -539,11 +539,14 @@ typedef struct ModuleHostTable {
      */
     ModuleHostTableStatus (*output_texture_acquire_from_node_output_pool)(void *node_host, const ModuleHostTableNodeOutputTextureRequest *request, ModuleHostTableSurfaceHandle *acquired_surface, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 2: convert a YCbCr pixel buffer into an RGBA texture of the same
-     * extent with the engine's colour converter, returning once the
-     * destination's next reader sees the result.
+     * Minor 2: convert between a YCbCr surface and an RGBA texture of the
+     * same extent with the engine's colour converter, returning once the
+     * destination's next reader sees the result. `ycbcr_side_color`
+     * describes whichever side is YCbCr. Minor 2 converts a YCbCr pixel
+     * buffer into an RGBA texture; from minor 5 a macOS host also converts
+     * an RGBA texture into an adopted NV12 IOSurface.
      */
-    ModuleHostTableStatus (*surface_convert_into)(void *node_host, ModuleHostTableSurfaceHandle source, ModuleHostTableSurfaceHandle destination, const ModuleHostTableColorInfo *source_color, ModuleHostTableErrorMessage *error_message);
+    ModuleHostTableStatus (*surface_convert_into)(void *node_host, ModuleHostTableSurfaceHandle source, ModuleHostTableSurfaceHandle destination, const ModuleHostTableColorInfo *ycbcr_side_color, ModuleHostTableErrorMessage *error_message);
     /**
      * Minor 2: the surface id a message names `surface` by; valid until the
      * surface is released, empty for a handle that names no surface.
@@ -588,6 +591,13 @@ typedef struct ModuleHostTable {
      * elsewhere.
      */
     ModuleHostTableStatus (*surface_import_iosurface)(void *node_host, const ModuleHostTableIOSurfaceImport *iosurface_import, ModuleHostTableSurfaceHandle *imported_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 5: lend native code the surface a message names by
+     * `surface_id`, such as an upstream node's frame, to convert from.
+     * Releasing it gives back only the lend; the surface stays its
+     * publisher's.
+     */
+    ModuleHostTableStatus (*surface_lend_by_surface_id)(void *node_host, ModuleHostTableUtf8 surface_id, ModuleHostTableSurfaceHandle *lent_surface, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus
