@@ -958,7 +958,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, linux-pool-slot-import-once; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1308,7 +1308,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pool's slot set to each processor interpreter once, which imports every slot once, and a
   per-pool claim table in shared memory replaces the per-frame socket check-out, its generation
   re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
-  Linux import-once ships first and on its own. Every descriptor, being a cross-language ABI,
+  Linux import-once ships first and on its own [linux-pool-slot-import-once — IN-FLIGHT]. Every descriptor, being a cross-language ABI,
   carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
 - **OPEN** — Fan-out under zero copy: a borrow pins the producer's own slot, so readers of one
   output share its pool, and a slow reader that holds slots can starve a timely one. Direction
