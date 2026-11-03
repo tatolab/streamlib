@@ -349,7 +349,8 @@ impl SurfaceColorConversionSession {
 
     /// Whether `destination_surface_id` is an adopted NV12 IOSurface, resolved
     /// and kept the first time a conversion names it. A source this session
-    /// already reads as YCbCr never asks the surface store.
+    /// already reads as YCbCr, or a pooled YCbCr frame, never asks the surface
+    /// store.
     #[cfg(target_os = "macos")]
     fn converts_into_an_adopted_nv12_iosurface(
         &mut self,
@@ -363,8 +364,21 @@ impl SurfaceColorConversionSession {
         {
             return Ok(true);
         }
+        let source_is_a_pooled_ycbcr_frame =
+            crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
+                && gpu
+                    .pooled_backing_held_in_this_process(source_surface_id)
+                    .is_some_and(|pixel_buffer| {
+                        matches!(
+                            pixel_buffer.format(),
+                            PixelFormat::Nv12VideoRange
+                                | PixelFormat::Nv12FullRange
+                                | PixelFormat::Yuyv422
+                                | PixelFormat::Uyvy422
+                        )
+                    });
         if self.sources_by_surface_id.contains_key(source_surface_id)
-            || crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
+            || source_is_a_pooled_ycbcr_frame
         {
             return Ok(false);
         }
@@ -395,8 +409,9 @@ impl SurfaceColorConversionSession {
         Ok(true)
     }
 
-    /// Convert the RGBA texture `source_surface_id` into the adopted NV12
-    /// IOSurface `destination_surface_id` in `ycbcr_side_color`'s matrix, and
+    /// Convert the RGBA texture `source_surface_id` — or an RGBA pixel buffer,
+    /// refreshed into a texture first — into the adopted NV12 IOSurface
+    /// `destination_surface_id` in `ycbcr_side_color`'s matrix, and
     /// return once the surface's CPU and media-engine readers see it — with
     /// the source's registration, whose layout the conversion settled.
     #[cfg(target_os = "macos")]
@@ -417,8 +432,12 @@ impl SurfaceColorConversionSession {
                     "surface {destination_surface_id} was resolved and is gone"
                 ))
             })?;
-        let source =
-            gpu.resolve_texture_registration_by_surface_id(source_surface_id, None, 0, 0)?;
+        let source = gpu.resolve_texture_registration_by_surface_id(
+            source_surface_id,
+            None,
+            destination.width,
+            destination.height,
+        )?;
         let source_texture = source.texture();
         if (source_texture.width(), source_texture.height())
             != (destination.width, destination.height)

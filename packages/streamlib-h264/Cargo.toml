@@ -4,7 +4,7 @@ version = "0.68.13"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
-description = "H.264 encode and decode for StreamLib on a Vulkan device the module owns, as the tatolab-h264 extension wheel."
+description = "H.264 encode and decode for StreamLib on Vulkan Video or VideoToolbox, as the tatolab-h264 extension wheel."
 repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 publish = false
@@ -21,9 +21,9 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
 # The module host table the coding threads read and write their node's ports
 # through, with no Python attached.
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.2.0", features = ["pyo3"] }
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.5.0", features = ["pyo3"] }
 # The encoder and decoder node bodies, shared with tatolab-h265: on Linux they
-# code on a Vulkan device this helper owns.
+# code on a Vulkan device this helper owns, on macOS on VideoToolbox.
 streamlib-owned-device-video-codec-nodes = { path = "../../runtime/streamlib-owned-device-video-codec-nodes", version = "0.68.13" }
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
