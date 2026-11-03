@@ -259,7 +259,7 @@ impl RgbaPixelBufferVideoEncoder {
         timestamp_ns: i64,
     ) -> VideoResult<Vec<EncodePacket>> {
         let tightest_row = u64::from(width) * RGBA8_BYTES_PER_PIXEL;
-        if bytes_per_row < tightest_row || bytes_per_row % RGBA8_BYTES_PER_PIXEL != 0 {
+        if bytes_per_row < tightest_row || !bytes_per_row.is_multiple_of(RGBA8_BYTES_PER_PIXEL) {
             return Err(VideoError::Configuration(format!(
                 "an RGBA8 pixel buffer {width} pixels wide cannot have rows {bytes_per_row} \
                  bytes apart"

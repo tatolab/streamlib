@@ -297,15 +297,11 @@ fn test_parse_h265_sps_dimensions_640x480() {
     // general_profile_compatibility_flag[32]:
     bits.push(0);
     bits.push(1);
-    for _ in 0..30 {
-        bits.push(0);
-    }
+    bits.extend(std::iter::repeat_n(0, 30));
     // progressive, interlaced, non_packed, frame_only
     bits.extend_from_slice(&[1, 0, 1, 0]);
     // 44 reserved zero bits
-    for _ in 0..44 {
-        bits.push(0);
-    }
+    bits.extend(std::iter::repeat_n(0, 44));
     // general_level_idc: 8 bits = 93 (0x5D)
     bits.extend_from_slice(&[0, 1, 0, 1, 1, 1, 0, 1]);
 
@@ -315,21 +311,17 @@ fn test_parse_h265_sps_dimensions_640x480() {
     bits.extend_from_slice(&[0, 1, 0]);
 
     // pic_width_in_luma_samples: ue(640)
-    for _ in 0..9 {
-        bits.push(0);
-    }
+    bits.extend(std::iter::repeat_n(0, 9));
     bits.push(1);
     bits.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0, 1]); // 129
 
     // pic_height_in_luma_samples: ue(480)
-    for _ in 0..8 {
-        bits.push(0);
-    }
+    bits.extend(std::iter::repeat_n(0, 8));
     bits.push(1);
     bits.extend_from_slice(&[1, 1, 1, 0, 0, 0, 0, 1]); // 225
 
     // Pad to byte boundary
-    while bits.len() % 8 != 0 {
+    while !bits.len().is_multiple_of(8) {
         bits.push(0);
     }
 

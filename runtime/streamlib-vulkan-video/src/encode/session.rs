@@ -216,7 +216,7 @@ impl SimpleEncoder {
                 enc.log2_max_frame_num_minus4 = 0; // max_frame_num = 16
                 enc.log2_max_pic_order_cnt_lsb_minus4 = 4; // max_poc_lsb = 256
                 // Reserve 1 slot for setup (reconstructed picture), rest for references
-                enc.max_num_ref_frames = (max_dpb as u32).saturating_sub(1).max(1);
+                enc.max_num_ref_frames = max_dpb.saturating_sub(1).max(1);
                 enc.init_dpb(max_dpb as i32);
                 enc.frame_num = 0;
                 enc.poc_lsb = 0;
@@ -521,9 +521,10 @@ impl SimpleEncoder {
             let h265_pps_array: [vk::video::StdVideoH265PictureParameterSet; 1];
 
             // Active typed add-info selected below.
-            let add_info: crate::VideoSessionParametersAddInfo;
 
-            if self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+            let add_info: crate::VideoSessionParametersAddInfo = if self.codec_flag
+                == vk::VideoCodecOperationFlagsKHR::ENCODE_H264
+            {
                 // Build SPS/PPS from the ported EncoderConfigH264 state instead of
                 // hard-coding values inline.
                 let enc = self
@@ -551,13 +552,13 @@ impl SimpleEncoder {
                 vui_flags.set_timing_info_present_flag(1);
                 vui_flags.set_fixed_frame_rate_flag(1);
                 let color_vui = config.color_vui;
-                if let Some(cv) = color_vui {
-                    if cv.is_video_signal_type_block_needed() {
-                        vui_flags.set_video_signal_type_present_flag(1);
-                        vui_flags.set_video_full_range_flag(cv.full_range_bit());
-                        if cv.is_colour_description_block_needed() {
-                            vui_flags.set_color_description_present_flag(1);
-                        }
+                if let Some(cv) = color_vui
+                    && cv.is_video_signal_type_block_needed()
+                {
+                    vui_flags.set_video_signal_type_present_flag(1);
+                    vui_flags.set_video_full_range_flag(cv.full_range_bit());
+                    if cv.is_colour_description_block_needed() {
+                        vui_flags.set_color_description_present_flag(1);
                     }
                 }
                 // Decoders skip these fields entirely when
@@ -680,12 +681,12 @@ impl SimpleEncoder {
 
                 h264_sps_array = [h264_sps];
                 h264_pps_array = [h264_pps];
-                add_info = crate::VideoSessionParametersAddInfo::EncodeH264 {
+                crate::VideoSessionParametersAddInfo::EncodeH264 {
                     sps: &h264_sps_array,
                     pps: &h264_pps_array,
                     max_std_sps_count: 1,
                     max_std_pps_count: 1,
-                };
+                }
             } else if self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
                 // --- VPS flags (matching C++ VkEncoderConfigH265.cpp lines 761-764) ---
                 let mut vps_flags: vk::video::StdVideoH265VpsFlags = std::mem::zeroed();
@@ -704,10 +705,10 @@ impl SimpleEncoder {
                     std::mem::zeroed();
                 ptl_flags.set_general_progressive_source_flag(1); // C++ line 648
                 ptl_flags.set_general_frame_only_constraint_flag(1); // C++ line 651
-                if let Some(ref cfg) = self.h265_config {
-                    if cfg.general_tier_flag {
-                        ptl_flags.set_general_tier_flag(1);
-                    }
+                if let Some(ref cfg) = self.h265_config
+                    && cfg.general_tier_flag
+                {
+                    ptl_flags.set_general_tier_flag(1);
                 }
                 let (ptl_profile, ptl_level) = if let Some(ref cfg) = self.h265_config {
                     (
@@ -910,17 +911,17 @@ impl SimpleEncoder {
                 h265_vps_array = [h265_vps];
                 h265_sps_array = [h265_sps];
                 h265_pps_array = [h265_pps];
-                add_info = crate::VideoSessionParametersAddInfo::EncodeH265 {
+                crate::VideoSessionParametersAddInfo::EncodeH265 {
                     vps: &h265_vps_array,
                     sps: &h265_sps_array,
                     pps: &h265_pps_array,
                     max_std_vps_count: 1,
                     max_std_sps_count: 1,
                     max_std_pps_count: 1,
-                };
+                }
             } else {
                 return Err(VideoError::CodecNotSupported(self.codec_flag));
-            }
+            };
 
             let descriptor = crate::VideoSessionParametersDescriptor {
                 label: "encode/session-params",

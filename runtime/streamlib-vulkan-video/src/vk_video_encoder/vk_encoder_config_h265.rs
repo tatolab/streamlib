@@ -602,10 +602,10 @@ impl EncoderConfigH265 {
             self.base.vbv_buffer_size =
                 (LEVEL_LIMITS_H265[level_idx].max_cpb_size_main_tier as u32 * cpb_vcl_factor)
                     .min(100_000_000);
-            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED {
-                if (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate {
-                    self.base.vbv_buffer_size = self.hrd_bitrate << 3;
-                }
+            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
+                && (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate
+            {
+                self.base.vbv_buffer_size = self.hrd_bitrate << 3;
             }
         }
 

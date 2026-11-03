@@ -610,11 +610,11 @@ impl VulkanBitstreamBufferStream {
         } else {
             self.max_access_location
         };
-        if commit_size > 0 {
-            if let Some(ref buf) = self.bitstream_buffer {
-                buf.flush_range(0, commit_size);
-                self.max_access_location = 0;
-            }
+        if commit_size > 0
+            && let Some(ref buf) = self.bitstream_buffer
+        {
+            buf.flush_range(0, commit_size);
+            self.max_access_location = 0;
         }
         commit_size
     }

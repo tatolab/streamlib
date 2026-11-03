@@ -638,10 +638,8 @@ pub unsafe fn wait_and_reset_fence(
             return result;
         }
 
-        if reset_after_wait {
-            if let Err(e) = device.reset_fences(&[fence]) {
-                return e.into();
-            }
+        if reset_after_wait && let Err(e) = device.reset_fences(&[fence]) {
+            return e.into();
         }
 
         vk::Result::SUCCESS
@@ -766,8 +764,8 @@ impl VulkanCommandBufferPool {
                 }
             }
 
-            if create_query_pool {
-                if pool
+            if create_query_pool
+                && pool
                     .query_pool_set
                     .create_set(
                         vulkan_device,
@@ -778,9 +776,8 @@ impl VulkanCommandBufferPool {
                         video_profile,
                     )
                     .is_err()
-                {
-                    return vk::Result::ERROR_INITIALIZATION_FAILED;
-                }
+            {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
             }
 
             for i in 0..num_pool_nodes {
@@ -1104,9 +1101,8 @@ impl PoolNodeHandler {
                 let begin_info = vk::CommandBufferBeginInfo::builder()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-                match handle.begin_command_buffer_recording(&begin_info) {
-                    Ok(buf) => cmd_buf = buf,
-                    Err(_) => {}
+                if let Ok(buf) = handle.begin_command_buffer_recording(&begin_info) {
+                    cmd_buf = buf
                 }
             }
 
@@ -1140,9 +1136,8 @@ impl PoolNodeHandler {
                 let begin_info = vk::CommandBufferBeginInfo::builder()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-                match handle.begin_command_buffer_recording(&begin_info) {
-                    Ok(buf) => cmd_buf = buf,
-                    Err(_) => {}
+                if let Ok(buf) = handle.begin_command_buffer_recording(&begin_info) {
+                    cmd_buf = buf
                 }
             }
 
@@ -1222,16 +1217,16 @@ impl PoolNodeHandler {
 
 impl Drop for PoolNodeHandler {
     fn drop(&mut self) {
-        if let Some(ref handle) = self.node_handle {
-            if self.command_ended {
-                handle.set_command_buffer_submitted();
+        if let Some(ref handle) = self.node_handle
+            && self.command_ended
+        {
+            handle.set_command_buffer_submitted();
 
-                if self.wait_on_cpu_after_submit {
-                    // SAFETY: If we got here, the command buffer was recorded and
-                    // submitted, so the fence is valid.
-                    unsafe {
-                        handle.sync_host_on_cmd_buff_complete(false, &self.operation_name);
-                    }
+            if self.wait_on_cpu_after_submit {
+                // SAFETY: If we got here, the command buffer was recorded and
+                // submitted, so the fence is valid.
+                unsafe {
+                    handle.sync_host_on_cmd_buff_complete(false, &self.operation_name);
                 }
             }
         }

@@ -492,18 +492,17 @@ impl VkEncDpbH265 {
                 delta_poc_s0[idx] = self.dpb[i].pic_order_cnt_val.wrapping_sub(cur_poc);
                 num_negative_ref_pics += 1;
             }
-            if self.use_multiple_refs {
-                if self.dpb[i].marking == 1
-                    && self.dpb[i].pic_order_cnt_val > cur_poc
-                    && !self.dpb[i].corrupted
-                    && (self.dpb[i].temporal_id < cur_temporal_id
-                        || (!tsa_picture && self.dpb[i].temporal_id == cur_temporal_id))
-                {
-                    let idx = num_positive_ref_pics as usize;
-                    short_term_ref_pic_poc_l1[idx] = self.dpb[i].pic_order_cnt_val;
-                    delta_poc_s1[idx] = self.dpb[i].pic_order_cnt_val.wrapping_sub(cur_poc);
-                    num_positive_ref_pics += 1;
-                }
+            if self.use_multiple_refs
+                && self.dpb[i].marking == 1
+                && self.dpb[i].pic_order_cnt_val > cur_poc
+                && !self.dpb[i].corrupted
+                && (self.dpb[i].temporal_id < cur_temporal_id
+                    || (!tsa_picture && self.dpb[i].temporal_id == cur_temporal_id))
+            {
+                let idx = num_positive_ref_pics as usize;
+                short_term_ref_pic_poc_l1[idx] = self.dpb[i].pic_order_cnt_val;
+                delta_poc_s1[idx] = self.dpb[i].pic_order_cnt_val.wrapping_sub(cur_poc);
+                num_positive_ref_pics += 1;
             }
         }
 
@@ -753,7 +752,7 @@ impl VkEncDpbH265 {
 
         // Find free slot
         self.cur_dpb_index = -1;
-        for i in 0..self.dpb_size as i8 {
+        for i in 0..self.dpb_size {
             if self.dpb[i as usize].state == 0 {
                 self.cur_dpb_index = i;
                 break;
@@ -858,7 +857,7 @@ impl VkEncDpbH265 {
 
         // Find free slot
         self.cur_dpb_index = -1;
-        for i in 0..self.dpb_size as i8 {
+        for i in 0..self.dpb_size {
             if self.dpb[i as usize].state == 0 {
                 self.cur_dpb_index = i;
                 break;
@@ -1521,11 +1520,12 @@ impl VkEncDpbH265 {
 
         // First try: bump an entry that needs output (decoder path)
         for i in 0..self.dpb_size as usize {
-            if self.dpb[i].state == 1 && self.dpb[i].output {
-                if min_idx < 0 || self.dpb[i].pic_order_cnt_val < min_poc {
-                    min_poc = self.dpb[i].pic_order_cnt_val;
-                    min_idx = i as i32;
-                }
+            if self.dpb[i].state == 1
+                && self.dpb[i].output
+                && (min_idx < 0 || self.dpb[i].pic_order_cnt_val < min_poc)
+            {
+                min_poc = self.dpb[i].pic_order_cnt_val;
+                min_idx = i as i32;
             }
         }
 
@@ -1543,11 +1543,12 @@ impl VkEncDpbH265 {
         min_poc = u32::MAX;
         min_idx = -1;
         for i in 0..self.dpb_size as usize {
-            if self.dpb[i].state == 1 && self.dpb[i].marking == 1 {
-                if min_idx < 0 || self.dpb[i].pic_order_cnt_val < min_poc {
-                    min_poc = self.dpb[i].pic_order_cnt_val;
-                    min_idx = i as i32;
-                }
+            if self.dpb[i].state == 1
+                && self.dpb[i].marking == 1
+                && (min_idx < 0 || self.dpb[i].pic_order_cnt_val < min_poc)
+            {
+                min_poc = self.dpb[i].pic_order_cnt_val;
+                min_idx = i as i32;
             }
         }
 
@@ -1556,6 +1557,12 @@ impl VkEncDpbH265 {
             self.dpb[idx].marking = 0;
             self.dpb[idx].state = 0;
         }
+    }
+}
+
+impl Default for VkEncDpbH265 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

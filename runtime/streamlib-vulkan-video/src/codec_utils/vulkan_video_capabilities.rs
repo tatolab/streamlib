@@ -117,9 +117,8 @@ pub unsafe fn get_video_decode_capabilities(
                 video_profile,
                 &mut video_capabilities,
             )
-            .map_err(|e| {
+            .inspect_err(|&e| {
                 tracing::error!("GetVideoDecodeCapabilities failed: {:?}", e);
-                e
             })?;
 
         let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
@@ -201,9 +200,8 @@ pub unsafe fn get_video_encode_capabilities(
                 video_profile,
                 &mut video_capabilities,
             )
-            .map_err(|e| {
+            .inspect_err(|&e| {
                 tracing::error!("GetVideoEncodeCapabilities failed: {:?}", e);
-                e
             })?;
 
         let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
@@ -253,7 +251,6 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
             next: core::ptr::null(),
             video_profile: video_profile as *const _,
             quality_level,
-            ..Default::default()
         };
 
         let mut quality_level_properties = vk::VideoEncodeQualityLevelPropertiesKHR {
@@ -267,13 +264,12 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
             &quality_level_info,
             &mut quality_level_properties,
         )
-        .map_err(|e| {
+        .inspect_err(|&e| {
             tracing::error!(
                 "GetPhysicalDeviceVideoEncodeQualityLevelProperties failed: {:?}, quality_level: {}",
                 e,
                 quality_level
             );
-            e
         })?;
 
         Ok(EncodeQualityLevelResult {
@@ -438,15 +434,15 @@ pub unsafe fn get_video_capabilities(
                 let decode_caps = &*(next_ptr as *const vk::VideoDecodeCapabilitiesKHR);
                 if !decode_caps.next.is_null() {
                     let codec_stype = (*(decode_caps.next as *const vk::BaseOutStructure)).s_type;
-                    if let Some(expected) = decode_capability_stype(codec) {
-                        if codec_stype != expected {
-                            tracing::error!(
-                                "Codec capability sType mismatch: got {:?}, expected {:?}",
-                                codec_stype,
-                                expected
-                            );
-                            return vk::Result::ERROR_INITIALIZATION_FAILED;
-                        }
+                    if let Some(expected) = decode_capability_stype(codec)
+                        && codec_stype != expected
+                    {
+                        tracing::error!(
+                            "Codec capability sType mismatch: got {:?}, expected {:?}",
+                            codec_stype,
+                            expected
+                        );
+                        return vk::Result::ERROR_INITIALIZATION_FAILED;
                     }
                 }
             } else {
@@ -454,15 +450,15 @@ pub unsafe fn get_video_capabilities(
                 let encode_caps = &*(next_ptr as *const vk::VideoEncodeCapabilitiesKHR);
                 if !encode_caps.next.is_null() {
                     let codec_stype = (*(encode_caps.next as *const vk::BaseOutStructure)).s_type;
-                    if let Some(expected) = encode_capability_stype(codec) {
-                        if codec_stype != expected {
-                            tracing::error!(
-                                "Codec capability sType mismatch: got {:?}, expected {:?}",
-                                codec_stype,
-                                expected
-                            );
-                            return vk::Result::ERROR_INITIALIZATION_FAILED;
-                        }
+                    if let Some(expected) = encode_capability_stype(codec)
+                        && codec_stype != expected
+                    {
+                        tracing::error!(
+                            "Codec capability sType mismatch: got {:?}, expected {:?}",
+                            codec_stype,
+                            expected
+                        );
+                        return vk::Result::ERROR_INITIALIZATION_FAILED;
                     }
                 }
             }
@@ -570,14 +566,12 @@ pub unsafe fn get_video_formats(
             next: core::ptr::null(),
             profile_count: 1,
             profiles: video_profile as *const _,
-            ..Default::default()
         };
 
         let video_format_info = vk::PhysicalDeviceVideoFormatInfoKHR {
             s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR,
             next: &video_profiles as *const _ as *const core::ffi::c_void,
             image_usage,
-            ..Default::default()
         };
 
         // vulkanalia's wrapper handles the two-call count+fill pattern.
@@ -642,10 +636,10 @@ pub unsafe fn get_supported_codecs(
         for (queue_index, (q, vq)) in queues.iter().zip(video_queues.iter()).enumerate() {
             let queue_index = queue_index as u32;
 
-            if let Some(required_family) = video_queue_family {
-                if required_family != queue_index {
-                    continue;
-                }
+            if let Some(required_family) = video_queue_family
+                && required_family != queue_index
+            {
+                continue;
             }
 
             let flags = q.queue_family_properties.queue_flags;

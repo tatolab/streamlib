@@ -592,12 +592,11 @@ impl VulkanVideoSessionParameters {
             }
         }
 
-        if let Some(level) = descriptor.quality_level {
-            if level > 0 {
-                quality_level_info =
-                    vk::VideoEncodeQualityLevelInfoKHR::builder().quality_level(level);
-                params_create = params_create.push_next(&mut quality_level_info);
-            }
+        if let Some(level) = descriptor.quality_level
+            && level > 0
+        {
+            quality_level_info = vk::VideoEncodeQualityLevelInfoKHR::builder().quality_level(level);
+            params_create = params_create.push_next(&mut quality_level_info);
         }
 
         let handle = unsafe {
