@@ -3239,7 +3239,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   list every running stream with its private and public ports; an internal port may be
   listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
   one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853; amended by
-  stream-interface-and-routing-policy: levels leave code for the routing policy below]
+  stream-interface-and-routing-policy: levels leave code for the routing policy below; amended by
+  strict-port-families: the machine's owner previews any port on the machine, exposed or not]
 - **DECIDED** — What goes out where is decided on the publisher's side, by the runtime, never
   in the stream's code, and applied live with the edge check above. For now that is one toggle:
   every exposed output is published to every relay the machine has joined, and the owner turns
@@ -3288,7 +3289,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is inspected by exposing it — private keeps it on the machine — or by chaining nodes off it
   at the access level its author chooses, and an internal port is seen through its stream's
   logs alone. The engine's internals are proven by unit tests; the engine is never proven by
-  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875]
+  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875; amended by
+  strict-port-families: an internal port is also seen through an on-machine preview]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
   for the rigs, an MCP image tool — side paths past exposure and the relays, which agents
   reach for over the product's own doors (owner, 2026-10-17).
@@ -3490,6 +3492,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   relay already has its own player (owner, 2026-10-16).
   Rejected: the player's published package copied in with no build — it is a library of many
   packages a browser cannot load unbundled (owner, 2026-10-17).
+- **DECIDED** — The machine's owner can preview any port of any node on the machine, exposed or
+  not, the way TouchDesigner shows every wire: a view per family — a thumbnail for Image, shape
+  and statistics or a point view for Array, a waveform for Channels, keyframes and bitrate with
+  an on-demand decode for Packets, a table or a tree for Records. A preview is on the machine
+  only: it never reaches a relay's every-interface listener or a hosted relay, and it changes
+  no stream's interface. Owner, 2026-11-03. [strict-port-families]
+- **OPEN** — How a preview reads a port that is not exposed, and who on the machine may open one.
+  Direction (review, not decided): the runtime publishes the previewed port to the local relay's
+  loopback listener alone while a preview is open, so the relay stays the one way a port is read.
+  Settled in the change that builds the families. [strict-port-families]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; Red5's adapter; and a zero-copy

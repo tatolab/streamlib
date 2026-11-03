@@ -68,3 +68,7 @@ code: Records takes plain dicts and encodes them itself.
 - Records is the one family with no brake; built-ins never publish Records for data that fits
   another family, and the catalog marks a Records port as unchecked.
 - `ImageToArray` has to be zero-copy where the layouts match, or authors route around it.
+- A known layout per family gives every port a preview, so the machine's owner can see any
+  port on the machine, exposed or not, as TouchDesigner shows every wire. This reverses the
+  2026-10-17 rule that an internal port is seen only through its stream's logs; a preview stays
+  on the machine and never reaches a relay off it.

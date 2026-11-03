@@ -58,8 +58,9 @@ changed live.
   machines, which a link request quietly did.
 
 - **No tap.** A tap that reads any port is a door around the permission. Reading a port from
-  outside its stream goes through exposure, so every read is listed and revocable; a stream's
-  insides are seen through its own logs.
+  outside its stream goes through exposure, so every read is listed and revocable; ~~a stream's
+  insides are seen through its own logs.~~ — Superseded 2026-11-03 by
+  `strict-port-families.md`: the machine's owner also previews any port on the machine.
 
 ## Rejected alternatives
 
