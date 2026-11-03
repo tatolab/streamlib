@@ -8,7 +8,7 @@
 [package]
 name = "tatolab-module-sdk"
 # The module host table's ABI major.minor; a patch release never changes the table.
-version = "1.4.0"
+version = "1.5.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

@@ -53,6 +53,13 @@ Version 1.4 adds the macOS twin of the DMA-BUF import: an `IOSurfaceRef`, such
 as a camera's or a decoder's, adopted as a surface written by a foreign device,
 which the colour conversion reads where it sits.
 
+Version 1.5 adds a write from host memory, for a renderer that paints into CPU
+memory and cannot share a GPU buffer: `bgra32` or `rgba32` rows at any stride
+replace every pixel of an output-pool texture of the same extent, with the
+channel order swapped where the texture's differs. It costs one CPU copy into
+the engine's host-visible staging and one GPU copy into the texture, and is
+served on Linux.
+
 Every verb is callable from any thread with no Python attached. The table carries
 plain data, opaque handles and borrowed fds only. No engine or GPU object
 crosses it, and

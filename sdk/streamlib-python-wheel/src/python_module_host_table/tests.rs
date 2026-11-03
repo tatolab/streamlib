@@ -358,7 +358,7 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 4})
+        serde_json::json!({"major": 1, "minor": 5})
     );
     assert_eq!(capabilities["node_id"], "source-node");
     assert_eq!(

@@ -134,6 +134,34 @@ enum FrameThisStagingHoldsAfterTheCopy<'a> {
     WhateverItAlreadyHeld,
 }
 
+/// How much of the frame a staged write-back replaces, which decides whether
+/// the frame must have been read into the staging first.
+#[derive(Clone, Copy)]
+enum StagedWriteBackCoverage {
+    /// An edit of the pixels read in: the rest of the staging is that frame.
+    AnEditOfTheFrameReadIn,
+    /// Every byte of the staging was written, so nothing of the old frame
+    /// survives to be read in.
+    EveryPixelOfTheFrame,
+}
+
+impl StagedWriteBackCoverage {
+    fn refuse_a_write_this_staging_does_not_cover(
+        self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<()> {
+        match self {
+            Self::AnEditOfTheFrameReadIn => {
+                GpuContext::refuse_a_write_of_a_frame_this_staging_does_not_hold(
+                    staging, surface_id,
+                )
+            }
+            Self::EveryPixelOfTheFrame => Ok(()),
+        }
+    }
+}
+
 /// The recorder plus the next timeline value, under one lock: the
 /// correctness of the strictly-increasing signal values depends on the
 /// value being drawn and submitted while this lock is held, so the
@@ -830,10 +858,38 @@ impl GpuContext {
         staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<Option<u64>> {
-        let destination = self.resolve_write_back_destination(staging, surface_id)?;
+        let destination = self.resolve_write_back_destination(
+            staging,
+            surface_id,
+            StagedWriteBackCoverage::AnEditOfTheFrameReadIn,
+        )?;
         Self::submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
+            |recorder| Self::record_write_back(staging, &destination, recorder),
+        )
+    }
+
+    /// Copy a staging the consumer wrote in full into its source surface,
+    /// replacing every pixel the surface held.
+    ///
+    /// The upload twin of [`Self::copy_surface_export_staging_back_to_surface`]:
+    /// every guard but the read-before-write rule, which protects an edit of
+    /// the frame read in and has nothing to protect when no byte of the
+    /// frame survives. Afterwards the staging holds this frame.
+    pub fn copy_surface_export_staging_over_every_pixel_of_surface(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        let destination = self.resolve_write_back_destination(
+            staging,
+            surface_id,
+            StagedWriteBackCoverage::EveryPixelOfTheFrame,
+        )?;
+        Self::submit_staging_copy_and_wait(
+            staging,
+            FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_write_back(staging, &destination, recorder),
         )
     }
@@ -867,6 +923,7 @@ impl GpuContext {
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
+        coverage: StagedWriteBackCoverage,
     ) -> Result<ResolvedWriteBackDestination> {
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
@@ -891,7 +948,7 @@ impl GpuContext {
                          someone else's frame and the staged edit cannot be published into it"
                     )));
                 }
-                Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
+                coverage.refuse_a_write_this_staging_does_not_cover(staging, surface_id)?;
                 let ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) =
                     self.resolve_device_export_source(surface_id)?
                 else {
@@ -920,7 +977,7 @@ impl GpuContext {
                          acquire the texture with that usage to write it through an export"
                     )));
                 }
-                Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
+                coverage.refuse_a_write_this_staging_does_not_cover(staging, surface_id)?;
                 let ResolvedSurfaceBacking::RegisteredTexture(registration) =
                     self.resolve_device_export_source(surface_id)?
                 else {
@@ -1043,6 +1100,16 @@ impl crate::core::context::GpuContextLimitedAccess {
     ) -> Result<Option<u64>> {
         self.host_inner()
             .copy_surface_export_staging_back_to_surface(staging, surface_id)
+    }
+
+    /// See [`GpuContext::copy_surface_export_staging_over_every_pixel_of_surface`].
+    pub fn copy_surface_export_staging_over_every_pixel_of_surface(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        self.host_inner()
+            .copy_surface_export_staging_over_every_pixel_of_surface(staging, surface_id)
     }
 
     /// See [`GpuContext::export_surface_export_staging_opaque_fd`].
@@ -1544,6 +1611,38 @@ mod tests {
         assert!(
             refusal.to_string().contains("never been read into"),
             "the refusal must name the missing read, got: {refusal}"
+        );
+    }
+
+    /// The upload direction: a staging written in full replaces every pixel
+    /// of a texture nothing was ever read out of, and afterwards names that
+    /// frame as the one it holds. GPU-gated: skips when no device is present.
+    #[test]
+    fn a_whole_staging_upload_replaces_every_pixel_of_a_never_read_texture() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu.register_texture_with_layout(
+            &surface_id,
+            create_producer_owned_texture(&gpu),
+            VulkanLayout::UNDEFINED,
+        );
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("device-export staging for the upload target");
+        stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
+        gpu.copy_surface_export_staging_over_every_pixel_of_surface(&staging, &surface_id)
+            .expect("an upload needs no read-in");
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("after an upload the staging holds the frame it wrote");
+
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("re-read the texture after the upload");
+        assert_every_byte_is(
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
+            CONSUMER_EDIT_STAMP,
+            "the texture's pixels after a whole-staging upload",
         );
     }
 

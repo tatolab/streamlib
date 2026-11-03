@@ -1588,6 +1588,9 @@ pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
 
     #[serde(rename = "image_to_buffer")]
     ImageToBuffer,
+
+    #[serde(rename = "whole_buffer_to_image")]
+    WholeBufferToImage,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1596,7 +1599,9 @@ pub(crate) struct EscalateRequestRunCpuReadbackCopy {
     /// Which copy the host runs. `image_to_buffer` reads the named frame
     /// into the staging; `buffer_to_image` publishes the staged edit back
     /// into the surface's own pooled allocation, and is refused unless
-    /// that same frame was read in first. Which Vulkan copy each becomes
+    /// that same frame was read in first; `whole_buffer_to_image` publishes
+    /// a staging the subprocess wrote in full, replacing every pixel, with
+    /// no read first. Which Vulkan copy each becomes
     /// is the engine's business and varies with the surface's backing.
     ///
     /// The host signals a new value on the staging's timeline at

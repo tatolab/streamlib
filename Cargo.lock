@@ -6193,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "pyo3",
  "tracing",

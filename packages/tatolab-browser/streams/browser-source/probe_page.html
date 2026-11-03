@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Copyright (c) 2025 Jonathan Fontanez -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>BrowserSource probe page</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #101418; color: #f2f2f2; font: 48px sans-serif; overflow: hidden; }
+  #sweep { position: absolute; top: 0; width: 24px; height: 100%; background: #38bdf8; }
+  #frame-count { position: absolute; left: 48px; top: 48px; }
+  #last-data { position: absolute; left: 48px; top: 120px; color: #fbbf24; }
+</style>
+</head>
+<body>
+<div id="sweep"></div>
+<div id="frame-count">frame 0</div>
+<div id="last-data">no data yet</div>
+<script>
+  // Moves every animation frame, so a still page never stops CEF painting.
+  const sweep = document.getElementById("sweep");
+  const frameCount = document.getElementById("frame-count");
+  const lastData = document.getElementById("last-data");
+  let framesAnimated = 0;
+  let sentNsAwaitingPaint = [];
+  function animate() {
+    framesAnimated += 1;
+    sweep.style.left = `${(framesAnimated * 8) % window.innerWidth}px`;
+    frameCount.textContent = `frame ${framesAnimated}`;
+    for (const sentNs of sentNsAwaitingPaint) {
+      window.tatolab.publish({ data_painted: sentNs });
+    }
+    sentNsAwaitingPaint = [];
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+
+  window.addEventListener("tatolab:data", (event) => {
+    lastData.textContent = `data ${JSON.stringify(event.detail)}`;
+    if (typeof event.detail.sent_ns === "number") {
+      sentNsAwaitingPaint.push(event.detail.sent_ns);
+    }
+  });
+
+  // A continuous tone, so any gap in the published audio is a silent block.
+  const audioContext = new AudioContext();
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  oscillator.frequency.value = 440;
+  gain.gain.value = 0.2;
+  oscillator.connect(gain).connect(audioContext.destination);
+  oscillator.start();
+</script>
+</body>
+</html>

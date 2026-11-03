@@ -14,7 +14,7 @@ use crate::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
     ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
@@ -481,6 +481,56 @@ impl ModuleHost {
         refuse_unless_ok("surface_convert_into", status, &error_message)
     }
 
+    /// Write `pixels` over every pixel of `destination`, an output-pool
+    /// texture of the same extent, returning once its next reader sees them.
+    pub fn write_surface_from_host_memory(
+        &self,
+        destination: &ModuleHostSurface,
+        pixels: &ModuleHostHostMemoryPixels<'_>,
+    ) -> Result<(), ModuleHostError> {
+        let bytes_the_rows_span =
+            pixels
+                .bytes_the_rows_span()
+                .ok_or_else(|| ModuleHostError::VerbRefused {
+                    verb: "surface_write_from_host_memory",
+                    refusal: format!(
+                        "{}x{} pixels {} bytes apart do not fit in memory",
+                        pixels.width, pixels.height, pixels.row_stride_bytes
+                    ),
+                })?;
+        if (pixels.pixels.len() as u64) < bytes_the_rows_span {
+            return Err(ModuleHostError::VerbRefused {
+                verb: "surface_write_from_host_memory",
+                refusal: format!(
+                    "{} rows of {} four-byte pixels, {} bytes apart, span {bytes_the_rows_span} \
+                     bytes; {} were handed",
+                    pixels.height,
+                    pixels.width,
+                    pixels.row_stride_bytes,
+                    pixels.pixels.len()
+                ),
+            });
+        }
+        let table_pixels = ModuleHostTableHostMemoryPixels {
+            pixels: ModuleHostTableBytes::of(pixels.pixels),
+            pixel_format: ModuleHostTableUtf8::of(pixels.pixel_format),
+            width: pixels.width,
+            height: pixels.height,
+            row_stride_bytes: pixels.row_stride_bytes,
+        };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`; the surface is this host's.
+        let status = unsafe {
+            (self.module_host_table.surface_write_from_host_memory)(
+                self.module_host_table.node_host,
+                destination.handle,
+                &table_pixels,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_write_from_host_memory", status, &error_message)
+    }
+
     /// What the host offers, as one JSON object.
     pub fn host_capabilities_json(&self) -> &str {
         // SAFETY: the host keeps the text alive while the node host is
@@ -557,6 +607,33 @@ pub struct ModuleHostColorInfo<'description> {
     pub transfer: Option<&'description str>,
     pub matrix: Option<&'description str>,
     pub range: Option<&'description str>,
+}
+
+/// Four-byte pixels in the module's memory, as
+/// [`ModuleHost::write_surface_from_host_memory`] takes them.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostHostMemoryPixels<'pixels> {
+    pub pixels: &'pixels [u8],
+    /// A pixel format wire name: `bgra32` or `rgba32`.
+    pub pixel_format: &'pixels str,
+    pub width: u32,
+    pub height: u32,
+    /// The distance from one row's first byte to the next row's.
+    pub row_stride_bytes: u64,
+}
+
+impl ModuleHostHostMemoryPixels<'_> {
+    /// The bytes from the first row's first pixel to the last row's last;
+    /// `None` when that overflows.
+    pub fn bytes_the_rows_span(&self) -> Option<u64> {
+        if self.width == 0 || self.height == 0 {
+            return Some(0);
+        }
+        let row_bytes = u64::from(self.width).checked_mul(4)?;
+        self.row_stride_bytes
+            .checked_mul(u64::from(self.height) - 1)?
+            .checked_add(row_bytes)
+    }
 }
 
 /// A surface lent to native code; dropping it gives it back.

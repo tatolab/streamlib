@@ -1,0 +1,4 @@
+/target
+/.venv
+# Staged from the CEF distribution by `stage_cef_runtime.py`.
+/python/tatolab/browser/cef/
