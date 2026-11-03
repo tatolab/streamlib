@@ -11,9 +11,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+#[cfg(target_os = "linux")]
+use tatolab_module_sdk::module_host_table_abi::MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES;
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, ModuleHostTableColorInfo,
-    ModuleHostTableDmaBufImport, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableIOSurfaceImport,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 

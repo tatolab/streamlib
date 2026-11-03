@@ -124,8 +124,8 @@ impl PhaseContinuousSineTone {
         for frame in interleaved_f32_bytes.chunks_exact_mut(4 * channels) {
             self.phase_in_cycles = (self.phase_in_cycles + self.cycles_per_sample).fract();
             let sample = self.amplitude * (2.0 * PI * self.phase_in_cycles).sin() as f32;
-            for channel in frame.chunks_exact_mut(4) {
-                channel.copy_from_slice(&sample.to_le_bytes());
+            for channel in frame.as_chunks_mut::<4>().0 {
+                *channel = sample.to_le_bytes();
             }
         }
     }
@@ -222,8 +222,10 @@ fn the_next_block_from_the_taps_aggregate(
 
 fn f32_samples_of(interleaved_little_endian_bytes: &[u8]) -> Vec<f32> {
     interleaved_little_endian_bytes
-        .chunks_exact(4)
-        .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|scalar| f32::from_le_bytes(*scalar))
         .collect()
 }
 
@@ -824,8 +826,10 @@ fn samples_generated_in_device_requests(
         tone.fill_interleaved_f32(&mut request, 2);
         samples.extend(
             f32_samples_of(&request)
-                .chunks_exact(2)
-                .map(|frame| frame[0]),
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[first_channel, _]| *first_channel),
         );
     }
     samples

@@ -17,6 +17,7 @@ use crate::core::runtime::the_open_descriptor_limit;
 pub fn detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
+    #[cfg(target_os = "linux")]
     let spawning_process_id = std::process::id() as libc::pid_t;
     // SAFETY: everything called here is async-signal-safe, which is the
     // contract for a `pre_exec` closure running between fork and exec.

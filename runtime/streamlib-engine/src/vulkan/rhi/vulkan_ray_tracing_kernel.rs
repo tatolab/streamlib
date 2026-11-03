@@ -1850,15 +1850,18 @@ mod tests {
     };
     use crate::core::rhi::{
         RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
-        RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture,
-        TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
+        RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage,
+    };
+    #[cfg(target_os = "linux")]
+    use crate::core::rhi::{
+        Texture, TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
         TextureUsages,
     };
+    #[cfg(target_os = "linux")]
     use crate::host_rhi::HostTextureExt;
-    use crate::vulkan::rhi::{
-        HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
-        VulkanTextureReadback,
-    };
+    use crate::vulkan::rhi::{HostVulkanDevice, VulkanAccelerationStructure};
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::{HostVulkanTexture, TlasInstanceDesc, VulkanTextureReadback};
 
     /// Smoke check both that a Vulkan device is available AND that it
     /// exposes the `VK_KHR_ray_tracing_pipeline` extension chain. Tests

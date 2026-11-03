@@ -3475,8 +3475,10 @@ mod tests {
 
     fn interleaved_f32_samples_of(bytes: &[u8]) -> Vec<f32> {
         bytes
-            .chunks_exact(4)
-            .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|scalar| f32::from_le_bytes(*scalar))
             .collect()
     }
 
