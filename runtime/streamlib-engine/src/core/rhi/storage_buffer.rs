@@ -154,6 +154,7 @@ impl StorageBuffer {
     /// **Panics if called from cdylib code** for the same reason
     /// [`Self::host_inner`] does — the handle is only dereferenceable in
     /// host-compiled code.
+    #[cfg(target_os = "linux")]
     pub(crate) fn host_inner_arc(&self) -> Arc<crate::vulkan::rhi::HostVulkanBuffer> {
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
         // (see `from_arc_into_raw`). Incrementing the strong count and

@@ -328,7 +328,7 @@ impl SurfaceColorConversionSession {
     }
 
     /// Whether this session keeps a resolved source for `surface_id`.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn keeps_a_source_for(&self, surface_id: &str) -> bool {
         self.sources_by_surface_id.contains_key(surface_id)
     }

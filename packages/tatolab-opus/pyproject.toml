@@ -1,0 +1,57 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-opus"
+version = "0.68.14"
+description = "Opus encode and decode nodes for Tatolab streams."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+# PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
+# dependency's — libopus's included, which `opusic-sys` links in statically.
+# `LICENSE` is a symlink to the repo root, which maturin follows; the notices
+# are generated over this project's own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory packages/tatolab-opus`.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+# The stream package and nothing of the engine: the nodes here run in a
+# processor interpreter, which borrows `tatolab.runtime` from the runtime that
+# starts it. A minimum, never an exact pin, as a third party's package
+# depends on it.
+dependencies = ["tatolab-stream>=0.68.7"]
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.opus._native"
+features = ["pyo3/extension-module"]
+
+# The engine wheel's macOS floor, so this wheel installs wherever that one does.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "15.0"
+
+[tool.pyright]
+include = ["python", "tests"]
+# The package is checked from source, not from an install, so `tests/` needs the
+# package root on the search path. Its helper-side tests import `tatolab.runtime`,
+# which no venv of a package holds — they borrow it from the runtime unit's lend —
+# so pyright reads it from the engine's own source and stub in this checkout.
+extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
+# it describes. `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"

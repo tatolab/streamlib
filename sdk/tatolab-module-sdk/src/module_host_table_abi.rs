@@ -15,7 +15,8 @@
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
 //! channel, with no interpreter on either end, as do the IOSurface import
-//! minor 4 adds and the lend by surface id minor 5 adds.
+//! minor 4 adds, the host-memory write minor 5 adds and the lend by surface
+//! id minor 6 adds.
 
 use std::ffi::{CStr, c_void};
 
@@ -24,7 +25,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 5;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 6;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -170,6 +171,22 @@ pub struct ModuleHostTableColorInfo {
     pub transfer: ModuleHostTableUtf8,
     pub matrix: ModuleHostTableUtf8,
     pub range: ModuleHostTableUtf8,
+}
+
+/// Pixels in the caller's memory, `height` rows of `width` pixels each,
+/// `row_stride_bytes` apart; the bytes stay the caller's for the length of
+/// the call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableHostMemoryPixels {
+    /// The first byte of the first row; at least
+    /// `row_stride_bytes × (height − 1) + width × 4` bytes long.
+    pub pixels: ModuleHostTableBytes,
+    /// A pixel format wire name: `bgra32` or `rgba32`.
+    pub pixel_format: ModuleHostTableUtf8,
+    pub width: u32,
+    pub height: u32,
+    pub row_stride_bytes: u64,
 }
 
 /// The caller's buffer a refused verb writes its message into.
@@ -512,7 +529,17 @@ pub struct ModuleHostTable {
         imported_surface: *mut ModuleHostTableSurfaceHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 5: lend native code the surface a message names by
+    /// Minor 5: write CPU pixels over every pixel of an output-pool texture of
+    /// the same extent, swapping channel order between `bgra32` and `rgba32`
+    /// where the texture's differs, and return once the texture's next reader
+    /// sees them.
+    pub surface_write_from_host_memory: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        destination: ModuleHostTableSurfaceHandle,
+        host_memory_pixels: *const ModuleHostTableHostMemoryPixels,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 6: lend native code the surface a message names by
     /// `surface_id`, such as an upstream node's frame, to convert from.
     /// Releasing it gives back only the lend; the surface stays its
     /// publisher's.
@@ -880,14 +907,23 @@ mod layout_regression_tests {
         );
     }
 
-    /// Minor 5 appends its lend by surface id after the minor 4 IOSurface import.
+    /// Minor 5 appends its host-memory write after the minor 4 IOSurface import.
     #[test]
-    fn the_v1_5_table_appends_its_lend_by_surface_id_after_every_v1_4_field() {
+    fn the_v1_5_table_appends_its_host_memory_write_after_every_v1_4_field() {
         assert_eq!(
-            offset_of!(ModuleHostTable, surface_lend_by_surface_id),
+            offset_of!(ModuleHostTable, surface_write_from_host_memory),
             16 + 30 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 31 * POINTER);
+    }
+
+    /// Minor 6 appends its lend by surface id after the minor 5 host-memory write.
+    #[test]
+    fn the_v1_6_table_appends_its_lend_by_surface_id_after_every_v1_5_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, surface_lend_by_surface_id),
+            16 + 31 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 32 * POINTER);
     }
 
     #[test]
@@ -906,6 +942,32 @@ mod layout_regression_tests {
             3 * POINTER + 4
         );
         assert_eq!(size_of::<ModuleHostTableIOSurfaceImport>(), 3 * POINTER + 8);
+    }
+
+    #[test]
+    fn host_memory_pixels_put_their_views_then_their_geometry() {
+        assert_eq!(offset_of!(ModuleHostTableHostMemoryPixels, pixels), 0);
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, pixel_format),
+            2 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, width),
+            4 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, height),
+            4 * POINTER + 4
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixels, row_stride_bytes),
+            4 * POINTER + 8
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableHostMemoryPixels>(),
+            4 * POINTER + 16
+        );
+        assert_eq!(align_of::<ModuleHostTableHostMemoryPixels>(), 8);
     }
 
     #[test]

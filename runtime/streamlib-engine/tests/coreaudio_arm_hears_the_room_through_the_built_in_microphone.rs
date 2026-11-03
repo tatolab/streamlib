@@ -77,8 +77,10 @@ fn the_built_in_microphone_carries_more_than_digital_silence() {
         .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
             let scalars = block
                 .interleaved_sample_bytes
-                .chunks_exact(4)
-                .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four bytes")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
                 .collect();
             let _ = block_sender.send(scalars);
         }))

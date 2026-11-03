@@ -9,10 +9,9 @@ import tatolab.stream
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.microphone import MicrophoneSource
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.speaker import SpeakerSink
 from tatolab.stream import (
-    OpusDecoder,
-    OpusEncoder,
     StreamBuilder,
     stream,
 )

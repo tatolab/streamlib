@@ -141,6 +141,7 @@ enum HostVisibleAllocationIntent {
     /// CPU-read memory the GPU writes — private staging on a HOST_CACHED
     /// type wherever the device has one, never write-combined, never
     /// exported.
+    #[cfg(target_os = "linux")]
     RandomReadPrivate,
 }
 
@@ -161,6 +162,7 @@ impl HostVisibleAllocationIntent {
                     | vma::AllocationCreateFlags::MAPPED
                     | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
             }
+            #[cfg(target_os = "linux")]
             Self::RandomReadPrivate => {
                 vma::AllocationCreateFlags::MAPPED | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM
             }
@@ -170,6 +172,7 @@ impl HostVisibleAllocationIntent {
     fn vma_preferred_memory_property_flags(self) -> vk::MemoryPropertyFlags {
         match self {
             Self::SequentialWriteExportable => vk::MemoryPropertyFlags::empty(),
+            #[cfg(target_os = "linux")]
             Self::RandomReadPrivate => vk::MemoryPropertyFlags::HOST_CACHED,
         }
     }
@@ -504,6 +507,7 @@ impl HostVulkanBuffer {
     /// device. Callers exporting an OPAQUE_FD bind the CUDA context to
     /// this device's `physical_device_uuid()`, never the UUID of some
     /// other (e.g. the current `GpuContext`'s) device.
+    #[cfg(target_os = "linux")]
     pub(crate) fn vulkan_device(&self) -> &Arc<HostVulkanDevice> {
         &self.vulkan_device
     }
@@ -1491,10 +1495,12 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
+    #[cfg(target_os = "linux")]
     use std::os::fd::{FromRawFd as _, OwnedFd};
 
     /// A pipe's read end stands in for a plane fd a refusal must close;
     /// a fake number would make that close land on someone else's fd.
+    #[cfg(target_os = "linux")]
     fn a_pipe_read_end() -> OwnedFd {
         let (read_end, _write_end_closed_here) = std::io::pipe().expect("a pipe opens");
         OwnedFd::from(read_end)

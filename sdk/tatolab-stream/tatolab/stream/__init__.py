@@ -22,10 +22,6 @@ from . import catalog as catalog
 from . import clock as clock
 from . import log as log
 from . import msgpack as msgpack
-from ._built_in_nodes import OpusDecoder as OpusDecoder
-from ._built_in_nodes import OpusDecoderConfig as OpusDecoderConfig
-from ._built_in_nodes import OpusEncoder as OpusEncoder
-from ._built_in_nodes import OpusEncoderConfig as OpusEncoderConfig
 from ._built_in_nodes import RelayTrackSource as RelayTrackSource
 from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._built_in_nodes import TestPatternSource as TestPatternSource
@@ -143,10 +139,6 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "OpaqueFdAllocationExport",
-    "OpusDecoder",
-    "OpusDecoderConfig",
-    "OpusEncoder",
-    "OpusEncoderConfig",
     "PixelAccessToOneClaimedSurface",
     "RayTracingKernel",
     "RelayTrackSource",

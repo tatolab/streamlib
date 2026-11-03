@@ -2031,7 +2031,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib-webrtc"
-version = "0.68.13"
+version = "0.68.14"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -2123,7 +2123,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "pyo3",
  "tracing",

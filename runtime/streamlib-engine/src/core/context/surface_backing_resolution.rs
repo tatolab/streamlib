@@ -77,21 +77,6 @@ impl ResolvedSurfaceBacking {
             export_bytes_per_pixel_for_pixel_format(pixel_format)?,
         ))
     }
-
-    /// The IOSurface this backing's storage is, when it is one.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
-        use crate::host_rhi::HostTextureExt as _;
-
-        match self {
-            Self::PixelBuffer(pixel_buffer) => pixel_buffer.buffer_ref().inner.backing_iosurface(),
-            Self::RegisteredTexture(registration) => registration
-                .texture()
-                .vulkan_inner()
-                .backing_iosurface()
-                .map(|iosurface| &**iosurface),
-        }
-    }
 }
 
 impl GpuContext {

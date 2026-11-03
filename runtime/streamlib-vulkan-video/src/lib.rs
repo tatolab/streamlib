@@ -8,14 +8,17 @@
 //!
 //! Ported from NVIDIA nvpro-samples
 //! (<https://github.com/nvpro-samples/vk_video_samples>).
-#![expect(
-    clippy::needless_range_loop,
-    clippy::field_reassign_with_default,
-    clippy::too_many_arguments,
-    reason = "the parsers follow the codec specs and the nvpro-samples sources: \
-              syntax elements are read in order into a defaulted struct, \
-              several tables are indexed by one syntax-element index, and \
-              the ported functions keep their C++ parameter lists"
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        clippy::needless_range_loop,
+        clippy::field_reassign_with_default,
+        clippy::too_many_arguments,
+        reason = "the parsers follow the codec specs and the nvpro-samples sources: \
+                  syntax elements are read in order into a defaulted struct, \
+                  several tables are indexed by one syntax-element index, and \
+                  the ported functions keep their C++ parameter lists"
+    )
 )]
 
 #[cfg(target_os = "linux")]

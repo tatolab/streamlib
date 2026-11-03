@@ -117,7 +117,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
                 self.conversion_stage.wait_for_the_previous_submission()?;
                 staging.copy_the_planes_of(iosurface)?;
                 CapturedVideoFrameBytesInAStorageBuffer {
-                    storage_buffer: &*staging.storage_buffer,
+                    storage_buffer: &staging.storage_buffer,
                     layout: staging.layout,
                     written_by_another_device: false,
                 }

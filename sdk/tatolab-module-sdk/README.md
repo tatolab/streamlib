@@ -56,6 +56,13 @@ Version 1.5 lends native code the surface a message names by id, such as an
 upstream node's frame, and on macOS converts an RGBA texture into an adopted
 NV12 IOSurface, the direction a VideoToolbox encoder feeds from.
 
+Version 1.5 adds a write from host memory, for a renderer that paints into CPU
+memory and cannot share a GPU buffer: `bgra32` or `rgba32` rows at any stride
+replace every pixel of an output-pool texture of the same extent, with the
+channel order swapped where the texture's differs. It costs one CPU copy into
+the engine's host-visible staging and one GPU copy into the texture, and is
+served on Linux.
+
 Every verb is callable from any thread with no Python attached. The table carries
 plain data, opaque handles and borrowed fds only. No engine or GPU object
 crosses it, and

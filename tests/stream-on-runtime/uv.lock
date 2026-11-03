@@ -1800,6 +1800,7 @@ dependencies = [
     { name = "tatolab-h264" },
     { name = "tatolab-h265" },
     { name = "tatolab-microphone" },
+    { name = "tatolab-opus" },
     { name = "tatolab-speaker" },
     { name = "tatolab-stream" },
 ]
@@ -1822,6 +1823,7 @@ requires-dist = [
     { name = "tatolab-h264", directory = "../../packages/streamlib-h264" },
     { name = "tatolab-h265", directory = "../../packages/streamlib-h265" },
     { name = "tatolab-microphone", directory = "../../packages/tatolab-microphone" },
+    { name = "tatolab-opus", directory = "../../packages/tatolab-opus" },
     { name = "tatolab-speaker", directory = "../../packages/tatolab-speaker" },
     { name = "tatolab-stream", editable = "../../sdk/tatolab-stream" },
 ]
@@ -1871,7 +1873,7 @@ test = [{ name = "pytest", specifier = ">=7.0" }]
 
 [[package]]
 name = "tatolab-h264"
-version = "0.68.13"
+version = "0.68.14"
 source = { directory = "../../packages/streamlib-h264" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1882,7 +1884,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-h265"
-version = "0.68.11"
+version = "0.68.14"
 source = { directory = "../../packages/streamlib-h265" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1893,7 +1895,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-microphone"
-version = "0.68.13"
+version = "0.68.14"
 source = { directory = "../../packages/tatolab-microphone" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1903,8 +1905,19 @@ dependencies = [
 requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
+name = "tatolab-opus"
+version = "0.68.14"
+source = { directory = "../../packages/tatolab-opus" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
+
+[[package]]
 name = "tatolab-speaker"
-version = "0.68.13"
+version = "0.68.14"
 source = { directory = "../../packages/tatolab-speaker" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1915,7 +1928,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-stream"
-version = "0.68.13"
+version = "0.68.14"
 source = { editable = "../../sdk/tatolab-stream" }
 dependencies = [
     { name = "msgpack" },

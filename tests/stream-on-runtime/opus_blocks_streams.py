@@ -3,7 +3,8 @@
 
 """The `@stream` functions `test_opus_blocks.py` runs from the suite project."""
 
-from tatolab.stream import OpusDecoder, OpusEncoder, StreamBuilder, stream
+from tatolab.opus import OpusDecoder, OpusEncoder
+from tatolab.stream import StreamBuilder, stream
 
 from opus_blocks_probes import DecodedAudioBlockProbe, EncodedOpusMediaFrameProbe, StereoToneSource
 

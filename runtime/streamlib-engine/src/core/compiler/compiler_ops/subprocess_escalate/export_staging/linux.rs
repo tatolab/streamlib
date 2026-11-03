@@ -34,6 +34,9 @@ pub(super) enum SurfaceExportStagingCopyDirection {
     /// A publish: the consumer's edit back into the surface's own
     /// allocation, so every other holder observes it.
     StagingBackIntoSurface,
+    /// An upload: a staging the consumer wrote in full replaces every pixel
+    /// of the surface, with no frame read in first.
+    WholeStagingOverTheSurface,
 }
 
 impl SurfaceExportStagingCopyOp {
@@ -172,6 +175,8 @@ pub(super) fn handle_surface_export_staging_copy(
             SurfaceExportStagingCopyDirection::StagingBackIntoSurface => {
                 sandbox.copy_surface_export_staging_back_to_surface(&staging, surface_id)
             }
+            SurfaceExportStagingCopyDirection::WholeStagingOverTheSurface => sandbox
+                .copy_surface_export_staging_over_every_pixel_of_surface(&staging, surface_id),
         });
     match copied {
         Ok(value_another_process_waits_for) => EscalateResponse::Ok(EscalateResponseOk {
@@ -227,6 +232,9 @@ pub(in super::super) fn handle_run_cpu_readback_copy(
             }
             EscalateRequestRunCpuReadbackCopyDirection::BufferToImage => {
                 SurfaceExportStagingCopyDirection::StagingBackIntoSurface
+            }
+            EscalateRequestRunCpuReadbackCopyDirection::WholeBufferToImage => {
+                SurfaceExportStagingCopyDirection::WholeStagingOverTheSurface
             }
         }),
     )

@@ -132,7 +132,7 @@ refuse_while_a_runtime_answers_at_the_local_api_socket \
 
 VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
-    "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop\` this wheel into it"
+    "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and tatolab-opus, and \`maturin develop\` this wheel into it"
 
 # The streams capture, play and code video through the microphone, speaker and
 # H.264 modules, built from this checkout into that venv when it cannot import them.
@@ -149,8 +149,9 @@ fi
 if ! IMPORT_FAILURE="$("$VENV_PYTHON" -c '
 import tatolab.h264
 import tatolab.stream
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
-_ = (tatolab.stream.TestPatternSource, tatolab.h264.H264Decoder, WhepPlayer, WhipPublisher)
+_ = (tatolab.stream.TestPatternSource, tatolab.h264.H264Decoder, OpusEncoder, OpusDecoder, WhepPlayer, WhipPublisher)
 ' 2>&1)"; then
     say "$IMPORT_FAILURE" >&2
     cannot_run "the venv cannot import this wheel beside tatolab-stream. Rebuild with \`maturin develop\` — this arm measures the extension, not the tree."

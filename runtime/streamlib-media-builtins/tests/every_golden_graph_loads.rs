@@ -24,20 +24,20 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0015-every-key-every-built-in-and-the-audio-camera-and-codec-modules.json",
-        "d0a68f99972137af77980d72256b42b2d0b34ef2365bf801fca76a3dc25693de",
+        "0019-every-key-every-built-in-and-the-audio-camera-opus-and-codec-modules.json",
+        "945a20498a90778ea2eb07be4a29e4e5125fb65b4937545631c2329d50c07b4d",
     ),
     (
-        "0016-every-key-with-exposure-levels-and-the-audio-camera-and-codec-modules.json",
-        "c80bf8259e9b3d54a5c6de19cbfb3843c58de6bc2fcf6a8bcccd65068172c858",
+        "0020-every-key-with-exposure-levels-and-the-audio-camera-opus-and-codec-modules.json",
+        "ddb949c446e9f00a283cd6b03f4072054563bccfa6ae8209bf97847a7f5151b3",
     ),
     (
-        "0017-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-and-codec-modules.json",
-        "cf5995e7a405313e4beec67055741457f0f8b62db09f9a3734418ef6ca680ecc",
+        "0021-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-opus-and-codec-modules.json",
+        "15f198022e490916489c76fe6b078b7018a74ebb3e06d0baffe2ec18c30d0356",
     ),
     (
-        "0018-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-and-codec-modules.json",
-        "fd661555909cbe02e143e35a5d738fd09916671fe3b00bdef4e2e3f3143e7ecf",
+        "0022-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-opus-and-codec-modules.json",
+        "a4e477790918cfa4fd3c24f605e73b442614d9611ae243def383bea660452428",
     ),
 ];
 
@@ -191,10 +191,10 @@ fn every_golden_graph_loads_on_this_floor() {
     }
 }
 
-/// A golden names each camera, audio and codec module by the type its
+/// A golden names each module that replaced a built-in by the type its
 /// distribution declares, never by the built-in type it replaced.
 #[test]
-fn the_golden_graphs_name_the_camera_audio_and_codec_modules_by_their_module_types() {
+fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
     register_media_builtin_processor_types();
     for path in golden_graph_paths() {
         let node_types = node_types_in(&golden_graph_document(&path));
@@ -202,6 +202,8 @@ fn the_golden_graphs_name_the_camera_audio_and_codec_modules_by_their_module_typ
             "tatolab.camera:CameraSource",
             "tatolab.microphone:MicrophoneSource",
             "tatolab.speaker:SpeakerSink",
+            "tatolab.opus:OpusEncoder",
+            "tatolab.opus:OpusDecoder",
             "tatolab.h264:H264Encoder",
             "tatolab.h264:H264Decoder",
             "tatolab.h265:H265Encoder",

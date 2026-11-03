@@ -307,7 +307,7 @@ impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestructi
     }
 
     /// How many entries await destruction.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn count(&self) -> usize {
         self.entries_awaiting_destruction.lock().len()
     }

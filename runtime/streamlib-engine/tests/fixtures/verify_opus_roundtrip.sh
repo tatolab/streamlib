@@ -39,12 +39,20 @@ while [ $# -gt 0 ]; do
 done
 
 # What this arm can be skipped for. No audio device is in the path, and libopus
-# is linked into the engine — what is left is the runtime unit, and the GPU the
-# engine's own context needs. A render node that exists but cannot make a
+# is linked into the `tatolab-opus` module this arm builds — what is left is the
+# runtime unit, and the GPU the engine's own context needs. A render node that exists but cannot make a
 # Vulkan device is an engine-visible failure and gets the failure verdict, not
 # a quiet skip.
 require_the_runtime_unit
 require_the_fixture_venv
+# Built from this tree on every run, so the arm scores the module as it stands
+# rather than whichever build the shared fixture venv last took.
+echo "installing tatolab-opus from this tree into the fixture venv" >&2
+if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet --reinstall-package tatolab-opus \
+    "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-opus" >&2; then
+    echo "ERROR: could not install tatolab-opus into the fixture venv" >&2
+    exit 1
+fi
 # Built before the stream runs, so the build takes none of the signal's window.
 require_tatolab_read_track
 if ! compgen -G "/dev/dri/renderD*" >/dev/null; then

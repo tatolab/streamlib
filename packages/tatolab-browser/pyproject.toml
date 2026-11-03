@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-browser"
+version = "0.1.0"
+description = "A web page as a stream source: Chromium (CEF) renders it offscreen in the node's helper, and its frames, audio and events are published through the module host table."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+# PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
+# dependency's, CEF and Chromium included.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Video",
+]
+# A minimum, never an exact pin, as a third party's package depends on it.
+dependencies = ["tatolab-stream>=0.68.8"]
+
+[project.entry-points."tatolab.nodes"]
+BrowserSource = "tatolab.browser.browser_source:BrowserSource"
+BrowserSourceOutputProbe = "tatolab.browser.browser_source_output_probe:BrowserSourceOutputProbe"
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.browser._native"
+features = ["pyo3/extension-module"]
+# CEF loads from `cef/` through `_native`'s `$ORIGIN/cef` rpath, beside the
+# resources it reads; an auditwheel repair would graft a second libcef and
+# the system libraries Chromium links into `tatolab.libs/` and repoint it.
+compatibility = "linux"
+# The CEF runtime and the subprocess binary, staged by `stage_cef_runtime.py`
+# and kept out of git. Relative to `python-source`.
+include = [{ path = "tatolab/browser/cef/**/*", format = "wheel" }]
+
+[tool.pyright]
+include = ["python", "streams"]
+extraPaths = ["python", "../streamlib-h264/python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = "none"

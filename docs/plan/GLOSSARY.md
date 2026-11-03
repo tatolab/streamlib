@@ -157,7 +157,7 @@ machine joins for an internet address. Never the runtime. _Avoid_: "gateway", "t
 "router", "endpoint".
 
 **Codec block**: an encoder or decoder node — the video codecs as the `tatolab-h264` and
-`tatolab-h265` modules (`H264Encoder`, `H265Decoder`, ...), the Opus pair still built-ins —
+`tatolab-h265` modules (`H264Encoder`, `H265Decoder`, ...), the Opus pair as `tatolab-opus` —
 configured like any node; its per-frame path never enters an interpreter. There is no muxer: a stream's last mile is a MoQ client's. The next
 codec follows the built-in criterion and is not a codec block by default. _Avoid_: "codec
 processor" (user-authored shape), "codec plugin" (pre-pivot).

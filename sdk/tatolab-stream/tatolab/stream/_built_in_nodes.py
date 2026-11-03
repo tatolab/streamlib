@@ -14,10 +14,6 @@ from typing import ClassVar, Literal, TypedDict
 from ._built_in_node import BuiltInNode
 
 __all__ = [
-    "OpusDecoder",
-    "OpusDecoderConfig",
-    "OpusEncoder",
-    "OpusEncoderConfig",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
     "TestPatternSource",
@@ -25,111 +21,6 @@ __all__ = [
     "VirtualCameraSink",
     "VirtualCameraSinkConfig",
 ]
-
-
-class OpusDecoderConfig(TypedDict, total=False):
-    """`OpusDecoder`'s config: the keys `stream_builder.add` takes."""
-
-
-class OpusDecoder(BuiltInNode[OpusDecoderConfig]):
-    """Decodes Opus media frames to audio blocks via libopus.
-
-    `encoded_audio` takes media frames in the layout `OpusEncoder` publishes and the
-    moq-dev players read — a QUIC varint timestamp, then one Opus packet — and declares
-    no window contract: an encoded link carries whole packets, and reframing a
-    compressed bitstream is not a thing the stage could do. The channel count and the
-    encoder's lookahead come from the `OpusHead` in the upstream port's catalog entry.
-    An audio entry carrying no `OpusHead` names the channel count; with no entry at all,
-    the first packet's TOC fixes one or two channels for the run. Either way nothing is
-    trimmed. A message that is not a media frame, an upstream entry that is not an
-    `opus` audio entry, an `OpusHead` that does not read, and a `pre_skip` past the 5
-    760 samples one Opus packet can span are refused by name. `audio` publishes ordinary
-    `AudioBlock` bags — `f32` at 48 000 Hz in the stream's own channel count.
-
-    The entry is read as it stands when each packet decodes, and no packet names the
-    entry it was written under. When the upstream re-mints for a new channel count,
-    packets still queued on the link decode under the new entry until the first packet
-    written in the new count arrives. Between one and two channels they decode, down- or
-    up-mixed into the new count; across any other change libopus refuses them, decodes
-    them as noise, or places their channels on the wrong speakers. When a queued packet
-    does decode, the re-entry's `pre_skip` trim lands on it, so the new encoder's
-    lookahead plays rather than being trimmed.
-
-    It enters the stream at any packet, since every Opus packet opens a group, and trims
-    the encoder's `pre_skip` lookahead at entry — so the first block after entry is
-    short by exactly that many samples. Stamps are derived from the entry packet's own
-    stamp plus the samples emitted since, so the first emitted sample is the stamped
-    instant rather than one lookahead later.
-
-    A read reporting lost packets resets the decoder, re-enters at that packet, and logs
-    how many it did not see. Nothing is invented to bridge the loss — no concealment, no
-    FEC decode — so it stays derivable from the stamps either side.
-
-    Inputs:
-        `encoded_audio` (ordered): Opus media frames to decode.
-
-    Outputs:
-        `audio`: Decoded audio blocks at 48 kHz in the stream's own channel count.
-            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-
-    Config: `OpusDecoderConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:OpusDecoder"
-
-
-class OpusEncoderConfig(TypedDict, total=False):
-    """`OpusEncoder`'s config: the keys `stream_builder.add` takes."""
-
-    application: Literal["audio", "voip", "lowdelay"] | None
-    """Which tuning libopus encodes for. Absent means `audio`.
-
-    Values:
-        `audio`: Broadcast and high fidelity: the decoded audio should be as close as
-            possible to the input.
-        `voip`: Speech: listening quality and intelligibility matter most.
-        `lowdelay`: Lowest achievable latency, at a cost in quality.
-    """
-
-    bitrate_bps: int | None
-    """Target bitrate in bits per second. Absent, libopus picks its own from the sample
-    rate and channel count.
-    """
-
-
-class OpusEncoder(BuiltInNode[OpusEncoderConfig]):
-    """Encodes 20 ms windows of audio to Opus via libopus.
-
-    `audio` declares `audio_window(sample_rate=48000, dtype="f32", window_size=960,
-    hop=960)` and states no channel count, so the engine resamples to Opus's own clock,
-    converts to `f32` and frames into 20 ms windows while the count follows whatever the
-    source publishes — one microphone and one ambisonic rig reach this encoder with
-    nothing configured between them. One to eight channels; more is refused by name.
-    `encoded_audio` publishes one media frame per Opus packet, the layout the moq-dev
-    players read: a QUIC varint timestamp in microseconds, then the packet, each one
-    opening its own group. The port's catalog entry is an `AudioEntry` — `opus`, 48 000
-    Hz, the channel count — carrying the `OpusHead` hex-encoded in `description`, so a
-    decoder learns the channel count and the encoder's lookahead before the first
-    packet.
-
-    The libopus encoder is minted from the first window's channel count — one or two
-    channels as a single stream, three to eight as a multistream under channel mapping
-    family 1 — and re-mints when the source's count changes, which libopus offers no
-    other mechanism for. A re-mint costs prediction state, not decodability, and
-    replaces the port's catalog entry with one naming the new count. In-band FEC and DTX
-    are off and are not knobs.
-
-    Inputs:
-        `audio` (ordered): Audio to encode, resampled and framed to 20 ms at Opus's own
-            rate in the source's own channel count.
-
-    Outputs:
-        `encoded_audio`: Opus media frames, one packet each.
-
-    Config: `OpusEncoderConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:OpusEncoder"
 
 
 class _RelayTrackSourceConfigRequiredKeys(TypedDict):

@@ -340,6 +340,7 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
         EscalateRequestRunCpuReadbackCopyDirection {
             BufferToImage => "buffer_to_image",
             ImageToBuffer => "image_to_buffer",
+            WholeBufferToImage => "whole_buffer_to_image",
         }
         EscalateRequestRunGraphicsDrawDrawKind {
             Draw => "draw",

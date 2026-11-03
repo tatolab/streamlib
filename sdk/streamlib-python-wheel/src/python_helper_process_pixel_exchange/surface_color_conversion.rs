@@ -4,10 +4,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::{
-    HelperProcessGpuExchangeClient, escalate_round_trip_to_parent,
-    hand_a_release_handle_to_the_release_worker,
-};
+#[cfg(target_os = "linux")]
+use super::hand_a_release_handle_to_the_release_worker;
+use super::{HelperProcessGpuExchangeClient, escalate_round_trip_to_parent};
 
 /// The `ColorInfo` attributes the conversion reads, each an H.273 axis name.
 const COLOR_INFO_AXIS_ATTRIBUTES: [&str; 4] = ["primaries", "transfer", "matrix", "range"];
@@ -62,6 +61,7 @@ impl HelperProcessGpuExchangeClient {
     /// Forget the adoption `surface_id`, handing the parent the release of
     /// the conversion source it resolved for it; nothing more when no
     /// conversion ever named it.
+    #[cfg(target_os = "linux")]
     pub(crate) fn release_the_color_conversion_source_the_parent_resolved(
         &self,
         python: Python<'_>,

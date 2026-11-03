@@ -19,16 +19,14 @@ from importlib.metadata import distribution
 import pytest
 
 # The projects whose notices `cargo about` structurally cannot produce, appended
-# to the file by hand. Four arrive
-# through `shaderc-sys` as `libshaderc_combined.a`; libopus arrives through
-# `opusic-sys`, statically linked as `libopus.a` so the wheel carries the Opus
-# codec without a `DT_NEEDED` entry; VulkanMemoryAllocator and
-# Vulkan-Headers are checked into `vendor/tatolab-vulkanalia-vma/` and compiled
-# by its build script; PipeWire's SPA layer is checked into
-# `vendor/pipewire-headers/` and compiled by the engine's own build script — no
-# PipeWire library is linked, but its header-only inline code ships in the
-# binary. `cargo about` reads `cargo metadata`, and none of those is a package
-# in that graph, so tooling cannot find them.
+# to the file by hand. Four arrive through `shaderc-sys` as
+# `libshaderc_combined.a`; VulkanMemoryAllocator and Vulkan-Headers are checked
+# into `vendor/tatolab-vulkanalia-vma/` and compiled by its build script;
+# PipeWire's SPA layer is checked into `vendor/pipewire-headers/` and compiled
+# by the engine's own build script — no PipeWire library is linked, but its
+# header-only inline code ships in the binary. `cargo about` reads `cargo
+# metadata`, and none of those is a package in that graph, so tooling cannot
+# find them.
 #
 # The macOS and Linux wheels carry a prebuilt Vulkan loader and a driver —
 # MoltenVK on macOS, Mesa's lavapipe on Linux — so the projects compiled into
@@ -43,7 +41,6 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "glslang",
     "SPIRV-Tools",
     "SPIRV-Headers",
-    "libopus",
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
     "PipeWire",

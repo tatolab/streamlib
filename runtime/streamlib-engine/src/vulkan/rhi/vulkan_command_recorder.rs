@@ -611,6 +611,7 @@ impl RhiCommandRecorderInner {
     /// Submit with the given semaphore waits and signals. Mirrors
     /// [`Self::submit_inner`]'s recorder-state and fence bookkeeping so the
     /// next [`Self::begin`] waits correctly.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn submit_with_semaphores(
         &mut self,
         waits: &[vk::SemaphoreSubmitInfo],
@@ -697,6 +698,7 @@ impl RhiCommandRecorderInner {
     /// When both sides are `None` the caller gets a bare submission with
     /// no host wait — use [`Self::submit_and_wait`] if a host-side drain
     /// is needed instead.
+    #[cfg(target_os = "linux")]
     #[tracing::instrument(level = "trace", skip(self, wait, signal), fields(label = %self.label))]
     pub fn submit_waiting_and_signaling_timeline(
         &mut self,

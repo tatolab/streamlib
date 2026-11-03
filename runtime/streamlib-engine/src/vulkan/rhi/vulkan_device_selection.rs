@@ -39,6 +39,7 @@ pub(crate) enum VulkanDevicePassOverReason {
     LogicalDeviceCreationRefused { vulkan_error: vk::ErrorCode },
     /// A sentinel allocation failed in an export flavour the device
     /// advertises.
+    #[cfg(any(target_os = "linux", test))]
     ExportPoolSentinelAllocationFailed { refusal: String },
     /// Any other step of bringing the device up failed.
     DeviceBringUpFailed { refusal: String },
@@ -61,6 +62,7 @@ impl std::fmt::Display for VulkanDevicePassOverReason {
             Self::LogicalDeviceCreationRefused { vulkan_error } => {
                 write!(formatter, "vkCreateDevice failed: {vulkan_error}")
             }
+            #[cfg(any(target_os = "linux", test))]
             Self::ExportPoolSentinelAllocationFailed { refusal } => write!(
                 formatter,
                 "a sentinel allocation failed in an export flavour the device advertises: {refusal}"

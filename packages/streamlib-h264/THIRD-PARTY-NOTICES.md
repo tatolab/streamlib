@@ -1189,10 +1189,12 @@ the following restrictions:
 
 ## Notices `cargo about` cannot produce
 
-Every project below is compiled into the wheel by
-`vendor/tatolab-vulkanalia-vma/build.rs` from sources checked into this repository, so it
-appears in no resolve graph `cargo about` walks. These sections are appended by
+Every project below ships inside the wheel and owes terms the generated half above
+cannot carry: it is compiled in from vendored sources, and so appears in no resolve
+graph `cargo about` walks. These sections are appended by
 `cargo xtask generate-third-party-notices`.
+
+- Checked into this repository, compiled by `vendor/tatolab-vulkanalia-vma/build.rs`: VulkanMemoryAllocator and Vulkan-Headers
 
 ### VulkanMemoryAllocator (MIT)
 

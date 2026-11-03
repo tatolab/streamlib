@@ -174,8 +174,8 @@ fn a_tone_played_through_the_built_in_speaker_is_heard_by_the_built_in_microphon
                         }
                         None => 0.0,
                     };
-                    for channel in frame.chunks_exact_mut(4) {
-                        channel.copy_from_slice(&sample.to_le_bytes());
+                    for channel in frame.as_chunks_mut::<4>().0 {
+                        *channel = sample.to_le_bytes();
                     }
                 }
             },

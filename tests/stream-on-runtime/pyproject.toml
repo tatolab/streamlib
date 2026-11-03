@@ -23,6 +23,8 @@ dependencies = [
     # The video codec nodes the codec, relay and scaffold fixtures add.
     "tatolab-h264",
     "tatolab-h265",
+    # The Opus nodes the codec and wiring fixtures add.
+    "tatolab-opus",
     "pytest>=7.0",
     "numpy>=2.1",
     # The official MCP Python SDK, whose streamable-HTTP client drives a
@@ -57,6 +59,7 @@ tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = tr
 tatolab-camera = { path = "../../packages/tatolab-camera" }
 tatolab-h264 = { path = "../../packages/streamlib-h264" }
 tatolab-h265 = { path = "../../packages/streamlib-h265" }
+tatolab-opus = { path = "../../packages/tatolab-opus" }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's

@@ -1,21 +1,23 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The surface verbs of the module host table: a foreign DMA-BUF or IOSurface import, a
-//! node output pool texture, a lend of a surface a message names, and the engine's
-//! colour conversion between them,
-//! each a round trip on the helper's native escalate channel or its
-//! surface-share socket, with no Python on either end.
+//! The surface verbs of the module host table: a foreign DMA-BUF or IOSurface
+//! import, a node output pool texture, a lend of a surface a message names, the
+//! engine's colour conversion between them, and a write of host-memory pixels
+//! into a texture, each a round trip on the helper's native escalate channel or
+//! its surface-share socket, with no Python on either end.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+#[cfg(target_os = "linux")]
+use tatolab_module_sdk::module_host_table_abi::MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES;
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, ModuleHostTableColorInfo,
-    ModuleHostTableDmaBufImport, ModuleHostTableIOSurfaceImport,
-    ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
@@ -46,6 +48,9 @@ struct SurfaceLentToNativeCode {
 /// and the channels their verbs ride.
 pub(super) struct SurfacesLentToNativeCode {
     surfaces_by_handle_value: Mutex<HashMap<u64, SurfaceLentToNativeCode>>,
+    /// Held across one host-memory write, so two never fill a staging mapping at once.
+    #[cfg(target_os = "linux")]
+    host_memory_write_in_progress: Mutex<()>,
     next_handle_value: AtomicU64,
     native_escalate_channel: Option<Arc<HelperProcessNativeEscalateChannel>>,
     surface_share_client: Option<Arc<HelperProcessGpuExchangeClient>>,
@@ -58,6 +63,8 @@ impl SurfacesLentToNativeCode {
     ) -> Self {
         Self {
             surfaces_by_handle_value: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "linux")]
+            host_memory_write_in_progress: Mutex::new(()),
             next_handle_value: AtomicU64::new(1),
             native_escalate_channel,
             surface_share_client,
@@ -87,6 +94,29 @@ impl SurfacesLentToNativeCode {
             },
         );
         ModuleHostTableSurfaceHandle { value }
+    }
+
+    /// The surface id an output-pool texture's handle names; an imported
+    /// foreign surface's handle is refused, because its pixels are its producer's.
+    #[cfg(target_os = "linux")]
+    fn output_pool_texture_id_of_a_handle(
+        &self,
+        surface: ModuleHostTableSurfaceHandle,
+    ) -> Result<String, String> {
+        match self.surfaces_by_handle_value.lock().get(&surface.value) {
+            Some(lent) if lent.origin == SurfaceLentToNativeCodeOrigin::NodeOutputPoolTexture => {
+                Ok(lent.surface_id.clone())
+            }
+            Some(lent) => Err(format!(
+                "surface {} is an imported foreign surface, which takes no write: acquire a texture \
+                 from a node output pool",
+                lent.surface_id
+            )),
+            None => Err(format!(
+                "surface handle {} names no surface this table lent",
+                surface.value
+            )),
+        }
     }
 
     fn surface_id_of_a_handle(
@@ -319,6 +349,83 @@ impl SurfacesLentToNativeCode {
             .map(|_answer| ())
     }
 
+    /// Write `pixels` over every pixel of `destination`: the rows into the
+    /// surface's host-visible staging, then the staging over the texture.
+    #[cfg(target_os = "linux")]
+    pub(super) fn write_from_host_memory(
+        &self,
+        destination: ModuleHostTableSurfaceHandle,
+        pixels: &ModuleHostTableHostMemoryPixels,
+    ) -> Result<(), String> {
+        use super::host_memory_pixel_rows::{FourBytePixelRows, copy_four_byte_pixel_rows};
+        use crate::python_helper_process_pixel_exchange::CpuReadbackCopyDirection;
+        use streamlib::sdk::rhi::PixelFormat;
+
+        let destination_surface_id = self.output_pool_texture_id_of_a_handle(destination)?;
+        // SAFETY: the SDK hands views live for the call.
+        let (pixel_format_name, pixel_bytes) =
+            unsafe { (pixels.pixel_format.as_str(), pixels.pixels.as_slice()) };
+        let pixel_format_name = pixel_format_name
+            .map_err(|not_utf8| format!("a pixel format name is UTF-8: {not_utf8}"))?;
+        let source = FourBytePixelRows {
+            bytes: pixel_bytes,
+            format: PixelFormat::parse_wire_name(pixel_format_name)?,
+            width: pixels.width,
+            height: pixels.height,
+            row_stride_bytes: pixels.row_stride_bytes,
+        };
+        let native_escalate_channel = self.native_escalate_channel()?;
+        let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
+            "this helper was started without its surface-share socket, so it reaches no \
+             staging to write host memory through"
+                .to_string()
+        })?;
+        let _only_write_through_this_nodes_stagings = self.host_memory_write_in_progress.lock();
+        let staging = surface_share_client.open_cpu_readback_export_from_native_code(
+            native_escalate_channel,
+            &destination_surface_id,
+        )?;
+        if !staging.writable {
+            return Err(format!(
+                "surface {destination_surface_id} takes no write: acquire it from a node \
+                 output pool, whose textures take one"
+            ));
+        }
+        let staging_byte_size = staging.consumer_buffer.size() as usize;
+        // SAFETY: the mapping spans the staging's whole allocation and lives
+        // as long as the memoised import; the write lock above keeps every
+        // other host-memory write of this node out of it, and the parent reads
+        // the staging only inside the copy below, after this borrow ends.
+        let staging_bytes = unsafe {
+            std::slice::from_raw_parts_mut(staging.consumer_buffer.mapped_ptr(), staging_byte_size)
+        };
+        copy_four_byte_pixel_rows(
+            &source,
+            staging.format,
+            staging.bytes_per_row,
+            staging.width,
+            staging.height,
+            staging_bytes,
+        )?;
+        surface_share_client.run_cpu_readback_copy_from_native_code(
+            native_escalate_channel,
+            CpuReadbackCopyDirection::WholeStagingOverTheSurface,
+            &destination_surface_id,
+            &staging,
+        )
+    }
+
+    /// Refuses by name: the host-visible staging this writes through is
+    /// Linux's.
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn write_from_host_memory(
+        &self,
+        _destination: ModuleHostTableSurfaceHandle,
+        _pixels: &ModuleHostTableHostMemoryPixels,
+    ) -> Result<(), String> {
+        Err("surface_write_from_host_memory is served on Linux only".to_string())
+    }
+
     /// The surface id a handle names, as a view the map keeps alive until the
     /// handle is released; empty for a handle that names nothing.
     pub(super) fn surface_id_view(
@@ -411,6 +518,8 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     use super::*;
+    #[cfg(target_os = "linux")]
+    use tatolab_module_sdk::module_host_table_abi::ModuleHostTableBytes;
 
     /// A parent stand-in that answers each request with `answer_for` and hands
     /// back every request it saw once the channel closes.
@@ -473,6 +582,30 @@ mod tests {
             matrix: ModuleHostTableUtf8::of("bt709"),
             range: ModuleHostTableUtf8::of(range),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_host_memory_write_over_an_imported_dma_buf_is_refused_before_any_staging_opens() {
+        let surfaces = SurfacesLentToNativeCode::new(None, None);
+        let imported = surfaces.lend(
+            "foreign-dma-buf#1".to_string(),
+            SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,
+        );
+        let pixels = [0u8; 16];
+        let host_memory_pixels = ModuleHostTableHostMemoryPixels {
+            pixels: ModuleHostTableBytes::of(&pixels),
+            pixel_format: ModuleHostTableUtf8::of("bgra32"),
+            width: 2,
+            height: 2,
+            row_stride_bytes: 8,
+        };
+
+        let refusal = surfaces
+            .write_from_host_memory(imported, &host_memory_pixels)
+            .unwrap_err();
+
+        assert!(refusal.contains("imported foreign surface"), "{refusal}");
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.14](https://github.com/tatolab/streamlib/compare/v0.68.13...v0.68.14) (2026-11-03)
+
+
+### Features
+
+* **tatolab-browser:** a web page as a stream source on CEF's CPU paint path ([#3083](https://github.com/tatolab/streamlib/issues/3083)) ([78b16c4](https://github.com/tatolab/streamlib/commit/78b16c4bd1124ed461a1a91e75134cbd7c9264bf))
+
 ## [0.68.13](https://github.com/tatolab/streamlib/compare/v0.68.12...v0.68.13) (2026-11-03)
 
 
