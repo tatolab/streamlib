@@ -371,7 +371,6 @@ fn initialize_cef(
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     remove_cef_cache_directories_whose_helper_has_exited(&std::env::temp_dir());
     let root_cache_directory = create_an_owner_only_cef_cache_directory()?;
-    remove_this_helpers_cef_cache_directory_when_it_exits(&root_cache_directory);
     let path_text = |path: &Path| CefString::from(path.to_string_lossy().as_ref());
     let settings = Settings {
         no_sandbox: 1,
@@ -408,6 +407,7 @@ fn initialize_cef(
             root_cache_directory.join("cef.log").display()
         ));
     }
+    remove_this_helpers_cef_cache_directory_when_it_exits(&root_cache_directory);
     Ok(())
 }
 
