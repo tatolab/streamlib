@@ -38,11 +38,16 @@ def cef_distribution_directory(cef_path: Path) -> Path:
     return found[0]
 
 
-def strip_debug_sections(shared_library: Path) -> None:
-    """Remove `shared_library`'s debug sections in place; its dynamic symbols stay."""
+def strip_executable_on_path() -> str:
+    """The `strip` that removes CEF's debug sections, refused by name when absent."""
     strip_executable = shutil.which("strip")
     if strip_executable is None:
         raise SystemExit("no `strip` on PATH; CEF's libraries ship stripped of debug sections")
+    return strip_executable
+
+
+def strip_debug_sections(strip_executable: str, shared_library: Path) -> None:
+    """Remove `shared_library`'s debug sections in place; its dynamic symbols stay."""
     subprocess.run([strip_executable, "--strip-debug", str(shared_library)], check=True)
 
 
@@ -51,6 +56,7 @@ def is_a_shared_library(path: Path) -> bool:
 
 
 def stage(cef_directory: Path, subprocess_executable: Path) -> None:
+    strip_executable = strip_executable_on_path()
     for required_name in RUNTIME_FILE_NAMES:
         if not (cef_directory / required_name).is_file():
             raise SystemExit(
@@ -69,7 +75,7 @@ def stage(cef_directory: Path, subprocess_executable: Path) -> None:
             staged_entry = STAGED_RUNTIME_DIRECTORY / entry.name
             shutil.copy2(entry, staged_entry)
             if is_a_shared_library(staged_entry):
-                strip_debug_sections(staged_entry)
+                strip_debug_sections(strip_executable, staged_entry)
     for locale in sorted((cef_directory / "locales").glob("*.pak")):
         shutil.copy2(locale, STAGED_RUNTIME_DIRECTORY / "locales" / locale.name)
     staged_subprocess = STAGED_RUNTIME_DIRECTORY / SUBPROCESS_EXECUTABLE_NAME
