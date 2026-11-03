@@ -1280,18 +1280,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Records under `newest`. Built-ins never publish Records for data another family fits, and
   the node catalog marks a Records port unchecked. Owner, 2026-11-03. [strict-port-families]
   Rejected: audio as its own family — Channels is the same layout (owner, 2026-11-03).
-- **DECIDED** — `connect` compares two ports' families by equality and refuses a mismatch,
+- **DECIDED** — The families are the engine's foundation of primitives, as Holoscan's and
+  TouchDesigner's are: a small, clearly defined set in place of a loose system or a
+  negotiated one. `connect` compares two ports' families by equality and refuses a mismatch,
   naming both sides, before a frame flows. Inside a family names are open — channel names,
   attribute names, record keys and codec strings pass through unknown — and an input may
   require names (`requires=("rpm",)`), checked at `connect` against the output's declared
-  names. Conversion between families is always a node an author or an agent places
-  (`ChannelsToImage`, `ImageToArray`, a decoder): the engine inserts no converter and never
-  moves a payload between GPU and CPU on its own. `ImageToArray` is zero-copy where the
-  layouts match. Ports are class attributes carrying their family (`Input(Image,
+  names. The trade is accepted: a person or an agent converts between families explicitly,
+  with a node they place (`ChannelsToImage`, `ImageToArray`, a decoder), and no conversion is
+  ever automatic or implied — the engine inserts none and never moves a payload between GPU
+  and CPU on its own — so a slow path is always one somebody wrote and can see in the graph.
+  `ImageToArray` is zero-copy where the layouts match. Ports are class attributes carrying their family (`Input(Image,
   delivery="newest")`, `Output(Channels, names=(…), rate=…)`), so pyright infers what a read
   returns and a mistyped port fails at import. Owner, 2026-11-03. [strict-port-families]
-  Rejected: capability negotiation between ports, and converters the engine inserts — a link's
-  result and its cost stop being predictable to an author or an agent (owner, 2026-11-03).
+  Rejected: capability negotiation between ports (GStreamer's caps), and converters the engine
+  inserts (Holoscan's `auto_insert_converters`) — a link's path and its cost stop being visible
+  to an author or an agent (owner, 2026-11-03).
 - **OPEN** — How a port's names and `requires=` are spelled beyond the shape above. Decided with
   the change that builds the families. [strict-port-families]
 - **DECIDED** — The data plane is zero-copy by family. Each family's descriptor is a fixed
@@ -3228,20 +3232,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
   one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853; amended by
   stream-interface-and-routing-policy: levels leave code for the routing policy below]
-- **DECIDED** — What reaches a relay is a runtime-owned routing policy, never the stream's code,
-  edited in the app, the CLI and MCP and applied live with the edge check above. Egress: every
-  exposed output is published by default, with a toggle per output and segments ("only
-  `kind:video` to Cloudflare"). Ingress, the same shape for exposed inputs, is off by default:
-  it binds an input to another stream's output or a remote track, and for a remote track the
-  runtime inserts the receive node itself. Relays are destinations: the runtime keeps a
+- **DECIDED** — What goes out where is decided on the publisher's side, by the runtime, never
+  in the stream's code, and applied live with the edge check above. For now that is one toggle:
+  every exposed output is published to every relay the machine has joined, and the owner turns
+  it off per relay in the app, the CLI or MCP. Relays are destinations: the runtime keeps a
   transport-neutral manifest of exposed ports — name, stream, family and its names — and the
   MoQ catalog and `.hang` are one projection of it, beside which WebRTC, NDI, SRT or a file
-  sink is each one adapter. In the app the policy lives in the Relays settings section, a page
+  sink is each one adapter. In the app the toggle lives in the Relays settings section, a page
   per relay. Owner, 2026-11-03. [stream-interface-and-routing-policy]
   Rejected: exposure levels and a `local_only` veto in code — where a port goes is the
   machine's owner's call, not the author's (owner, 2026-11-03).
-- **OPEN** — Whether ingress needs its own consent step before a binding opens a door into a
-  running stream. [stream-interface-and-routing-policy]
+- **OPEN** — The routing policy's final form, settled after the toggle has been tested: per-output
+  toggles and segments ("only `kind:video` to Cloudflare"); ingress, the same shape for exposed
+  inputs, binding an input to another stream's output or a remote track, off by default, with the
+  runtime inserting the receive node for a remote track, and whether it needs its own consent
+  step; a compose-style file that seeds it; and whether the publisher and the relays stay
+  separate concerns. Direction (review, not decided): routing logic on the publisher's side,
+  in the spirit of Docker's `EXPOSE` and `-p`. [stream-interface-and-routing-policy]
 - **DECIDED** — Every exposed port is a track at a relay, named by its address, and that is the
   one way a port is read from outside its stream — by another stream through the relay source
   node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,

@@ -25,6 +25,12 @@ code: Records takes plain dicts and encodes them itself.
 
 ## Why
 
+- **A foundation of primitives, not a loose system.** Holoscan and TouchDesigner each build on a
+  small, clearly defined set of data types rather than bytes or negotiated capabilities. The
+  set is the foundation everything else composes on, and the families are ours.
+- **No accidental slow paths.** The trade is that a person or an agent converts explicitly. In
+  return, no conversion is ever automatic or implied, so a developer can never create a
+  non-optimal path by accident: every conversion is a node someone placed and can see.
 - **Agents and editors need something to wire against.** With bytes alone, nothing in the
   graph says whether two ports fit, and a mismatch surfaces as a decode failure deep in a
   consumer. One family tag compared by equality is the least type system that makes a graph
@@ -35,9 +41,6 @@ code: Records takes plain dicts and encodes them itself.
 - **Zero copy needs a known layout.** A payload the engine cannot read cannot be borrowed in
   place. A fixed descriptor per family lets Python read through the buffer protocol and DLPack,
   and lets an encoder write straight into shared memory.
-- **Strict is easier to reason about, for people and for agents.** An engine that converts
-  on its own, or moves a frame from GPU to CPU behind the author's back, hides cost and makes
-  a graph's behaviour depend on what the engine chose.
 
 ## Rejected alternatives
 

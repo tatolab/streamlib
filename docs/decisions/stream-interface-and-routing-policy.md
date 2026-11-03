@@ -19,12 +19,13 @@ own name. `stream_builder.add` takes a `@stream` function as it takes a node cla
 parameters are promoted config, its exposed ports are the only reachable ones, and it flattens
 at compile with scoped node names. The same function still runs alone as a stream.
 
-Outside code, a runtime-owned routing policy decides what goes where, edited in the app, the
-CLI and MCP. Egress publishes every exposed output by default, with per-output toggles and
-segments. Ingress binds an exposed input to another stream's output or a remote track, off by
-default; for a remote track the runtime inserts the receive node. Relays are destinations over
-a transport-neutral manifest of exposed ports; the MoQ catalog is one projection of it. In the
-app, the policy lives in the existing Relays settings section, a page per relay.
+Outside code, the runtime decides what goes out where, on the publisher's side. For now that
+is one toggle: every exposed output is published to every relay the machine has joined, turned
+off per relay in the app (the existing Relays settings section, a page per relay), the CLI or
+MCP. Relays are destinations over a transport-neutral manifest of exposed ports; the MoQ
+catalog is one projection of it. The policy's final form — per-output toggles, segments,
+ingress, a compose-style file, and whether the publisher and the relays stay separate — is
+left OPEN until the toggle has been tested.
 
 ## Why
 
@@ -48,7 +49,9 @@ app, the policy lives in the existing Relays settings section, a page per relay.
 ## Consequences
 
 - `Exposure`, its levels and `expose_port {level}` leave the stream package and the local API.
+- The routing policy is deliberately immature: publishing everything is the simple start, and
+  the shape of the logic on the publisher's side is settled after testing.
 - Ingress opens a door into a running stream, so whether it needs its own consent step is
-  left OPEN.
+  left OPEN with the rest of the policy.
 - Nesting and which installed `@stream` functions are addable are left OPEN.
 - Each transport beyond MoQ is one adapter over the manifest.

@@ -150,9 +150,9 @@ outside it, whether it runs alone or as a **subgraph**. _Avoid_: "API", "public 
 its extra parameters promoted config, flattened at compile under the reference's name. _Avoid_:
 "component", "COMP", "macro".
 
-**Routing policy** _(crosses)_: the runtime-owned rules, edited in the app, the CLI or MCP, for
-which exposed outputs reach which relay (egress) and which exposed inputs are bound to what
-(ingress). Never in a stream's code. _Avoid_: "exposure level", "publish settings".
+**Routing policy** _(crosses)_: what the runtime decides, on the publisher's side, about which
+exposed outputs reach which relay — for now one toggle per relay, edited in the app, the CLI or
+MCP. Never in a stream's code. _Avoid_: "exposure level", "publish settings".
 
 **Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
