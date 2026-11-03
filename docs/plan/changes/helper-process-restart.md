@@ -20,7 +20,7 @@ stream keeps running around a hole until the stream is re-run.
 - **A crash loop ends.** A helper that keeps dying soon after it starts is given up on: the node
   is `failed`, with the last death's reason, and the rest of the stream keeps running as it does
   today.
-- **`graph` says what happened.** A node between a death and its next start reads `restarting`,
+- **`graph` says what happened.** A node between a death and its next start reads `Restarting`,
   with how many times it has been restarted and why it last died.
 - **One restart policy in the engine.** The local relay's children, the shared browser host and
   helper restart count deaths and wait between starts through one engine type, so there is one
@@ -81,7 +81,9 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   its backoff and starts again as the same node with a new processor instance — the old one died
   with its process: a fresh interpreter re-imports the class and constructs the instance, `setup()`
   runs on it with the node's current config, the setup command carries every link the node holds, `run`
-  follows, and each link reads `pending` until the new helper answers and then `wired`. A frame or
+  follows. A link's `graph` state is not re-stamped across a restart: a link `wired` before the
+  death reads `wired` throughout, and one still `pending` at the death is refused on the death path
+  and reads `error`, though the new helper's setup command still carries it. A frame or
   message in flight at the death is lost and never replayed; a Python processor's in-memory state
   is gone, as it is at every start. A restart gets a fresh loss-count board, as every spawn does.
   Budgets are engine-chosen and not authorable. [helper-process-restart]
@@ -98,12 +100,13 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   stream (`tatolab run`, or `tatolab start` after a stop) starts it with a fresh count. A restart
   whose `setup()` refuses, or whose helper refuses the engine's build id, counts as one death in a
   row, and its refusal is the reason the node carries. [helper-process-restart]
-- **ADDED (§Control plane & observability):** A helper-placed node in `graph` reads `restarting`
-  between a death and its next `ready`, with `restart_count` (restarts since the stream loaded) and
-  `last_exit_reason` (the exit status or signal, and the tail of the helper's standard error, as
-  the setup refusal already quotes it). A `failed` node carries the same fields beside its
-  `error_reason`. The MCP instructions name `restarting` beside `pending` and `error`.
-  [helper-process-restart]
+- **ADDED (§Control plane & observability):** A helper-placed node's `components.state` in `graph`
+  reads `Restarting` between a death and its next `ready`, and its
+  `components.helper_process_restarts` carries `restart_count` (restarts since the stream loaded)
+  and `last_exit_reason` (the exit status or signal, its pid, and the tail of the helper's standard
+  error, as the setup refusal already quotes it). A node past its limit reads `Error`, and the
+  readiness error names the crash loop and the last death's reason. The MCP instructions name
+  `Restarting` and the restart record. [helper-process-restart]
 
 ## MODIFIED
 
@@ -113,6 +116,11 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
 - **MODIFIED (§Processor model, the link-confirmation entry, `:1440-1452`):** a helper that dies
   with a link unconfirmed still takes the link down on the death path; the restarted helper's setup
   command carries it again, so it reads `pending` and then `wired` or `error`.
+- **MODIFIED (§Processor model, the loss-count board entry, `:1114-1137`):** a restarted helper
+  gets a fresh board, and each wiring's counts stay cumulative across the restart: the parent
+  keeps what the dead helper's board last held for every wiring still in place and adds it to what
+  the new board reads, so a link's losses never go backwards in `graph`; a reconnect still starts
+  from zero.
 - **MODIFIED (§Processor model, failure isolation, `:1629-1648`):** "Python crashes and hangs stay
   in their own process" gains "and a crashed helper is restarted within its crash-loop limit".
 - **MODIFIED (§Product, "There are no restart policies", `:209`):** reads "There are no stream
@@ -125,7 +133,7 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   retries stays open.
 - **MODIFIED (engine code):**
   - `thread_runner.rs:826-835` — the Manual loop asks the host to restart instead of latching
-    `Error`, and moves the state to `restarting`, `running` and `failed` with reasons; the backoff
+    `Error`, and moves the state to `Restarting`, `Running` and `Error` with reasons; the backoff
     is a monotonic deadline checked in the existing 100 ms poll, never a sleep, so a shutdown
     during the wait is seen within one poll.
   - `ProcessorInterpreterSpawnHostProcessor` gains the restart: reset `child_is_gone`,

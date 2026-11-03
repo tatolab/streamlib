@@ -246,6 +246,9 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// graph shows this processor in error; the frame in flight is lost, and
     /// is never silently replayed.
     child_is_gone: bool,
+    /// Why the helper died on its own — its exit and the end of its standard
+    /// error — once the engine noticed and took its group down.
+    why_the_helper_process_died_on_its_own: Option<String>,
     /// Set once this helper has been through the shutdown ask, so the ladder's
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
@@ -601,7 +604,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
 
     /// Take the group down with no cooperative rung at all — see
     /// [`HelperProcessShutdownLadder::skip_to_terminating_the_process_group`].
-    fn take_the_helper_process_group_down(&mut self) {
+    fn take_the_helper_process_group_down(&mut self) -> Option<String> {
         let outcome = self.child.take().map(|child| {
             HelperProcessShutdownLadder::taking_over(
                 self.processor_display_name.clone(),
@@ -612,7 +615,16 @@ impl ProcessorInterpreterSpawnHostProcessor {
             )
             .skip_to_terminating_the_process_group()
         });
+        let how_the_helper_process_ended = outcome.as_ref().map(|outcome| match outcome {
+            HelperProcessShutdownOutcome::Reaped(exit_status) => {
+                format!("its helper process ended with {exit_status}")
+            }
+            HelperProcessShutdownOutcome::AbandonedAfterTheLadder => {
+                "its helper process outlived every signal sent to it and was abandoned".to_string()
+            }
+        });
         self.close_the_engines_end_of_the_helper_process(outcome);
+        how_the_helper_process_ended
     }
 
     /// Let go of everything this end held for the helper, whichever way it went.
@@ -1316,21 +1328,73 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
     /// pid is gone went on reading as alive and issuing its privileged
     /// operations.
     fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {
-        if self.child_is_gone {
-            return;
-        }
         let Some(child) = self.child.as_ref() else {
             return;
         };
         if !a_child_process_has_exited_without_being_reaped(child.id()) {
             return;
         }
+        let helper_process_id = child.id();
         tracing::error!(
-            "[{}] its helper process (pid={}) died; taking its process group down with it",
+            "[{}] its helper process (pid={helper_process_id}) died; taking its process group \
+             down with it",
             self.processor_display_name,
-            child.id(),
         );
-        self.take_the_helper_process_group_down();
+        let how_the_helper_process_ended = self
+            .take_the_helper_process_group_down()
+            .unwrap_or_else(|| "its helper process ended".to_string());
+        let standard_error_tail = self
+            .child_standard_error_tail
+            .as_ref()
+            .map(|tail| {
+                tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+            })
+            .unwrap_or_default();
+        self.why_the_helper_process_died_on_its_own = Some(format!(
+            "{how_the_helper_process_ended} (pid={helper_process_id}). {}",
+            standard_error_tail_as_a_refusal_quotes_it(&standard_error_tail)
+        ));
+    }
+
+    fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
+        self.why_the_helper_process_died_on_its_own.clone()
+    }
+
+    fn restart_the_out_of_process_helper_that_died(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        if self.why_the_helper_process_died_on_its_own.is_none() {
+            return Err(Error::Runtime(format!(
+                "[{}] its helper process did not die on its own, so it is not restarted",
+                self.processor_display_name
+            )));
+        }
+        if self.child.is_some() {
+            self.take_the_helper_process_group_down();
+        }
+        self.why_the_helper_process_died_on_its_own = None;
+        self.child_is_gone = false;
+        self.shutdown_was_already_asked_of_this_helper = false;
+        self.child_standard_error_tail = None;
+        self.bridge = None;
+        self.link_wiring
+            .reopen_for_a_new_far_side_in_place_of_one_that_died();
+        tracing::info!(
+            "[{}] starting a new helper process in place of the one that died",
+            self.processor_display_name
+        );
+        let restarted = self
+            .set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
+                host.start_the_helper_process_and_await_its_registration(ctx)
+            })
+            .and_then(|()| self.start(ctx));
+        if let Err(restart_refusal) = &restarted {
+            // A restart that failed is one more death, and the next restart
+            // starts from it.
+            self.why_the_helper_process_died_on_its_own = Some(restart_refusal.to_string());
+        }
+        restarted
     }
 
     fn has_failed_unrecoverably(&self) -> bool {
@@ -1459,6 +1523,7 @@ pub(crate) fn spawn_host_for_processor_node(
         child_standard_error_tail: None,
         bridge: None,
         child_is_gone: false,
+        why_the_helper_process_died_on_its_own: None,
         shutdown_was_already_asked_of_this_helper: false,
         link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
             child_execution_config.execution,
@@ -2236,6 +2301,75 @@ sys.exit(0)
             ),
             "{refusal}"
         );
+    }
+
+    /// A helper that dies on its own mid-run is noticed by its process, its
+    /// group is taken down, and why it died — its exit and the end of its
+    /// standard error — is kept for the restart that follows.
+    ///
+    /// Fail-without-fix: keep the early return on a host already given up on
+    /// and a helper that died during a lifecycle exchange is never reaped or
+    /// restarted; drop the reason and the node restarts saying nothing.
+    #[test]
+    fn a_helper_that_died_on_its_own_is_noticed_with_its_exit_and_its_standard_error() {
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf 'Traceback (most recent call last):\\nRuntimeError: boom\\n' >&2; exit 3",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        let mut child = command.spawn().expect("sh starts");
+        let mut host = spawn_host_for_test();
+        host.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
+            child.stderr.take().expect("stderr is piped"),
+            "Pblur",
+        ));
+        let helper_process_id = child.id();
+        host.child = Some(child);
+        host.give_up_on_the_helper_process();
+        assert!(
+            a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
+            "the stand-in helper never exited"
+        );
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        assert!(host.child.is_none(), "the dead helper was not reaped");
+        assert!(host.has_failed_unrecoverably());
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the death is kept for the restart");
+        assert!(why.contains("exit status: 3"), "{why}");
+        assert!(why.contains(&format!("pid={helper_process_id}")), "{why}");
+        assert!(why.ends_with("RuntimeError: boom"), "{why}");
+    }
+
+    /// A helper the engine stopped itself, or one that is still alive, never
+    /// reads as having died on its own, so it is never restarted.
+    #[test]
+    fn a_helper_still_running_has_not_died_on_its_own() {
+        let mut host = spawn_host_for_test();
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep starts");
+        host.child = Some(child);
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        assert!(host.child.is_some());
+        assert_eq!(host.why_the_out_of_process_helper_died_on_its_own(), None);
+        if let Some(mut child) = host.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// A descendant still holding the pipe cannot stall the refusal: the wait

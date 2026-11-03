@@ -214,7 +214,7 @@ impl OutOfProcessLinkWiringEnvelope {
             "service_name": board.service_name(),
             "output_ports": board.output_port_names().collect::<Vec<_>>(),
         });
-        self.loss_counts.hold_the_board_of_this_spawn(board)?;
+        self.loss_counts.hold_the_board_of_this_spawn(board);
         Ok(setup_command_loss_count_board)
     }
 
@@ -430,6 +430,29 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Reopen the envelope for a new far side standing in for one that died:
+    /// every link recorded so far rides the new far side's setup command.
+    pub fn reopen_for_a_new_far_side_in_place_of_one_that_died(&self) {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        let how_links_reached_the_dead_far_side = std::mem::replace(
+            &mut recorded.how_a_link_reaches_the_far_side,
+            HowALinkReachesTheFarSide::RidesTheSetupCommand,
+        );
+        let reason = "the helper process this link was handed to died before answering";
+        match how_links_reached_the_dead_far_side {
+            HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => {
+                refuse_every_link_waiting_behind_the_setup_command(waiting, reason);
+            }
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
+                delivery.refuse_every_link_still_awaiting_the_far_sides_answer(reason);
+            }
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => {}
+        }
+    }
+
     /// The `ports` payload a setup command sent now would carry.
     #[cfg(test)]
     pub(crate) fn as_setup_command_ports(&self) -> JsonValue {
@@ -522,6 +545,26 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// by returning `Err` from the callback that failed.
     fn has_failed_unrecoverably(&self) -> bool {
         false
+    }
+
+    /// Why this processor's helper process died on its own, once the engine
+    /// has noticed and taken its group down; `None` for a processor with no
+    /// helper, one whose helper is alive, or one the engine stopped itself.
+    fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
+        None
+    }
+
+    /// Start a new helper process, with a new processor instance in it, in
+    /// place of one that died on its own: the same node, its current config
+    /// and every link it holds, then `run`.
+    fn restart_the_out_of_process_helper_that_died(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> crate::core::Result<()> {
+        Err(crate::core::Error::Runtime(
+            "this processor runs in the app process, so it has no helper process to restart"
+                .to_string(),
+        ))
     }
 
     /// Where to record this processor's link wiring, when its iceoryx2 ports
@@ -1060,6 +1103,54 @@ mod tests {
         assert!(
             link_ids_the_setup_command_carries(&envelope.as_setup_command_ports(), "outputs")
                 .is_empty()
+        );
+    }
+
+    /// A new helper standing in for one that died is handed every link the
+    /// node holds on its own setup command, those wired before the death and
+    /// those wired past the dead helper's setup alike.
+    ///
+    /// Fail-without-fix: leave the envelope refusing and the new helper's setup
+    /// command is refused; clear the recorded links on reopen and it opens no
+    /// port.
+    #[test]
+    fn a_reopened_envelope_hands_a_new_far_side_every_link_the_dead_one_held() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        record(&envelope, PortDirection::Input, "L-before-setup");
+        envelope.hold_every_later_link_until_the_setup_command_goes_out();
+        envelope
+            .send_the_setup_command_then_hand_every_later_link_over(
+                |_| Ok(()),
+                RecordingOutOfProcessFarSideLinkDelivery::default(),
+            )
+            .expect("the dead helper's setup command went out");
+        record(&envelope, PortDirection::Output, "L-past-setup");
+        envelope.refuse_every_later_link_because_the_far_side_is_gone(
+            "the helper process died".to_string(),
+        );
+
+        envelope.reopen_for_a_new_far_side_in_place_of_one_that_died();
+        envelope.hold_every_later_link_until_the_setup_command_goes_out();
+        let mut new_far_sides_setup_command_ports = None;
+        envelope
+            .send_the_setup_command_then_hand_every_later_link_over(
+                |ports| {
+                    new_far_sides_setup_command_ports = Some(ports);
+                    Ok(())
+                },
+                RecordingOutOfProcessFarSideLinkDelivery::default(),
+            )
+            .expect("the new helper's setup command goes out");
+
+        let ports = new_far_sides_setup_command_ports.expect("the setup command carried ports");
+        assert_eq!(
+            link_ids_the_setup_command_carries(&ports, "inputs"),
+            ["L-before-setup"]
+        );
+        assert_eq!(
+            link_ids_the_setup_command_carries(&ports, "outputs"),
+            ["L-past-setup"]
         );
     }
 }
