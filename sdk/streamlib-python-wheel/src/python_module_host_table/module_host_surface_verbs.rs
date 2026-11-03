@@ -46,6 +46,7 @@ struct SurfaceLentToNativeCode {
 pub(super) struct SurfacesLentToNativeCode {
     surfaces_by_handle_value: Mutex<HashMap<u64, SurfaceLentToNativeCode>>,
     /// Held across one host-memory write, so two never fill a staging mapping at once.
+    #[cfg(target_os = "linux")]
     host_memory_write_in_progress: Mutex<()>,
     next_handle_value: AtomicU64,
     native_escalate_channel: Option<Arc<HelperProcessNativeEscalateChannel>>,
@@ -59,6 +60,7 @@ impl SurfacesLentToNativeCode {
     ) -> Self {
         Self {
             surfaces_by_handle_value: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "linux")]
             host_memory_write_in_progress: Mutex::new(()),
             next_handle_value: AtomicU64::new(1),
             native_escalate_channel,
