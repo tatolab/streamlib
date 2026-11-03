@@ -91,7 +91,9 @@ and the macOS per-slot cache (`ARCHITECTURE.md:1399-1401`, SHIPPED) are in place
   [linux-pool-slot-import-once]
 - **ADDED (§Processor model & scheduling, the data-plane entry, DECIDED):** A helper drops a
   slot's import when the engine unregisters the slot, and drops every import when its
-  connection to the service closes. How it learns of the unregistration is the decision below.
+  connection to the service closes. The service tells it: each connection remembers the pool slot keys it has handed memory
+  for, and when one is unregistered the next reply on that connection lists it in
+  `retired_pool_slots`. A notice for a slot the helper no longer holds is ignored.
   [linux-pool-slot-import-once]
 - **ADDED (§Processor model, failure isolation):** a cached import is never a claim. It pins
   nothing on the engine's side, a dead helper's imports die with its process, and the engine
@@ -130,31 +132,21 @@ and the macOS per-slot cache (`ARCHITECTURE.md:1399-1401`, SHIPPED) are in place
 Nothing; the per-frame import path stays as the first touch of a slot and for every surface
 that is not a pool slot.
 
-## [NEEDS DECISION] How a helper learns a slot was retired
+## Decided — how a helper learns a slot was retired (owner, 2026-11-03)
 
-A pool is rebuilt when its frames change size, so a long stream retires slots; a helper that
-never hears of it keeps their memory. The Linux socket is request-and-reply, with no push.
-
-- **A. The service tells it on the next reply (recommended).** The connection remembers which
-  slot keys it has handed memory for; when one is unregistered, the next reply on that
-  connection carries it in `retired_pool_slots`, and the helper drops those imports. Exact,
-  costs nothing per frame, and a helper that has stopped asking holds nothing new while it is
-  idle. A notice is a hint: one for a slot the helper no longer holds is ignored.
-- **B. The helper bounds its own cache.** Keep at most a fixed number of slots and evict the
-  least recently used. No wire change for retirement, but the bound is a guess: too small and a
-  deep pool re-imports every frame, too large and a rebuilt pool's memory lingers.
-- **C. Never evict, as macOS does today.** The smallest change, and it leaks one pool's memory
-  per rebuild for the life of the helper.
-
-Recommendation: **A**. If it is chosen, macOS adopts the same notice when its cache next
-changes, so the two platforms keep one rule; that is not in this change.
+The service lists retired slots on the connection's next reply (`retired_pool_slots`), as the
+ADDED entry above states. It is exact and costs nothing per frame. macOS adopts the same notice
+when its cache next changes, so both platforms keep one rule; that is not in this change.
+Rejected: a bounded cache in the helper, whose bound is a guess (too small re-imports a deep
+pool every frame, too large keeps a rebuilt pool's memory), and never evicting, which leaks one
+pool's memory per rebuild for the life of the helper (owner, 2026-11-03).
 
 ## Proof
 
 - An engine test against the socket service: two check-outs of two generations of one slot on
   one connection, the second with `holds_pool_slot_import`, take two leases and receive fds once;
   a recycled generation is refused with and without the flag; unregistering the slot puts it in
-  the next reply's `retired_pool_slots` (if A is chosen).
+  the next reply's `retired_pool_slots`.
 - A helper test beside `linux/opaque_fd_pixel_buffer_import_tests.rs`, which runs on NVIDIA
   and on lavapipe and skips where no device comes up: five frames over a two-slot pool import
   twice, every frame's pixels read back right, and the cache is empty after the connection
@@ -166,7 +158,7 @@ changes, so the two platforms keep one rule; that is not in this change.
 ## Tickets (expected)
 
 One tracer bullet: the service flag and metadata split, the helper cache across the three
-resource types, the retirement path the decision picks, and the proofs above. The claim table
+resource types, the `retired_pool_slots` notice, and the proofs above. The claim table
 that removes the per-frame round trip altogether is the next change of the milestone.
 
 ## Notes (not in scope)
