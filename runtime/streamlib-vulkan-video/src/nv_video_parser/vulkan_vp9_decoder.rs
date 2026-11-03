@@ -362,7 +362,7 @@ impl<'a> BitstreamReader<'a> {
     ///
     /// Corresponds to the `u(n)` calls in the C++ code.
     pub fn u(&mut self, n: u32) -> u32 {
-        debug_assert!(n >= 1 && n <= 32);
+        debug_assert!((1..=32).contains(&n));
         let mut value: u32 = 0;
         for _ in 0..n {
             let byte_idx = self.bit_offset >> 3;
@@ -543,11 +543,9 @@ impl VulkanVp9Decoder {
             3 => Vp9Profile::Profile3,
             _ => unreachable!(),
         };
-        if self.pic_data.std_picture_info.profile == Vp9Profile::Profile3 {
-            if bs.u(1) != 0 {
-                tracing::error!("Invalid syntax: reserved bit must be 0 for profile 3");
-                return false;
-            }
+        if self.pic_data.std_picture_info.profile == Vp9Profile::Profile3 && bs.u(1) != 0 {
+            tracing::error!("Invalid syntax: reserved bit must be 0 for profile 3");
+            return false;
         }
 
         // show_existing_frame
@@ -1009,10 +1007,8 @@ impl VulkanVp9Decoder {
                         let bits = segmentation_feature_bits[j];
                         let mut val = if bits > 0 { bs.u(bits) as i16 } else { 0 };
 
-                        if segmentation_feature_signed[j] {
-                            if bs.u(1) == 1 {
-                                val = -val;
-                            }
+                        if segmentation_feature_signed[j] && bs.u(1) == 1 {
+                            val = -val;
                         }
                         segment.feature_data[i][j] = val;
                     }
@@ -1601,7 +1597,7 @@ mod tests {
         push_bits(&mut bitvec, 0, 16); // compressed_header_size
 
         // Pack bits into bytes
-        let byte_len = (bitvec.len() + 7) / 8;
+        let byte_len = bitvec.len().div_ceil(8);
         bits.resize(byte_len, 0);
         for (i, &bit) in bitvec.iter().enumerate() {
             if bit != 0 {

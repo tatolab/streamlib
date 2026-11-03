@@ -57,7 +57,7 @@ impl SimpleEncoder {
             self.frame_counter += 1;
 
             // Now encode buffered B-frames in display order
-            let buffered: Vec<ReorderEntry> = self.reorder_buffer.drain(..).collect();
+            let buffered: Vec<ReorderEntry> = std::mem::take(&mut self.reorder_buffer);
             for entry in buffered {
                 let b_pkt = self.upload_and_encode(
                     &entry.nv12_data,
@@ -82,7 +82,7 @@ impl SimpleEncoder {
         // These B-frames lack a future reference, so encode them as P-frames
         // (they still have backward references from the DPB).
         let mut packets = Vec::new();
-        let buffered: Vec<ReorderEntry> = self.reorder_buffer.drain(..).collect();
+        let buffered: Vec<ReorderEntry> = std::mem::take(&mut self.reorder_buffer);
         for entry in buffered {
             let pkt = unsafe {
                 self.upload_and_encode(

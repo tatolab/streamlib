@@ -60,7 +60,7 @@ pub const VIDEO_CODEC_OPERATION_DECODE_VP9: vk::VideoCodecOperationFlagsKHR =
 
 /// Tracks data associated with a single DPB reference slot.
 /// Mirrors C++ `DpbSlot`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DpbSlot {
     picture_id: i32,
     pic_buf_idx: Option<i32>,
@@ -70,19 +70,6 @@ pub struct DpbSlot {
     pub decode_width: u32,
     /// Decode height of the picture resource (used for VP9 reference sizing).
     pub decode_height: u32,
-}
-
-impl Default for DpbSlot {
-    fn default() -> Self {
-        Self {
-            picture_id: 0,
-            pic_buf_idx: None,
-            reserved: false,
-            in_use: false,
-            decode_width: 0,
-            decode_height: 0,
-        }
-    }
 }
 
 impl DpbSlot {
@@ -245,10 +232,10 @@ impl DpbSlots {
         for slot in 0..self.dpb_max_size {
             if slot as i32 == dpb_slot {
                 self.dpb[slot as usize].set_picture_resource(pic_buf_idx, age);
-            } else if let Some(idx) = pic_buf_idx {
-                if self.dpb[slot as usize].get_picture_resource() == Some(idx) {
-                    self.free_slot(slot as i8);
-                }
+            } else if let Some(idx) = pic_buf_idx
+                && self.dpb[slot as usize].get_picture_resource() == Some(idx)
+            {
+                self.free_slot(slot as i8);
             }
         }
     }
@@ -425,10 +412,11 @@ impl VulkanVideoParser {
     /// Get the picture index from a picture buffer index.
     /// Mirrors C++ `VulkanVideoParser::GetPicIdx(vkPicBuffBase*)`.
     pub fn get_pic_idx(&self, pic_buf_idx: Option<i32>) -> i8 {
-        if let Some(idx) = pic_buf_idx {
-            if idx >= 0 && (idx as u32) < self.max_num_decode_surfaces {
-                return idx as i8;
-            }
+        if let Some(idx) = pic_buf_idx
+            && idx >= 0
+            && (idx as u32) < self.max_num_decode_surfaces
+        {
+            return idx as i8;
         }
         -1
     }

@@ -400,9 +400,11 @@ impl SimpleEncoder {
                 .build();
 
             self.device.reset_fences(&[self.transfer_fence])?;
-            self.codec_device
-                .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)
-                .map_err(VideoError::from)?;
+            self.codec_device.submit_to_queue(
+                self.transfer_queue,
+                &[submit],
+                self.transfer_fence,
+            )?;
             self.device
                 .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
 

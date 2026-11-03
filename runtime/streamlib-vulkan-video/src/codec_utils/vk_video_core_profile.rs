@@ -108,8 +108,9 @@ pub fn get_ycbcr_primaries_constants(standard: YcbcrBtStandard) -> YcbcrPrimarie
 ///
 /// In the C++ source this is a union of Vulkan profile-info structs.
 /// Rust replaces the union with an enum for safety.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum CodecProfileExt {
+    #[default]
     None,
     DecodeH264(vk::VideoDecodeH264ProfileInfoKHR),
     DecodeH265(vk::VideoDecodeH265ProfileInfoKHR),
@@ -124,12 +125,6 @@ pub enum CodecProfileExt {
     EncodeAv1 {
         std_profile: u32,
     },
-}
-
-impl Default for CodecProfileExt {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 // Manually implement Debug since ash vk structs may not impl Debug.
@@ -249,7 +244,7 @@ impl VkVideoCoreProfile {
         h264_picture_layout: vk::VideoDecodeH264PictureLayoutFlagsKHR,
         encode_usage_info: Option<vk::VideoEncodeUsageInfoKHR>,
     ) -> Self {
-        let encode_usage = encode_usage_info.unwrap_or_else(|| vk::VideoEncodeUsageInfoKHR {
+        let encode_usage = encode_usage_info.unwrap_or(vk::VideoEncodeUsageInfoKHR {
             s_type: vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR,
             next: std::ptr::null(),
             video_usage_hints: vk::VideoEncodeUsageFlagsKHR::DEFAULT,

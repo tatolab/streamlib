@@ -12,18 +12,13 @@ use vulkanalia::vk::Handle;
 
 /// Whether the DPB images also serve as the decode output (coincide mode)
 /// or whether output goes to a separate image (distinct mode).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DpbOutputMode {
     /// DPB image is also the decode output (`VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_COINCIDE_BIT_KHR`).
+    #[default]
     Coincide,
     /// Decode output is a separate image (`VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_DISTINCT_BIT_KHR`).
     Distinct,
-}
-
-impl Default for DpbOutputMode {
-    fn default() -> Self {
-        DpbOutputMode::Coincide
-    }
 }
 
 // ---------------------------------------------------------------------------

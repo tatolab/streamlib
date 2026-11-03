@@ -38,7 +38,7 @@ impl SliceType {
     /// and normalizes 5..9 down to 0..4.
     pub fn from_raw(value: u32) -> Option<Self> {
         // Normalize the 5..9 range down to 0..4 per H.264 Table 7-6.
-        let normalized = if value >= 5 && value <= 9 {
+        let normalized = if (5..=9).contains(&value) {
             value - 5
         } else {
             value

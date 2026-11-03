@@ -26,13 +26,14 @@ use streamlib_consumer_rhi::h273_color_vui::color_vui_every_engine_encoder_write
 /// Maps to the internal `vk_video_gop_structure::FrameType` but is presented
 /// as the public API surface so callers do not need to reach into internal
 /// modules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FrameType {
     /// Instantaneous Decoder Refresh -- forces a clean-point.
     Idr,
     /// Intra frame (non-IDR).
     I,
     /// Predictive frame -- references previous frames.
+    #[default]
     P,
     /// Bi-predictive frame -- references previous and future frames.
     B,
@@ -50,20 +51,15 @@ impl FrameType {
     }
 }
 
-impl Default for FrameType {
-    fn default() -> Self {
-        Self::P
-    }
-}
-
 // ---------------------------------------------------------------------------
 // RateControlMode
 // ---------------------------------------------------------------------------
 
 /// Rate control mode for the encoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RateControlMode {
     /// Driver default / disabled.
+    #[default]
     Default,
     /// Constant Bitrate.
     Cbr,
@@ -71,12 +67,6 @@ pub enum RateControlMode {
     Vbr,
     /// Constant QP (no rate control).
     Cqp,
-}
-
-impl Default for RateControlMode {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl RateControlMode {
@@ -415,24 +405,24 @@ impl SimpleEncoderConfig {
         if self.height == 0 {
             return Err("height must be > 0".to_string());
         }
-        if self.width % 2 != 0 {
+        if !self.width.is_multiple_of(2) {
             return Err(format!("width must be even, got {}", self.width));
         }
-        if self.height % 2 != 0 {
+        if !self.height.is_multiple_of(2) {
             return Err(format!("height must be even, got {}", self.height));
         }
         if self.fps == 0 {
             return Err("fps must be > 0".to_string());
         }
-        if let Some(qp) = self.qp {
-            if qp < 0 || qp > 51 {
-                return Err(format!("qp must be 0..=51, got {}", qp));
-            }
+        if let Some(qp) = self.qp
+            && !(0..=51).contains(&qp)
+        {
+            return Err(format!("qp must be 0..=51, got {}", qp));
         }
-        if let Some(br) = self.bitrate_bps {
-            if br == 0 {
-                return Err("bitrate_bps must be > 0 when set".to_string());
-            }
+        if let Some(br) = self.bitrate_bps
+            && br == 0
+        {
+            return Err("bitrate_bps must be > 0 when set".to_string());
         }
         if self.streaming && self.idr_interval_secs == 0 {
             return Err("idr_interval_secs must be > 0 in streaming mode".to_string());

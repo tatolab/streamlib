@@ -1072,10 +1072,7 @@ impl VulkanAv1Decoder {
         }
 
         let type_val = (data[0] >> 3) & 0xf;
-        hdr.obu_type = Av1ObuType::from_u8(type_val);
-        if hdr.obu_type.is_none() {
-            return None;
-        }
+        hdr.obu_type = Some(Av1ObuType::from_u8(type_val)?);
 
         hdr.has_extension = ((data[0] >> 2) & 1) != 0;
         hdr.has_size_field = ((data[0] >> 1) & 1) != 0;
@@ -1382,9 +1379,7 @@ impl VulkanAv1Decoder {
                 if buf_idx >= 0 && (buf_idx as usize) < BUFFER_POOL_MAX_SIZE {
                     let buf = &self.buffers[buf_idx as usize];
                     if buf.buffer_valid {
-                        for i in 0..GM_GLOBAL_MODELS_PER_FRAME {
-                            prev_models[i] = buf.global_models[i].clone();
-                        }
+                        prev_models = buf.global_models.clone();
                     }
                 }
             }
@@ -1796,13 +1791,9 @@ impl VulkanAv1Decoder {
             }
 
             let tile_width_sb = (sb_cols + (1 << self.log2_tile_cols) - 1) >> self.log2_tile_cols;
-            self.pic_data.tile_info.tile_cols = (sb_cols + tile_width_sb - 1) / tile_width_sb;
+            self.pic_data.tile_info.tile_cols = sb_cols.div_ceil(tile_width_sb);
 
-            let min_log2_tile_rows_val = if min_log2_tiles > self.log2_tile_cols {
-                min_log2_tiles - self.log2_tile_cols
-            } else {
-                0
-            };
+            let min_log2_tile_rows_val = min_log2_tiles.saturating_sub(self.log2_tile_cols);
             self.log2_tile_rows = min_log2_tile_rows_val;
             while self.log2_tile_rows < max_log2_tile_rows {
                 if bs.u(1) == 0 {
@@ -1812,7 +1803,7 @@ impl VulkanAv1Decoder {
             }
 
             let tile_height_sb = (sb_rows + (1 << self.log2_tile_rows) - 1) >> self.log2_tile_rows;
-            self.pic_data.tile_info.tile_rows = (sb_rows + tile_height_sb - 1) / tile_height_sb;
+            self.pic_data.tile_info.tile_rows = sb_rows.div_ceil(tile_height_sb);
 
             // Derive width_in_sbs_minus_1
             let tc = self.pic_data.tile_info.tile_cols;
@@ -2561,10 +2552,7 @@ impl VulkanAv1Decoder {
 
     /// Compute skip mode frames and return them.
     pub fn compute_skip_mode_frames(&self) -> Option<[i32; 2]> {
-        let sps = match &self.sps {
-            Some(s) => s,
-            None => return None,
-        };
+        let sps = self.sps.as_ref()?;
 
         if !sps.enable_order_hint
             || self.is_frame_intra()
@@ -3185,11 +3173,10 @@ impl VulkanAv1Decoder {
             if obu_type != Av1ObuType::TemporalDelimiter
                 && obu_type != Av1ObuType::SequenceHeader
                 && obu_type != Av1ObuType::Padding
+                && !Self::is_obu_in_current_operating_point(self.operating_point_idc_active, &hdr)
             {
-                if !Self::is_obu_in_current_operating_point(self.operating_point_idc_active, &hdr) {
-                    offset += total_obu_size;
-                    continue;
-                }
+                offset += total_obu_size;
+                continue;
             }
 
             let payload_start = offset + hdr.header_size as usize;

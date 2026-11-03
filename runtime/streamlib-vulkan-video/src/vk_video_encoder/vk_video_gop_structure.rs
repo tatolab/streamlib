@@ -56,7 +56,7 @@ pub mod flags {
 /// Mutable state tracked across frames within a GOP sequence.
 ///
 /// Equivalent to the C++ `VkVideoGopStructure::GopState` struct.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GopState {
     pub position_in_input_order: u32,
     pub last_ref_in_input_order: u32,
@@ -64,19 +64,6 @@ pub struct GopState {
     pub intra_refresh_counter: u32,
     pub intra_refresh_cycle_restarted: bool,
     pub intra_refresh_start_skipped: bool,
-}
-
-impl Default for GopState {
-    fn default() -> Self {
-        Self {
-            position_in_input_order: 0,
-            last_ref_in_input_order: 0,
-            last_ref_in_encode_order: 0,
-            intra_refresh_counter: 0,
-            intra_refresh_cycle_restarted: false,
-            intra_refresh_start_skipped: false,
-        }
-    }
 }
 
 /// Position information for a single frame within the GOP.
@@ -267,7 +254,10 @@ impl VkVideoGopStructure {
 
         // IDR frame detection
         if first_frame
-            || (self.idr_period > 0 && (gop_state.position_in_input_order % self.idr_period) == 0)
+            || (self.idr_period > 0
+                && gop_state
+                    .position_in_input_order
+                    .is_multiple_of(self.idr_period))
         {
             gop_pos.picture_type = FrameType::Idr;
             gop_pos.input_order = 0;
@@ -291,7 +281,7 @@ impl VkVideoGopStructure {
             consecutive_b_frame_count =
                 (gop_state.position_in_input_order - gop_state.last_ref_in_input_order - 1) as u8;
             gop_state.intra_refresh_counter = 0;
-        } else if (gop_pos.in_gop % self.gop_frame_cycle as u32) == 0 {
+        } else if gop_pos.in_gop.is_multiple_of(self.gop_frame_cycle as u32) {
             // Start of min/sub-GOP
             gop_pos.picture_type = FrameType::P;
             consecutive_b_frame_count =
@@ -346,11 +336,11 @@ impl VkVideoGopStructure {
             gop_pos.flags |= flags::IS_REF;
 
             // Edge case: P-frame naturally before IDR boundary
-            if self.idr_period > 0
-                && ((gop_state.position_in_input_order + 1) % self.idr_period == 0)
-            {
-                gop_pos.flags |= flags::CLOSE_GOP;
-            } else if self.closed_gop && (gop_pos.in_gop == self.gop_frame_count - 1) {
+            let next_frame_is_idr = self.idr_period > 0
+                && (gop_state.position_in_input_order + 1).is_multiple_of(self.idr_period);
+            let last_frame_of_closed_gop =
+                self.closed_gop && (gop_pos.in_gop == self.gop_frame_count - 1);
+            if next_frame_is_idr || last_frame_of_closed_gop {
                 gop_pos.flags |= flags::CLOSE_GOP;
             }
 

@@ -97,7 +97,7 @@ impl SimpleDecoder {
         }
 
         let mut r = BitstreamReader::new(&sps_nalu[1..]);
-        let profile_idc = r.u(8) as u32;
+        let profile_idc = r.u(8);
         let _constraint_flags = r.u(8);
         let _level_idc = r.u(8);
         let _sps_id = r.ue();
@@ -153,7 +153,7 @@ impl SimpleDecoder {
         let _ = r.u(1); // gaps_in_frame_num
         let pic_width_in_mbs_minus1 = r.ue() as u32;
         let pic_height_in_map_units_minus1 = r.ue() as u32;
-        let frame_mbs_only_flag = r.u(1) as u32;
+        let frame_mbs_only_flag = r.u(1);
 
         let mut width = (pic_width_in_mbs_minus1 + 1) * 16;
         let mut height = (2 - frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1) * 16;
@@ -205,13 +205,14 @@ impl SimpleDecoder {
         }
 
         // Auto-configure session now that both SPS and PPS are available
-        if !self.session_configured && self.coded_picture_width > 0 && self.coded_picture_height > 0
+        if !self.session_configured
+            && self.coded_picture_width > 0
+            && self.coded_picture_height > 0
+            && let Some(ref parser) = self.h264_parser
+            && parser.sps.is_some()
+            && parser.ppss.iter().any(|p| p.is_some())
         {
-            if let Some(ref parser) = self.h264_parser {
-                if parser.sps.is_some() && parser.ppss.iter().any(|p| p.is_some()) {
-                    self.configure_session()?;
-                }
-            }
+            self.configure_session()?;
         }
 
         Ok(())
@@ -249,12 +250,8 @@ impl SimpleDecoder {
         // resets POC MSB/LSB to 0).
         if is_idr {
             parser.flush_decoded_picture_buffer();
-            for s in &mut self.h264_dpb_to_slot {
-                *s = -1;
-            }
-            for s in &mut self.dpb_slot_in_use {
-                *s = false;
-            }
+            self.h264_dpb_to_slot.fill(-1);
+            self.dpb_slot_in_use.fill(false);
         }
 
         // Remove emulation prevention bytes and skip 1-byte NAL header

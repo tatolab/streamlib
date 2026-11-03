@@ -105,9 +105,10 @@ impl RgbToNv12ComputePipeline {
                     .push_constant_ranges(&push_constant_ranges),
                 None,
             )?;
-            let spirv_words: Vec<u32> = SHADER_SPIRV
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+            let (spirv_word_bytes, _) = SHADER_SPIRV.as_chunks::<4>();
+            let spirv_words: Vec<u32> = spirv_word_bytes
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .collect();
             let shader_module = device.create_shader_module(
                 &vk::ShaderModuleCreateInfo::builder()
@@ -298,6 +299,11 @@ impl RgbToNv12Converter {
     /// * `compute_queue` - Queue from the compute family
     /// * `encode_queue_family` - Queue family index for video encode (for CONCURRENT sharing)
     /// * `codec_flag` - Codec operation flag for the video profile
+    ///
+    /// # Safety
+    ///
+    /// `compute_queue` must be a queue of `compute_queue_family` on `ctx`'s device,
+    /// and `encode_queue_family` must be a queue family of that device.
     pub unsafe fn new(
         ctx: &Arc<VulkanVideoEncodeContext>,
         width: u32,
@@ -519,6 +525,11 @@ impl RgbToNv12Converter {
     ///
     /// Returns `(encode_nv12_image, encode_nv12_color_view)` for the caller to
     /// pass to `Encoder::encode_frame()`.
+    ///
+    /// # Safety
+    ///
+    /// `rgba_image_view` must be a live view on the converter's device over an
+    /// image of `source_width` × `source_height`.
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
@@ -586,8 +597,8 @@ impl RgbToNv12Converter {
             // --- Bind compute pipeline + push descriptors + push constants + dispatch ---
             // Each thread handles a 2x2 luma block, so we need
             // (width/2 + 7) / 8 x (height/2 + 7) / 8 workgroups.
-            let group_x = (self.width / 2 + 7) / 8;
-            let group_y = (self.height / 2 + 7) / 8;
+            let group_x = (self.width / 2).div_ceil(8);
+            let group_y = (self.height / 2).div_ceil(8);
             self.compute_pipeline.record(
                 &self.device,
                 cb,
@@ -806,7 +817,7 @@ mod tests {
             "SPIR-V bytecode must not be empty"
         );
         assert!(
-            SHADER_SPIRV.len() % 4 == 0,
+            SHADER_SPIRV.len().is_multiple_of(4),
             "SPIR-V size must be multiple of 4"
         );
         // Verify magic number
