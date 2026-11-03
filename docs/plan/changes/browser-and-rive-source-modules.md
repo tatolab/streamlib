@@ -79,8 +79,9 @@ retires nothing.
   surface-share. The renderer's own C++ makes its Vulkan calls on that device. Rust outside
   the RHI still never names `vulkanalia`.
 - **Supervised shared services.** `tatolabd` supervises a shared native service the way it
-  supervises the local relay, through one generalised child supervisor: its own process
-  group, bound to `tatolabd`'s life, restarted with backoff up to a crash-loop limit. A node's
+  supervises the local relay: its own process group, bound to `tatolabd`'s life, restarted
+  under the engine's one child-process restart policy (`helper-process-restart`) with its
+  crash-loop limit. A node's
   helper takes a lease on a service over the escalate channel; the lease ends when the node
   stops or its helper dies. The service starts at the first lease and stops a short grace
   after the last. The scope a lease resolves to is one runtime rule: the machine. A service
@@ -129,8 +130,7 @@ retires nothing.
 - **§Packages & extension model**, the first-party module list: add `tatolab.browser`,
   `tatolab.rive` and `tatolab.compositor`.
 - **§Packages & extension model** and **§Distribution & versioning**: the runtime unit carries the browser
-  host per OS beside the relay, and `tatolabd` supervises both through one child supervisor,
-  as ADDED states.
+  host per OS beside the relay, and `tatolabd` supervises both, as ADDED states.
 - **§GPU** (the consumer RHI): the owned-device tier serves video codecs and embedded
   renderers. The external-renderer accessor is the single place raw Vulkan handles leave the
   RHI. It is named for that purpose, never for general use.
@@ -203,8 +203,8 @@ Rejected: a CEF per node in the node's helper — it costs a whole Chromium per 
    - Done: a 1080p page animates at 60 fps on the dev box.
    - Done: a `data` message changes the page within one frame.
    - Done: `kill -9` of the helper takes CEF's subprocesses with it.
-2. **Shared browser host, zero copy, Linux and macOS.** The generalised child supervisor and
-   service leases in the runtime; the browser host staged into the runtime unit with a tab
+2. **Shared browser host, zero copy, Linux and macOS.** The host's supervision and service
+   leases in the runtime; the browser host staged into the runtime unit with a tab
    per node and a profile per stream; `OnAcceleratedPaint` handed to each node and imported
    through `surface_import_dma_buf` on Linux and `import_iosurface` on macOS, with the
    host-memory path as the fallback where the platform cannot share a buffer.
