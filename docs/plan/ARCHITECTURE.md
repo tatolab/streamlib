@@ -946,7 +946,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — SHIPPED (OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -3640,7 +3640,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime]
   Rejected: running the runtime from inside the app bundle through an `SMAppService` agent — launchd keeps running the copy that registered first, and replacing the bundle leaves the old runtime running (owner, 2026-10-31).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
