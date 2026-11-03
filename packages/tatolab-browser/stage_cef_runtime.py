@@ -6,7 +6,8 @@
 Run after `cargo build --release --bin tatolab-browser-subprocess` and before
 `maturin build`, with `CEF_PATH` naming the CEF distribution the build linked
 (the directory `cef-dll-sys` downloads into). Copies the runtime libraries,
-resources, locales and CEF's licence into `python/tatolab/browser/cef/`.
+resources, locales and CEF's licence into `python/tatolab/browser/cef/`, and
+strips the debug sections CEF's distribution ships in its shared libraries.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +38,18 @@ def cef_distribution_directory(cef_path: Path) -> Path:
     return found[0]
 
 
+def strip_debug_sections(shared_library: Path) -> None:
+    """Remove `shared_library`'s debug sections in place; its dynamic symbols stay."""
+    strip_executable = shutil.which("strip")
+    if strip_executable is None:
+        raise SystemExit("no `strip` on PATH; CEF's libraries ship stripped of debug sections")
+    subprocess.run([strip_executable, "--strip-debug", str(shared_library)], check=True)
+
+
+def is_a_shared_library(path: Path) -> bool:
+    return path.name.endswith(".so") or ".so." in path.name
+
+
 def stage(cef_directory: Path, subprocess_executable: Path) -> None:
     for required_name in RUNTIME_FILE_NAMES:
         if not (cef_directory / required_name).is_file():
@@ -52,7 +66,10 @@ def stage(cef_directory: Path, subprocess_executable: Path) -> None:
             or ".so." in entry.name
             or entry.name in RUNTIME_FILE_NAMES
         ):
-            shutil.copy2(entry, STAGED_RUNTIME_DIRECTORY / entry.name)
+            staged_entry = STAGED_RUNTIME_DIRECTORY / entry.name
+            shutil.copy2(entry, staged_entry)
+            if is_a_shared_library(staged_entry):
+                strip_debug_sections(staged_entry)
     for locale in sorted((cef_directory / "locales").glob("*.pak")):
         shutil.copy2(locale, STAGED_RUNTIME_DIRECTORY / "locales" / locale.name)
     staged_subprocess = STAGED_RUNTIME_DIRECTORY / SUBPROCESS_EXECUTABLE_NAME
