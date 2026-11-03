@@ -1579,7 +1579,7 @@ mod tests {
             return;
         };
 
-        let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
+        let buf = HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64)
             .expect("buffer creation failed");
 
         let fd = buf.export_dma_buf_fd().expect("DMA-BUF export failed");
@@ -1809,11 +1809,8 @@ mod tests {
         }
 
         // Positive: OPAQUE_FD-allocated buffer exports an OPAQUE_FD fd.
-        let buf = HostVulkanBuffer::new_opaque_fd_export(
-            &device,
-            (128 as u64) * (128 as u64) * (4 as u64),
-        )
-        .expect("new_opaque_fd_export failed");
+        let buf = HostVulkanBuffer::new_opaque_fd_export(&device, 128_u64 * 128_u64 * 4_u64)
+            .expect("new_opaque_fd_export failed");
         assert!(
             !buf.mapped_ptr().is_null(),
             "mapped pointer should be non-null"
@@ -1826,8 +1823,8 @@ mod tests {
         unsafe { libc::close(fd) };
 
         // Negative: DMA-BUF-allocated buffer rejects OPAQUE_FD export.
-        let dma_buf = HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
-            .expect("dma-buf buffer failed");
+        let dma_buf =
+            HostVulkanBuffer::new(&device, 64_u64 * 64_u64 * 4_u64).expect("dma-buf buffer failed");
         match dma_buf.export_opaque_fd_memory() {
             Err(crate::core::Error::GpuError(msg)) => {
                 assert!(
@@ -1863,11 +1860,9 @@ mod tests {
             return;
         }
 
-        let buf = HostVulkanBuffer::new_opaque_fd_export_device_local(
-            &device,
-            (128 as u64) * (128 as u64) * (4 as u64),
-        )
-        .expect("new_opaque_fd_export_device_local failed");
+        let buf =
+            HostVulkanBuffer::new_opaque_fd_export_device_local(&device, 128_u64 * 128_u64 * 4_u64)
+                .expect("new_opaque_fd_export_device_local failed");
         // DEVICE_LOCAL allocations are not host-mapped.
         assert!(
             buf.mapped_ptr().is_null(),
@@ -1903,8 +1898,8 @@ mod tests {
 
         // DMA-BUF flavor → DmaBuf variant, on a device that exports DMA-BUF;
         // a refusal naming the device on one that does not.
-        let dma_buf = HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
-            .expect("dma-buf buffer failed");
+        let dma_buf =
+            HostVulkanBuffer::new(&device, 64_u64 * 64_u64 * 4_u64).expect("dma-buf buffer failed");
         match dma_buf.export_external_handle() {
             Ok(RhiExternalHandle::DmaBuf { fd, size }) if device.supports_dma_buf_export() => {
                 assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
@@ -1925,11 +1920,9 @@ mod tests {
         // OPAQUE_FD flavor → OpaqueFd variant. Skip if the pool isn't
         // available on this driver (already tested separately above).
         if device.opaque_fd_buffer_pool().is_some() {
-            let opaque_buf = HostVulkanBuffer::new_opaque_fd_export(
-                &device,
-                (64 as u64) * (64 as u64) * (4 as u64),
-            )
-            .expect("new_opaque_fd_export failed");
+            let opaque_buf =
+                HostVulkanBuffer::new_opaque_fd_export(&device, 64_u64 * 64_u64 * 4_u64)
+                    .expect("new_opaque_fd_export failed");
             match opaque_buf.export_external_handle() {
                 Ok(RhiExternalHandle::OpaqueFd {
                     fd,
@@ -2017,14 +2010,14 @@ mod tests {
             }
         };
 
-        let b0 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
-            .expect("buffer 0 failed");
-        let b1 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
-            .expect("buffer 1 failed");
-        let b2 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
-            .expect("buffer 2 failed");
-        let b3 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
-            .expect("buffer 3 failed");
+        let b0 =
+            HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64).expect("buffer 0 failed");
+        let b1 =
+            HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64).expect("buffer 1 failed");
+        let b2 =
+            HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64).expect("buffer 2 failed");
+        let b3 =
+            HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64).expect("buffer 3 failed");
 
         assert_ne!(b0.buffer(), vk::Buffer::null());
         assert_ne!(b1.buffer(), vk::Buffer::null());
@@ -2055,7 +2048,7 @@ mod tests {
             }
         };
 
-        let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
+        let buf = HostVulkanBuffer::new(&device, 1920_u64 * 1080_u64 * 4_u64)
             .expect("buffer creation failed");
         drop(buf);
 

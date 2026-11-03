@@ -165,10 +165,10 @@ fn matches_allow(rel_path: &Path, allow: &[AllowEntry]) -> bool {
             }
             AllowKind::PathSegment => {
                 for component in rel_path.components() {
-                    if let std::path::Component::Normal(seg) = component {
-                        if seg.to_string_lossy() == entry.path {
-                            return true;
-                        }
+                    if let std::path::Component::Normal(seg) = component
+                        && seg.to_string_lossy() == entry.path
+                    {
+                        return true;
                     }
                 }
             }

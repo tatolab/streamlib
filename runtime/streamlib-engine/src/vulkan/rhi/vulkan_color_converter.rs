@@ -761,7 +761,7 @@ mod tests {
 
     /// Wrap a raw NV12 byte buffer in a HOST_VISIBLE `HostVulkanBuffer`
     /// + `PixelBuffer` so the converter sees it as a storage-buffer
-    /// source.
+    ///   source.
     fn upload_nv12_pixel_buffer(
         device: &Arc<HostVulkanDevice>,
         nv12_bytes: &[u8],

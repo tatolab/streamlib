@@ -103,7 +103,7 @@ pub fn linear_to_pq(x: f32) -> f32 {
 
 const HLG_A: f32 = 0.17883277;
 const HLG_B: f32 = 0.28466892;
-const HLG_C: f32 = 0.55991073;
+const HLG_C: f32 = 0.559_910_7;
 
 /// ARIB STD-B67 HLG OETF inverse: encoded `[0,1]` → linear `[0,1]`.
 /// Linear `1.0` corresponds to the reference peak (12× the diffuse-gray

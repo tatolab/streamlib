@@ -173,10 +173,10 @@ fn scan_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
 /// File-level test exemption: a `#![cfg(test)]` / `#![cfg(all(test …))]` guard
 /// or a `*_test.rs` / `*_tests.rs` name.
 fn is_test_file(path: &Path, content: &str) -> bool {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.ends_with("_test.rs") || name.ends_with("_tests.rs") {
-            return true;
-        }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+        && (name.ends_with("_test.rs") || name.ends_with("_tests.rs"))
+    {
+        return true;
     }
     content.contains("#![cfg(test") || content.contains("#![cfg(all(test")
 }

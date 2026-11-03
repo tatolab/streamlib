@@ -20,23 +20,23 @@
 //! edge:
 //!
 //! - `read`        — CONSUMER side: wait on
-//!                   `produce_done.current_value()`,
-//!                   vkCmdCopyImageToBuffer into a staging VkBuffer,
-//!                   send the bytes back, signal `consume_done` at
-//!                   its next monotonic value.
+//!   `produce_done.current_value()`,
+//!   vkCmdCopyImageToBuffer into a staging VkBuffer,
+//!   send the bytes back, signal `consume_done` at
+//!   its next monotonic value.
 //! - `write`       — PRODUCER side: wait on
-//!                   `consume_done.current_value()`,
-//!                   vkCmdClearColorImage with the provided RGBA
-//!                   tuple, signal `produce_done` at its next
-//!                   monotonic value.
+//!   `consume_done.current_value()`,
+//!   vkCmdClearColorImage with the provided RGBA
+//!   tuple, signal `produce_done` at its next
+//!   monotonic value.
 //! - `wait-only`   — CONSUMER-flavored: wait on `produce_done`,
-//!                   signal `consume_done`, exit. Used by contention-
-//!                   shape tests.
+//!   signal `consume_done`, exit. Used by contention-
+//!   shape tests.
 //! - `crash-mid-write` — PRODUCER side: begin a write (acquire
-//!                   timeline value + start command submission), then
-//!                   `abort()` mid-flight. Verifies host-side cleanup
-//!                   via the EPOLLHUP watchdog or
-//!                   `SubprocessCrashHarness`.
+//!   timeline value + start command submission), then
+//!   `abort()` mid-flight. Verifies host-side cleanup
+//!   via the EPOLLHUP watchdog or
+//!   `SubprocessCrashHarness`.
 
 // The adapter this fixture drives imports a DMA-BUF, so it exists on Linux
 // alone. Off it the binary is an empty `main` so the target still compiles —

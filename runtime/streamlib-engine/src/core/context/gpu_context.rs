@@ -1936,6 +1936,41 @@ impl GpuContext {
             })
     }
 
+    /// Acquire this process's registered texture for `surface_id` back from
+    /// the external queue family when a helper that held its slot checked out
+    /// released it there — a module drawing on its own device into this
+    /// process's output pool — so every same-process reader sees the layout
+    /// the helper left it in. A no-op when no such release is outstanding.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn acquire_the_registered_texture_a_check_out_holder_released(
+        &self,
+        surface_id: &str,
+    ) -> Result<()> {
+        let Some(check_out_leases) = SurfaceStore::check_out_lease_registry_of_the_engines_own(
+            &self.engines_own_surface_store,
+        ) else {
+            return Ok(());
+        };
+        let texture_cache = self.texture_cache.lock().unwrap();
+        let Some(registration) = texture_cache.get(pool_slot_key_of_surface_id(surface_id)) else {
+            return Ok(());
+        };
+        let Some(layout_the_helper_released_in) = check_out_leases
+            .take_image_layout_a_check_out_holder_released_in(surface_id)?
+            .map(VulkanLayout)
+            .filter(|layout| *layout != VulkanLayout::UNDEFINED)
+        else {
+            return Ok(());
+        };
+        if let Some(image) = registration.texture().vulkan_inner().image() {
+            self.device
+                .inner
+                .acquire_from_foreign(image, layout_the_helper_released_in.as_vk())?;
+        }
+        registration.update_layout(layout_the_helper_released_in);
+        Ok(())
+    }
+
     /// The texture a producer registered of its own under `surface_id`
     /// in this process, if any.
     ///
@@ -2031,12 +2066,16 @@ impl GpuContext {
         // so the frame-vs-slot distinction lives here.
         self.refuse_a_retired_frame_id(surface_id)?;
 
-        // Path 1: same-process texture cache (fastest)
+        // Path 1: same-process texture cache (fastest).
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.acquire_the_registered_texture_a_check_out_holder_released(surface_id)?;
+        if let Some(reg) = self
+            .texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(surface_id))
         {
-            let cache = self.texture_cache.lock().unwrap();
-            if let Some(reg) = cache.get(pool_slot_key_of_surface_id(surface_id)) {
-                return Ok(reg.clone());
-            }
+            return Ok(reg.clone());
         }
 
         // Path 2: cross-process VkImage import via the surface-share service —

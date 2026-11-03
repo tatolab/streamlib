@@ -271,7 +271,7 @@ fn handle_client_connection(
             "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
-            "update_layout" => handle_update_layout(&state, &request),
+            "update_layout" => handle_update_layout(&state, &request, lease_holder),
             _ => (
                 serde_json::json!({"error": format!("unknown operation: {}", op)}),
                 Vec::new(),
@@ -806,9 +806,13 @@ fn handle_lookup(
 /// Handle the `update_layout` op (#633): a producer that just issued a
 /// QFOT release barrier publishes the post-release `VkImageLayout` so
 /// the next consumer's lookup picks it up. Returns `{"success": bool}`.
+/// Publish the layout a peer left a texture in. A peer that holds the slot
+/// checked out has released it to the external queue family in that layout,
+/// and that release is recorded for the slot's owner to acquire.
 fn handle_update_layout(
     state: &SurfaceShareState,
     request: &serde_json::Value,
+    lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
@@ -831,6 +835,16 @@ fn handle_update_layout(
     };
 
     let updated = state.update_image_layout(surface_id, layout);
+    if updated
+        && let Err(unrecorded_release) = state
+            .check_out_leases()
+            .record_image_layout_a_check_out_holder_released_in(surface_id, lease_holder, layout)
+    {
+        return (
+            serde_json::json!({"error": unrecorded_release.to_string()}),
+            Vec::new(),
+        );
+    }
     (serde_json::json!({"success": updated}), Vec::new())
 }
 
@@ -1913,7 +1927,7 @@ mod tests {
     /// - `MAX_SCM_RIGHTS_FDS = MAX_DMA_BUF_PLANES + 1 = 5` — the wire-level
     ///   cap that leaves a slot for an optional timeline-semaphore fd
     ///   alongside the plane fds.
-    /// Sentinel: `MAX_SCM_RIGHTS_FDS + 1 = 6` is "one over the cap."
+    ///   Sentinel: `MAX_SCM_RIGHTS_FDS + 1 = 6` is "one over the cap."
     #[test]
     fn oversize_fd_vec_rejected() {
         let state = SurfaceShareState::new();

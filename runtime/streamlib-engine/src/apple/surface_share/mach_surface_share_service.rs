@@ -733,7 +733,10 @@ fn answer_surface_share_request(
             Vec::new(),
         ),
         "unregister" | "release" => (answer_unregister(state, request), Vec::new()),
-        "update_layout" => (handle_update_layout(state, request), Vec::new()),
+        "update_layout" => (
+            handle_update_layout(state, request, lease_holder),
+            Vec::new(),
+        ),
         SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE => {
             (answer_signal_consume_done(state, request), Vec::new())
         }
@@ -972,10 +975,13 @@ fn handle_lookup(
 }
 
 /// Publish the layout a helper left a texture in, for the next holder to
-/// transition out of.
+/// transition out of. A helper that holds the slot checked out has released
+/// it to the external queue family in that layout, and that release is
+/// recorded for the slot's owner to acquire.
 fn handle_update_layout(
     state: &IOSurfaceShareState,
     request: &serde_json::Value,
+    lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> serde_json::Value {
     let Some(surface_id) = requested_surface_id(request) else {
         return serde_json::json!({"error": "missing surface_id"});
@@ -983,7 +989,15 @@ fn handle_update_layout(
     let Some(layout) = stated_current_image_layout(request) else {
         return serde_json::json!({"error": "missing current_image_layout"});
     };
-    serde_json::json!({"success": state.update_image_layout(surface_id, layout)})
+    let updated = state.update_image_layout(surface_id, layout);
+    if updated
+        && let Err(unrecorded_release) = state
+            .check_out_leases()
+            .record_image_layout_a_check_out_holder_released_in(surface_id, lease_holder, layout)
+    {
+        return serde_json::json!({"error": unrecorded_release.to_string()});
+    }
+    serde_json::json!({"success": updated})
 }
 
 /// A helper's host-side report that it released the frame at `value`,

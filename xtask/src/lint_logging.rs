@@ -181,12 +181,11 @@ fn scan_target(
 fn is_excluded(path: &Path, root: &Path, target: &LintTarget) -> bool {
     let rel = path.strip_prefix(root).unwrap_or(path);
     for component in rel.components() {
-        if let std::path::Component::Normal(seg) = component {
-            if let Some(seg_str) = seg.to_str() {
-                if target.exclude_path_segments.contains(&seg_str) {
-                    return true;
-                }
-            }
+        if let std::path::Component::Normal(seg) = component
+            && let Some(seg_str) = seg.to_str()
+            && target.exclude_path_segments.contains(&seg_str)
+        {
+            return true;
         }
     }
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -493,16 +492,14 @@ fn resolve_mod_candidates(
 ) -> Vec<PathBuf> {
     // #[path = "custom.rs"] mod foo; — honor the override.
     for attr in attrs {
-        if attr.path().is_ident("path") {
-            if let syn::Meta::NameValue(nv) = &attr.meta {
-                if let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(s),
-                    ..
-                }) = &nv.value
-                {
-                    return vec![parent_dir.join(s.value())];
-                }
-            }
+        if attr.path().is_ident("path")
+            && let syn::Meta::NameValue(nv) = &attr.meta
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+        {
+            return vec![parent_dir.join(s.value())];
         }
     }
     vec![
@@ -611,19 +608,19 @@ struct RustVisitor<'a> {
 
 impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if let Some(attrs) = item_attrs(item) {
-            if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
-                return;
-            }
+        if let Some(attrs) = item_attrs(item)
+            && attrs.iter().any(|attr| is_skip_attr(attr, self.platform))
+        {
+            return;
         }
         syn::visit::visit_item(self, item);
     }
 
     fn visit_expr(&mut self, expr: &'ast syn::Expr) {
-        if let Some(attrs) = expr_attrs(expr) {
-            if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
-                return;
-            }
+        if let Some(attrs) = expr_attrs(expr)
+            && attrs.iter().any(|attr| is_skip_attr(attr, self.platform))
+        {
+            return;
         }
         if let syn::Expr::Macro(m) = expr {
             self.check_macro(&m.mac);
@@ -831,16 +828,16 @@ fn eval_bare(
     platform: PlatformTheCfgGatesAreEvaluatedFor,
 ) -> CfgEval {
     // Look ahead for `= "value"` — a Punct('=') then a Literal.
-    if let Some(proc_macro2::TokenTree::Punct(p)) = iter.peek() {
-        if p.as_char() == '=' {
-            iter.next();
-            if let Some(proc_macro2::TokenTree::Literal(lit)) = iter.next() {
-                let value_raw = lit.to_string();
-                let value = value_raw.trim_matches('"');
-                return eval_name_value(name, value, platform);
-            }
-            return CfgEval::Unknown;
+    if let Some(proc_macro2::TokenTree::Punct(p)) = iter.peek()
+        && p.as_char() == '='
+    {
+        iter.next();
+        if let Some(proc_macro2::TokenTree::Literal(lit)) = iter.next() {
+            let value_raw = lit.to_string();
+            let value = value_raw.trim_matches('"');
+            return eval_name_value(name, value, platform);
         }
+        return CfgEval::Unknown;
     }
     match name {
         "test" => CfgEval::False,
@@ -930,11 +927,11 @@ fn split_on_commas(stream: proc_macro2::TokenStream) -> Vec<proc_macro2::TokenSt
     let mut out: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut current: Vec<proc_macro2::TokenTree> = Vec::new();
     for tt in stream {
-        if let proc_macro2::TokenTree::Punct(ref p) = tt {
-            if p.as_char() == ',' {
-                out.push(current.drain(..).collect());
-                continue;
-            }
+        if let proc_macro2::TokenTree::Punct(ref p) = tt
+            && p.as_char() == ','
+        {
+            out.push(current.drain(..).collect());
+            continue;
         }
         current.push(tt);
     }

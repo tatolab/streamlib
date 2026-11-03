@@ -157,6 +157,8 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Result<ResolvedSurfaceBacking> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.acquire_the_registered_texture_a_check_out_holder_released(surface_id)?;
         if let Some(same_process_backing) = self.same_process_backing_of_surface(surface_id) {
             return Ok(same_process_backing);
         }
