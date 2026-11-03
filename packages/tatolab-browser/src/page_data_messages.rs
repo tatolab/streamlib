@@ -69,6 +69,12 @@ fn json_of_msgpack(value: &MsgpackValue) -> Result<JsonValue, String> {
                         ));
                     }
                 };
+                if object.contains_key(&key) {
+                    return Err(format!(
+                        "a data message's map names the key {key:?} twice once integer keys \
+                         become text"
+                    ));
+                }
                 object.insert(key, json_of_msgpack(entry)?);
             }
             JsonValue::Object(object)
@@ -233,6 +239,18 @@ mod tests {
         let refusal = events_msgpack_map_of_published_json("[1,2]").expect_err("an array");
         assert!(refusal.contains("one JSON object"), "{refusal}");
     }
+    #[test]
+    fn an_integer_key_and_its_text_twin_are_refused_rather_than_one_overwriting_the_other() {
+        let payload = msgpack(&MsgpackValue::Map(vec![
+            (7.into(), "integer".into()),
+            ("7".into(), "text".into()),
+        ]));
+
+        let refusal = page_data_detail_json_of_msgpack_map(&payload).unwrap_err();
+
+        assert!(refusal.contains("\"7\""), "{refusal}");
+    }
+
     #[test]
     fn held_data_scripts_come_back_in_arrival_order_and_once() {
         let mut awaiting = PageDataScriptsAwaitingTheLoadedDocument::default();

@@ -40,6 +40,15 @@ class BrowserSourceOutputProbeConfig:
         int, "How many frames pass between two `data` messages sent to the page."
     ] = 30
 
+    def __post_init__(self) -> None:
+        for field_name in ("frames_between_reports", "frames_between_data_messages"):
+            frames = getattr(self, field_name)
+            if not isinstance(frames, int) or isinstance(frames, bool) or frames < 1:
+                raise ValueError(
+                    f"BrowserSourceOutputProbeConfig: {field_name} is a whole number of "
+                    f"frames, at least 1, got {frames!r}"
+                )
+
 
 @node(description="Logs a BrowserSource's frame rate, audio continuity and data round trip")
 class BrowserSourceOutputProbe:

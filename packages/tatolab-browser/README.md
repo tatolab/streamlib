@@ -35,7 +35,7 @@ it into `$CEF_PATH` from the official `cef_binary_*_linux64_minimal` archive,
 because the wheel and its notices both reproduce it:
 
 ```bash
-export CEF_PATH=/path/to/cef_binary_linux64   # the extracted distribution holding libcef.so
+export CEF_PATH=/path/to/cef   # the directory holding libcef.so and LICENSE.txt, as export-cef-dir leaves it
 cargo build --release -p tatolab-browser-page-bridge --bin tatolab-browser-subprocess
 python3 stage_cef_runtime.py      # copies CEF and the subprocess into python/tatolab/browser/cef/
 uvx maturin@1.9.6 build --release

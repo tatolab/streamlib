@@ -11,7 +11,7 @@
 
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -48,6 +48,8 @@ const PAINTED_PAGE_PIXEL_FORMAT: &str = "bgra32";
 const LONGEST_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const PAGE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
+/// How many `data` messages may wait for the CEF thread before newer ones are refused.
+const MOST_DATA_SCRIPTS_ON_THEIR_WAY_TO_THE_CEF_THREAD: usize = 256;
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
 
 /// What a page is opened with.
@@ -95,6 +97,7 @@ struct PagePublishing {
     first_frame_refusal_logged: AtomicBool,
     publishing_stopped: AtomicBool,
     main_frame_document_loaded: AtomicBool,
+    data_scripts_on_their_way_to_the_cef_thread: AtomicUsize,
     page_closed: Mutex<Option<SyncSender<()>>>,
 }
 
@@ -562,6 +565,9 @@ fn serve_the_cef_thread(requests: Receiver<CefThreadRequest>) {
             }
             Ok(CefThreadRequest::DispatchPageData { script }) => {
                 if let Some(page) = open_page.as_mut() {
+                    page.publishing
+                        .data_scripts_on_their_way_to_the_cef_thread
+                        .fetch_sub(1, Ordering::AcqRel);
                     page.dispatch_or_hold_data_script(script);
                 }
             }
@@ -925,6 +931,7 @@ impl BrowserPageRendering {
             first_frame_refusal_logged: AtomicBool::new(false),
             publishing_stopped: AtomicBool::new(false),
             main_frame_document_loaded: AtomicBool::new(false),
+            data_scripts_on_their_way_to_the_cef_thread: AtomicUsize::new(0),
             page_closed: Mutex::new(Some(page_closed_sender)),
         });
         let (opened, open_outcome) = std::sync::mpsc::sync_channel(1);
@@ -941,7 +948,7 @@ impl BrowserPageRendering {
             .name("tatolab-browser-data".to_string())
             .spawn({
                 let data_input_stop = Arc::clone(&data_input_stop);
-                let counters = Arc::clone(&counters);
+                let publishing = Arc::clone(&publishing);
                 let module_host = ports.module_host;
                 let data_input_port = ports.data_input_port;
                 move || {
@@ -949,12 +956,19 @@ impl BrowserPageRendering {
                         &module_host,
                         &data_input_port,
                         cef_thread,
-                        &counters,
+                        &publishing,
                         &data_input_stop,
                     )
                 }
-            })
-            .map_err(|spawn_failure| format!("the data thread did not start: {spawn_failure}"))?;
+            });
+        let data_input_thread = match data_input_thread {
+            Ok(data_input_thread) => data_input_thread,
+            Err(spawn_failure) => {
+                publishing.publishing_stopped.store(true, Ordering::Release);
+                let _ = cef_thread.send(CefThreadRequest::ClosePage);
+                return Err(format!("the data thread did not start: {spawn_failure}"));
+            }
+        };
         Ok(Self {
             cef_thread,
             publishing,
@@ -1040,10 +1054,12 @@ fn deliver_data_messages_to_the_page(
     module_host: &ModuleHost,
     data_input_port: &ModuleHostInputPort,
     cef_thread: &CefBrowserProcessThread,
-    counters: &BrowserPageCounters,
+    publishing: &PagePublishing,
     stop: &AtomicBool,
 ) {
-    while !stop.load(Ordering::Acquire) && !module_host.stop_requested() {
+    let counters = &publishing.counters;
+    let delivery_stopped = || stop.load(Ordering::Acquire) || module_host.stop_requested();
+    while !delivery_stopped() {
         match module_host.wait_for_any_input_port(DATA_INPUT_WAIT) {
             Ok(false) => continue,
             Ok(true) => {}
@@ -1056,7 +1072,7 @@ fn deliver_data_messages_to_the_page(
                 return;
             }
         }
-        loop {
+        while !delivery_stopped() {
             let message = match data_input_port.read() {
                 Ok(Some(message)) => message,
                 Ok(None) => break,
@@ -1071,6 +1087,18 @@ fn deliver_data_messages_to_the_page(
             };
             match page_data_detail_json_of_msgpack_map(message.payload()) {
                 Ok(detail_json) => {
+                    let scripts_on_their_way = publishing
+                        .data_scripts_on_their_way_to_the_cef_thread
+                        .fetch_add(1, Ordering::AcqRel);
+                    if scripts_on_their_way >= MOST_DATA_SCRIPTS_ON_THEIR_WAY_TO_THE_CEF_THREAD {
+                        publishing
+                            .data_scripts_on_their_way_to_the_cef_thread
+                            .fetch_sub(1, Ordering::AcqRel);
+                        counters
+                            .data_messages_refused
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
                     let script = page_data_dispatch_script(&detail_json);
                     if cef_thread
                         .send(CefThreadRequest::DispatchPageData { script })
