@@ -238,7 +238,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(5),
+                leaked_table_of_minor(6),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
@@ -253,7 +253,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(5), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(python, leaked_table_of_minor(6), c"numpy.core._ARRAY_API")
         }
         .unwrap();
         let refusal =

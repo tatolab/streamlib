@@ -711,7 +711,7 @@ fn a_module_built_against_1_6_loads_on_a_runtime_lending_1_7_and_reaches_its_por
     }
     .expect("a 1.6 module loads on a 1.7 runtime");
 
-    assert_eq!(module_host.module_host_table_version(), (1, 6));
+    assert_eq!(module_host.module_host_table_version(), (1, 7));
     let output_port = module_host
         .open_output_port("lent")
         .expect("the lent port opens");
@@ -751,7 +751,7 @@ fn a_runtime_of_another_major_is_refused_naming_both_versions() {
             runtime_major: 2,
             runtime_minor: 0,
             module_major: 1,
-            module_minor: 5,
+            module_minor: 6,
         }
     );
     let message = refusal.to_string();
@@ -787,7 +787,7 @@ fn a_1_6_module_is_refused_on_a_runtime_lending_1_1() {
         refusal,
         ModuleHostError::ModuleHostTableOlderThanTheModuleNeeds {
             runtime_minor: 1,
-            module_minor: 5,
+            module_minor: 6,
             ..
         }
     ));
