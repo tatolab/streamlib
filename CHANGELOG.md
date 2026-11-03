@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.17](https://github.com/tatolab/streamlib/compare/v0.68.16...v0.68.17) (2026-11-03)
+
+
+### Bug Fixes
+
+* **tatolab-browser:** stage CEF's libraries stripped of debug sections ([#3108](https://github.com/tatolab/streamlib/issues/3108)) ([3b6d471](https://github.com/tatolab/streamlib/commit/3b6d471bbfebd6aad97220a23e3dde7b1832350e))
+
 ## [0.68.16](https://github.com/tatolab/streamlib/compare/v0.68.15...v0.68.16) (2026-11-03)
 
 
