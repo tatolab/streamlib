@@ -3,7 +3,8 @@
 
 //! The video codec node bodies `tatolab-h264` and `tatolab-h265` run in their
 //! helpers: a thread reads its node's ports through the module host table and
-//! codes on a Vulkan device the helper owns, with no Python attached.
+//! codes, with no Python attached, on a Vulkan Video device the helper owns on
+//! Linux and on Apple's media engine through VideoToolbox on macOS.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -23,6 +24,8 @@ pub mod owned_device_video_encoder;
 pub mod video_decoder_settings;
 pub mod video_encoder_settings;
 pub mod video_frame_message;
+#[cfg(target_os = "macos")]
+pub mod videotoolbox;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
 use crate::video_decoder_settings::VideoDecoderSettings;
@@ -219,16 +222,30 @@ type VideoEncoderOnThisPlatform = owned_device_video_encoder::OwnedDeviceVideoEn
 #[cfg(target_os = "linux")]
 fn open_the_encoder(
     node: VideoCodecNodeIdentity,
+    _module_host: &ModuleHost,
     settings: VideoEncoderSettings,
 ) -> Result<VideoEncoderOnThisPlatform, String> {
     VideoEncoderOnThisPlatform::open(node, settings)
 }
 
+#[cfg(target_os = "macos")]
+type VideoEncoderOnThisPlatform =
+    videotoolbox::videotoolbox_video_encoder::VideoToolboxVideoEncoder;
+
+#[cfg(target_os = "macos")]
+fn open_the_encoder(
+    node: VideoCodecNodeIdentity,
+    module_host: &ModuleHost,
+    settings: VideoEncoderSettings,
+) -> Result<VideoEncoderOnThisPlatform, String> {
+    VideoEncoderOnThisPlatform::open(node, module_host.clone(), settings)
+}
+
 /// No encoder opens here, so none exists to encode with.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 enum VideoEncoderOnThisPlatform {}
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl VideoEncoderOnThisPlatform {
     fn encode_and_publish(
         &mut self,
@@ -239,13 +256,14 @@ impl VideoEncoderOnThisPlatform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn open_the_encoder(
     node: VideoCodecNodeIdentity,
+    _module_host: &ModuleHost,
     _settings: VideoEncoderSettings,
 ) -> Result<VideoEncoderOnThisPlatform, String> {
     Err(format!(
-        "{} encodes with Vulkan Video, on Linux only",
+        "{} encodes on Linux and macOS only",
         node.node_type_name
     ))
 }
@@ -261,7 +279,7 @@ fn encode_until_stopped(
     stop_requested: &AtomicBool,
 ) {
     let node_type_name = node.node_type_name;
-    let mut encoder = match open_the_encoder(node, settings) {
+    let mut encoder = match open_the_encoder(node, module_host, settings) {
         Ok(encoder) => Some(encoder),
         Err(refusal) => {
             tracing::error!("{refusal}; every frame is discarded");
@@ -302,7 +320,11 @@ fn encode_until_stopped(
 #[cfg(target_os = "linux")]
 type VideoDecoderOnThisPlatform = owned_device_video_decoder::OwnedDeviceVideoDecoder;
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+type VideoDecoderOnThisPlatform =
+    videotoolbox::videotoolbox_video_decoder::VideoToolboxVideoDecoder;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -312,10 +334,10 @@ fn open_the_decoder(
 }
 
 /// No decoder opens here, so none exists to decode with.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 enum VideoDecoderOnThisPlatform {}
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl VideoDecoderOnThisPlatform {
     fn decode_and_publish(
         &mut self,
@@ -330,14 +352,14 @@ impl VideoDecoderOnThisPlatform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn open_the_decoder(
     node: VideoCodecNodeIdentity,
     _module_host: &ModuleHost,
     _settings: VideoDecoderSettings,
 ) -> Result<VideoDecoderOnThisPlatform, String> {
     Err(format!(
-        "{} decodes with Vulkan Video, on Linux only",
+        "{} decodes on Linux and macOS only",
         node.node_type_name
     ))
 }

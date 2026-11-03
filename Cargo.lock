@@ -5913,6 +5913,11 @@ dependencies = [
 name = "streamlib-owned-device-video-codec-nodes"
 version = "0.68.13"
 dependencies = [
+ "objc2-core-foundation",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-io-surface",
+ "objc2-video-toolbox",
  "rmp-serde",
  "serde",
  "streamlib-consumer-rhi",
