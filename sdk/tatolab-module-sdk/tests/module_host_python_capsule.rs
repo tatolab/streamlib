@@ -235,7 +235,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 4));
+        assert_eq!(module_host.module_host_table_version(), (1, 5));
     });
 }
 
