@@ -67,26 +67,10 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
         "tatolab.speaker:SpeakerSink",
         "tatolab-speaker",
     ),
-    (
-        "H264Encoder",
-        "tatolab.h264:H264Encoder",
-        "tatolab-h264",
-    ),
-    (
-        "H264Decoder",
-        "tatolab.h264:H264Decoder",
-        "tatolab-h264",
-    ),
-    (
-        "H265Encoder",
-        "tatolab.h265:H265Encoder",
-        "tatolab-h265",
-    ),
-    (
-        "H265Decoder",
-        "tatolab.h265:H265Decoder",
-        "tatolab-h265",
-    ),
+    ("H264Encoder", "tatolab.h264:H264Encoder", "tatolab-h264"),
+    ("H264Decoder", "tatolab.h264:H264Decoder", "tatolab-h264"),
+    ("H265Encoder", "tatolab.h265:H265Encoder", "tatolab-h265"),
+    ("H265Decoder", "tatolab.h265:H265Decoder", "tatolab-h265"),
 ];
 
 /// Register every media built-in on the process-wide registry, and record each
@@ -193,10 +177,8 @@ mod built_in_node_type_tests {
             mode: CatalogDataTrackMode::Snapshot,
             mime: Some("application/msgpack".to_string()),
         });
-        for (class_name, output_port) in [
-            ("TestPatternSource", "video"),
-            ("OpusDecoder", "audio"),
-        ] {
+        for (class_name, output_port) in [("TestPatternSource", "video"), ("OpusDecoder", "audio")]
+        {
             let descriptor = PROCESSOR_REGISTRY
                 .descriptor(&ProcessorClassImportPath::of_built_in_node(class_name))
                 .unwrap_or_else(|| panic!("{class_name} is registered"));
