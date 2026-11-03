@@ -2503,7 +2503,7 @@ fn dma_buf_texture_registration_payload(
         // `import_render_target_dma_buf` must pass to `vkAllocateMemory` —
         // deriving it from extent × stride under-sizes tiled allocations and
         // fails the bind.
-        "vk_image_allocation_size": texture.vma_allocation_size() as u64,
+        "vk_image_allocation_size": texture.vma_allocation_size(),
         SURFACE_REPLY_HAS_PRODUCE_DONE_FD: has_produce_done_fd,
         SURFACE_REPLY_HAS_CONSUME_DONE_FD: has_consume_done_fd,
         // The producer's declared `VkImageLayout`: the layout the texture
@@ -3085,7 +3085,7 @@ mod plane_fd_ownership_tests {
         if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
             return None;
         }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+        Some(unsafe { file_status.assume_init() }.st_ino)
     }
 
     impl ExportedPlaneFdUnderTest {
