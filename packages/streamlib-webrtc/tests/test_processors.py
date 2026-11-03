@@ -52,14 +52,13 @@ from played_media_stand_ins import (
     MEDIA_FRAME_OF_AN_OPUS_PACKET,
     MONO_OPUS_IDENTIFICATION_HEADER_HEX,
 )
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import (
     H264Decoder,
     H264Encoder,
     Message,
-    OpusDecoder,
-    OpusEncoder,
     StreamBuilder,
     compile_stream_to_graph,
     log,

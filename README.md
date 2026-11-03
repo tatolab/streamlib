@@ -29,9 +29,9 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
   CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
-- **Native built-ins for the parts with deadlines**: test pattern, H.264 / H.265 / Opus
-  codecs, and a virtual camera on Linux — native code inside the runtime, configured from
-  Python. The camera, microphone and speaker are modules that move their frames and samples on
+- **Native built-ins for the parts with deadlines**: test pattern, H.264 / H.265 codecs, and
+  a virtual camera on Linux — native code inside the runtime, configured from Python. The
+  camera, microphone, speaker and Opus codec are modules that move their frames and samples on
   native threads.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
@@ -572,12 +572,14 @@ ordinary Python package that exposes handles (file descriptors, exportable alloc
 and is wrapped by a node you write. It never links the runtime, and the CPython ABI is the only
 binary boundary. First-party optional capabilities take that same door: `tatolab-webrtc`
 (`uv add tatolab-webrtc`) is an ordinary package with Rust inside and two nodes for WHIP publish and
-WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nodes' own processes.
+WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nodes' own processes;
+`tatolab-opus` (`uv add tatolab-opus`) carries libopus the same way, as `OpusEncoder` and
+`OpusDecoder`.
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
 **It costs you** a small set of built-ins. Test pattern, the
-H.264 / H.265 / Opus codec pairs and the virtual camera ship inside the runtime because their
+H.264 / H.265 codec pairs and the virtual camera ship inside the runtime because their
 per-frame paths have deadlines a separate process cannot meet, need primitives only the
 runtime has, or present a device to other applications; everything else is a package or a node you
 write.
@@ -680,7 +682,6 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 |---|---|
 | `TestPatternSource` | Color bars, for a machine with no camera. |
 | `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
-| `OpusEncoder`, `OpusDecoder` | libopus. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
 
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
@@ -689,6 +690,9 @@ Each runs in its own helper process and moves its samples on a native thread ove
 engine's audio backend, so no interpreter sits in the sample path either. The camera is one too:
 `pip install tatolab-camera`, then `from tatolab.camera import CameraSource` — V4L2 on Linux and
 AVFoundation on macOS, each frame imported to the GPU with no CPU copy.
+
+Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
+libopus linked statically into the wheel.
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
 model-input tensor kernel, and the monotonic clock every node shares.

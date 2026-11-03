@@ -148,7 +148,7 @@
     {
       "id": "golden10",
       "name": "opusencoder",
-      "type": "tatolab.stream:OpusEncoder",
+      "type": "tatolab.opus:OpusEncoder",
       "config": {
         "bitrate_bps": 64000,
         "application": "audio"
@@ -165,7 +165,7 @@
     {
       "id": "golden11",
       "name": "opusdecoder",
-      "type": "tatolab.stream:OpusDecoder",
+      "type": "tatolab.opus:OpusDecoder",
       "config": {},
       "config_checksum": 0,
       "ports": {
@@ -199,7 +199,8 @@
       "config": {
         "relay_url": "http://127.0.0.1:4443",
         "broadcast": "golden-desk/camera-rig.hang",
-        "track": "camerasource/video"
+        "track": "camerasource/video",
+        "max_age": 40
       },
       "config_checksum": 0,
       "ports": {
