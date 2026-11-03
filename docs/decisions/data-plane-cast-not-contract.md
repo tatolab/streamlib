@@ -1,5 +1,8 @@
 # Data plane: cast, not contract
 
+> Further superseded 2026-11-03 by `strict-port-families.md`: a link is no longer pure
+> plumbing; a port's family is compared at `connect`, and each family has an engine-owned layout.
+
 > Partially superseded 2026-08-03 by `schema-free-ports.md`. The cast-at-read core and
 > the port-local channel policy stand. What no longer holds: unilateral type hints on a
 > port (there are no port type declarations at all), the advisory connect warning
