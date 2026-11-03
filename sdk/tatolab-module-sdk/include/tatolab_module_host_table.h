@@ -20,8 +20,8 @@
  * which attaches to the interpreter for its round trip to the parent. The
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
  * channel, with no interpreter on either end, as do the IOSurface import
- * minor 4 adds, the host-memory write minor 5 adds and the lend by surface
- * id minor 6 adds.
+ * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
+ * id minor 6 adds and the shared native service leases minor 7 adds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -42,7 +42,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(6)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(7)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -174,6 +174,31 @@ typedef struct ModuleHostTablePortHandle {
 typedef struct ModuleHostTableSurfaceHandle {
     uint64_t value;
 } ModuleHostTableSurfaceHandle;
+
+/**
+ * A lease on one of the runtime's shared native services, valid until
+ * `ModuleHostTable.shared_native_service_lease_release`; `0` names none.
+ */
+typedef struct ModuleHostTableSharedNativeServiceLeaseHandle {
+    uint64_t value;
+} ModuleHostTableSharedNativeServiceLeaseHandle;
+
+/**
+ * What a granted lease names. Its text is the host's, alive until the lease
+ * is released.
+ */
+typedef struct ModuleHostTableSharedNativeServiceLease {
+    ModuleHostTableSharedNativeServiceLeaseHandle lease;
+    /**
+     * The Unix socket the service accepts this node's connections on.
+     */
+    ModuleHostTableUtf8 endpoint_socket_path;
+    /**
+     * The stream the lease was granted to, which the service keys the
+     * node's state by.
+     */
+    ModuleHostTableUtf8 tenant_stream_id;
+} ModuleHostTableSharedNativeServiceLease;
 
 /**
  * The most planes one `ModuleHostTableDmaBufImport` describes.
@@ -626,6 +651,23 @@ typedef struct ModuleHostTable {
      * publisher's.
      */
     ModuleHostTableStatus (*surface_lend_by_surface_id)(void *node_host, ModuleHostTableUtf8 surface_id, ModuleHostTableSurfaceHandle *lent_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 7: lease the runtime's shared native service `service_name` for
+     * this node, the runtime starting it when no node holds a lease on it.
+     * Refused by name when the runtime offers no such service or it failed.
+     */
+    ModuleHostTableStatus (*shared_native_service_lease_acquire)(void *node_host, ModuleHostTableUtf8 service_name, ModuleHostTableSharedNativeServiceLease *granted_lease, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 7: `MODULE_HOST_TABLE_STATUS_OK` while the leased service runs,
+     * `MODULE_HOST_TABLE_STATUS_EMPTY` while the runtime starts it again,
+     * and `MODULE_HOST_TABLE_STATUS_ENDED`, with the reason written, once
+     * it failed for good.
+     */
+    ModuleHostTableStatus (*shared_native_service_lease_state)(void *node_host, ModuleHostTableSharedNativeServiceLeaseHandle lease, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 7: give a lease back; the service stops a grace after its last.
+     */
+    void (*shared_native_service_lease_release)(void *node_host, ModuleHostTableSharedNativeServiceLeaseHandle lease);
 } ModuleHostTable;
 
 #ifdef __cplusplus

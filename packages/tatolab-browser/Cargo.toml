@@ -30,4 +30,4 @@ libc = "0.2"
 # third party would build one, with its own root, its own lockfile and no
 # engine crate.
 [workspace]
-members = ["page-bridge"]
+members = ["page-bridge", "tab-protocol", "host"]
