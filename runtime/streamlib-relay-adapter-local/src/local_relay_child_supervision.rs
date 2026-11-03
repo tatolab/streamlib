@@ -29,19 +29,10 @@ use streamlib::sdk::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
+use streamlib::sdk::child_process_restart_backoff::ChildProcessRestartBackoff;
 use streamlib_relay_adapter_sdk::{RelayConnectionState, RelayInstanceId};
 
 use crate::lock_ignoring_poison;
-
-/// The first wait before a child that exited is started again.
-const FIRST_RESTART_BACKOFF: Duration = Duration::from_secs(1);
-
-/// The longest wait before a child that keeps exiting is started again.
-const LONGEST_RESTART_BACKOFF: Duration = Duration::from_secs(30);
-
-/// How long a child must run for its next exit to be met with the first
-/// backoff again.
-const RUN_THAT_RESETS_THE_BACKOFF: Duration = Duration::from_secs(60);
 
 /// How long a stopped child has to end on `SIGTERM` before it is killed.
 const STOPPED_CHILD_GRACE: Duration = Duration::from_secs(3);
@@ -187,9 +178,9 @@ fn keep_the_child_running(
     woken: &mpsc::Receiver<()>,
     connection_state: &tokio::sync::watch::Sender<RelayConnectionState>,
 ) {
-    let mut restart_backoff = FIRST_RESTART_BACKOFF;
+    let mut restart_backoff = ChildProcessRestartBackoff::new();
     loop {
-        let why_the_child_is_not_running = {
+        let (why_the_child_is_not_running, run_before_the_death) = {
             let mut running = lock_ignoring_poison(running_child_process_id);
             if stopping.load(Ordering::SeqCst) {
                 return;
@@ -217,34 +208,36 @@ fn keep_the_child_running(
                     if stopping.load(Ordering::SeqCst) {
                         return;
                     }
-                    if started.elapsed() >= RUN_THAT_RESETS_THE_BACKOFF {
-                        restart_backoff = FIRST_RESTART_BACKOFF;
-                    }
-                    match exit {
+                    let why_the_child_is_not_running = match exit {
                         Ok(status) => format!("it exited with {status}"),
                         Err(failure) => format!("it could not be waited on: {failure}"),
-                    }
+                    };
+                    (why_the_child_is_not_running, started.elapsed())
                 }
-                Err(failure) => format!(
-                    "{} could not be started: {failure}",
-                    launch.relay_executable.display()
+                Err(failure) => (
+                    format!(
+                        "{} could not be started: {failure}",
+                        launch.relay_executable.display()
+                    ),
+                    Duration::ZERO,
                 ),
             }
         };
+        let restart_wait = restart_backoff
+            .wait_before_starting_again_after_a_death_ending_a_run_of(run_before_the_death);
         tracing::warn!(
             relay = %launch.relay_id,
             "the local relay child is not running, because {why_the_child_is_not_running}; it \
-             starts again in {restart_backoff:?}"
+             starts again in {restart_wait:?}"
         );
         connection_state.send_replace(RelayConnectionState::Lost {
             why: why_the_child_is_not_running,
-            rejoining_after: restart_backoff,
+            rejoining_after: restart_wait,
         });
-        match woken.recv_timeout(restart_backoff) {
+        match woken.recv_timeout(restart_wait) {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
-        restart_backoff = (restart_backoff * 2).min(LONGEST_RESTART_BACKOFF);
     }
 }
 

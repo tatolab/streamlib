@@ -22,6 +22,7 @@ pub(crate) mod test_support;
 // can reach `streamlib::sdk::<name>` via the SDK's per-module
 // re-exports.
 pub mod child_process_lifetime;
+pub mod child_process_restart_backoff;
 pub mod color;
 pub mod context;
 pub mod descriptors;
