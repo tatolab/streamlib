@@ -371,29 +371,34 @@ def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     )
 
 
-def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
+def test_a_crashed_helper_is_restarted_in_a_new_process_and_the_pipeline_keeps_running(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """The owner's crash policy: surface, keep running.
+    """The owner's crash policy: surface, restart, keep running.
 
-    A processor that takes its own process down mid-run is reported in error,
-    and the rest of the stream is unaffected. What notices is the Manual loop's
-    hundred-millisecond poll asking the process itself; the bridge reader seeing
-    EOF is the second signal, and a descendant holding that socket defers it
-    indefinitely. Break both and the death goes unreported until shutdown, which
-    is what this locks.
+    A processor that takes its own process down mid-run is reported, a new
+    helper process takes its place after a backoff, and the rest of the stream
+    is unaffected. What notices is the Manual loop's hundred-millisecond poll
+    asking the process itself; the bridge reader seeing EOF is the second
+    signal, and a descendant holding that socket defers it indefinitely.
+
+    Fail-without-fix: break the poll and the death goes unreported until
+    shutdown; latch the death and no second helper ever starts.
     """
     tatolabd = start_tatolabd_running_stream(dies_abruptly_beside_a_survivor_pair)
-    tatolabd.await_marker("ABOUT_TO_DIE")
-    failure_line = tatolabd.await_stderr_containing("Processor failed unrecoverably")
-    sink_reports_before_the_failure_was_surfaced = sum(
+    first_helper_pid = tatolabd.await_marker("ABOUT_TO_DIE")["pid"]
+    death_line = tatolabd.await_stderr_containing("a new one starts in")
+    assert f"pid={first_helper_pid}" in death_line, death_line
+    sink_reports_before_the_death_was_surfaced = sum(
         1
-        for line in tatolabd.stderr_lines[: tatolabd.stderr_lines.index(failure_line) + 1]
+        for line in tatolabd.stderr_lines[: tatolabd.stderr_lines.index(death_line) + 1]
         if "MARKER:SINK_PID" in line
     )
+    restarted_helper_pid = tatolabd.await_marker("ABOUT_TO_DIE", occurrence=2)["pid"]
+    assert restarted_helper_pid != first_helper_pid, "a restart is a new helper process"
     # The survivors were already producing before the crash and must still be
     # producing after it — the stream is not brought down with one processor.
-    tatolabd.await_marker("SINK_PID", occurrence=sink_reports_before_the_failure_was_surfaced + 1)
+    tatolabd.await_marker("SINK_PID", occurrence=sink_reports_before_the_death_was_surfaced + 1)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
