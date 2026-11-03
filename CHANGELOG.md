@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.15](https://github.com/tatolab/streamlib/compare/v0.68.14...v0.68.15) (2026-11-03)
+
+
+### Features
+
+* **codecs:** H.264 and H.265 leave the engine for the tatolab-h264 and tatolab-h265 modules ([#3098](https://github.com/tatolab/streamlib/issues/3098)) ([0904def](https://github.com/tatolab/streamlib/commit/0904deff14fbf41fa33a3cd05365fbe2c9bd2568))
+
 ## [0.68.14](https://github.com/tatolab/streamlib/compare/v0.68.13...v0.68.14) (2026-11-03)
 
 
