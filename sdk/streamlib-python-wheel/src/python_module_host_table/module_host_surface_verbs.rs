@@ -12,10 +12,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+#[cfg(target_os = "linux")]
+use tatolab_module_sdk::module_host_table_abi::MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES;
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, ModuleHostTableColorInfo,
-    ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
-    ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
@@ -44,6 +46,7 @@ struct SurfaceLentToNativeCode {
 pub(super) struct SurfacesLentToNativeCode {
     surfaces_by_handle_value: Mutex<HashMap<u64, SurfaceLentToNativeCode>>,
     /// Held across one host-memory write, so two never fill a staging mapping at once.
+    #[cfg(target_os = "linux")]
     host_memory_write_in_progress: Mutex<()>,
     next_handle_value: AtomicU64,
     native_escalate_channel: Option<Arc<HelperProcessNativeEscalateChannel>>,
@@ -57,6 +60,7 @@ impl SurfacesLentToNativeCode {
     ) -> Self {
         Self {
             surfaces_by_handle_value: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "linux")]
             host_memory_write_in_progress: Mutex::new(()),
             next_handle_value: AtomicU64::new(1),
             native_escalate_channel,
@@ -486,6 +490,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     use super::*;
+    #[cfg(target_os = "linux")]
     use tatolab_module_sdk::module_host_table_abi::ModuleHostTableBytes;
 
     /// A parent stand-in that answers each request with `answer_for` and hands

@@ -10,6 +10,7 @@
 //! the audio capture and playback streams it opens call its callbacks from
 //! their device threads.
 
+#[cfg(target_os = "linux")]
 mod host_memory_pixel_rows;
 mod module_host_surface_verbs;
 

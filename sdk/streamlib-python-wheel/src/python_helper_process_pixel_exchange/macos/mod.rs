@@ -184,18 +184,6 @@ pub(crate) struct HelperIOSurfaceCpuLock {
 }
 
 impl HelperIOSurfaceCpuLock {
-    /// Take `iosurface`'s lock read-only or read-write, replacing any lock
-    /// already held. On a discrete-GPU Mac the lock is what makes the host
-    /// view coherent with the GPU's copy.
-    fn lock(
-        &self,
-        iosurface: &objc2_io_surface::IOSurfaceRef,
-        read_only: bool,
-    ) -> Result<(), IOSurfaceLockRefused> {
-        let mut held_lock_options = self.held_lock_options.lock();
-        Self::lock_replacing_held(&mut held_lock_options, iosurface, read_only)
-    }
-
     /// Take `iosurface`'s lock read-only or read-write unless a lock is
     /// already held — the lock a CPU door takes once per lock scope.
     fn lock_unless_held(

@@ -826,11 +826,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: cargo clippy (workspace, default targets)
-        run: cargo clippy --locked --workspace --no-deps
+      # Compiler warnings and clippy lints are errors in every first-party crate and target
+      # except streamlib-adapter-skia, which is compiled but not linted.
+      # The vendored vulkanalia trees are excluded because a change to them is a recorded
+      # patch against upstream. Tests, examples and benches may print, so the `println!` ban
+      # (`clippy::disallowed_macros`) holds for libraries and binaries only.
+      - name: Clippy is fatal (workspace libraries and binaries)
+        run: >-
+          cargo clippy --locked --keep-going --workspace --lib --bins --no-deps
+          --exclude streamlib-adapter-skia
+          --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
+          -- -D warnings
 
-      - name: cargo check (workspace, all targets)
-        run: cargo check --locked --workspace --all-targets
+      - name: Clippy is fatal (workspace tests, examples and benches)
+        run: >-
+          cargo clippy --locked --keep-going --workspace --tests --examples --benches --no-deps
+          --exclude streamlib-adapter-skia
+          --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
+          -- -A clippy::disallowed_macros -D warnings
+
+      - name: cargo check (streamlib-adapter-skia, all targets)
+        run: cargo check --locked -p streamlib-adapter-skia --all-targets
 
       # The camera module's AVFoundation half builds only here; its capture
       # needs a camera and an access grant no runner has, so CI holds its pure

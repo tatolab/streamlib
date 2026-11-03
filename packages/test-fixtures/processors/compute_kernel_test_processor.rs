@@ -54,6 +54,7 @@
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
+#[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, TensorStorageBufferLayout,
 };
@@ -61,8 +62,10 @@ use streamlib::sdk::rhi::{
 /// SPIR-V for the `output[i] = input[i] * 2` reference kernel.
 /// Compiled from `shaders/cpu_ref_doubler.comp` by this crate's
 /// `build.rs` and staged at `OUT_DIR/cpu_ref_doubler.spv`.
+#[cfg(target_os = "linux")]
 const CPU_REF_DOUBLER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cpu_ref_doubler.spv"));
 
+#[cfg(target_os = "linux")]
 const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec {
         binding: 0,

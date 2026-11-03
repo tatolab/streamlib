@@ -669,7 +669,8 @@ mod tests {
                 &copied[pixel * 4..pixel * 4 + 4],
             );
         }
-        let distinct_colors: std::collections::HashSet<&[u8]> = imported.chunks_exact(4).collect();
+        let distinct_colors: std::collections::HashSet<&[u8; 4]> =
+            imported.as_chunks::<4>().0.iter().collect();
         assert!(
             distinct_colors.len() > 64,
             "[{label}] the pattern survives as many colors, got {}",

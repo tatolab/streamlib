@@ -37,10 +37,12 @@
 //! or `offscreen_render` surfaces here as either a missing output
 //! file (the processor panicked) or `ERR:<message>` in the file.
 
+#[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
+#[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
@@ -50,16 +52,21 @@ use streamlib::sdk::rhi::{
 };
 
 /// SPIR-V for the smoke-test vertex stage. Compiled by `build.rs`.
+#[cfg(target_os = "linux")]
 const SMOKE_VERT_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/graphics_kernel_smoke_vert.spv"));
 
 /// SPIR-V for the smoke-test fragment stage. Compiled by `build.rs`.
+#[cfg(target_os = "linux")]
 const SMOKE_FRAG_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/graphics_kernel_smoke_frag.spv"));
 
+#[cfg(target_os = "linux")]
 const SMOKE_BINDINGS: &[GraphicsBindingSpec] = &[];
 
+#[cfg(target_os = "linux")]
 const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
+#[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(

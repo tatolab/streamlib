@@ -166,8 +166,10 @@ pub struct ConsumerVulkanDevice {
     queue_mutex: Mutex<()>,
     /// The loader's `vkGetInstanceProcAddr`, valid while [`Self::entry`]
     /// keeps the loader library open.
+    #[cfg(target_os = "linux")]
     get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr,
     /// The `VkPhysicalDeviceFeatures` the device was created with.
+    #[cfg(target_os = "linux")]
     enabled_physical_device_features: vk::PhysicalDeviceFeatures,
 }
 
@@ -494,6 +496,13 @@ impl ConsumerVulkanDevice {
         vulkan_device_uuid_the_runtime_named: [u8; 16],
         queues: ConsumerVulkanDeviceQueues,
     ) -> Result<Self> {
+        #[cfg_attr(
+            not(target_os = "linux"),
+            expect(
+                unused_variables,
+                reason = "only the Linux external renderer reads the loader's vkGetInstanceProcAddr"
+            )
+        )]
         let (entry, instance, get_instance_proc_addr) = create_the_consumer_vulkan_instance()?;
         let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
             physical_devices_the_loader_enumerates_on(&instance)?
@@ -776,7 +785,9 @@ impl ConsumerVulkanDevice {
             live_allocation_count: AtomicUsize::new(0),
             video_codec_queue,
             queue_mutex: Mutex::new(()),
+            #[cfg(target_os = "linux")]
             get_instance_proc_addr,
+            #[cfg(target_os = "linux")]
             enabled_physical_device_features,
         })
     }
@@ -795,11 +806,13 @@ impl ConsumerVulkanDevice {
     }
 
     /// The loader's `vkGetInstanceProcAddr`, valid while this device lives.
+    #[cfg(target_os = "linux")]
     pub(crate) fn get_instance_proc_addr(&self) -> vk::PFN_vkGetInstanceProcAddr {
         self.get_instance_proc_addr
     }
 
     /// The `VkPhysicalDeviceFeatures` this device was created with.
+    #[cfg(target_os = "linux")]
     pub(crate) fn enabled_physical_device_features(&self) -> &vk::PhysicalDeviceFeatures {
         &self.enabled_physical_device_features
     }

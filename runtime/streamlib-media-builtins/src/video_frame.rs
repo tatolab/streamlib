@@ -13,9 +13,6 @@
 use serde::de::{self, DeserializeOwned, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
-use streamlib::sdk::color::ResolveH273ColorVuiDefaults as _;
-
 /// Video frame bag: references a GPU surface by id — pixels never ride the
 /// link. `surface_id` is the handoff contract (texture cache in-process,
 /// surface-share memory fd cross-process, pixel buffer for CPU readback);
@@ -290,10 +287,14 @@ impl ColorInfo {
     /// The fully resolved description the engine's colour kernels take:
     /// every absent axis filled with `resolve_color_defaults`' answer for a
     /// source of `kind`.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn resolve_defaults(
         &self,
         kind: streamlib::sdk::color::ColorSpaceKind,
     ) -> streamlib::sdk::color::ResolvedColorInfo {
+        use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
+        use streamlib::sdk::color::ResolveH273ColorVuiDefaults as _;
+
         color_info_to_h273_color_vui(self).resolve_defaults(kind)
     }
 }

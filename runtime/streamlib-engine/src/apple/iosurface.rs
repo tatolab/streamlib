@@ -1,16 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Private IOSurface allocation, and the host read of one.
+//! Private IOSurface allocation, and the host read tests make of one.
 //!
 //! Never `kIOSurfaceIsGlobal`: a global surface's id resolves from any
 //! process on the machine. A private one reaches another process only
 //! through a Mach port this process chose to send.
 
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};
+#[cfg(test)]
+use objc2_io_surface::IOSurfaceLockOptions;
 use objc2_io_surface::{
-    IOSurfaceLockOptions, IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
-    kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+    IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
+    kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
 use crate::core::rhi::PixelFormat;
@@ -68,7 +70,8 @@ pub fn create_iosurface_mach_send_right(
 ///
 /// A surface whose stride equals `row_byte_len` is handed over in place; one
 /// whose stride pads its rows is copied row by row into packed storage first.
-pub fn with_iosurface_rows_tightly_packed_for_reading<R>(
+#[cfg(test)]
+pub(crate) fn with_iosurface_rows_tightly_packed_for_reading<R>(
     iosurface: &IOSurfaceRef,
     row_byte_len: usize,
     row_count: usize,
@@ -112,10 +115,12 @@ pub fn with_iosurface_rows_tightly_packed_for_reading<R>(
 }
 
 /// An IOSurface locked read-only, unlocked when this drops.
+#[cfg(test)]
 struct IOSurfaceLockedForReading<'a> {
     iosurface: &'a IOSurfaceRef,
 }
 
+#[cfg(test)]
 impl<'a> IOSurfaceLockedForReading<'a> {
     fn lock(iosurface: &'a IOSurfaceRef) -> Result<Self> {
         // SAFETY: a null seed pointer is the documented "not wanted".
@@ -140,6 +145,7 @@ impl<'a> IOSurfaceLockedForReading<'a> {
     }
 }
 
+#[cfg(test)]
 impl Drop for IOSurfaceLockedForReading<'_> {
     fn drop(&mut self) {
         // SAFETY: paired with the read-only lock this value was made by.

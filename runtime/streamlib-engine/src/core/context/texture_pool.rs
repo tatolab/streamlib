@@ -696,7 +696,7 @@ impl TexturePool {
     }
 
     /// How many slots taken out of the pool await destruction.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn slot_count_awaiting_destruction(&self) -> usize {
         self.inner.slots_awaiting_destruction.count()
     }

@@ -49,6 +49,7 @@
 //! `set_push_constants`, or `trace_rays` surfaces here as either a
 //! missing output file (the processor panicked) or `ERR:<message>`.
 
+#[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};

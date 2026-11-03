@@ -84,6 +84,7 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     /// this type.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     checked_out_surface: HelperCheckedOutSurface,
+    #[cfg(target_os = "linux")]
     minted_surface_id: Option<String>,
     /// The one staged edit outstanding against this surface, whichever
     /// door staged it.
@@ -102,10 +103,18 @@ impl GpuSurfaceOwnedMemory {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn new(
         checked_out_surface: HelperCheckedOutSurface,
+        #[cfg_attr(
+            not(target_os = "linux"),
+            expect(
+                unused_variables,
+                reason = "only the Linux device and CPU-readback exports name the surface by its id"
+            )
+        )]
         minted_surface_id: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
             checked_out_surface,
+            #[cfg(target_os = "linux")]
             minted_surface_id,
             #[cfg(target_os = "linux")]
             pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
