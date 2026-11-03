@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The Opus codec pair, built-in class to decoded audio block.
+"""The `tatolab-opus` module's codec pair, node class to decoded audio block.
 
 The load tests need no device: `tatolabd` loads the graph and its start is
 then refused at the GPU. The graph tests start the engine, so they carry
@@ -35,7 +35,8 @@ from opus_blocks_streams import (
     stereo_tone_through_the_opus_pair_probed_on_both_links,
 )
 from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import OpusDecoder, OpusEncoder, compile_stream_to_graph
+from tatolab.opus import OpusDecoder, OpusEncoder
+from tatolab.stream import compile_stream_to_graph
 
 TWO_OPUS_MARKERS = [OpusEncoder, OpusDecoder]
 
@@ -62,7 +63,7 @@ DECODED_BLOCKS_TO_CROSS_CHECK = DECODED_BLOCKS_REPORTED // 2
 READINESS_TIMEOUT_SECONDS = 20.0
 
 
-# ---- built-in class semantics (no GPU) -------------------------------------
+# ---- module class semantics (no GPU) ---------------------------------------
 
 
 ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
@@ -77,7 +78,9 @@ def test_node_name_defaults_to_the_type_name(
 ):
     graph = compile_stream_to_graph(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
     [marker_node] = [
-        node for node in graph["nodes"] if node["type"] == marker_class.type
+        node
+        for node in graph["nodes"]
+        if node["type"] == f"tatolab.opus:{marker_class.__qualname__}"
     ]
     assert marker_node["name"] == marker_class.__name__.lower()
 

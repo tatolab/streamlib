@@ -1,0 +1,32 @@
+[package]
+name = "tatolab-opus"
+version = "0.68.13"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "Opus encode and decode for StreamLib, as the tatolab-opus extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `tatolab.opus.processors` imports. cdylib only:
+# nothing links this crate as a Rust library, and the CPython ABI is the one
+# binary boundary an extension crosses.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.10 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+# libopus, statically linked through `opusic-sys`'s bundled copy (cmake, no
+# bindgen at build). The static link is load-bearing:
+# `tests/test_wheel_portability.py` fails if `DT_NEEDED` grows.
+opus = "0.4"
+thiserror = "2.0.17"
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

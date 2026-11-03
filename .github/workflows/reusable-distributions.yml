@@ -231,6 +231,18 @@ jobs:
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
+  build-tatolab-opus-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-opus
+      extension_distribution_name: tatolab-opus
+      extension_import_package_name: tatolab.opus
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
   # uploaded.
@@ -281,6 +293,7 @@ jobs:
       - build-tatolab-webrtc-distribution
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
+      - build-tatolab-opus-distribution
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
       - check-the-linux-runtime-can-be-published

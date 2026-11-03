@@ -6,6 +6,7 @@ between them, each run from the suite project to prove the engine loads the
 wiring as the nodes publish their ports."""
 
 import tatolab.stream
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.microphone import MicrophoneSource
 from tatolab.speaker import SpeakerSink
 from tatolab.stream import (
@@ -13,8 +14,6 @@ from tatolab.stream import (
     H264Encoder,
     H265Decoder,
     H265Encoder,
-    OpusDecoder,
-    OpusEncoder,
     StreamBuilder,
     stream,
 )

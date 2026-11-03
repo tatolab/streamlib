@@ -5,9 +5,9 @@
 //!
 //! Two projects' shapes, one command. The engine workspace's file is the wheel's
 //! and the SDK crate's; a standalone extension wheel under `packages/` is not a
-//! workspace member, links no engine crate and vendors no C++, so it owes a file
-//! of its own over its own closure. [`NoticesGenerationTarget`] is that choice,
-//! and it decides the manifest, the destination and the appendix together.
+//! workspace member and links no engine crate, so it owes a file of its own over
+//! its own closure. [`NoticesGenerationTarget`] is that choice, and it decides
+//! the manifest, the destination and the appendix together.
 //!
 //! The preamble is written here rather than in `about.hbs`, because what a file
 //! covers and how to regenerate it differ per project while the licence sections
@@ -16,7 +16,8 @@
 //! Two halves that no single tool covers. `cargo about generate` walks the
 //! resolve graph and reproduces each crate's licence text; the projects
 //! appended here owe terms it cannot reach, because they are no package in that
-//! graph at all. Every one of them ships inside the wheel.
+//! graph at all. Every one of them ships inside the wheel
+//! [`WheelCarryingTheNotice`] names, and only that wheel's file appends it.
 //! [`PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE`] is the roster; this doc
 //! does not repeat it, because a census in prose goes stale the moment the table
 //! grows.
@@ -126,6 +127,19 @@ const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 /// The crate whose checkout carries libopus's own sources and `COPYING`.
 const OPUSIC_VENDORING_CRATE_NAME: &str = "opusic-sys";
 
+/// The extension wheel that links libopus.
+const OPUS_EXTENSION_PACKAGE_DIRECTORY: &str = "packages/tatolab-opus";
+
+/// Which wheel a project's code ships inside, and so whose notices file appends
+/// its terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelCarryingTheNotice {
+    /// The engine wheel, whose file the SDK crate ships too.
+    TheEngineWheel,
+    /// The extension wheel in this repository-relative package directory.
+    TheExtensionWheelIn(&'static str),
+}
+
 /// Which bullet of the appendix's roster a project belongs under.
 ///
 /// Named separately from the notice source because the two answer different
@@ -161,7 +175,7 @@ impl NoticeRosterCargoAboutCannotProduce {
                 "Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`"
             }
             Self::LinkedThroughOpusicSys => {
-                "Through the `opusic-sys` crate, linked statically into the engine as \
+                "Through the `opusic-sys` crate, linked statically into the native module as \
                  `libopus.a`"
             }
             Self::CompiledByTheVulkanaliaVmaForksBuildScript => {
@@ -247,6 +261,7 @@ struct ProjectWhoseNoticeCargoAboutCannotProduce {
     /// read from and how the code reached the binary are different questions
     /// — two crates share one notice source and sit on different bullets.
     roster: NoticeRosterCargoAboutCannotProduce,
+    carried_by: WheelCarryingTheNotice,
 }
 
 const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
@@ -260,6 +275,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "build/shaderc/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "glslang",
@@ -273,6 +289,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "build/glslang/LICENSE.txt",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Tools",
@@ -283,6 +300,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "build/spirv-tools/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Headers",
@@ -293,6 +311,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "build/spirv-headers/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "VulkanMemoryAllocator",
@@ -302,6 +321,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Vulkan-Headers",
@@ -314,6 +334,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "PipeWire",
@@ -328,6 +349,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/pipewire-headers/COPYING",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheEnginesBuildScript,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "libopus",
@@ -344,6 +366,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "opus/COPYING",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
+        carried_by: WheelCarryingTheNotice::TheExtensionWheelIn(OPUS_EXTENSION_PACKAGE_DIRECTORY),
     },
     // The projects below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
     // and `scripts/stage_linux_bundled_vulkan_driver.sh` put in the wheel, each
@@ -358,6 +381,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/MoltenVK/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Cross",
@@ -367,6 +391,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/SPIRV-Cross/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "cereal",
@@ -376,6 +401,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/cereal/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Vulkan-Loader",
@@ -385,6 +411,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Vulkan-Loader/LICENSE.txt",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheBundledVulkanLoader,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "cJSON",
@@ -396,6 +423,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/cJSON/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheBundledVulkanLoader,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Mesa",
@@ -411,6 +439,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Mesa/NOTICE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "xxHash",
@@ -423,6 +452,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/xxHash/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Berkeley SoftFloat",
@@ -433,6 +463,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Berkeley-SoftFloat/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Fuchsia radix sort",
@@ -444,6 +475,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Fuchsia-radix-sort/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "LLVM",
@@ -453,6 +485,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/LLVM/LICENSE.TXT",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "OpenBSD regex",
@@ -465,6 +498,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/OpenBSD-regex/COPYRIGHT.regex",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "OpenBSD strlcpy",
@@ -475,6 +509,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/OpenBSD-strlcpy/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Unicode ConvertUTF",
@@ -486,6 +521,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Unicode-ConvertUTF/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Unicode Character Database",
@@ -498,6 +534,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Unicode-Character-Database/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Zstandard",
@@ -508,6 +545,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/zstd/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "zlib",
@@ -519,6 +557,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/zlib/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
 ];
 
@@ -581,6 +620,47 @@ impl NoticesGenerationTarget {
         }
     }
 
+    /// Whether this target's file appends `project`'s terms.
+    fn carries_the_notice_of(&self, project: &ProjectWhoseNoticeCargoAboutCannotProduce) -> bool {
+        match (self, project.carried_by) {
+            (Self::EngineWorkspace, WheelCarryingTheNotice::TheEngineWheel) => true,
+            (
+                Self::ExtensionPackage { package_directory },
+                WheelCarryingTheNotice::TheExtensionWheelIn(carrying_package_directory),
+            ) => package_directory == Path::new(carrying_package_directory),
+            _ => false,
+        }
+    }
+
+    /// The projects on the roster whose terms this target's file appends.
+    fn projects_whose_notices_it_carries(
+        &self,
+    ) -> Vec<&'static ProjectWhoseNoticeCargoAboutCannotProduce> {
+        PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+            .iter()
+            .filter(|project| self.carries_the_notice_of(project))
+            .collect()
+    }
+
+    /// What the appendix opens with, before its roster bullets.
+    fn appendix_opening_paragraph(&self) -> &'static str {
+        match self {
+            Self::EngineWorkspace => {
+                "Every project below ships inside the wheel and owes terms the generated half above\n\
+                 cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
+                 graph `cargo about` walks, and some ship inside the prebuilt Vulkan loader and\n\
+                 driver the macOS or Linux wheel carries. These sections are appended by\n\
+                 `cargo xtask generate-third-party-notices`.\n"
+            }
+            Self::ExtensionPackage { .. } => {
+                "Every project below ships inside the wheel and owes terms the generated half above\n\
+                 cannot carry: it is compiled in from vendored sources, and so appears in no resolve\n\
+                 graph `cargo about` walks. These sections are appended by\n\
+                 `cargo xtask generate-third-party-notices`.\n"
+            }
+        }
+    }
+
     /// Everything above `## Overview`, which the template renders.
     pub fn preamble(&self) -> String {
         let mut preamble = String::from(NOTICES_PREAMBLE_OPENING);
@@ -613,48 +693,47 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         CargoAboutFeatureSelection::EveryFeature,
     )?);
 
-    // One dispatch, whose value is what the log then reports: two matches on
-    // one enum encode one fact — whether the appendix went on — and a third
-    // variant could make them disagree.
-    let notices_appended = match target {
-        NoticesGenerationTarget::EngineWorkspace => {
-            notices.push('\n');
-            notices.push_str(&render_the_local_relays_closure(workspace_root)?);
-            notices.push('\n');
-            notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
-            let source_trees = NoticeSourceTrees {
-                registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
-                workspace_root: workspace_root.to_path_buf(),
-            };
-            notices.push('\n');
-            notices.push_str(&render_the_appendix_cargo_about_cannot_produce(
-                &source_trees,
-            )?);
-            PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE.len()
-        }
-        NoticesGenerationTarget::ExtensionPackage { .. } => {
-            let projects_compiled_in =
-                projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(&project_root)?;
-            if !projects_compiled_in.is_empty() {
-                notices.push('\n');
-                notices.push_str(&render_the_extension_appendix_of_vendored_sources(
-                    workspace_root,
-                    &projects_compiled_in,
-                )?);
+    if *target == NoticesGenerationTarget::EngineWorkspace {
+        notices.push('\n');
+        notices.push_str(&render_the_local_relays_closure(workspace_root)?);
+        notices.push('\n');
+        notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
+    }
+
+    let mut projects_carried = target.projects_whose_notices_it_carries();
+    if matches!(target, NoticesGenerationTarget::ExtensionPackage { .. }) {
+        for project in
+            projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(&project_root)?
+        {
+            if !projects_carried
+                .iter()
+                .any(|carried| std::ptr::eq(*carried, project))
+            {
+                projects_carried.push(project);
             }
-            let fetched_appendix =
-                render_the_appendix_of_sources_the_build_script_fetches(&project_root)?;
-            let projects_fetched = match fetched_appendix {
-                Some((appendix, project_count)) => {
-                    notices.push('\n');
-                    notices.push_str(&appendix);
-                    project_count
-                }
-                None => 0,
-            };
-            projects_compiled_in.len() + projects_fetched
         }
-    };
+    }
+    if !projects_carried.is_empty() {
+        let source_trees = NoticeSourceTrees {
+            registry_crate_roots: locate_registry_crate_roots(&project_root, &projects_carried)?,
+            workspace_root: workspace_root.to_path_buf(),
+        };
+        notices.push('\n');
+        notices.push_str(&render_the_appendix_cargo_about_cannot_produce(
+            target,
+            &projects_carried,
+            &source_trees,
+        )?);
+    }
+    let mut notices_appended = projects_carried.len();
+    if matches!(target, NoticesGenerationTarget::ExtensionPackage { .. })
+        && let Some((appendix, projects_fetched)) =
+            render_the_appendix_of_sources_the_build_script_fetches(&project_root)?
+    {
+        notices.push('\n');
+        notices.push_str(&appendix);
+        notices_appended += projects_fetched;
+    }
 
     let notices_path = project_root.join(THIRD_PARTY_NOTICES_FILE_NAME);
     std::fs::write(&notices_path, notices)
@@ -806,16 +885,20 @@ fn markdown_with_every_heading_one_level_deeper(markdown: &str) -> String {
     deepened
 }
 
-/// Find every vendoring crate's registry checkout through `cargo metadata`.
+/// Find the registry checkout of every vendoring crate `projects` read a
+/// notice out of, through `cargo metadata` on the manifest in `project_root`.
 ///
 /// Resolved rather than hard-coded: the sources live in the registry checkout,
 /// whose path carries a version and a registry hash that both move. Driven off
 /// the roster itself, so a project added with a new vendoring crate resolves
 /// without a second list to keep in step.
-fn locate_registry_crate_roots(workspace_root: &Path) -> Result<BTreeMap<&'static str, PathBuf>> {
-    let metadata = crate::run_cargo_metadata_resolve_document(workspace_root)?;
+fn locate_registry_crate_roots(
+    project_root: &Path,
+    projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce],
+) -> Result<BTreeMap<&'static str, PathBuf>> {
+    let metadata = crate::run_cargo_metadata_resolve_document(project_root)?;
     let mut roots = BTreeMap::new();
-    for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+    for project in projects {
         let NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name,
             ..
@@ -876,13 +959,15 @@ fn registry_crate_root_in(
         .to_path_buf())
 }
 
-/// Render the appended half: one section per project on the roster.
+/// Render the appended half: one section per project in `projects`.
 ///
 /// A missing or unreadable notice is an error, never an omitted section. The
 /// failure mode this guards is a dependency bump or a re-vendor that renames or
 /// moves one of the trees — silently shipping the binary without its terms is
 /// the one outcome worse than a red build.
 fn render_the_appendix_cargo_about_cannot_produce(
+    target: &NoticesGenerationTarget,
+    projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce],
     source_trees: &NoticeSourceTrees,
 ) -> Result<String> {
     let mut appendix = String::new();
@@ -892,19 +977,12 @@ fn render_the_appendix_cargo_about_cannot_produce(
     // nobody wrote down is a number that cannot go stale.
     write!(
         appendix,
-        "## Notices `cargo about` cannot produce\n\
-         \n\
-         Every project below ships inside the wheel and owes terms the generated half above\n\
-         cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
-         graph `cargo about` walks, and some ship inside the prebuilt Vulkan loader and\n\
-         driver the macOS or Linux wheel carries. These sections are appended by\n\
-         `cargo xtask generate-third-party-notices`.\n\
-         \n\
-         {}",
-        roster_bullets(),
+        "## Notices `cargo about` cannot produce\n\n{}\n{}",
+        target.appendix_opening_paragraph(),
+        roster_bullets(projects),
     )?;
 
-    for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+    for project in projects {
         let notice = read_one_notice(project, source_trees)?;
         write!(
             appendix,
@@ -945,39 +1023,6 @@ fn projects_an_extension_compiles_in_from_this_repositorys_vendor_tree(
         .collect())
 }
 
-/// The notices of `projects`, which an extension compiles in from sources
-/// vendored in this repository and so reach no graph `cargo about` walks.
-fn render_the_extension_appendix_of_vendored_sources(
-    workspace_root: &Path,
-    projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce],
-) -> Result<String> {
-    let source_trees = NoticeSourceTrees {
-        registry_crate_roots: BTreeMap::new(),
-        workspace_root: workspace_root.to_path_buf(),
-    };
-    let mut appendix = String::from(
-        "## Notices `cargo about` cannot produce\n\
-         \n\
-         Every project below is compiled into the wheel by\n\
-         `vendor/tatolab-vulkanalia-vma/build.rs` from sources checked into this repository, so it\n\
-         appears in no resolve graph `cargo about` walks. These sections are appended by\n\
-         `cargo xtask generate-third-party-notices`.\n",
-    );
-    for project in projects {
-        let notice = read_one_notice(project, &source_trees)?;
-        write!(
-            appendix,
-            "\n### {} ({})\n\nUpstream: <{}>\n\n{}",
-            project.display_name,
-            project.license_summary,
-            project.upstream_repository_url,
-            fenced_licence_text_block(&notice)
-                .with_context(|| format!("fencing the {} notice", project.display_name))?,
-        )?;
-    }
-    Ok(appendix)
-}
-
 /// The fence every licence text in a notices file is reproduced in.
 const LICENCE_TEXT_FENCE: &str = "````";
 
@@ -995,27 +1040,27 @@ pub fn fenced_licence_text_block(licence_text: &str) -> Result<String> {
     ))
 }
 
-/// One bullet per roster, each naming the projects that reach the binary that
-/// way. Rendered off [`NoticeRosterCargoAboutCannotProduce::ALL`] rather than written out,
-/// so an eighth project cannot land in a table the prose above it never
-/// mentions.
-fn roster_bullets() -> String {
+/// One bullet per roster `projects` fill, each naming the projects that reach
+/// the binary that way. Rendered off [`NoticeRosterCargoAboutCannotProduce::ALL`]
+/// rather than written out, so a project cannot land in a table the prose above
+/// it never mentions.
+fn roster_bullets(projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce]) -> String {
     NoticeRosterCargoAboutCannotProduce::ALL
         .iter()
-        .map(|roster| {
-            format!(
-                "- {}: {}\n",
-                roster.how_the_code_reaches_the_binary(),
-                joined_project_display_names(*roster)
-            )
-        })
+        .map(|roster| joined_project_display_names(projects, *roster))
+        .zip(NoticeRosterCargoAboutCannotProduce::ALL)
+        .filter(|(names, _)| !names.is_empty())
+        .map(|(names, roster)| format!("- {}: {names}\n", roster.how_the_code_reaches_the_binary()))
         .collect()
 }
 
-/// The display names of every project in one roster, as an English list the
-/// surrounding sentence can take.
-fn joined_project_display_names(roster: NoticeRosterCargoAboutCannotProduce) -> String {
-    let names: Vec<&str> = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+/// The display names of every project in `projects` on one roster, as an
+/// English list the surrounding sentence can take.
+fn joined_project_display_names(
+    projects: &[&ProjectWhoseNoticeCargoAboutCannotProduce],
+    roster: NoticeRosterCargoAboutCannotProduce,
+) -> String {
+    let names: Vec<&str> = projects
         .iter()
         .filter(|project| project.roster == roster)
         .map(|project| project.display_name)
@@ -1207,6 +1252,23 @@ mod tests {
         (fixture, source_trees)
     }
 
+    fn opus_extension_target() -> NoticesGenerationTarget {
+        NoticesGenerationTarget::ExtensionPackage {
+            package_directory: PathBuf::from(OPUS_EXTENSION_PACKAGE_DIRECTORY),
+        }
+    }
+
+    fn rendered_appendix_of(
+        target: &NoticesGenerationTarget,
+        source_trees: &NoticeSourceTrees,
+    ) -> Result<String> {
+        render_the_appendix_cargo_about_cannot_produce(
+            target,
+            &target.projects_whose_notices_it_carries(),
+            source_trees,
+        )
+    }
+
     fn extension_root_whose_lockfile_resolves(package_names: &[&str]) -> TempDir {
         let extension_root = TempDir::new().expect("tempdir");
         let lockfile: String = package_names
@@ -1231,9 +1293,16 @@ mod tests {
             .collect();
         assert_eq!(names, ["VulkanMemoryAllocator", "Vulkan-Headers"]);
 
-        let appendix =
-            render_the_extension_appendix_of_vendored_sources(&workspace_root(), &projects)
-                .expect("render");
+        let source_trees = NoticeSourceTrees {
+            registry_crate_roots: BTreeMap::new(),
+            workspace_root: workspace_root(),
+        };
+        let appendix = render_the_appendix_cargo_about_cannot_produce(
+            &opus_extension_target(),
+            &projects,
+            &source_trees,
+        )
+        .expect("render");
         assert!(appendix.contains("### VulkanMemoryAllocator (MIT)"));
         assert!(appendix.contains("Copyright"));
     }
@@ -1254,9 +1323,11 @@ mod tests {
     fn the_appendix_reproduces_every_vendored_project_verbatim() {
         let (_fixture, source_trees) = notice_source_trees_fixture();
         let appendix =
-            render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
+            rendered_appendix_of(&NoticesGenerationTarget::EngineWorkspace, &source_trees)
+                .expect("render");
 
-        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+        for project in NoticesGenerationTarget::EngineWorkspace.projects_whose_notices_it_carries()
+        {
             assert!(
                 appendix.contains(&format!("### {} (", project.display_name)),
                 "{} has no section",
@@ -1316,8 +1387,9 @@ mod tests {
         )
         .expect("remove");
 
-        let failure = render_the_appendix_cargo_about_cannot_produce(&source_trees)
-            .expect_err("a missing licence file must not render as an omitted section");
+        let failure =
+            rendered_appendix_of(&NoticesGenerationTarget::EngineWorkspace, &source_trees)
+                .expect_err("a missing licence file must not render as an omitted section");
         let reported = format!("{failure:#}");
         assert!(
             reported.contains("glslang"),
@@ -1330,32 +1402,78 @@ mod tests {
     }
 
     /// The appendix's opening paragraph ships inside a legal notice, and its
-    /// two rosters are derived. A third notice source added later would render
-    /// its projects into sections while leaving them out of both rosters —
-    /// which is the paragraph claiming a coverage it no longer has.
+    /// rosters are derived. A notice source added later would render its
+    /// projects into sections while leaving them out of every roster — which is
+    /// the paragraph claiming a coverage it no longer has.
     #[test]
-    fn the_appendix_rosters_between_them_name_every_project_in_the_table() {
+    fn each_appendix_rosters_name_every_project_it_carries() {
         let (_fixture, source_trees) = notice_source_trees_fixture();
-        let appendix =
-            render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
+        for target in [
+            NoticesGenerationTarget::EngineWorkspace,
+            opus_extension_target(),
+        ] {
+            let projects = target.projects_whose_notices_it_carries();
+            assert!(!projects.is_empty(), "{target:?} carries no project");
+            let appendix = rendered_appendix_of(&target, &source_trees).expect("render");
+            let bullets = roster_bullets(&projects);
 
-        let rosters = NoticeRosterCargoAboutCannotProduce::ALL.map(joined_project_display_names);
-        for roster in &rosters {
-            assert!(
-                !roster.is_empty(),
-                "a roster emptied, leaving prose dangling"
-            );
-            assert!(appendix.contains(roster.as_str()));
+            assert!(appendix.contains(&bullets));
+            for project in &projects {
+                assert!(
+                    bullets.contains(project.display_name),
+                    "{} has a section in {target:?} but appears in no roster",
+                    project.display_name
+                );
+            }
         }
-        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+        for roster in NoticeRosterCargoAboutCannotProduce::ALL {
+            let projects: Vec<_> = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+                .iter()
+                .collect();
             assert!(
-                rosters
-                    .iter()
-                    .any(|roster| roster.contains(project.display_name)),
-                "{} has a section but appears in neither roster",
+                !joined_project_display_names(&projects, roster).is_empty(),
+                "{roster:?} names no project, leaving its prose dangling"
+            );
+        }
+    }
+
+    /// Every project's code ships inside exactly one wheel, so exactly one file
+    /// appends its terms.
+    #[test]
+    fn every_project_on_the_roster_is_carried_by_exactly_one_target() {
+        let mut targets = vec![NoticesGenerationTarget::EngineWorkspace];
+        targets.extend(
+            extension_package_directories()
+                .into_iter()
+                .map(
+                    |package_directory| NoticesGenerationTarget::ExtensionPackage {
+                        package_directory,
+                    },
+                ),
+        );
+        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+            let carrying: Vec<_> = targets
+                .iter()
+                .filter(|target| target.carries_the_notice_of(project))
+                .collect();
+            assert_eq!(
+                carrying.len(),
+                1,
+                "{} is carried by {carrying:?}",
                 project.display_name
             );
         }
+    }
+
+    #[test]
+    fn libopus_is_carried_by_the_opus_extension_and_not_the_engine() {
+        let libopus = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+            .iter()
+            .find(|project| project.display_name == "libopus")
+            .expect("libopus is on the roster");
+
+        assert!(opus_extension_target().carries_the_notice_of(libopus));
+        assert!(!NoticesGenerationTarget::EngineWorkspace.carries_the_notice_of(libopus));
     }
 
     #[test]
@@ -1415,6 +1533,7 @@ mod tests {
                 header_path_relative_to_workspace_root: "header.h",
             },
             roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
+            carried_by: WheelCarryingTheNotice::TheEngineWheel,
         };
         let workspace = TempDir::new().expect("temp dir");
         fs::write(workspace.path().join("header.h"), "// just a description\n").expect("write");
