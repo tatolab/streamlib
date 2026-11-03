@@ -29,7 +29,7 @@ from nodes.halftone_lens_effect import HalftoneLensEffect
 def main(stream_builder: StreamBuilder) -> None:
     """The sample animation through the lens, encoded and shared; brightness logged each second."""
     # Point it at your camera: `stream_builder.add(CameraSource)`, imported
-    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the
+    # from `tatolab.camera` (the `tatolab-camera` module), publishes on the
     # same `video` port.
     source = stream_builder.add(TestPatternSource)
     effect = stream_builder.add(HalftoneLensEffect)

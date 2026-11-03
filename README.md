@@ -2,8 +2,8 @@
 
 # Tatolab
 
-**Turn anything into a live stream.**<br>
-Wire cameras, models and your own code into a stream. Expose an output, and apps, agents and your other machines read it by URL.
+**A creative engine for media made live.**<br>
+Wire cameras, GPU shaders, models, web pages, animations and your own Python into a node graph you change while it runs, and share what it makes as a live stream.
 
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
@@ -27,7 +27,8 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 - **Every Python node runs in its own process**, with its own interpreter started from your stream's
   venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
-  CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
+  CPU copy, and a pixel effect is one GLSL function. Compute, graphics and ray-tracing kernels and a
+  model-input tensor kernel are a call away from Python. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
 - **Native built-ins for the parts with deadlines**: test pattern and a virtual camera on
   Linux — native code inside the runtime, configured from Python. The camera, microphone,
@@ -52,16 +53,26 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 
 ## Built for
 
-Tatolab turns anything into a live stream: cameras, models and your own code, wired together in
-Python and shared with people and agents. Today a stream runs on one machine, and you and your
-agents work on it there.
+Tatolab is a creative engine for content that is made as it plays: a node graph, in the spirit of
+TouchDesigner, that you program in Python and rewire while it runs. Sources, GPU effects, models,
+compositing and outputs are all nodes, so the same graph can take a different config per person,
+place or moment and produce a different picture each time. Today a stream runs on one machine, and
+you and your agents work on it there.
 
-- **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result on
-  a virtual camera that other applications can pick.
+- **Personalised media in near real time** — a model reads the input, a shader or compositor shapes
+  the picture, and the result plays in a browser, goes out over WebRTC, or lands on a virtual camera
+  other applications pick.
+- **Installations and live screens** — art installations, venue and hotel screens, reactive ads: a
+  camera, a microphone, a web page or a Rive animation driven by data, layered on the GPU and shown
+  live. The web page and Rive sources are Linux only and built from this repository for now; see
+  [what ships today](#what-ships-today).
 - **Agents that watch and change a running stream** — over MCP, on the machine itself, or from
   another machine over ssh.
 - **Tailscale users, first.** Reaching a stream on another machine of your tailnet is
   `ssh <machine> tatolab mcp`; Tatolab builds nothing Tailscale already does.
+
+Tatolab is code, not a visual patcher: there is no node editor. The graph is a `@stream` function,
+`tatolab graph` prints it live, and the preview page plays what it makes.
 
 ## What it doesn't replace
 
@@ -192,7 +203,7 @@ from nodes.halftone_lens_effect import HalftoneLensEffect
 def main(stream_builder: StreamBuilder) -> None:
     """The sample animation through the lens, encoded and shared; brightness logged each second."""
     # Point it at your camera: `stream_builder.add(CameraSource)`, imported
-    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the same `video` port.
+    # from `tatolab.camera` (the `tatolab-camera` module), publishes on the same `video` port.
     source = stream_builder.add(TestPatternSource)
     effect = stream_builder.add(HalftoneLensEffect)
     meter = stream_builder.add(BrightnessMeter)
@@ -209,8 +220,10 @@ The effect's output has two readers: the meter measures each frame, and the enco
 H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser plays, on this machine
 or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
 pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s `CameraSource`, as the comment says,
-to run your camera through the same effect. A built-in's `config` is a `TypedDict` —
-`TestPatternSourceConfig`, `OpusEncoderConfig` — so a type checker catches a misspelled key. `expose` without a level
+to run your camera through the same effect; the camera is a module you add to the project, built
+from this repository for now (see [what ships today](#what-ships-today)). A node's `config` is a
+`TypedDict` or a dataclass — `TestPatternSourceConfig`, `OpusEncoderConfig` — so a type checker
+catches a misspelled key. `expose` without a level
 makes an output private, readable by other streams and code on this machine.
 
 Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
@@ -578,11 +591,9 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Test pattern, the
-H.264 / H.265 codec pairs and the virtual camera ship inside the runtime because their
-per-frame paths have deadlines a separate process cannot meet, need primitives only the
-runtime has, or present a device to other applications; everything else is a package or a node you
-write.
+**It costs you** a small set of built-ins. The test pattern, the virtual camera and
+`RelayTrackSource` still ship inside the runtime; everything else, the camera, audio and video
+codecs included, is a package or a node you write, built the way a third party would build one.
 
 </details>
 
@@ -674,7 +685,8 @@ Other vendors are untested rather than validated.
 
 ## What ships today
 
-A stream on one machine — sources in, GPU work, your model, display or recording out — plus
+A stream on one machine — sources in, GPU work, your model, and out to a browser, a virtual
+camera, WebRTC or a speaker — plus
 observation and live changes from the CLI or an agent. The built-in nodes are native code inside the
 runtime, configured from Python, and their per-frame paths never enter an interpreter:
 
@@ -682,19 +694,34 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 |---|---|
 | `TestPatternSource` | Color bars, for a machine with no camera. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
+| `RelayTrackSource` | Reads another stream's exposed output from the relay, as a source in this one. |
 
-The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
-`from tatolab.microphone import MicrophoneSource` and `from tatolab.speaker import SpeakerSink`.
-Each runs in its own helper process and moves its samples on a native thread over the
-engine's audio backend, so no interpreter sits in the sample path either. The camera is one too:
-`pip install tatolab-camera`, then `from tatolab.camera import CameraSource` — V4L2 on Linux and
-AVFoundation on macOS, each frame imported to the GPU with no CPU copy. So are the hardware
-video codecs: `pip install tatolab-h264 tatolab-h265`, then `from tatolab.h264 import H264Encoder,
-H264Decoder` and `from tatolab.h265 import H265Encoder, H265Decoder` — Vulkan Video on a device
-the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on `tatolab-h264`.
+Everything else is a module: an ordinary Python package you add to the stream's project, whose
+native code runs in its node's own process. Add one with `uv add`, never `pip install`: the runtime
+syncs the project's `.venv` from `pyproject.toml` on every load, so a package installed outside it
+is gone at the next run. Published to PyPI with each release:
 
-Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
-libopus linked statically into the wheel.
+| Module | Nodes |
+|---|---|
+| `tatolab-h264`, `tatolab-h265` | `tatolab.h264.H264Encoder`, `H264Decoder` and `tatolab.h265.H265Encoder`, `H265Decoder`: Vulkan Video on a device the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on `tatolab-h264`. |
+| `tatolab-microphone` | `tatolab.microphone.MicrophoneSource` |
+| `tatolab-speaker` | `tatolab.speaker.SpeakerSink` |
+| `tatolab-opus` | `tatolab.opus.OpusEncoder`, `OpusDecoder`, libopus linked statically into the wheel |
+| `tatolab-webrtc` | `tatolab.webrtc.WhipPublisher`, `WhepPlayer` |
+
+The microphone and speaker each run in their own helper process and move their samples on a
+native thread over the engine's audio backend, so no interpreter sits in the sample path.
+
+In this repository under `packages/`, not on PyPI yet. Add one to a project from a checkout with
+`uv add <checkout>/packages/<directory>`; the ones with Rust inside build on the way in, and each
+package's README says what its build needs:
+
+| Module (directory) | Nodes |
+|---|---|
+| `tatolab-camera` | `tatolab.camera.CameraSource`: V4L2 on Linux and AVFoundation on macOS, each frame imported to the GPU with no CPU copy. |
+| `tatolab-compositor` | `tatolab.compositor.AlphaOverCompositor`: up to eight layers composited with alpha on the GPU, each placed with its own position and opacity. Pure Python. |
+| `tatolab-browser` | `tatolab.browser.BrowserSource`: a web page rendered offscreen by Chromium (CEF) as video and audio, with data in to the page and events out of it. Linux only. |
+| `tatolab-rive` | `tatolab.rive.RiveSource`: a Rive file's state machine drawn on the GPU, its view model driven by data. Linux only. |
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
 model-input tensor kernel, and the monotonic clock every node shares.
