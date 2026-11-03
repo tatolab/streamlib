@@ -16,10 +16,12 @@ level, and before passing an exposure level as a string.
 
 ## Decision
 
-Every output port of a stream is internal (the default), private or public. Inside a stream,
-any node links to any port and exposure is never consulted. Private lets other streams and code
+~~Every output port of a stream is internal (the default), private or public.~~ — Superseded
+2026-11-03 by `stream-interface-and-routing-policy.md`: `expose` takes no level. Inside a stream,
+any node links to any port and exposure is never consulted. ~~Private lets other streams and code
 on the same machine read the port, so one stream's hardware camera can feed others. Public adds
-a URL reachable off the machine, which other machines and tools pull. Exposure
+a URL reachable off the machine, which other machines and tools pull.~~ — Superseded 2026-11-03
+by the same record: what reaches each relay is the routing policy's. Exposure
 is a permissions map the runtime consults where a read crosses a stream's edge, and it can be
 changed live.
 
@@ -33,10 +35,12 @@ changed live.
   edge, like a proxy in front of every port. A change reaches the next check, cuts off readers it
   no longer allows, and needs no restart of the runtime or of any stream. (Zenoh is removed as of
   2026-10-04, `moq-on-the-tailnet.md`; the edge check stands on its own.)
-- **`expose(output)` means private.** The common case is sharing on the machine, and private keeps
-  the 2026-09-30 rule that nothing leaves the machine unasked: leaving takes an explicit public.
-- **An enum, not a string.** A string level is a typo the type checker cannot see; an enum member
-  is checked by pyright and by the stub test.
+- ~~**`expose(output)` means private.** The common case is sharing on the machine, and private keeps
+  the 2026-09-30 rule that nothing leaves the machine unasked: leaving takes an explicit public.~~
+  — Superseded 2026-11-03 by `stream-interface-and-routing-policy.md`.
+- ~~**An enum, not a string.** A string level is a typo the type checker cannot see; an enum member
+  is checked by pyright and by the stub test.~~ — Superseded 2026-11-03 by
+  `stream-interface-and-routing-policy.md`: there is no level to spell.
 - **The internet is not the runtime's.** A public port's URL is what Tailscale serve or funnel
   publishes, so the runtime has nothing to build for internet exposure.
 
