@@ -33,6 +33,8 @@ Source = "https://github.com/tatolab/streamlib"
 python-source = "python"
 module-name = "tatolab.browser._native"
 features = ["pyo3/extension-module"]
+# A CEF runtime the in-wheel layout once staged here is never packed again.
+exclude = ["python/tatolab/browser/cef/**"]
 
 [tool.pyright]
 include = ["python", "streams"]

@@ -1,2 +1,4 @@
 /target
 /.venv
+# A CEF runtime the in-wheel layout staged here; the browser host carries CEF now.
+/python/tatolab/browser/cef/

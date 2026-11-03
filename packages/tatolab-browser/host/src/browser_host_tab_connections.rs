@@ -154,12 +154,16 @@ fn open_the_requested_tab(
     }
     match open_outcome.recv() {
         Ok(Ok(())) => {
-            tracing::info!(
-                "tab {tab_id} of stream {} opened {} at {}x{}",
-                tab.tab_request.tenant_stream_id,
-                tab.tab_request.url,
-                tab.tab_request.width,
-                tab.tab_request.height
+            tab.log_to_the_node(
+                tatolab_browser_tab_protocol::BrowserHostTabLogLevel::Info,
+                format!(
+                    "tab {tab_id} of the browser host {} opened {} at {}x{} in stream {}'s profile",
+                    std::process::id(),
+                    tab.tab_request.url,
+                    tab.tab_request.width,
+                    tab.tab_request.height,
+                    tab.tab_request.tenant_stream_id,
+                ),
             );
             Some((tab, reader))
         }

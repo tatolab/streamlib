@@ -253,13 +253,36 @@ impl SharedNativeServicesOfTheEngine {
     /// Stop every running service, whatever leases it, as the engine shuts
     /// down.
     pub(crate) fn stop_every_service(&self) {
-        let supervisors: Vec<SupervisedChildProcess> = self
+        let supervisors: Vec<(String, SupervisedChildProcess)> = self
             .lock_services()
-            .values_mut()
-            .filter_map(|service| service.supervisor.take())
+            .iter_mut()
+            .filter_map(|(service_name, service)| {
+                service
+                    .supervisor
+                    .take()
+                    .map(|supervisor| (service_name.clone(), supervisor))
+            })
             .collect();
-        for mut supervisor in supervisors {
-            supervisor.stop();
+        for (service_name, supervisor) in supervisors {
+            self.stop_the_service_and_remove_its_socket(&service_name, supervisor);
+        }
+    }
+
+    fn stop_the_service_and_remove_its_socket(
+        &self,
+        service_name: &str,
+        mut supervisor: SupervisedChildProcess,
+    ) {
+        supervisor.stop();
+        let endpoint_socket_path = self.endpoint_socket_path_of(service_name);
+        match std::fs::remove_file(&endpoint_socket_path) {
+            Ok(()) => {}
+            Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {}
+            Err(failure) => tracing::warn!(
+                "the stopped shared native service {service_name}'s socket {} was not removed: \
+                 {failure}",
+                endpoint_socket_path.display()
+            ),
         }
     }
 
@@ -387,13 +410,13 @@ impl SharedNativeServicesOfTheEngine {
             }
             service.supervisor.take()
         };
-        if let Some(mut supervisor) = supervisor {
+        if let Some(supervisor) = supervisor {
             tracing::info!(
                 "the shared native service {service_name} is stopped, no node having leased it \
                  for {:?}",
                 self.grace_after_the_last_lease
             );
-            supervisor.stop();
+            self.stop_the_service_and_remove_its_socket(service_name, supervisor);
         }
     }
 
@@ -537,6 +560,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let services = services_offering_the_stand_in(directory.path(), Duration::from_millis(300));
         let pidfile = directory.path().join("services/stand-in.pid");
+        let endpoint_socket = directory.path().join("services/stand-in.sock");
 
         drop(services.lease("stand-in").unwrap());
         let leased_again = services.lease("stand-in").unwrap();
@@ -552,6 +576,7 @@ mod tests {
             services.state_of("stand-in") == SharedNativeServiceState::Stopped
         }));
         assert!(!pidfile.exists());
+        assert!(wait_until(Duration::from_secs(5), || !endpoint_socket.exists()));
     }
 
     #[test]
