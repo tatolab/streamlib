@@ -56,7 +56,11 @@ impl ModuleHost {
                 &mut error_message,
             )
         };
-        refuse_unless_ok("shared_native_service_lease_acquire", status, &error_message)?;
+        refuse_unless_ok(
+            "shared_native_service_lease_acquire",
+            status,
+            &error_message,
+        )?;
         // SAFETY: the host keeps a granted lease's text alive until it is
         // released, and it is copied out here before anything releases it.
         let (endpoint_socket_path, tenant_stream_id) = unsafe {
@@ -109,9 +113,7 @@ impl ModuleHostSharedNativeServiceLease {
         };
         match status {
             MODULE_HOST_TABLE_STATUS_OK => Ok(ModuleHostSharedNativeServiceState::Running),
-            MODULE_HOST_TABLE_STATUS_EMPTY => {
-                Ok(ModuleHostSharedNativeServiceState::StartingAgain)
-            }
+            MODULE_HOST_TABLE_STATUS_EMPTY => Ok(ModuleHostSharedNativeServiceState::StartingAgain),
             MODULE_HOST_TABLE_STATUS_ENDED => Ok(ModuleHostSharedNativeServiceState::Failed(
                 error_message.message(),
             )),

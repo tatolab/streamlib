@@ -74,7 +74,10 @@ fn open_the_requested_tab(
 ) -> Option<(Arc<BrowserHostTab>, TabProtocolMessageReader)> {
     let refuse = |writer: &mut TabProtocolMessageWriter, reason: String| {
         tracing::warn!("tab {tab_id} was refused: {reason}");
-        let _ = writer.send(&TabProtocolMessageFromBrowserHost::TabRefused { reason }, &[]);
+        let _ = writer.send(
+            &TabProtocolMessageFromBrowserHost::TabRefused { reason },
+            &[],
+        );
     };
     let tab_request = match reader.receive::<TabProtocolMessageFromNode>() {
         Ok(TabProtocolMessageFromNode::OpenTab {
@@ -99,7 +102,10 @@ fn open_the_requested_tab(
         }
         Err(TabProtocolSocketFailure::Ended) => return None,
         Err(failure) => {
-            refuse(&mut writer, format!("the open_tab did not arrive whole: {failure}"));
+            refuse(
+                &mut writer,
+                format!("the open_tab did not arrive whole: {failure}"),
+            );
             return None;
         }
     };
@@ -114,7 +120,10 @@ fn open_the_requested_tab(
     ) {
         Ok(frame_slots) => frame_slots,
         Err(failure) => {
-            refuse(&mut writer, format!("the tab's frame slots were not made: {failure}"));
+            refuse(
+                &mut writer,
+                format!("the tab's frame slots were not made: {failure}"),
+            );
             return None;
         }
     };
@@ -123,10 +132,18 @@ fn open_the_requested_tab(
         tab_protocol_version: TAB_PROTOCOL_VERSION,
         browser_host_process_id: std::process::id(),
     };
-    if writer.send(&opened_answer, &[frame_slots_descriptor]).is_err() {
+    if writer
+        .send(&opened_answer, &[frame_slots_descriptor])
+        .is_err()
+    {
         return None;
     }
-    let tab = Arc::new(BrowserHostTab::new(tab_id, tab_request, writer, frame_slots));
+    let tab = Arc::new(BrowserHostTab::new(
+        tab_id,
+        tab_request,
+        writer,
+        frame_slots,
+    ));
     let (opened, open_outcome) = std::sync::mpsc::sync_channel(1);
     if !cef_thread_requests.send(CefThreadRequest::OpenTab {
         tab: Arc::clone(&tab),

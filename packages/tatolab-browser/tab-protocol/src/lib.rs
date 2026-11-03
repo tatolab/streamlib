@@ -17,8 +17,8 @@ pub use browser_host_tab_frame_slots::{
     BrowserHostTabFrameSlots, FRAME_SLOT_BYTES_PER_PIXEL, frame_slot_byte_size,
 };
 pub use tab_protocol_socket::{
-    TabProtocolMessageReader, TabProtocolMessageWriter, TabProtocolSocketFailure,
-    MOST_TAB_PROTOCOL_MESSAGE_BYTES,
+    MOST_TAB_PROTOCOL_MESSAGE_BYTES, TabProtocolMessageReader, TabProtocolMessageWriter,
+    TabProtocolSocketFailure,
 };
 
 use serde::{Deserialize, Serialize};

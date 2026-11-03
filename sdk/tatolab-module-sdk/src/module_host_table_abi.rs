@@ -989,13 +989,19 @@ mod layout_regression_tests {
 
     #[test]
     fn a_service_lease_is_its_handle_then_its_endpoint_then_its_tenant() {
-        assert_eq!(size_of::<ModuleHostTableSharedNativeServiceLeaseHandle>(), 8);
+        assert_eq!(
+            size_of::<ModuleHostTableSharedNativeServiceLeaseHandle>(),
+            8
+        );
         assert_eq!(
             offset_of!(ModuleHostTableSharedNativeServiceLease, lease),
             0
         );
         assert_eq!(
-            offset_of!(ModuleHostTableSharedNativeServiceLease, endpoint_socket_path),
+            offset_of!(
+                ModuleHostTableSharedNativeServiceLease,
+                endpoint_socket_path
+            ),
             8
         );
         assert_eq!(

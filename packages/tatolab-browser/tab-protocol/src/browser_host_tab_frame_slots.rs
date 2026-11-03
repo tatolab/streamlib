@@ -32,16 +32,27 @@ unsafe impl Sync for BrowserHostTabFrameSlots {}
 impl BrowserHostTabFrameSlots {
     /// Create `slot_count` slots of `width × height`, mapped for writing.
     pub fn create(slot_count: u32, width: u32, height: u32) -> std::io::Result<Self> {
-        let slot_byte_size = usize::try_from(frame_slot_byte_size(width, height))
-            .map_err(|_| std::io::Error::other("a frame slot is past this machine's address space"))?;
-        let mapped_byte_size = slot_byte_size
-            .checked_mul(slot_count as usize)
-            .ok_or_else(|| std::io::Error::other("the frame slots are past this machine's address space"))?;
+        let slot_byte_size =
+            usize::try_from(frame_slot_byte_size(width, height)).map_err(|_| {
+                std::io::Error::other("a frame slot is past this machine's address space")
+            })?;
+        let mapped_byte_size =
+            slot_byte_size
+                .checked_mul(slot_count as usize)
+                .ok_or_else(|| {
+                    std::io::Error::other("the frame slots are past this machine's address space")
+                })?;
         if mapped_byte_size == 0 {
-            return Err(std::io::Error::other("a tab needs at least one frame slot of 1x1"));
+            return Err(std::io::Error::other(
+                "a tab needs at least one frame slot of 1x1",
+            ));
         }
         let shared_memory = create_anonymous_shared_memory(mapped_byte_size)?;
-        let mapped_base = map(&shared_memory, mapped_byte_size, libc::PROT_READ | libc::PROT_WRITE)?;
+        let mapped_base = map(
+            &shared_memory,
+            mapped_byte_size,
+            libc::PROT_READ | libc::PROT_WRITE,
+        )?;
         Ok(Self {
             shared_memory,
             mapped_base,
@@ -58,11 +69,16 @@ impl BrowserHostTabFrameSlots {
         width: u32,
         height: u32,
     ) -> std::io::Result<Self> {
-        let slot_byte_size = usize::try_from(frame_slot_byte_size(width, height))
-            .map_err(|_| std::io::Error::other("a frame slot is past this machine's address space"))?;
-        let mapped_byte_size = slot_byte_size
-            .checked_mul(slot_count as usize)
-            .ok_or_else(|| std::io::Error::other("the frame slots are past this machine's address space"))?;
+        let slot_byte_size =
+            usize::try_from(frame_slot_byte_size(width, height)).map_err(|_| {
+                std::io::Error::other("a frame slot is past this machine's address space")
+            })?;
+        let mapped_byte_size =
+            slot_byte_size
+                .checked_mul(slot_count as usize)
+                .ok_or_else(|| {
+                    std::io::Error::other("the frame slots are past this machine's address space")
+                })?;
         // SAFETY: fstat on a descriptor this function owns.
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(shared_memory.as_raw_fd(), status.as_mut_ptr()) } != 0 {
@@ -167,7 +183,8 @@ fn map(
 #[cfg(target_os = "linux")]
 fn create_anonymous_shared_memory(byte_size: usize) -> std::io::Result<OwnedFd> {
     // SAFETY: memfd_create with a static NUL-terminated name.
-    let descriptor = unsafe { libc::memfd_create(c"tatolab-browser-frame-slots".as_ptr(), libc::MFD_CLOEXEC) };
+    let descriptor =
+        unsafe { libc::memfd_create(c"tatolab-browser-frame-slots".as_ptr(), libc::MFD_CLOEXEC) };
     if descriptor < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -235,7 +252,11 @@ mod tests {
         assert_eq!(slot.len(), 4 * 2 * 4);
         assert!(slot.iter().all(|byte| *byte == 0x7F));
         // SAFETY: as above.
-        assert!(unsafe { node_side.slot(0).unwrap() }.iter().all(|byte| *byte == 0));
+        assert!(
+            unsafe { node_side.slot(0).unwrap() }
+                .iter()
+                .all(|byte| *byte == 0)
+        );
         assert!(unsafe { node_side.slot(3) }.is_none());
     }
 

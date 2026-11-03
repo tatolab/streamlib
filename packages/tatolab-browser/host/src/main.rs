@@ -63,7 +63,8 @@ fn browser_host_command_line_of(
         *slot = Some(PathBuf::from(value));
     }
     Ok(BrowserHostCommandLine {
-        listen_socket: listen_socket.ok_or_else(|| format!("{LISTEN_SOCKET_SWITCH} is required"))?,
+        listen_socket: listen_socket
+            .ok_or_else(|| format!("{LISTEN_SOCKET_SWITCH} is required"))?,
         state_directory: state_directory
             .ok_or_else(|| format!("{STATE_DIRECTORY_SWITCH} is required"))?,
     })
@@ -153,8 +154,14 @@ fn request_a_stop_on_sigterm_and_sigint() {
     }
     // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
     unsafe {
-        libc::signal(libc::SIGTERM, request_a_stop as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGINT, request_a_stop as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            request_a_stop as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            request_a_stop as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -185,8 +192,14 @@ mod tests {
     #[test]
     fn a_missing_or_unknown_switch_is_refused_by_name() {
         for (command_line, named) in [
-            (arguments(&["--state-directory", "/s"]), "--listen-socket is required"),
-            (arguments(&["--listen-socket", "/l"]), "--state-directory is required"),
+            (
+                arguments(&["--state-directory", "/s"]),
+                "--listen-socket is required",
+            ),
+            (
+                arguments(&["--listen-socket", "/l"]),
+                "--state-directory is required",
+            ),
             (arguments(&["--listen-socket"]), "names a path"),
             (arguments(&["--profile", "x"]), "--profile is not a switch"),
         ] {

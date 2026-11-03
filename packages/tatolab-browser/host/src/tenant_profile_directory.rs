@@ -46,7 +46,10 @@ mod tests {
     fn no_stream_id_reaches_outside_the_profiles_directory() {
         let directory = tenant_profile_directory(Path::new("/cache"), "../../etc");
         assert_eq!(directory.parent(), Some(Path::new("/cache/profiles")));
-        assert_eq!(directory, Path::new("/cache/profiles/.2e.2e.2f.2e.2e.2fetc"));
+        assert_eq!(
+            directory,
+            Path::new("/cache/profiles/.2e.2e.2f.2e.2e.2fetc")
+        );
     }
 
     #[test]
@@ -55,6 +58,9 @@ mod tests {
             file_name_safe_spelling("a.b"),
             file_name_safe_spelling("a.2eb")
         );
-        assert_ne!(file_name_safe_spelling("a/b"), file_name_safe_spelling("a.b"));
+        assert_ne!(
+            file_name_safe_spelling("a/b"),
+            file_name_safe_spelling("a.b")
+        );
     }
 }

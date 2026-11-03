@@ -30,8 +30,7 @@ use tatolab_module_sdk::{
     ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat, ModuleHostColorInfo, ModuleHostError,
     ModuleHostForeignDmaBuf, ModuleHostForeignIOSurface, ModuleHostHostMemoryPixels,
     ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest, ModuleHostSharedNativeServiceState,
-    ModuleHostTable,
-    refuse_a_module_host_table_this_module_cannot_read,
+    ModuleHostTable, refuse_a_module_host_table_this_module_cannot_read,
 };
 
 /// One message a stood-up host was handed by a write.
@@ -1597,7 +1596,9 @@ fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
         .unwrap_err();
 
     assert!(
-        refusal.to_string().contains("this runtime offers no rive-host"),
+        refusal
+            .to_string()
+            .contains("this runtime offers no rive-host"),
         "{refusal}"
     );
     assert_eq!(

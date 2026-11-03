@@ -4,29 +4,29 @@
 //! The native half of `tatolab-browser`, imported as `tatolab.browser._native`.
 //!
 //! The engine never calls anything here: the wheel's `@node` hands this module
-//! its module host table, and CEF's own threads paint, play and publish
-//! through it with no Python attached.
+//! its module host table, and the page opens as a tab in the machine's browser
+//! host, whose paints, audio and published objects this module's threads
+//! publish through the table with no Python attached.
 
 #[cfg(not(target_os = "linux"))]
 compile_error!(
     "tatolab-browser paints through host table 1.5's Linux upload; its macOS half follows"
 );
 
-pub mod cef_browser_process;
+pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
 pub mod page_data_messages;
 pub mod video_frame_record;
 
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::ModuleHost;
 
-use crate::cef_browser_process::{BrowserPageConfig, BrowserPagePorts, BrowserPageRendering};
+use crate::browser_host_tab_client::{BrowserPageConfig, BrowserPagePorts, BrowserPageRendering};
 
-/// A web page rendering offscreen in this helper, publishing its frames on
+/// A web page rendering as a tab in the machine's browser host, publishing its frames on
 /// `video`, its audio on `audio` and its published objects on `events`, and
 /// handed every `data` message as a DOM event.
 #[pyclass(name = "BrowserPageRendering")]
@@ -39,7 +39,6 @@ impl PythonBrowserPageRendering {
     #[new]
     #[pyo3(signature = (
         module_host_table,
-        cef_runtime_directory,
         video_output_port,
         events_output_port,
         audio_output_port,
@@ -56,7 +55,6 @@ impl PythonBrowserPageRendering {
     fn new(
         python: Python<'_>,
         module_host_table: &Bound<'_, PyAny>,
-        cef_runtime_directory: PathBuf,
         video_output_port: String,
         events_output_port: String,
         audio_output_port: String,
@@ -88,7 +86,6 @@ impl PythonBrowserPageRendering {
                     module_host,
                 };
                 BrowserPageRendering::open(
-                    &cef_runtime_directory,
                     BrowserPageConfig {
                         url,
                         width,
@@ -153,7 +150,15 @@ impl PythonBrowserPageRendering {
             .load(Ordering::Relaxed)
     }
 
-    /// Stop delivering data and close the page. Idempotent.
+    #[getter]
+    fn browser_host_reconnects(&self) -> u64 {
+        self.rendering
+            .counters()
+            .browser_host_reconnects
+            .load(Ordering::Relaxed)
+    }
+
+    /// Stop delivering data and close the tab. Idempotent.
     fn close(&mut self, python: Python<'_>) {
         python.detach(|| self.rendering.close());
     }
@@ -162,9 +167,5 @@ impl PythonBrowserPageRendering {
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PythonBrowserPageRendering>()?;
-    module.add(
-        "BROWSER_SUBPROCESS_EXECUTABLE_NAME",
-        cef_browser_process::BROWSER_SUBPROCESS_EXECUTABLE_NAME,
-    )?;
     Ok(())
 }

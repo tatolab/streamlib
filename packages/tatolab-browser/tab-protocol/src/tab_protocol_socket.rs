@@ -192,8 +192,7 @@ fn send_with_descriptors(
         let control_header = libc::CMSG_FIRSTHDR(&header);
         (*control_header).cmsg_level = libc::SOL_SOCKET;
         (*control_header).cmsg_type = libc::SCM_RIGHTS;
-        (*control_header).cmsg_len =
-            libc::CMSG_LEN(std::mem::size_of_val(descriptors) as u32) as _;
+        (*control_header).cmsg_len = libc::CMSG_LEN(std::mem::size_of_val(descriptors) as u32) as _;
         std::ptr::copy_nonoverlapping(
             descriptors.as_ptr(),
             libc::CMSG_DATA(control_header).cast::<RawFd>(),
@@ -252,8 +251,7 @@ fn receive_with_descriptors(
             if (*control_header).cmsg_level == libc::SOL_SOCKET
                 && (*control_header).cmsg_type == libc::SCM_RIGHTS
             {
-                let data_bytes =
-                    (*control_header).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
+                let data_bytes = (*control_header).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
                 let data = libc::CMSG_DATA(control_header).cast::<RawFd>();
                 for index in 0..data_bytes / std::mem::size_of::<RawFd>() {
                     let descriptor = std::ptr::read_unaligned(data.add(index));

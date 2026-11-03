@@ -71,34 +71,9 @@ impl PageAudioStreamTimeline {
     }
 }
 
-/// Interleave `channel_planes`, each holding at least `sample_count` samples,
-/// into `interleaved`, frame by frame.
-pub fn interleave_planar_samples(
-    channel_planes: &[&[f32]],
-    sample_count: usize,
-    interleaved: &mut Vec<f32>,
-) {
-    interleaved.clear();
-    interleaved.reserve(channel_planes.len() * sample_count);
-    for sample_index in 0..sample_count {
-        for plane in channel_planes {
-            interleaved.push(plane[sample_index]);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn planes_interleave_frame_by_frame() {
-        let left = [1.0f32, 2.0, 3.0];
-        let right = [-1.0f32, -2.0, -3.0];
-        let mut interleaved = vec![9.0];
-        interleave_planar_samples(&[&left, &right], 2, &mut interleaved);
-        assert_eq!(interleaved, [1.0, -1.0, 2.0, -2.0]);
-    }
 
     #[test]
     fn packets_tile_the_timeline_from_the_first_arrival_whatever_later_ones_arrive_at() {

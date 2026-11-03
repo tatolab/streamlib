@@ -5,12 +5,12 @@ build-backend = "maturin"
 [project]
 name = "tatolab-browser"
 version = "0.1.0"
-description = "A web page as a stream source: Chromium (CEF) renders it offscreen in the node's helper, and its frames, audio and events are published through the module host table."
+description = "A web page as a stream source: the machine's shared Chromium (CEF) browser host renders it offscreen as a tab, and its frames, audio and events are published through the module host table."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
-# dependency's, CEF and Chromium included.
+# dependency's.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 classifiers = [
@@ -33,13 +33,6 @@ Source = "https://github.com/tatolab/streamlib"
 python-source = "python"
 module-name = "tatolab.browser._native"
 features = ["pyo3/extension-module"]
-# CEF loads from `cef/` through `_native`'s `$ORIGIN/cef` rpath, beside the
-# resources it reads; an auditwheel repair would graft a second libcef and
-# the system libraries Chromium links into `tatolab.libs/` and repoint it.
-compatibility = "linux"
-# The CEF runtime and the subprocess binary, staged by `stage_cef_runtime.py`
-# and kept out of git. Relative to `python-source`.
-include = [{ path = "tatolab/browser/cef/**/*", format = "wheel" }]
 
 [tool.pyright]
 include = ["python", "streams"]

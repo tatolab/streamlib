@@ -4,8 +4,8 @@
 //! One tab: the page a node asked for, and everything CEF's handlers send that
 //! node over its connection.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use tatolab_browser_tab_protocol::{
     BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest,
@@ -96,7 +96,12 @@ impl BrowserHostTab {
 
     /// Copy one painted frame of packed BGRA into a slot the node does not
     /// hold and hand it over; with every slot held, the frame is dropped.
-    pub fn hand_a_painted_frame_to_the_node(&self, painted_bgra_rows: &[u8], width: u32, height: u32) {
+    pub fn hand_a_painted_frame_to_the_node(
+        &self,
+        painted_bgra_rows: &[u8],
+        width: u32,
+        height: u32,
+    ) {
         if self.connection_ended() {
             return;
         }
@@ -234,7 +239,8 @@ mod tests {
             .collect();
         assert_eq!(slots, [0, 1]);
         assert_eq!(
-            tab.frames_dropped_with_every_slot_held.load(Ordering::Relaxed),
+            tab.frames_dropped_with_every_slot_held
+                .load(Ordering::Relaxed),
             1
         );
         tab.frame_slot_released_by_the_node(0);
@@ -263,8 +269,11 @@ mod tests {
             } => {
                 assert_eq!(sample_count, 2);
                 let samples: Vec<f32> = interleaved_samples_le_f32
-                    .chunks_exact(4)
-                    .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(f32::from_le_bytes)
                     .collect();
                 assert_eq!(samples, [1.0, -1.0, 2.0, -2.0]);
             }

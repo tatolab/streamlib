@@ -4,20 +4,24 @@ A web page as a stream source, built the way a third party builds a node: a
 standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
 `tatolab-module-sdk`, and on no engine crate.
 
-- `BrowserSource` renders `url` offscreen with Chromium, through CEF, inside
-  its own helper process. On `start()` it lends its ports to this wheel's Rust,
-  which runs CEF's browser process on one thread of that helper. Each frame CEF
-  paints is written from host memory into a texture from the node's output
-  pool (`surface_write_from_host_memory`, module host table 1.5) and published
-  as an RGBA `VideoFrame`. Python never runs at frame or sample cadence.
+- `BrowserSource` renders `url` offscreen with Chromium, through CEF, as a tab
+  in the machine's browser host: one CEF the runtime starts at the first
+  `BrowserSource`'s lease and stops 30 s after the last, shared by every stream
+  on the machine, each stream with a CEF profile (cookies, storage) of its own.
+  The node's helper runs no CEF. On `start()` it lends its ports to this
+  wheel's Rust, which leases the host through the module host table (1.7),
+  opens the tab over the versioned tab protocol (`tab-protocol/`), and writes
+  each frame the host paints, handed over in shared memory, into a texture
+  from the node's output pool (`surface_write_from_host_memory`), published as
+  an RGBA `VideoFrame`. Python never runs at frame or sample cadence.
 - `data` input: each msgpack map reaches the page as
   `window.dispatchEvent(new CustomEvent("tatolab:data", { detail }))`.
 - `events` output: each `window.tatolab.publish(object)` call is one msgpack map.
 - `audio` output: what the page plays, as the house audio block (interleaved
   `f32`, stereo, at `audio_sample_rate`). A silent page publishes nothing.
-- CEF's child processes run `tatolab-browser-subprocess`, shipped in the wheel
-  beside CEF, and die with the helper, so `kill -9` of the helper takes them
-  with it.
+- A page's renderer that crashes is reloaded by the host. When the host
+  itself ends, the runtime starts it again under its restart backoff and each
+  open page opens again in the new host.
 - `BrowserSourceOutputProbe` logs a source's frame rate, its audio's
   continuity and how long a `data` message takes to reach the page's paint.
 
@@ -28,18 +32,20 @@ Linux only for now. Frames cross the CPU once per paint; zero-copy is next.
 
 ## Build it
 
-The wheel ships the CEF runtime, so building it needs CEF's binary
-distribution, the one `cef-dll-sys` links against. `export-cef-dir`, which
-fetches it for `cef-dll-sys`, leaves out the distribution's `LICENSE.txt`; copy
-it into `$CEF_PATH` from the official `cef_binary_*_linux64_minimal` archive,
-because the wheel and its notices both reproduce it:
+The wheel itself carries no CEF. The browser host, its CEF subprocess and the
+CEF runtime ship in the runtime unit, under `lib/tatolab/browser-host/`.
+Building them needs CEF's binary distribution, the one `cef-dll-sys` links
+against. `export-cef-dir`, which fetches it for `cef-dll-sys`, leaves out the
+distribution's `LICENSE.txt`; copy it into `$CEF_PATH` from the official
+`cef_binary_*_linux64_minimal` archive:
 
 ```bash
-export CEF_PATH=/path/to/cef   # the directory holding libcef.so and LICENSE.txt, as export-cef-dir leaves it
-cargo build --release -p tatolab-browser-page-bridge --bin tatolab-browser-subprocess
-python3 stage_cef_runtime.py      # copies CEF and the subprocess into python/tatolab/browser/cef/
-uvx maturin@1.9.6 build --release
+export CEF_PATH=/path/to/cef   # the directory holding libcef.so and LICENSE.txt
+cargo xtask build-runtime      # stages the browser host when CEF_PATH is set
+uvx maturin@1.9.6 build --release   # in packages/tatolab-browser
 ```
+
+`cargo xtask stage-browser-host` stages the host alone into the unit.
 
 ## Run it
 
