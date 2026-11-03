@@ -1310,6 +1310,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
   Linux import-once ships first and on its own. Every descriptor, being a cross-language ABI,
   carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
+- **OPEN** — Fan-out under zero copy: a borrow pins the producer's own slot, so readers of one
+  output share its pool, and a slow reader that holds slots can starve a timely one. Direction
+  (review, not decided): each link gets its own borrow quota and the pool is sized for the
+  producer's in-flight frames plus every link's quota, so a link past its quota drops only its
+  own frames and no reader ever copies; memory grows with fan-out. Settled in the change that
+  builds the data plane. [strict-port-families]
 - **DECIDED** — The families migrate the whole tree in the same work: every built-in port, every
   cast type, the stream package, the scaffold and the first-party modules in `packages/`.
   Records carries a node not yet converted. Owner, 2026-11-03. [strict-port-families]
@@ -1655,8 +1661,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   defaults to the port's own. `stream_builder.add` takes a `@stream` function as it takes a node
   class: its extra parameters are promoted config, so binding them is partial application; its
   exposed ports are the only ones reachable from outside; and it flattens at compile, its nodes
-  named under the reference's name (`overlay/comp`). The same function still runs alone as a
-  stream. Owner, 2026-11-03. [stream-interface-and-routing-policy]
+  named under the reference's name (`overlay/comp`). An added subgraph's exposed ports are its
+  interface to the stream that adds it and are wired inside that stream like any node's; only
+  the outermost stream's exposures reach the routing policy. The same function still runs alone
+  as a stream. Owner, 2026-11-03. [stream-interface-and-routing-policy]
 - **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether
   every installed `@stream` is addable or only marked ones. [stream-interface-and-routing-policy]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
@@ -3239,7 +3247,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   transport-neutral manifest of exposed ports — name, stream, family and its names — and the
   MoQ catalog and `.hang` are one projection of it, beside which WebRTC, NDI, SRT or a file
   sink is each one adapter. In the app the toggle lives in the Relays settings section, a page
-  per relay. Owner, 2026-11-03. [stream-interface-and-routing-policy]
+  per relay. The local relay's loopback listener is outside the toggle: the preview page and
+  every reader on the machine always see every exposed port. Owner, 2026-11-03. [stream-interface-and-routing-policy]
   Rejected: exposure levels and a `local_only` veto in code — where a port goes is the
   machine's owner's call, not the author's (owner, 2026-11-03).
 - **OPEN** — The routing policy's final form, settled after the toggle has been tested: per-output
