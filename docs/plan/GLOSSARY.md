@@ -139,7 +139,20 @@ name", "remote link" (retired).
 every-interface listener included). A live permission
 the runtime checks at the stream's edge, never part of the stream's logic. `expose` is the verb —
 in the stream's function, where the exposures start; at the CLI, the app or the local API, while
-it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint".
+it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint". _Amended by
+stream-interface-and-routing-policy: `expose` declares a stream's **interface** with no level, and
+the **routing policy** decides what reaches each relay._
+
+**Interface** _(user)_: the inputs and outputs a stream exposes — the only ports reachable from
+outside it, whether it runs alone or as a **subgraph**. _Avoid_: "API", "public ports".
+
+**Subgraph** _(user)_: a `@stream` function added to another stream with `stream_builder.add`,
+its extra parameters promoted config, flattened at compile under the reference's name. _Avoid_:
+"component", "COMP", "macro".
+
+**Routing policy** _(crosses)_: the runtime-owned rules, edited in the app, the CLI or MCP, for
+which exposed outputs reach which relay (egress) and which exposed inputs are bound to what
+(ingress). Never in a stream's code. _Avoid_: "exposure level", "publish settings".
 
 **Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
@@ -188,7 +201,8 @@ payload), "frame" for anything but a video frame.
 
 **Payload**: a message's bytes, in whatever encoding the writer chose and its port's catalog
 entry names — msgpack through the stream package's helper, a codec's media frame, the
-author's own. _Avoid_: "bag", "body".
+author's own. _Avoid_: "bag", "body". _Amended by strict-port-families: a payload is laid out
+by its port's family, and only Records is encoded, by the runtime._
 
 **Cast object**: the typed object `read(port, into=T)` constructs from a payload through
 `T.from_bytes` — the consumer's view of a message. A cast type that claims its surface is
@@ -255,7 +269,12 @@ runtime runs complete without one, and how it plugs in is OPEN. _Avoid_: "connec
 
 **Port**: a processor's named attachment point for a link. Declares name, description,
 and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
-itself.
+itself. _Amended by strict-port-families: a port also declares its **family**._
+
+**Family** _(crosses)_: which of five engine-owned layouts a port carries — **Image**, **Array**,
+**Channels**, **Packets** or **Records** — compared by equality at `connect`. Names inside a
+family (channels, attributes, record keys, codec strings) stay open. _Avoid_: "type",
+"schema", "caps", "kind".
 
 **Link**: one wired connection, output port → input port, in one stream, carrying messages. _Avoid_:
 "edge", "connection", "pipe".

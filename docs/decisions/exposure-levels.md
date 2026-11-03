@@ -1,5 +1,9 @@
 # Exposure is a live, three-level permission at a stream's edge
 
+> Partially superseded 2026-11-03 by `stream-interface-and-routing-policy.md`: `expose` takes
+> no level, and a runtime-owned routing policy decides what reaches each relay. The edge check,
+> a live change with no restart, and a restriction recorded before it changes live stand.
+
 Rationale for the exposure entry in `docs/plan/ARCHITECTURE.md` §Networking, decided 2026-10-04
 in an align on exposure, superseding the binary exposure decided 2026-09-30 under the
 one-runtime-per-machine pivot.
