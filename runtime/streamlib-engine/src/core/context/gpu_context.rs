@@ -2111,18 +2111,18 @@ impl GpuContext {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let surface_store = self.surface_store.lock().unwrap();
-            if let Some(store) = surface_store.as_ref() {
-                if let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id) {
-                    let resolved_layout = texture_layout.map(VulkanLayout).unwrap_or(ipc_layout);
-                    if resolved_layout != VulkanLayout::UNDEFINED {
-                        if let Some(image) = texture.vulkan_inner().image() {
-                            self.device
-                                .inner
-                                .acquire_from_foreign(image, resolved_layout.as_vk())?;
-                        }
-                    }
-                    return Ok(TextureRegistration::new(texture, resolved_layout));
+            if let Some(store) = surface_store.as_ref()
+                && let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id)
+            {
+                let resolved_layout = texture_layout.map(VulkanLayout).unwrap_or(ipc_layout);
+                if resolved_layout != VulkanLayout::UNDEFINED
+                    && let Some(image) = texture.vulkan_inner().image()
+                {
+                    self.device
+                        .inner
+                        .acquire_from_foreign(image, resolved_layout.as_vk())?;
                 }
+                return Ok(TextureRegistration::new(texture, resolved_layout));
             }
         }
 
@@ -4488,10 +4488,7 @@ impl GpuContextLimitedAccess {
         // `Arc<GpuContext>` is alive for the duration of `&self`.
         // We deref the Box, then the Arc, to borrow the inner
         // `GpuContext`.
-        unsafe {
-            let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
-            &**arc
-        }
+        unsafe { &*(self.handle as *const std::sync::Arc<GpuContext>) }
     }
 
     /// Produce a [`GpuContextFullAccess`] view of the same underlying context.
@@ -4644,10 +4641,7 @@ impl GpuContextFullAccess {
         // calls `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
         // matching Drop reclaims it, so the `Arc<GpuContext>` is alive
         // for the duration of `&self`.
-        unsafe {
-            let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
-            &**arc
-        }
+        unsafe { &*(self.handle as *const std::sync::Arc<GpuContext>) }
     }
 }
 
@@ -6072,30 +6066,6 @@ mod tests {
 
         println!("OPAQUE_FD mint/export/wrap OK — byte_size={BYTES} uuid={uuid:02x?}");
     }
-
-    /// #1262 followup #1 — the ONLY positive coverage of the batch's
-    /// riskiest FullAccess slot, `copy_texture_to_storage_buffer_and_signal`.
-    ///
-    /// Drives the REAL host vtable body
-    /// (`HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE`), not the plain
-    /// `GpuContext` method — that body reconstructs a borrowed source
-    /// `Texture` from a raw inner-Arc handle via
-    /// `Arc::increment_strong_count` + `Texture::from_arc_into_raw`,
-    /// records the image->buffer copy, and host-blocks on the
-    /// null-timeline submit path. Two locks:
-    ///   (a) the destination OPAQUE_FD `StorageBuffer` bytes equal the
-    ///       known source contents after the copy;
-    ///   (b) the source texture's inner-Arc strong count is identical
-    ///       before and after the call — the
-    ///       `increment_strong_count`/`from_arc_into_raw` borrow must be
-    ///       balanced by exactly one `Texture::Drop`.
-    ///
-    /// Mental-revert: if the host body leaked one strong count (dropped
-    /// the balancing `Texture::Drop`, or double-incremented), the
-    /// strong-count equality assertion fails — a use-after-free / leak
-    /// this test catches. GPU-gated: skips cleanly with no device (CI is
-    /// GPU-free), so it does not run in the sandbox — it is a
-    /// /verify-live regression.
 
     /// A privileged FullAccess plugin passing oversized dimensions (or a
     /// source buffer smaller than width*height*4) must get a typed

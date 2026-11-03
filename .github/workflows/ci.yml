@@ -134,18 +134,23 @@ jobs:
       - name: cargo deny check licenses
         run: cargo deny --locked --workspace check licenses -D license-not-encountered
 
-      - name: cargo clippy (workspace, default targets)
-        run: cargo clippy --locked --workspace --exclude streamlib-adapter-skia --no-deps
-
-      # Compiler warnings are errors in every first-party crate and target. Clippy's own lints
-      # stay advisory (`-A clippy::all`); the vendored vulkanalia trees are excluded because a
-      # change to them is a recorded patch against upstream.
-      - name: Compiler warnings are errors (workspace, all targets)
+      # Compiler warnings and clippy lints are errors in every first-party crate and target.
+      # The vendored vulkanalia trees are excluded because a change to them is a recorded
+      # patch against upstream. Tests, examples and benches may print, so the `println!` ban
+      # (`clippy::disallowed_macros`) holds for libraries and binaries only.
+      - name: Clippy is fatal (workspace libraries and binaries)
         run: >-
-          cargo clippy --locked --keep-going --workspace --all-targets --no-deps
+          cargo clippy --locked --keep-going --workspace --lib --bins --no-deps
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
-          -- -A clippy::all -D warnings
+          -- -D warnings
+
+      - name: Clippy is fatal (workspace tests, examples and benches)
+        run: >-
+          cargo clippy --locked --keep-going --workspace --tests --examples --benches --no-deps
+          --exclude streamlib-adapter-skia
+          --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
+          -- -A clippy::disallowed_macros -D warnings
 
       - name: Generated built-in node classes match the runtime's built-ins
         run: cargo run --locked -q -p xtask -- generate-built-in-node-classes --check
