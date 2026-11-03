@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! What every codec-arm round-trip test measures a decode with — the
+//! What every codec round-trip test measures a decode with — the
 //! checked-in PSNR references and the per-plane PSNR `cargo xtask psnr score`
 //! takes — and the checked-in access-unit clips one floor's encoder wrote for
 //! the other floor's decoder to read.
@@ -11,9 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib::sdk::context::{
-    GpuContext, VideoCodecElementaryStream, VideoDecodeSessionRequest, probe_video_codec_backend,
-};
+use streamlib_video_bitstream::VideoCodecElementaryStream;
 
 /// The bands `xtask psnr score` fails a decode below.
 pub const LUMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
@@ -98,9 +96,15 @@ impl Rgba8Picture {
     }
 }
 
+/// The engine rig's fixtures, which hold the PSNR references and the
+/// cross-floor clips.
+fn engine_rig_fixtures_directory() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../streamlib-engine/tests/fixtures")
+}
+
 /// Every checked-in PSNR reference, sorted by name.
 pub fn psnr_reference_paths() -> Vec<PathBuf> {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/psnr");
+    let directory = engine_rig_fixtures_directory().join("psnr");
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&directory)
         .expect("the checked-in references")
         .map(|entry| entry.expect("a directory entry").path())
@@ -119,8 +123,8 @@ pub fn psnr_reference_paths() -> Vec<PathBuf> {
 /// cropped to the clip's extent.
 pub fn cross_floor_clip_reference_picture() -> Rgba8Picture {
     Rgba8Picture::read_png(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/psnr")
+        &engine_rig_fixtures_directory()
+            .join("psnr")
             .join(format!("{CROSS_FLOOR_CLIP_REFERENCE}.png")),
     )
     .cropped_to(CROSS_FLOOR_CLIP_WIDTH, CROSS_FLOOR_CLIP_HEIGHT)
@@ -131,8 +135,8 @@ pub fn cross_floor_clip_reference_picture() -> Rgba8Picture {
 pub fn videotoolbox_cross_floor_clip_path(
     elementary_stream: VideoCodecElementaryStream,
 ) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cross_floor_codec_clips")
+    engine_rig_fixtures_directory()
+        .join("cross_floor_codec_clips")
         .join(match elementary_stream {
             VideoCodecElementaryStream::H264 => "videotoolbox_h264_320x180.access_units",
             VideoCodecElementaryStream::H265 => "videotoolbox_h265_320x180.access_units",
@@ -255,59 +259,4 @@ fn peak_signal_to_noise_ratio_db(decoded: &[u8], reference: &[u8]) -> f64 {
         return f64::INFINITY;
     }
     10.0 * (255.0f64.powi(2) / mean_squared_error).log10()
-}
-
-/// Decode the clip VideoToolbox wrote for `elementary_stream` through
-/// whichever arm this platform's chain probed, and hold every access unit to
-/// one picture and the last picture to the bands.
-pub fn decode_the_checked_in_videotoolbox_clip_inside_the_bands(
-    gpu_context: &GpuContext,
-    elementary_stream: VideoCodecElementaryStream,
-) {
-    let backend = probe_video_codec_backend();
-    let gpu = gpu_context.limited_access();
-    let access_units =
-        read_access_unit_clip(&videotoolbox_cross_floor_clip_path(elementary_stream));
-    let mut decode_session = gpu
-        .escalate(|full| {
-            backend.open_decode_session(
-                full,
-                &VideoDecodeSessionRequest {
-                    elementary_stream,
-                    maximum_coded_extent: None,
-                    processor_id_of_the_decoding_node: "cross-floor-clip-decoder".to_string(),
-                },
-            )
-        })
-        .expect("a decode session");
-    let mut decoded_pictures = Vec::new();
-    for access_unit in &access_units {
-        decode_session
-            .decode_annex_b_access_unit(access_unit, &mut decoded_pictures)
-            .expect("the access unit decodes");
-    }
-    assert_eq!(
-        decoded_pictures.len(),
-        access_units.len(),
-        "every access unit of the clip decodes to one picture on the {} arm",
-        backend.backend_name()
-    );
-    let last_picture = decoded_pictures.last().expect("a decoded picture");
-    assert_eq!(
-        (last_picture.width, last_picture.height),
-        (CROSS_FLOOR_CLIP_WIDTH, CROSS_FLOOR_CLIP_HEIGHT)
-    );
-    // SAFETY: the pooled picture is held, host-readable once decode hands it
-    // back, and exactly `width × height × 4` bytes.
-    let decoded_rgba = unsafe {
-        std::slice::from_raw_parts(
-            last_picture.pixel_buffer.plane_base_address(0),
-            CROSS_FLOOR_CLIP_WIDTH as usize * CROSS_FLOOR_CLIP_HEIGHT as usize * 4,
-        )
-    };
-    let scored = Yuv420PlanePsnr::between(decoded_rgba, &cross_floor_clip_reference_picture());
-    assert!(
-        !scored.fails_the_bands(),
-        "{elementary_stream:?}: {scored:?}"
-    );
 }

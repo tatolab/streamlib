@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-vulkan-video"
-description = "Vulkan Video encode and decode for StreamLib, on any device that names its queues and allocator: the engine's own device or one a codec module owns"
+description = "Vulkan Video encode and decode for StreamLib, on a device a codec module owns"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,9 +14,6 @@ repository.workspace = true
 # Gates the tests that mint codec resources on a real GPU:
 #   cargo test -p streamlib-vulkan-video --features hardware-tests -- --test-threads=1
 hardware-tests = []
-# Conversions to and from the engine's `streamlib_error::Error`, for the
-# engine, which encodes and decodes through this crate on its own device.
-engine-error-conversions = ["dep:streamlib-error"]
 # Zero bitstream buffers when (re)allocating them, so a NAL-parser bug is
 # easier to spot in raw memory. A debugging knob, off by default.
 clear_bitstream_buffers_on_create = []
@@ -40,11 +37,6 @@ version = "0.68.13"
 [target.'cfg(target_os = "linux")'.dependencies.streamlib-video-bitstream]
 path = "../streamlib-video-bitstream"
 version = "0.68.13"
-
-[target.'cfg(target_os = "linux")'.dependencies.streamlib-error]
-path = "../../sdk/streamlib-error"
-version = "0.68.13"
-optional = true
 
 # The hardware tests map an exported DMA-BUF the way an importer reads one.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

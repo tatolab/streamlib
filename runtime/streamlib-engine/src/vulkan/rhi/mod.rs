@@ -150,13 +150,7 @@ mod vulkan_host_mapping_read_by_gpu;
 pub use vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;
 
 #[cfg(target_os = "linux")]
-mod vulkan_video_codec_device;
-
-#[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
 
 #[cfg(all(test, target_os = "linux"))]
 mod dma_buf_export_test_device_fixture;
-
-#[cfg(all(test, target_os = "linux"))]
-mod video_profile_test_fixture;

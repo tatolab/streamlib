@@ -97,14 +97,6 @@ pub mod sdk {
 
     pub use streamlib_engine::core::texture;
 
-    /// Annex-B access units, the parameter sets they carry, and the codec
-    /// strings those sets spell.
-    pub mod video_bitstream {
-        pub use streamlib_video_bitstream::annex_b_access_unit::{
-            ParameterSetsFromAnnexBAccessUnit, parameter_sets_of_annex_b_access_unit,
-        };
-    }
-
     // ---- App authoring sugar ----
 
     /// [`App`] — thin authoring sugar over [`runtime::Runner`]. Construct, add
@@ -216,12 +208,6 @@ pub mod sdk {
         /// output device at `S_FMT`.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_v4l2_color;
-
-        /// Vulkan Video codec layer — the video codec seam's Linux arm and
-        /// its bitstream parsers. A codec session is opened through
-        /// `sdk::context::probe_video_codec_backend`, never minted here.
-        #[cfg(target_os = "linux")]
-        pub use streamlib_engine::video;
     }
 }
 

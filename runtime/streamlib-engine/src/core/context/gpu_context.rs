@@ -3455,48 +3455,6 @@ impl GpuContext {
         Ok(Arc::new(handle))
     }
 
-    /// Mint a hardware video [`SimpleEncoder`](crate::vulkan::video::encode::SimpleEncoder)
-    /// on this context's host device, built directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
-    ///
-    /// Eagerly runs [`SimpleEncoder::prepare_gpu_encode_resources`] so the
-    /// first submitted frame doesn't pay the RGB→NV12 converter allocation
-    /// latency.
-    #[cfg(target_os = "linux")]
-    #[tracing::instrument(skip(self, config), fields(rhi_op = "create_encoder_session"))]
-    pub(crate) fn create_encoder_session(
-        &self,
-        config: crate::vulkan::video::encode::SimpleEncoderConfig,
-    ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
-        let host_device = Arc::clone(&self.device.inner);
-        let mut encoder = crate::vulkan::video::encode::SimpleEncoder::new(host_device, config)
-            .map_err(|e| Error::GpuError(format!("create_encoder_session: {e}")))?;
-        encoder.prepare_gpu_encode_resources().map_err(|e| {
-            Error::GpuError(format!(
-                "create_encoder_session: prepare GPU encode resources: {e}"
-            ))
-        })?;
-        Ok(encoder)
-    }
-
-    /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
-    /// on this context's host device.
-    ///
-    /// Coded dimensions are auto-detected from the first SPS (query via
-    /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
-    /// after the first `feed`); the config's `max_width` / `max_height` of
-    /// `0` request that auto-detection.
-    #[cfg(target_os = "linux")]
-    #[tracing::instrument(skip(self, config), fields(rhi_op = "create_decoder_session"))]
-    pub(crate) fn create_decoder_session(
-        &self,
-        config: crate::vulkan::video::decode::SimpleDecoderConfig,
-    ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
-        let host_device = Arc::clone(&self.device.inner);
-        crate::vulkan::video::decode::SimpleDecoder::new(host_device, config)
-            .map_err(|e| Error::GpuError(format!("create_decoder_session: {e}")))
-    }
-
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -4922,28 +4880,6 @@ impl GpuContextFullAccess {
     ) -> Result<crate::vulkan::rhi::VulkanOffscreenCompositor> {
         self.host_inner()
             .create_offscreen_compositor(attachment_format)
-    }
-
-    /// Mint a Vulkan Video encoder on the host device — the FullAccess mirror
-    /// of [`GpuContext::create_encoder_session`] the video codec seam's Vulkan
-    /// Video arm opens an encode session with.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn create_encoder_session(
-        &self,
-        config: crate::vulkan::video::encode::SimpleEncoderConfig,
-    ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
-        self.host_inner().create_encoder_session(config)
-    }
-
-    /// Mint a Vulkan Video decoder on the host device — the FullAccess mirror
-    /// of [`GpuContext::create_decoder_session`] the video codec seam's Vulkan
-    /// Video arm opens a decode session with.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn create_decoder_session(
-        &self,
-        config: crate::vulkan::video::decode::SimpleDecoderConfig,
-    ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
-        self.host_inner().create_decoder_session(config)
     }
 
     /// Wait for the GPU device to become idle.

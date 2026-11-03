@@ -33,5 +33,19 @@ objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
 objc2-io-surface.workspace = true
 objc2-video-toolbox = { workspace = true, features = ["std", "VTSession", "VTCompressionSession", "VTCompressionProperties", "VTDecompressionSession", "VTDecompressionProperties", "VTErrors", "objc2-core-media", "objc2-core-video"] }
 
+[features]
+# Gates the round trips that code on a real hardware encoder and decoder:
+# `cargo test -p streamlib-owned-device-video-codec-nodes --features hardware-tests`.
+hardware-tests = []
+
+[dev-dependencies]
+# Reads the checked-in PSNR references the round trips score against.
+png = "0.17"
+
+# The runtime's device, whose exported memory a Linux round trip imports onto
+# the owned encode device as a module receives a frame.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk" }
+
 [lints]
 workspace = true

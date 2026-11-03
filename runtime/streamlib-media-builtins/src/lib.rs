@@ -13,14 +13,8 @@ pub mod audio_block;
 pub mod audio_window_to_encoded_packet_encoder;
 pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
-pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_packet_to_audio_block_decoder;
-pub mod h264_decoder;
-pub mod h264_encoder;
-pub mod h265_decoder;
-pub mod h265_encoder;
 pub mod h273_color_vui_translation;
-pub mod hardware_video_codec_processor_identity;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod opus_decoder;
@@ -28,7 +22,6 @@ pub mod opus_encoder;
 pub mod opus_identification_header;
 pub mod opus_stream_layout;
 pub(crate) mod processor_thread_join;
-pub mod published_surface_to_encoded_frame_encoder;
 pub mod relay_track_source;
 pub(crate) mod test_pattern_frame_renderer;
 #[cfg(test)]
@@ -40,14 +33,8 @@ pub mod virtual_camera_sink;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
-pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
-pub use h264_decoder::H264Decoder;
-pub use h264_encoder::H264Encoder;
-pub use h265_decoder::H265Decoder;
-pub use h265_encoder::H265Encoder;
 pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
-pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
@@ -80,6 +67,26 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
         "tatolab.speaker:SpeakerSink",
         "tatolab-speaker",
     ),
+    (
+        "H264Encoder",
+        "tatolab.h264:H264Encoder",
+        "tatolab-h264",
+    ),
+    (
+        "H264Decoder",
+        "tatolab.h264:H264Decoder",
+        "tatolab-h264",
+    ),
+    (
+        "H265Encoder",
+        "tatolab.h265:H265Encoder",
+        "tatolab-h265",
+    ),
+    (
+        "H265Decoder",
+        "tatolab.h265:H265Decoder",
+        "tatolab-h265",
+    ),
 ];
 
 /// Register every media built-in on the process-wide registry, and record each
@@ -92,10 +99,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
-    PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
-    PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
     PROCESSOR_REGISTRY.register::<relay_track_source::RelayTrackSource::Processor>();
 
     for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
@@ -192,8 +195,6 @@ mod built_in_node_type_tests {
         });
         for (class_name, output_port) in [
             ("TestPatternSource", "video"),
-            ("H264Decoder", "video"),
-            ("H265Decoder", "video"),
             ("OpusDecoder", "audio"),
         ] {
             let descriptor = PROCESSOR_REGISTRY

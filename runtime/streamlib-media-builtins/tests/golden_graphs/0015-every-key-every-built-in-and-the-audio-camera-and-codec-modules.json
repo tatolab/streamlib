@@ -1,5 +1,5 @@
 {
-  "stream": "reader",
+  "stream": "every-built-in",
   "nodes": [
     {
       "id": "golden01",
@@ -39,7 +39,7 @@
     {
       "id": "golden04",
       "name": "h264encoder",
-      "type": "tatolab.stream:H264Encoder",
+      "type": "tatolab.h264:H264Encoder",
       "config": {
         "width": 1920,
         "height": 1080,
@@ -60,7 +60,7 @@
     {
       "id": "golden05",
       "name": "h264decoder",
-      "type": "tatolab.stream:H264Decoder",
+      "type": "tatolab.h264:H264Decoder",
       "config": {
         "max_width": 1920,
         "max_height": 1080
@@ -77,7 +77,7 @@
     {
       "id": "golden06",
       "name": "h265encoder",
-      "type": "tatolab.stream:H265Encoder",
+      "type": "tatolab.h265:H265Encoder",
       "config": {
         "width": 1920,
         "height": 1080,
@@ -98,7 +98,7 @@
     {
       "id": "golden07",
       "name": "h265decoder",
-      "type": "tatolab.stream:H265Decoder",
+      "type": "tatolab.h265:H265Decoder",
       "config": {
         "max_width": 1920,
         "max_height": 1080
@@ -191,24 +191,6 @@
       "components": {
         "state": "Running"
       }
-    },
-    {
-      "id": "golden02",
-      "name": "relaytracksource",
-      "type": "tatolab.stream:RelayTrackSource",
-      "config": {
-        "relay_url": "http://127.0.0.1:4443",
-        "broadcast": "golden-desk/camera-rig.hang",
-        "track": "camerasource/video"
-      },
-      "config_checksum": 0,
-      "ports": {
-        "inputs": [],
-        "outputs": []
-      },
-      "components": {
-        "state": "Running"
-      }
     }
   ],
   "links": [
@@ -244,6 +226,20 @@
     {
       "id": "goldenlink03",
       "source": {
+        "node": "camerasource",
+        "port": "video"
+      },
+      "target": {
+        "node": "h265encoder",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink04",
+      "source": {
         "node": "h264encoder",
         "port": "encoded_video"
       },
@@ -256,7 +252,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink04",
+      "id": "goldenlink05",
       "source": {
         "node": "h265encoder",
         "port": "encoded_video"
@@ -270,7 +266,21 @@
       "components": {}
     },
     {
-      "id": "goldenlink05",
+      "id": "goldenlink06",
+      "source": {
+        "node": "h264decoder",
+        "port": "video"
+      },
+      "target": {
+        "node": "virtualcamerasink",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink07",
       "source": {
         "node": "microphonesource",
         "port": "audio"
@@ -284,7 +294,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink06",
+      "id": "goldenlink08",
       "source": {
         "node": "opusencoder",
         "port": "encoded_audio"
@@ -298,7 +308,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink07",
+      "id": "goldenlink09",
       "source": {
         "node": "opusdecoder",
         "port": "audio"
@@ -310,42 +320,18 @@
       "capacity": 16,
       "state": "wired",
       "components": {}
-    },
-    {
-      "id": "goldenlink11",
-      "source": {
-        "node": "relaytracksource",
-        "port": "track"
-      },
-      "target": {
-        "node": "virtualcamerasink",
-        "port": "video"
-      },
-      "capacity": 16,
-      "state": "error",
-      "error_reason": "a reason `graph` renders only on a link in error",
-      "components": {
-        "state": "Error"
-      }
     }
   ],
   "exposed": [
     {
       "node": "camerasource",
-      "port": "video",
-      "level": "private"
+      "port": "video"
     },
     {
       "node": "h264encoder",
-      "port": "encoded_video",
-      "level": "public"
-    },
-    {
-      "node": "relaytracksource",
-      "port": "track",
-      "level": "private"
+      "port": "encoded_video"
     }
   ],
   "extensions": [],
-  "machine": "golden-desk"
+  "runtime_name": "golden-desk-a1b2"
 }
