@@ -1798,6 +1798,7 @@ dependencies = [
     { name = "tatolab-camera" },
     { name = "tatolab-compositor" },
     { name = "tatolab-microphone" },
+    { name = "tatolab-opus" },
     { name = "tatolab-speaker" },
     { name = "tatolab-stream" },
 ]
@@ -1818,6 +1819,7 @@ requires-dist = [
     { name = "tatolab-camera", directory = "../../packages/tatolab-camera" },
     { name = "tatolab-compositor", editable = "../../packages/tatolab-compositor" },
     { name = "tatolab-microphone", directory = "../../packages/tatolab-microphone" },
+    { name = "tatolab-opus", directory = "../../packages/tatolab-opus" },
     { name = "tatolab-speaker", directory = "../../packages/tatolab-speaker" },
     { name = "tatolab-stream", editable = "../../sdk/tatolab-stream" },
 ]
@@ -1875,6 +1877,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
+
+[[package]]
+name = "tatolab-opus"
+version = "0.68.13"
+source = { directory = "../../packages/tatolab-opus" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
 
 [[package]]
 name = "tatolab-speaker"

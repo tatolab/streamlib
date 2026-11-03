@@ -140,7 +140,7 @@ def resolve_track_kind(
 
 
 #: RFC 7587 defines an RTP payload format for mono and stereo Opus only. The
-#: engine's `OpusEncoder` legally produces mapping-family-1 multistream packets
+#: `tatolab.opus.OpusEncoder` legally produces mapping-family-1 multistream packets
 #: for 3–8 channels, which no WHIP relay can carry.
 HIGHEST_CHANNELS_RTP_CARRIES = 2
 

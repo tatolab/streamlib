@@ -32,9 +32,9 @@ import os
 
 import known_audio_signal
 import known_audio_signal_source
-import tatolab.stream
 from captured_audio_waveform_recorder import SECONDS_TO_RECORD, CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
+from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.stream import StreamBuilder, stream
 
 # What the source will ever publish, derived rather than named so it cannot
@@ -70,8 +70,8 @@ def known_signal_through_opus_and_back(stream_builder: StreamBuilder) -> None:
         )
 
     signal = stream_builder.add(KnownAudioSignalSource)
-    encoder = stream_builder.add(tatolab.stream.OpusEncoder)
-    decoder = stream_builder.add(tatolab.stream.OpusDecoder)
+    encoder = stream_builder.add(OpusEncoder)
+    decoder = stream_builder.add(OpusDecoder)
     recorder = stream_builder.add(CapturedAudioWaveformRecorder)
 
     stream_builder.connect(signal.output("audio"), encoder.input("audio"))

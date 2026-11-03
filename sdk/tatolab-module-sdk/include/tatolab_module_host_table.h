@@ -19,8 +19,8 @@
  * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
  * which attaches to the interpreter for its round trip to the parent. The
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
- * channel, with no interpreter on either end, as does the IOSurface import
- * minor 4 adds.
+ * channel, with no interpreter on either end, as do the IOSurface import
+ * minor 4 adds and the host-memory write minor 5 adds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -41,7 +41,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(4)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(5)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -254,6 +254,26 @@ typedef struct ModuleHostTableColorInfo {
     ModuleHostTableUtf8 matrix;
     ModuleHostTableUtf8 range;
 } ModuleHostTableColorInfo;
+
+/**
+ * Pixels in the caller's memory, `height` rows of `width` pixels each,
+ * `row_stride_bytes` apart; the bytes stay the caller's for the length of
+ * the call.
+ */
+typedef struct ModuleHostTableHostMemoryPixels {
+    /**
+     * The first byte of the first row; at least
+     * `row_stride_bytes × (height − 1) + width × 4` bytes long.
+     */
+    ModuleHostTableBytes pixels;
+    /**
+     * A pixel format wire name: `bgra32` or `rgba32`.
+     */
+    ModuleHostTableUtf8 pixel_format;
+    uint32_t width;
+    uint32_t height;
+    uint64_t row_stride_bytes;
+} ModuleHostTableHostMemoryPixels;
 
 /**
  * The caller's buffer a refused verb writes its message into.
@@ -588,6 +608,13 @@ typedef struct ModuleHostTable {
      * elsewhere.
      */
     ModuleHostTableStatus (*surface_import_iosurface)(void *node_host, const ModuleHostTableIOSurfaceImport *iosurface_import, ModuleHostTableSurfaceHandle *imported_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 5: write CPU pixels over every pixel of an output-pool texture of
+     * the same extent, swapping channel order between `bgra32` and `rgba32`
+     * where the texture's differs, and return once the texture's next reader
+     * sees them.
+     */
+    ModuleHostTableStatus (*surface_write_from_host_memory)(void *node_host, ModuleHostTableSurfaceHandle destination, const ModuleHostTableHostMemoryPixels *host_memory_pixels, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

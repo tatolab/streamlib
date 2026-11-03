@@ -432,8 +432,10 @@ jobs:
             . -> target
             packages/streamlib-webrtc -> target
             packages/tatolab-camera -> target
+            packages/tatolab-browser -> target
             packages/tatolab-microphone -> target
             packages/tatolab-speaker -> target
+            packages/tatolab-opus -> target
             packages/streamlib-h264 -> target
             packages/streamlib-h265 -> target
             packages/tatolab-rive -> target
@@ -575,7 +577,8 @@ jobs:
       # The engine's suite runs before the extension's steps, so a consumer
       # the engine has moved past cannot hide the engine's own result.
       # A stream's venv exactly as a third party's holds the extension:
-      # `tatolab-stream` and the extension, and no engine.
+      # `tatolab-stream` and the extension, and no engine. Its tests wire the
+      # publisher to the Opus nodes, so the venv holds `tatolab-opus` too.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
         working-directory: packages/streamlib-webrtc
         run: |
@@ -583,6 +586,7 @@ jobs:
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus"
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` and pyright do not reach a non-member.
@@ -618,6 +622,19 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
           .venv/bin/python -m mypy.stubtest tatolab.camera._native
+          uvx pyright@1.1.411
+
+      # The browser wheel links CEF, which CI does not download: `cef/dox`
+      # compiles the bindings unlinked, so CI holds its pure logic, lints and
+      # types; its rendering runs in the rig.
+      - name: "Browser: formatting, crate tests, clippy and types"
+        working-directory: packages/tatolab-browser
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --workspace --features cef/dox
+          cargo clippy --locked --workspace --all-targets --features cef/dox -- -D warnings
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           uvx pyright@1.1.411
 
       # rive-runtime draws on the GPU, which the rig runs; CI holds the
@@ -694,6 +711,28 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v
 
+      - name: "Extension: build tatolab-opus into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-opus
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-opus formatting, crate tests, clippy and types"
+        working-directory: packages/tatolab-opus
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uvx pyright@1.1.411
+
+      - name: "Extension: tatolab-opus stubs and tests"
+        working-directory: packages/tatolab-opus
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.opus._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
       # The H.264 module encodes with Vulkan Video, which only the Linux lane
       # builds; its GPU encode runs in the rig.
       - name: "Extension: build streamlib-h264 into a venv holding tatolab-stream"
@@ -1018,6 +1057,7 @@ jobs:
             packages/streamlib-webrtc -> target
             packages/tatolab-microphone -> target
             packages/tatolab-speaker -> target
+            packages/tatolab-opus -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache the local relay build
@@ -1087,7 +1127,8 @@ jobs:
             "$GITHUB_WORKSPACE/target/tatolab-runtime" "$RUNNER_TEMP/tatolab-stream-dist"
 
       # A stream's venv exactly as a third party's holds the extension:
-      # `tatolab-stream` and the extension, and no engine.
+      # `tatolab-stream` and the extension, and no engine. Its tests wire the
+      # publisher to the Opus nodes, so the venv holds `tatolab-opus` too.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
         working-directory: packages/streamlib-webrtc
         run: |
@@ -1095,6 +1136,7 @@ jobs:
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus"
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: "Extension: crate tests and clippy"
@@ -1158,6 +1200,31 @@ jobs:
         working-directory: packages/tatolab-speaker
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.speaker._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v
+
+      - name: "Extension: build tatolab-opus into a venv holding tatolab-stream"
+        working-directory: packages/tatolab-opus
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: tatolab-opus crate tests and clippy"
+        working-directory: packages/tatolab-opus
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+
+      # Carries the portability gate over the built `.dylib`: libopus is
+      # linked statically, so the Mach-O loads nothing outside macOS itself.
+      - name: "Extension: tatolab-opus stubs and tests"
+        working-directory: packages/tatolab-opus
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.opus._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v
 

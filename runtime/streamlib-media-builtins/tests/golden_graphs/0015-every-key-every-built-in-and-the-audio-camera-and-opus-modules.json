@@ -148,7 +148,7 @@
     {
       "id": "golden10",
       "name": "opusencoder",
-      "type": "tatolab.stream:OpusEncoder",
+      "type": "tatolab.opus:OpusEncoder",
       "config": {
         "bitrate_bps": 64000,
         "application": "audio"
@@ -165,7 +165,7 @@
     {
       "id": "golden11",
       "name": "opusdecoder",
-      "type": "tatolab.stream:OpusDecoder",
+      "type": "tatolab.opus:OpusDecoder",
       "config": {},
       "config_checksum": 0,
       "ports": {
@@ -325,13 +325,11 @@
   "exposed": [
     {
       "node": "camerasource",
-      "port": "video",
-      "level": "private"
+      "port": "video"
     },
     {
       "node": "h264encoder",
-      "port": "encoded_video",
-      "level": "public"
+      "port": "encoded_video"
     }
   ],
   "extensions": [],

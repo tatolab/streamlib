@@ -11,6 +11,7 @@ use streamlib::sdk::rhi::PixelFormat;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 use streamlib_consumer_rhi::ConsumerVulkanTimelineSemaphore;
 
+use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
 use crate::python_cuda_pixel_exchange::CudaImportedSurface;
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGpuExchangeClient, escalate_round_trip_to_parent,
@@ -111,6 +112,9 @@ pub(crate) enum CpuReadbackCopyDirection {
     /// The staged edit back into the surface's own allocation, so every
     /// other holder observes it.
     StagingBackIntoSurface,
+    /// A staging written in full over every pixel of the surface, with no
+    /// frame read in first.
+    WholeStagingOverTheSurface,
 }
 
 impl CpuReadbackCopyDirection {
@@ -118,6 +122,7 @@ impl CpuReadbackCopyDirection {
         match self {
             Self::SurfaceIntoStaging => "image_to_buffer",
             Self::StagingBackIntoSurface => "buffer_to_image",
+            Self::WholeStagingOverTheSurface => "whole_buffer_to_image",
         }
     }
 }
@@ -657,6 +662,147 @@ impl HelperProcessGpuExchangeClient {
         })?;
         let _adopted_by_vulkan = copy_done_fd.into_raw_fd();
         Ok(imported_timeline)
+    }
+}
+
+/// The CPU-readback staging reached from a helper's native code, over its
+/// native escalate channel, with no Python attached on either end.
+impl HelperProcessGpuExchangeClient {
+    /// The readback export of `surface_id`, opened and mapped on first ask and
+    /// memoised on the pool-slot key the CPU doors share.
+    pub(crate) fn open_cpu_readback_export_from_native_code(
+        &self,
+        native_escalate_channel: &HelperProcessNativeEscalateChannel,
+        surface_id: &str,
+    ) -> Result<Arc<HelperCpuReadbackExport>, String> {
+        let source_pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(already_open) = self
+            .cpu_readback_exports_by_pool_slot
+            .lock()
+            .get(source_pool_slot_key)
+        {
+            return Ok(Arc::clone(already_open));
+        }
+        let answer = native_escalate_channel.request_from_parent(serde_json::json!({
+            "op": HelperExportStagingResidency::HostVisible.escalate_open_op_name(),
+            "surface_id": surface_id,
+        }))?;
+        let described = DeviceExportStagingDescription::from_native_escalate_answer(&answer)?;
+        self.write_back_answers_by_pool_slot
+            .lock()
+            .insert(source_pool_slot_key.to_string(), described.writable);
+        let opened = Arc::new(
+            self.check_out_and_import_cpu_readback_export(&described)
+                .map_err(|import_failure| import_failure.to_string())?,
+        );
+        Ok(Arc::clone(
+            self.cpu_readback_exports_by_pool_slot
+                .lock()
+                .entry(source_pool_slot_key.to_string())
+                .or_insert(opened),
+        ))
+    }
+
+    /// Run one CPU-readback staging copy for native code and wait for the
+    /// timeline value the parent answers with, where it answers one.
+    pub(crate) fn run_cpu_readback_copy_from_native_code(
+        &self,
+        native_escalate_channel: &HelperProcessNativeEscalateChannel,
+        direction: CpuReadbackCopyDirection,
+        surface_id: &str,
+        export: &HelperCpuReadbackExport,
+    ) -> Result<(), String> {
+        let answer = native_escalate_channel.request_from_parent(serde_json::json!({
+            "op": "run_cpu_readback_copy",
+            "surface_id": surface_id,
+            "direction": direction.wire_name(),
+        }))?;
+        let answered = optional_decimal_string_of_a_native_answer(&answer, "timeline_value")?;
+        match (export.copy_done.as_ref(), answered) {
+            (None, None) => Ok(()),
+            (Some(copy_done), Some(signalled)) => copy_done
+                .wait(signalled, DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS)
+                .map_err(|wait_failure| {
+                    format!(
+                        "waiting for run_cpu_readback_copy of surface {surface_id:?} to reach \
+                         timeline value {signalled} failed: {wait_failure}"
+                    )
+                }),
+            (None, Some(signalled)) => Err(format!(
+                "run_cpu_readback_copy of surface {surface_id:?} answered timeline value \
+                 {signalled}, but its staging was checked out with no timeline to wait on"
+            )),
+            (Some(_), None) => Err(format!(
+                "run_cpu_readback_copy of surface {surface_id:?} answered no timeline value, \
+                 but its staging was checked out with a timeline the copy should have \
+                 signalled"
+            )),
+        }
+    }
+}
+
+impl DeviceExportStagingDescription {
+    /// The staging contract the parent answers `open_cpu_readback_staging`
+    /// with, as the native escalate channel hands it back.
+    fn from_native_escalate_answer(answer: &serde_json::Value) -> Result<Self, String> {
+        let text_field = |field: &str| {
+            answer
+                .get(field)
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| format!("the parent's staging answer carried no {field}: {answer}"))
+        };
+        let u32_field = |field: &str| {
+            answer
+                .get(field)
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| format!("the parent's staging answer carried no {field}: {answer}"))
+        };
+        let decimal_field = |field: &str| {
+            optional_decimal_string_of_a_native_answer(answer, field)?
+                .ok_or_else(|| format!("the parent's staging answer carried no {field}: {answer}"))
+        };
+        let exporting_device_uuid = text_field("exporting_device_uuid")?;
+        Ok(Self {
+            staging_share_id: text_field("handle_id")?.to_string(),
+            staging_byte_size: decimal_field("staging_byte_size")?,
+            exporting_device_uuid: streamlib_consumer_rhi::vulkan_device_uuid_from_hex(
+                exporting_device_uuid,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "the parent reported the exporting device UUID as \
+                     {exporting_device_uuid:?}, which is not 32 hex characters"
+                )
+            })?,
+            width: u32_field("width")?,
+            height: u32_field("height")?,
+            format: PixelFormat::parse_wire_name(text_field("format")?)?,
+            bytes_per_row: decimal_field("bytes_per_row")?,
+            writable: answer
+                .get("writable")
+                .and_then(|value| value.as_bool())
+                .ok_or_else(|| {
+                    format!("the parent's staging answer carried no writable: {answer}")
+                })?,
+        })
+    }
+}
+
+/// A decimal-string u64 a native escalate answer may leave out; `None` when it
+/// did.
+fn optional_decimal_string_of_a_native_answer(
+    answer: &serde_json::Value,
+    field: &str,
+) -> Result<Option<u64>, String> {
+    match answer.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(as_written)) => as_written.parse().map(Some).map_err(|_| {
+            format!("the parent's {field} was {as_written:?}, which is not a decimal u64")
+        }),
+        Some(other) => Err(format!(
+            "the parent's {field} was {other}, where a decimal string was expected"
+        )),
     }
 }
 

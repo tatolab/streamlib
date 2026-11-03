@@ -2688,14 +2688,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stereo) is the plainest case the window contract exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
   audio-port-window-contract — SHIPPED #2034; package-split-and-lend — SHIPPED #2684]
-- **DECIDED** — Codec blocks are native built-ins beside the camera and the audio
-  pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`,
-  `OpusEncoder`, `OpusDecoder` — instantiated and configured the one way a
+- **DECIDED** — Codec blocks are native built-ins beside the camera:
+  `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` — instantiated and configured the one way a
   built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
   codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. The runtime decodes no
   JPEG anywhere. AV1 and VP9 remain ported but unexposed until a consumer demands them.
-  The six name the shipped set, not a rule: the next codec follows the built-in criterion in
+  The four name the shipped set, not a rule: the next codec follows the built-in criterion in
   §Packages & extension model.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
@@ -2885,21 +2884,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   That is the drop-at-the-edge and flush-not-interpolate doctrine applied to a codec: a
   decoder that concealed a lost packet would invent 20 ms of audio, so the gap stays
   derivable from the stamps instead. [opus-mp4-recording-rung — SHIPPED #2125]
-- **DECIDED** — Opus links statically into the wheel: libopus is BSD-3-Clause and
-  royalty-free, its attribution rides the wheel's third-party-notices surface, and no
-  `DT_NEEDED` entry appears — the dlopen arm is for system audio servers, never for a
-  codec the wheel can carry. It arrives through the `opus` crate over `opusic-sys`, whose
-  bundled libopus builds static by default; libopus's notice joins `VENDORED_CPP_PROJECTS`
-  read from the crate's own `COPYING` in the registry checkout — the `shaderc-sys` shape
-  generalised to a second build-script crate rather than a parallel mechanism — and the
-  portability gate is the pass/fail: Opus adds no host library to the five the shipped
-  `_engine.abi3.so` names.
+- **DECIDED** — Opus links statically into the `tatolab-opus` wheel: libopus is
+  BSD-3-Clause and royalty-free, its attribution rides that wheel's third-party-notices
+  surface, and no `DT_NEEDED` entry appears — the dlopen arm is for system audio servers,
+  never for a codec the wheel can carry. It arrives through the `opus` crate over
+  `opusic-sys`, whose bundled libopus builds static by default; libopus's notice is a
+  `VENDORED_CPP_PROJECTS` entry carried by the `tatolab-opus` wheel, read from the crate's
+  own `COPYING` in the registry checkout — the `shaderc-sys` shape generalised to a second
+  build-script crate rather than a parallel mechanism — and the wheel's portability test is
+  the pass/fail: the extension loads no host library outside the platform's own.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
-- **DECIDED** — `OpusEncoder` and `OpusDecoder` reach Python as generated classes like every
-  built-in, with no Linux split — nothing here is platform-bound, so they register
-  unconditionally beside the audio built-ins. Their descriptors' docs, carried into the
-  generated classes, state the engine's own behavior rather than an aspiration: the encoder's
-  window and first-block mint, its two config keys, the decoder's entry and gap rule.
+- **DECIDED** — `OpusEncoder` and `OpusDecoder` ship as the `tatolab-opus` extension
+  wheel (`tatolab.opus:OpusEncoder`, `tatolab.opus:OpusDecoder`): Python nodes in their own
+  helper processes whose native half runs libopus, with no Linux split — nothing here is
+  platform-bound. Their docstrings state the module's own behavior rather than an
+  aspiration: the encoder's window and first-block mint, its two config keys, the decoder's
+  entry and gap rule. A graph naming their former built-in types is refused naming the
+  module to install.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128; stream-graph — SHIPPED #2618;
   package-split-and-lend — SHIPPED #2684]
 - **DECIDED** — The rung's CI-run, GPU-free proof: the stage with `channels` absent emits
