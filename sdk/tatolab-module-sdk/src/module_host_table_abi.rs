@@ -14,7 +14,8 @@
 //! Python's GIL, except [`ModuleHostTable::output_port_set_catalog_entry`],
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
-//! channel, with no interpreter on either end.
+//! channel, with no interpreter on either end, as does the IOSurface import
+//! minor 4 adds.
 
 use std::ffi::{CStr, c_void};
 
@@ -23,7 +24,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 3;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 4;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -125,6 +126,21 @@ pub struct ModuleHostTableDmaBufImport {
     pub drm_format_modifier: u64,
     pub plane_offsets_bytes: [u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES],
     pub plane_strides_bytes: [u64; MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES],
+}
+
+/// One foreign IOSurface and the pixel format its planes hold.
+///
+/// `iosurface` is an `IOSurfaceRef` that stays the caller's: the host takes
+/// its own reference and its own Mach port for as long as the import lives.
+/// The planes' offsets and strides are the surface's own.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableIOSurfaceImport {
+    pub iosurface: *const c_void,
+    /// A pixel format wire name, such as `nv12_video_range`.
+    pub pixel_format: ModuleHostTableUtf8,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// One texture out of a node output pool: a new `<slot>#<generation>` per
@@ -484,6 +500,15 @@ pub struct ModuleHostTable {
     /// Minor 3.
     pub audio_playback_stream_close:
         unsafe extern "C" fn(node_host: *mut c_void, stream: ModuleHostTableAudioStreamHandle),
+    /// Minor 4: adopt a foreign IOSurface as a surface the graph can resolve,
+    /// registered as written by a foreign device. macOS only; refused by name
+    /// elsewhere.
+    pub surface_import_iosurface: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        iosurface_import: *const ModuleHostTableIOSurfaceImport,
+        imported_surface: *mut ModuleHostTableSurfaceHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTableUtf8 {
@@ -705,7 +730,6 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_appended_at_minor_3.into_iter().enumerate() {
             assert_eq!(offset, 16 + (24 + slot) * POINTER, "minor 3 slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 29 * POINTER);
         assert_eq!(align_of::<ModuleHostTable>(), 8);
     }
 
@@ -832,6 +856,34 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_in_order.into_iter().enumerate() {
             assert_eq!(offset, 16 + (19 + slot) * POINTER, "pointer slot {slot}");
         }
+    }
+
+    /// Minor 4 appends its IOSurface import after the minor 3 audio playback verbs.
+    #[test]
+    fn the_v1_4_table_appends_its_iosurface_import_after_every_v1_3_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, surface_import_iosurface),
+            16 + 29 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 30 * POINTER);
+    }
+
+    #[test]
+    fn an_iosurface_import_puts_its_surface_then_its_name_then_its_extent() {
+        assert_eq!(offset_of!(ModuleHostTableIOSurfaceImport, iosurface), 0);
+        assert_eq!(
+            offset_of!(ModuleHostTableIOSurfaceImport, pixel_format),
+            POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableIOSurfaceImport, width),
+            3 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableIOSurfaceImport, height),
+            3 * POINTER + 4
+        );
+        assert_eq!(size_of::<ModuleHostTableIOSurfaceImport>(), 3 * POINTER + 8);
     }
 
     #[test]

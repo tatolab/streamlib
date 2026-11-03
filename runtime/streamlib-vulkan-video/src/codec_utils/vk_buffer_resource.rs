@@ -754,7 +754,7 @@ impl VkBufferResource {
             config
                 .allocator
                 .create_buffer(create_info, &alloc_opts)
-                .map_err(|e| vk::Result::from(e))?
+                .map_err(vk::Result::from)?
         };
 
         // Retrieve the actual memory property flags from the chosen memory

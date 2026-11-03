@@ -297,6 +297,10 @@ pub struct QueueFamilyInfo {
 /// extensions chained.
 ///
 /// Port of inline `vk::get(vkIf, phy, queues, videoQueues, queryResultStatus)`.
+///
+/// # Safety
+///
+/// `physical_device` must be a valid handle enumerated from `instance`.
 pub unsafe fn get_physical_device_queue_family_properties2(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
@@ -352,6 +356,10 @@ pub unsafe fn get_physical_device_queue_family_properties2(
 /// `requirements_mask`.
 ///
 /// Port of inline `vk::MapMemoryTypeToIndex`.
+///
+/// # Safety
+///
+/// `physical_device` must be a valid handle enumerated from `instance`.
 pub unsafe fn map_memory_type_to_index(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
@@ -387,6 +395,10 @@ pub const DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT: u64 = 5 * 1_000 * 1_000 * 1_000;
 /// Wait for `fence` to be signaled and optionally reset it.
 ///
 /// Port of inline `vk::WaitAndResetFence`.
+///
+/// # Safety
+///
+/// `fence` must be a valid fence created from `device`.
 pub unsafe fn wait_and_reset_fence(
     device: &vulkanalia::Device,
     fence: vk::Fence,
@@ -464,6 +476,11 @@ pub unsafe fn wait_and_reset_fence(
 /// timeout.
 ///
 /// Port of inline `vk::WaitAndGetStatus`.
+///
+/// # Safety
+///
+/// `fence` and `query_pool` must be valid handles created from `device`, and
+/// `start_query_id` must name a query in `query_pool`.
 pub unsafe fn wait_and_get_status(
     device: &vulkanalia::Device,
     fence: vk::Fence,

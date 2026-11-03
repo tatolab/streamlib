@@ -14,6 +14,10 @@ use vulkanalia::vk;
 /// on a freshly-allocated fence. Used on both host and consumer sides
 /// — these tests' command-buffer needs are simple enough that a single
 /// helper covers them.
+///
+/// # Safety
+///
+/// Every handle passed in must belong to `device`, which must be live.
 pub unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
     device: &vulkanalia::Device,
     queue: vk::Queue,
@@ -69,6 +73,10 @@ pub unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
 /// producer wanting to hand off the image with a non-UNDEFINED layout has
 /// a reference shape, even though these tests' consumers bridge UNDEFINED →
 /// TRANSFER_SRC (see [`record_image_readback_to_buffer`]).
+///
+/// # Safety
+///
+/// `cmd` must be recording, and every handle passed in must belong to `device`.
 pub unsafe fn record_pattern_upload_to_image(
     device: &vulkanalia::Device,
     cmd: vk::CommandBuffer,
@@ -164,6 +172,10 @@ pub unsafe fn record_pattern_upload_to_image(
 /// is the spec-correct content-preserving form when the extension is
 /// present; NVIDIA does not ship it as of 2026-05, so the bridge is the
 /// structurally permanent path on NVIDIA.
+///
+/// # Safety
+///
+/// `cmd` must be recording, and every handle passed in must belong to `device`.
 pub unsafe fn record_image_readback_to_buffer(
     device: &vulkanalia::Device,
     cmd: vk::CommandBuffer,

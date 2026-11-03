@@ -29,6 +29,9 @@ enum SurfaceColorConversionSourcePixels {
         host_mapping_read_by_gpu: crate::vulkan::rhi::HostMappingReadByGpu,
         dma_buf_mapping: crate::linux::dma_buf_mapped_for_cpu_reads::DmaBufMappedForCpuReads,
     },
+    /// An IOSurface's pages imported as a storage buffer, zero-copy.
+    #[cfg(target_os = "macos")]
+    ImportedIOSurface(crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer),
 }
 
 /// A conversion source resolved once and read on every later conversion: its
@@ -146,6 +149,16 @@ impl SurfaceColorConversionSession {
                 &resolved_color,
                 resolved_color.transfer,
             )?,
+            #[cfg(target_os = "macos")]
+            SurfaceColorConversionSourcePixels::ImportedIOSurface(imported_iosurface) => {
+                color_converter.prepare_buffer_to_image_storage(
+                    imported_iosurface.storage_buffer(),
+                    source_layout,
+                    destination_texture,
+                    &resolved_color,
+                    resolved_color.transfer,
+                )?
+            }
         };
         #[cfg(target_os = "linux")]
         if let SurfaceColorConversionSourcePixels::ForeignDmaBufReadThroughAHostMapping {
@@ -216,6 +229,16 @@ impl SurfaceColorConversionSession {
                         VulkanStage::HOST,
                         VulkanStage::COMPUTE_SHADER,
                         VulkanAccess::HOST_WRITE,
+                        VulkanAccess::SHADER_READ,
+                    )?;
+                }
+                #[cfg(target_os = "macos")]
+                SurfaceColorConversionSourcePixels::ImportedIOSurface(imported_iosurface) => {
+                    recorder.record_buffer_barrier(
+                        imported_iosurface.storage_buffer(),
+                        VulkanStage::NONE,
+                        VulkanStage::COMPUTE_SHADER,
+                        VulkanAccess::NONE,
                         VulkanAccess::SHADER_READ,
                     )?;
                 }
@@ -459,15 +482,68 @@ impl Drop for ReadsThroughADmaBufMappingThatEndOnDrop<'_> {
     }
 }
 
+/// The surface-share registration's IOSurface, its pages imported as a
+/// storage buffer, with its planes where the surface itself lays them out.
 #[cfg(target_os = "macos")]
 fn resolve_color_conversion_source_through_the_surface_store(
-    _gpu: &GpuContext,
+    gpu: &GpuContext,
     surface_id: &str,
 ) -> Result<SurfaceColorConversionSource> {
-    Err(Error::NotSupported(format!(
-        "surface {surface_id} is not a pixel buffer this process holds; a cross-process \
-         conversion source is a Linux DMA-BUF import today"
-    )))
+    let store = gpu.surface_store().ok_or_else(|| {
+        Error::Configuration(format!(
+            "surface {surface_id} is not a pixel buffer this process holds, and no surface-share \
+             service is connected to look it up"
+        ))
+    })?;
+    let registration = store.lookup_iosurface_registration_without_importing_it(surface_id)?;
+    let planes = iosurface_planes_within_its_allocation(
+        &registration.iosurface,
+        registration.pixel_format,
+        registration.width,
+        registration.height,
+    )?;
+    let imported_iosurface = gpu.import_iosurface_as_storage_buffer(&registration.iosurface)?;
+    Ok(SurfaceColorConversionSource {
+        pixels: SurfaceColorConversionSourcePixels::ImportedIOSurface(imported_iosurface),
+        pixel_format: registration.pixel_format,
+        width: registration.width,
+        height: registration.height,
+        planes,
+    })
+}
+
+/// Where `iosurface`'s planes sit from its base address, at its own strides;
+/// a surface another device fills, so its reads take no prior GPU write.
+#[cfg(target_os = "macos")]
+fn iosurface_planes_within_its_allocation(
+    iosurface: &objc2_io_surface::IOSurfaceRef,
+    pixel_format: PixelFormat,
+    width: u32,
+    height: u32,
+) -> Result<PixelPlanesWithinOneAllocation> {
+    let base_address = iosurface.base_address().as_ptr() as u64;
+    let (plane_offsets_bytes, plane_strides_bytes) = if iosurface.plane_count() == 0 {
+        (vec![0], vec![iosurface.bytes_per_row() as u64])
+    } else {
+        (0..iosurface.plane_count())
+            .map(|plane_index| {
+                (
+                    (iosurface.base_address_of_plane(plane_index).as_ptr() as u64)
+                        .saturating_sub(base_address),
+                    iosurface.bytes_per_row_of_plane(plane_index) as u64,
+                )
+            })
+            .unzip()
+    };
+    PixelPlanesWithinOneAllocation::new(
+        pixel_format,
+        width,
+        height,
+        iosurface.alloc_size() as u64,
+        plane_offsets_bytes,
+        plane_strides_bytes,
+        true,
+    )
 }
 
 /// The texture `surface_id` names, refused unless the converter can write it:

@@ -124,7 +124,7 @@ impl BitWriter {
 
     fn trailing_bits(&mut self) {
         self.put_bit(1); // RBSP stop bit
-        while self.bit_pos % 8 != 0 {
+        while !self.bit_pos.is_multiple_of(8) {
             self.put_bit(0);
         }
     }
@@ -204,32 +204,33 @@ fn split_nals(data: &[u8]) -> Vec<(usize, Vec<u8>)> {
     let mut i = 0;
     while i < data.len() {
         // Look for start code
-        let sc_len;
-        if i + 3 < data.len()
+
+        let sc_len = if i + 3 < data.len()
             && data[i] == 0
             && data[i + 1] == 0
             && data[i + 2] == 0
             && data[i + 3] == 1
         {
-            sc_len = 4;
+            4
         } else if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-            sc_len = 3;
+            3
         } else {
             i += 1;
             continue;
-        }
+        };
         let nal_start = i + sc_len;
         i = nal_start;
 
         // Find next start code or end of data
         let mut nal_end = data.len();
         while i + 2 < data.len() {
-            if data[i] == 0 && data[i + 1] == 0 {
-                if (i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1) || data[i + 2] == 1
-                {
-                    nal_end = i;
-                    break;
-                }
+            if data[i] == 0
+                && data[i + 1] == 0
+                && ((i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1)
+                    || data[i + 2] == 1)
+            {
+                nal_end = i;
+                break;
             }
             i += 1;
         }

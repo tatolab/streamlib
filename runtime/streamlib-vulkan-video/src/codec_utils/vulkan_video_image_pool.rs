@@ -97,7 +97,6 @@ impl Default for VulkanVideoImagePoolNode {
                 },
                 base_array_layer: 0,
                 image_view_binding: vk::ImageView::null(),
-                ..unsafe { std::mem::zeroed() }
             },
             image_resource_view: None,
             parent: None,
@@ -111,7 +110,6 @@ impl Default for VulkanVideoImagePoolNode {
                 value: 0,
                 stage_mask: vk::PipelineStageFlags2::empty(),
                 device_index: 0,
-                ..unsafe { std::mem::zeroed() }
             },
         }
     }
@@ -127,7 +125,7 @@ impl VulkanVideoImagePoolNode {
     pub fn image_exist(&self) -> bool {
         self.image_resource_view
             .as_ref()
-            .map_or(false, |h| h.image_view != vk::ImageView::null())
+            .is_some_and(|h| h.image_view != vk::ImageView::null())
     }
 
     /// Returns `true` if the image must be (re-)created before use.
@@ -213,7 +211,6 @@ impl VulkanVideoImagePoolNode {
                             value: 0,
                             stage_mask: vk::PipelineStageFlags2::empty(),
                             device_index: 0,
-                            ..std::mem::zeroed()
                         };
                     }
                     Err(_) => {
@@ -344,7 +341,6 @@ fn empty_semaphore_submit_info() -> vk::SemaphoreSubmitInfo {
         value: 0,
         stage_mask: vk::PipelineStageFlags2::empty(),
         device_index: 0,
-        ..unsafe { std::mem::zeroed() }
     }
 }
 
@@ -688,12 +684,9 @@ impl VulkanVideoImagePool {
 
         if let Some(idx) = available_index {
             // Ensure the image is created / up-to-date.
-            if let Err(_) = Self::get_image_set_new_layout(
-                &mut inner,
-                idx,
-                new_image_layout,
-                &mut image_factory,
-            ) {
+            if Self::get_image_set_new_layout(&mut inner, idx, new_image_layout, &mut image_factory)
+                .is_err()
+            {
                 // Creation failed — put the slot back.
                 inner.available_pool_nodes |= 1u64 << idx;
                 return None;

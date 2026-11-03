@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 8
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 7
 
 
 @pytest.mark.parametrize(
@@ -50,24 +50,22 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(CameraSource, config="):
-        tatolab.stream.CameraSource()  # pyright: ignore[reportCallIssue]
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(TestPatternSource, config="):
+        tatolab.stream.TestPatternSource()  # pyright: ignore[reportCallIssue]
 
 
 @stream
-def camera_to_h264_encoder(stream_builder: tatolab.stream.StreamBuilder) -> None:
-    camera = stream_builder.add(
-        _built_in_nodes.CameraSource, config={"device_id": "/dev/video2"}
-    )
+def a_test_pattern_into_an_h264_encoder(stream_builder: tatolab.stream.StreamBuilder) -> None:
+    source = stream_builder.add(_built_in_nodes.TestPatternSource, config={"width": 640})
     encoder = stream_builder.add(_built_in_nodes.H264Encoder)
-    stream_builder.connect(camera.output("video"), encoder.input("video"))
+    stream_builder.connect(source.output("video"), encoder.input("video"))
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = compile_stream_to_graph(camera_to_h264_encoder)
+    graph = compile_stream_to_graph(a_test_pattern_into_an_h264_encoder)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
-        ("camerasource", "tatolab.stream:CameraSource"),
+        ("testpatternsource", "tatolab.stream:TestPatternSource"),
         ("h264encoder", "tatolab.stream:H264Encoder"),
     ]
-    assert graph["nodes"][0]["config"] == {"device_id": "/dev/video2"}
+    assert graph["nodes"][0]["config"] == {"width": 640}

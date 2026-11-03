@@ -21,7 +21,7 @@
     {
       "id": "golden03",
       "name": "camerasource",
-      "type": "tatolab.stream:CameraSource",
+      "type": "tatolab.camera:CameraSource",
       "config": {
         "device_id": "/dev/video0",
         "max_width": 1920,

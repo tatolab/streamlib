@@ -174,12 +174,12 @@ impl VkVideoEncoderPsnr {
         let width = self.input_width.min(self.encode_width);
         let height = self.input_height.min(self.encode_height);
         let chroma_w = if self.chroma_420 {
-            (width + 1) / 2
+            width.div_ceil(2)
         } else {
             width
         };
         let chroma_h = if self.chroma_420 {
-            (height + 1) / 2
+            height.div_ceil(2)
         } else {
             height
         };
@@ -204,7 +204,7 @@ impl VkVideoEncoderPsnr {
                 chroma_w as usize,
                 recon_u,
                 if self.chroma_420 {
-                    (self.encode_width as usize + 1) / 2
+                    (self.encode_width as usize).div_ceil(2)
                 } else {
                     self.encode_width as usize
                 },
@@ -223,7 +223,7 @@ impl VkVideoEncoderPsnr {
                 chroma_w as usize,
                 recon_v,
                 if self.chroma_420 {
-                    (self.encode_width as usize + 1) / 2
+                    (self.encode_width as usize).div_ceil(2)
                 } else {
                     self.encode_width as usize
                 },

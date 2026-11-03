@@ -106,7 +106,7 @@ macro_rules! define_bitset {
     ($name:ident, $capacity:expr) => {
         #[derive(Clone)]
         struct $name {
-            words: [u64; ($capacity + 63) / 64],
+            words: [u64; usize::div_ceil($capacity, 64)],
         }
 
         impl $name {
@@ -114,7 +114,7 @@ macro_rules! define_bitset {
 
             fn new() -> Self {
                 Self {
-                    words: [0u64; ($capacity + 63) / 64],
+                    words: [0u64; usize::div_ceil($capacity, 64)],
                 }
             }
 
@@ -353,21 +353,18 @@ impl VkParserVideoPictureParameters {
         template: Option<&VkParserVideoPictureParameters>,
     ) -> vk::Result {
         let update_type = pps_set.get_std_type();
-        let current_id: i32;
 
-        match update_type {
-            StdType::H264Sps | StdType::H264Pps => {
-                current_id = Self::populate_h264_update_fields(pps_set);
-            }
+        let current_id: i32 = match update_type {
+            StdType::H264Sps | StdType::H264Pps => Self::populate_h264_update_fields(pps_set),
             StdType::H265Vps | StdType::H265Sps | StdType::H265Pps => {
-                current_id = Self::populate_h265_update_fields(pps_set);
+                Self::populate_h265_update_fields(pps_set)
             }
             StdType::Av1Sps => {
                 // AV1 does not support template parameters (VUID-09258).
                 // template is forced to None for AV1.
-                current_id = 0;
+                0
             }
-        }
+        };
 
         // TODO: Actually call vkCreateVideoSessionParametersKHR here.
         // For now, simulate success.
@@ -415,20 +412,17 @@ impl VkParserVideoPictureParameters {
         pps_set: &dyn StdVideoPictureParametersSetIf,
     ) -> vk::Result {
         let update_type = pps_set.get_std_type();
-        let current_id: i32;
 
-        match update_type {
-            StdType::H264Sps | StdType::H264Pps => {
-                current_id = Self::populate_h264_update_fields(pps_set);
-            }
+        let current_id: i32 = match update_type {
+            StdType::H264Sps | StdType::H264Pps => Self::populate_h264_update_fields(pps_set),
             StdType::H265Vps | StdType::H265Sps | StdType::H265Pps => {
-                current_id = Self::populate_h265_update_fields(pps_set);
+                Self::populate_h265_update_fields(pps_set)
             }
             StdType::Av1Sps => {
                 debug_assert!(false, "No calls to UpdateParametersObject for AV1");
                 return vk::Result::SUCCESS;
             }
-        }
+        };
 
         self.update_count += 1;
 

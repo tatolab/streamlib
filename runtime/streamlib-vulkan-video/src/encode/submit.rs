@@ -89,7 +89,7 @@ impl SimpleEncoder {
             let is_h265 = self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H265;
             let is_reference = frame_type != FrameType::B;
 
-            if is_h265 && self.h265_encoder.is_some() {
+            if is_h265 && let Some(enc) = self.h265_encoder.as_mut() {
                 // H.265 DPB-managed path: full pipeline matching C++ VkVideoEncoderH265.cpp
                 // Call order: ReferencePictureMarking -> InitializeRPS -> DpbPictureStart
                 //   -> SetupReferencePictureListLx -> DpbPictureEnd
@@ -115,7 +115,6 @@ impl SimpleEncoder {
                     FrameType::B => 3,   // PIC_TYPE_B
                 };
 
-                let enc = self.h265_encoder.as_mut().unwrap();
                 let h265_log2_max_poc_lsb_m4 = enc.log2_max_pic_order_cnt_lsb_minus4;
                 let dpb = &mut enc.dpb;
 
@@ -239,10 +238,9 @@ impl SimpleEncoder {
                 h264_setup_slot = -1;
                 h264_ref_slot_list = Vec::new();
                 h264_ref_slot_list_l1 = Vec::new();
-            } else if is_h264 && self.h264_encoder.is_some() {
+            } else if is_h264 && let Some(enc) = self.h264_encoder.as_mut() {
                 // H.264 DPB-managed path via VkVideoEncoderH264: handles FrameNum, POC,
                 // reference list construction, sliding window, and DPB slot management.
-                let enc = self.h264_encoder.as_mut().unwrap();
                 if is_idr {
                     enc.frame_num = 0;
                     enc.poc_lsb = 0;
@@ -365,12 +363,12 @@ impl SimpleEncoder {
                         reference_slot_indices.push(idx);
                     }
                 }
-            } else if frame_type == FrameType::P || frame_type == FrameType::B {
-                if self.frame_count > 0 {
-                    let prev_slot = ((self.frame_count - 1) as usize) % self.dpb_slots.len();
-                    if self.dpb_slots[prev_slot].in_use {
-                        reference_slot_indices.push(prev_slot);
-                    }
+            } else if (frame_type == FrameType::P || frame_type == FrameType::B)
+                && self.frame_count > 0
+            {
+                let prev_slot = ((self.frame_count - 1) as usize) % self.dpb_slots.len();
+                if self.dpb_slots[prev_slot].in_use {
+                    reference_slot_indices.push(prev_slot);
                 }
             }
 
@@ -1161,8 +1159,7 @@ impl SimpleEncoder {
 
             device.reset_fences(&[self.fence])?;
             self.codec_device
-                .submit_to_queue(self.encode_queue, &[submit_info], self.fence)
-                .map_err(VideoError::from)?;
+                .submit_to_queue(self.encode_queue, &[submit_info], self.fence)?;
             device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
             // --- Query encode feedback ---

@@ -915,6 +915,10 @@ mod tests {
     fn interrupt_this_process_three_times_holding_a_helper_process_group(
         record_path: std::path::PathBuf,
     ) -> ! {
+        #[expect(
+            clippy::zombie_processes,
+            reason = "the stand-in outlives this process, which the test ends"
+        )]
         let stand_in_helper =
             crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
         let helper_process_group = stand_in_helper.id() as i32;

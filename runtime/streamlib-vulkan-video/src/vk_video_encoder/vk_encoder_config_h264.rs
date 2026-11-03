@@ -597,10 +597,10 @@ impl EncoderConfigH264 {
         if self.base.vbv_buffer_size == 0 {
             self.base.vbv_buffer_size =
                 (LEVEL_LIMITS_H264[level_idx].max_cpb * 1000).min(120_000_000);
-            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED {
-                if (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate {
-                    self.base.vbv_buffer_size = self.hrd_bitrate << 3;
-                }
+            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
+                && (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate
+            {
+                self.base.vbv_buffer_size = self.hrd_bitrate << 3;
             }
         }
 

@@ -258,22 +258,6 @@ impl HelperProcessGpuExchangeClient {
                 )
             })
     }
-
-    /// Remove an adopted surface's registration, closing the service's fd
-    /// dups. The one place the `release` op is spelled for adoptions.
-    pub(crate) fn unregister_foreign_surface(&self, surface_id: &str) -> PyResult<()> {
-        let (response, _no_fds) = self.surface_share_request(&serde_json::json!({
-            "op": "release",
-            "surface_id": surface_id,
-            "runtime_id": self.foreign_surface_registration_runtime_id,
-        }))?;
-        match response.get("success").and_then(|value| value.as_bool()) {
-            Some(true) => Ok(()),
-            _ => Err(PyRuntimeError::new_err(format!(
-                "the surface-share service did not release adopted surface {surface_id:?}"
-            ))),
-        }
-    }
 }
 
 /// The adoption round trip against a real surface-share service, at the

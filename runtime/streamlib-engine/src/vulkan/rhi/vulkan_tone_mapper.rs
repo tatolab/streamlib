@@ -745,7 +745,9 @@ mod tests {
         let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tone_curve.spv"));
         assert_eq!(spv.len() % 4, 0, "SPIR-V blob must be word-aligned");
         let words: Vec<u32> = spv
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
             .collect();
         assert_eq!(words[0], SPIRV_MAGIC, "not a SPIR-V module");

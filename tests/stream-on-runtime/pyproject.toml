@@ -18,6 +18,8 @@ dependencies = [
     "tatolab-speaker",
     # The compositor module's pixel tests run here, on this suite's runtime.
     "tatolab-compositor",
+    # The camera node the camera, cast-claim and device-exchange fixtures add.
+    "tatolab-camera",
     # The Opus nodes the codec and wiring fixtures add.
     "tatolab-opus",
     "pytest>=7.0",
@@ -51,6 +53,7 @@ tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
 tatolab-microphone = { path = "../../packages/tatolab-microphone" }
 tatolab-speaker = { path = "../../packages/tatolab-speaker" }
 tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = true }
+tatolab-camera = { path = "../../packages/tatolab-camera" }
 tatolab-opus = { path = "../../packages/tatolab-opus" }
 
 [tool.pytest.ini_options]

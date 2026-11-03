@@ -198,7 +198,7 @@ fn first_differing_pixel(actual: &[u8], expected: &[u8]) -> Option<(u32, u32, [u
         .as_chunks::<4>()
         .0
         .iter()
-        .zip(expected.chunks_exact(4))
+        .zip(expected.as_chunks::<4>().0.iter())
         .position(|(actual_pixel, expected_pixel)| actual_pixel != expected_pixel)
         .map(|pixel_index| {
             let offset = pixel_index * 4;

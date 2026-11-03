@@ -48,6 +48,8 @@ use streamlib_consumer_rhi::ConsumerVulkanDevice;
 use streamlib::sdk::rhi::PixelFormat;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod foreign_surface_adoption;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gpu_kernels;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -587,7 +589,7 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// the node's id would have its crash sweep the parent's own
     /// registrations. A child-scoped id makes the sweep exactly this
     /// child's adoptions.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     foreign_surface_registration_runtime_id: String,
     /// One connection per child, opened at first checkout. Taken out for
     /// each exchange and put back only on success, so a stream with half a

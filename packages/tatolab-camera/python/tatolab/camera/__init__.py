@@ -3,9 +3,10 @@
 
 """A camera node as an extension wheel.
 
-V4L2 capture runs on a thread in this wheel's own Rust, which hands each driver
-buffer to the engine as a DMA-BUF and has it converted to RGBA on the GPU, with
-no CPU copy. Nothing here links the engine.
+Capture runs in this wheel's own Rust — V4L2 on Linux, AVFoundation on macOS —
+which hands each capture buffer to the engine as a DMA-BUF or an IOSurface and
+has it converted to RGBA on the GPU, with no CPU copy. Nothing here links the
+engine.
 """
 
 from .camera_source import CameraSource as CameraSource

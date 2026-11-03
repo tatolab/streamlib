@@ -15,6 +15,7 @@ use super::{
     required_positive_u32_check_out_metadata_field,
 };
 
+mod foreign_iosurface;
 mod storage_buffer;
 mod texture;
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
@@ -324,7 +325,7 @@ impl HelperProcessGpuExchangeClient {
     /// per-slot cache when the service goes away — an IOSurface this helper
     /// still holds stays readable after the engine dies, so nothing else
     /// would release it.
-    fn surface_share_mach_connection(
+    pub(super) fn surface_share_mach_connection(
         &self,
     ) -> PyResult<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>> {
         let mut connection = self.surface_share_mach_connection.lock();

@@ -96,10 +96,10 @@ pub fn split_annex_b_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
         }
     }
 
-    if let Some(s) = start {
-        if s < data.len() {
-            push_nal_without_trailing_zero_bytes(&mut nals, &data[s..]);
-        }
+    if let Some(s) = start
+        && s < data.len()
+    {
+        push_nal_without_trailing_zero_bytes(&mut nals, &data[s..]);
     }
 
     nals

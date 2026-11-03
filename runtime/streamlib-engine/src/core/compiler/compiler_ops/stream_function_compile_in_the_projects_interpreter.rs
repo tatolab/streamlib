@@ -574,7 +574,7 @@ mod tests {
     fn a_compiled_graph() -> serde_json::Value {
         serde_json::json!({
             "stream": "camera-preview",
-            "nodes": [{"name": "camera", "type": "tatolab.stream:CameraSource", "config": {}}],
+            "nodes": [{"name": "camera", "type": "tatolab.stream:TestPatternSource", "config": {}}],
             "links": [],
             "exposed": [{"node": "camera", "port": "video", "level": "private"}],
         })

@@ -732,8 +732,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         std::slice::from_raw_parts(local_staging_buffer.mapped_ptr(), IMAGE_BYTES as usize)
     };
     let pixels_match = readback
-        .chunks_exact(4)
-        .all(|pixel| pixel == FILL_CONSTANT_RGBA);
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == FILL_CONSTANT_RGBA);
     let verdict: &[u8] = if pixels_match {
         b"pixels-match"
     } else {

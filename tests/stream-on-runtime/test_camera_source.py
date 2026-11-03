@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.CameraSource` — the camera built-in over the video device seam.
+"""`tatolab.camera.CameraSource` — the camera module, run from the suite project.
 
 The load test needs no device: `tatolabd` loads the graph and its start is
 then refused at the GPU. The graph test starts the engine, which initializes a GPU context,
@@ -27,7 +27,7 @@ READINESS_TIMEOUT_SECONDS = 10.0
 CAMERA_NODE_NAME = "camerasource"
 
 
-# ---- built-in class semantics (no GPU) -------------------------------------
+# ---- module class semantics (no GPU) ---------------------------------------
 
 
 def test_node_name_defaults_to_the_type_name(
@@ -40,7 +40,7 @@ def test_node_name_defaults_to_the_type_name(
     assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
-# ---- the native block in a real graph (GPU) --------------------------------
+# ---- the module in a real graph (GPU) --------------------------------------
 
 
 @pytest.mark.requires_gpu

@@ -29,9 +29,10 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
   CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
-- **Native built-ins for the parts with deadlines**: camera, test pattern, microphone,
-  speaker, H.264 / H.265 codecs, and a virtual camera on Linux — native code inside the
-  runtime, configured from Python. Opus is the `tatolab-opus` package.
+- **Native built-ins for the parts with deadlines**: test pattern, H.264 / H.265 codecs, and
+  a virtual camera on Linux — native code inside the runtime, configured from Python. The
+  camera, microphone, speaker and Opus codec are modules that move their frames and samples on
+  native threads.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
@@ -191,7 +192,7 @@ from nodes.halftone_lens_effect import HalftoneLensEffect
 def main(stream_builder: StreamBuilder) -> None:
     """The sample animation through the lens, encoded and shared; brightness logged each second."""
     # Point it at your camera: `stream_builder.add(CameraSource)`, imported
-    # from `tatolab.stream`, publishes on the same `video` port.
+    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the same `video` port.
     source = stream_builder.add(TestPatternSource)
     effect = stream_builder.add(HalftoneLensEffect)
     meter = stream_builder.add(BrightnessMeter)
@@ -207,9 +208,9 @@ def main(stream_builder: StreamBuilder) -> None:
 The effect's output has two readers: the meter measures each frame, and the encoder turns it into
 H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser plays, on this machine
 or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
-pass `name=`. Swap `TestPatternSource` for `CameraSource`, as the comment says, to run your camera
-through the same effect. A built-in's `config` is a `TypedDict` — `CameraSourceConfig`,
-`TestPatternSourceConfig` — so a type checker catches a misspelled key. `expose` without a level
+pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s `CameraSource`, as the comment says,
+to run your camera through the same effect. A built-in's `config` is a `TypedDict` —
+`TestPatternSourceConfig`, `H264EncoderConfig` — so a type checker catches a misspelled key. `expose` without a level
 makes an output private, readable by other streams and code on this machine.
 
 Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
@@ -577,7 +578,7 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Camera, test pattern, microphone, speaker, the
+**It costs you** a small set of built-ins. Test pattern, the
 H.264 / H.265 codec pairs and the virtual camera ship inside the runtime because their
 per-frame paths have deadlines a separate process cannot meet, need primitives only the
 runtime has, or present a device to other applications; everything else is a package or a node you
@@ -679,7 +680,6 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 
 | Built-in | |
 |---|---|
-| `CameraSource` | V4L2 on Linux (zero-copy DMA-BUF when the device exports it), AVFoundation on macOS (zero-copy IOSurface import). |
 | `TestPatternSource` | Color bars, for a machine with no camera. |
 | `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
@@ -687,7 +687,9 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
 `from tatolab.microphone import MicrophoneSource` and `from tatolab.speaker import SpeakerSink`.
 Each runs in its own helper process and moves its samples on a native thread over the
-engine's audio backend, so no interpreter sits in the sample path either.
+engine's audio backend, so no interpreter sits in the sample path either. The camera is one too:
+`pip install tatolab-camera`, then `from tatolab.camera import CameraSource` — V4L2 on Linux and
+AVFoundation on macOS, each frame imported to the GPU with no CPU copy.
 
 Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
 libopus linked statically into the wheel.
@@ -740,7 +742,7 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that
   `vulkaninfo` runs.
 - **No camera, or the wrong one** — the stream `tatolab new` writes starts from
-  `TestPatternSource` and needs none. `CameraSource` takes the first capture device unless its `device_id` config names one (a
+  `TestPatternSource` and needs none. `tatolab.camera.CameraSource` takes the first capture device unless its `device_id` config names one (a
   V4L2 path such as `/dev/video2` on Linux, a camera's unique ID on macOS); a named device that
   cannot be opened is refused by name.
 - **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,

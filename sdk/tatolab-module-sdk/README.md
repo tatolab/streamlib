@@ -49,6 +49,9 @@ Version 1.3 adds playback through the same backend:
 - start and stop asking a callback on the backend's device thread to fill each
   device buffer;
 - read whether the device still serves the stream, and close it.
+Version 1.4 adds the macOS twin of the DMA-BUF import: an `IOSurfaceRef`, such
+as a camera's or a decoder's, adopted as a surface written by a foreign device,
+which the colour conversion reads where it sits.
 
 Every verb is callable from any thread with no Python attached. The table carries
 plain data, opaque handles and borrowed fds only. No engine or GPU object

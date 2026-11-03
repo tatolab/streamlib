@@ -48,51 +48,9 @@ impl Default for ScalingListEntry {
 ///
 /// Corresponds to `scaling_list_s` in the C++ source.
 /// Indexed as `entry[size_id][matrix_id]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ScalingList {
     pub entry: [[ScalingListEntry; 6]; 4],
-}
-
-impl Default for ScalingList {
-    fn default() -> Self {
-        // Rust const arrays require Copy, so build manually.
-        Self {
-            entry: [
-                [
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                ],
-                [
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                ],
-                [
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                ],
-                [
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                    ScalingListEntry::default(),
-                ],
-            ],
-        }
-    }
 }
 
 /// Derive 4x4 scaling matrices from parsed scaling list data.
@@ -171,9 +129,8 @@ pub fn init_8x8_scaling_lists_h265(
                 } else {
                     if matrix_id >= 1 { 1 } else { 0 }
                 };
-                for k in 0..64 {
-                    scaling_factors[offset + k] = DEFAULT_SCALING_LIST_8X8[list_idx][k];
-                }
+                scaling_factors[offset..offset + 64]
+                    .copy_from_slice(&DEFAULT_SCALING_LIST_8X8[list_idx]);
                 if size_id >= 2 {
                     scaling_factors_dc[matrix_id] = DEFAULT_SCALING_LIST_8X8[list_idx][0];
                 }

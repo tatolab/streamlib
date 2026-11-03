@@ -543,11 +543,8 @@ impl PerFrameDecodeResources {
         let fence_info = vk::FenceCreateInfo::default();
 
         unsafe {
-            self.frame_complete_fence = device
-                .create_fence(&fence_signaled_info, None)
-                .map_err(|e| e)?;
-            self.frame_consumer_done_fence =
-                device.create_fence(&fence_info, None).map_err(|e| e)?;
+            self.frame_complete_fence = device.create_fence(&fence_signaled_info, None)?;
+            self.frame_consumer_done_fence = device.create_fence(&fence_info, None)?;
         }
 
         self.reset();

@@ -1003,15 +1003,15 @@ impl VulkanH265Decoder {
         self.picture_started = true;
         self.num_delta_pocs_of_ref_rps_idx = 0;
 
-        if slh.strps.inter_ref_pic_set_prediction_flag != 0 {
-            if let Some(ref active_sps) = self.active_sps[nuh_layer_id] {
-                let r_idx = active_sps.num_short_term_ref_pic_sets as i32
-                    - (slh.strps.delta_idx_minus1 as i32 + 1);
-                if r_idx >= 0 && (r_idx as usize) < active_sps.strpss.len() {
-                    self.num_delta_pocs_of_ref_rps_idx =
-                        active_sps.strpss[r_idx as usize].num_negative_pics as i32
-                            + active_sps.strpss[r_idx as usize].num_positive_pics as i32;
-                }
+        if slh.strps.inter_ref_pic_set_prediction_flag != 0
+            && let Some(ref active_sps) = self.active_sps[nuh_layer_id]
+        {
+            let r_idx = active_sps.num_short_term_ref_pic_sets as i32
+                - (slh.strps.delta_idx_minus1 as i32 + 1);
+            if r_idx >= 0 && (r_idx as usize) < active_sps.strpss.len() {
+                self.num_delta_pocs_of_ref_rps_idx = active_sps.strpss[r_idx as usize]
+                    .num_negative_pics as i32
+                    + active_sps.strpss[r_idx as usize].num_positive_pics as i32;
             }
         }
 
@@ -1129,13 +1129,13 @@ impl VulkanH265Decoder {
         self.dpb[cur_idx].marking = DPB_MARKING_SHORT_TERM;
 
         let nuh_layer_id = self.nuh_layer_id as usize;
-        if nuh_layer_id < MAX_VPS_LAYERS {
-            if let Some(ref active_sps) = self.active_sps[nuh_layer_id] {
-                let max_reorder = active_sps.max_num_reorder_pics as i32;
-                while self.dpb_reordering_delay() > max_reorder {
-                    if !self.dpb_bumping(self.max_dpb_size - 1) {
-                        break;
-                    }
+        if nuh_layer_id < MAX_VPS_LAYERS
+            && let Some(ref active_sps) = self.active_sps[nuh_layer_id]
+        {
+            let max_reorder = active_sps.max_num_reorder_pics as i32;
+            while self.dpb_reordering_delay() > max_reorder {
+                if !self.dpb_bumping(self.max_dpb_size - 1) {
+                    break;
                 }
             }
         }
@@ -1470,44 +1470,44 @@ impl VulkanH265Decoder {
         let mut num_active_ref_layer_pics_0 = 0i32;
         let mut num_active_ref_layer_pics_1 = 0i32;
 
-        if self.nuh_layer_id > 0 {
-            if let Some(ref vps) = self.active_vps {
-                for i in 0..slh.num_active_ref_layer_pics as usize {
-                    let layer_id_ref = slh.inter_layer_pred_layer_idc[i] as usize;
-                    let view_id_cur = vps.view_id_val[self.nuh_layer_id as usize];
-                    let view_id_zero = vps.view_id_val[0];
-                    let view_id_ref = vps.view_id_val[layer_id_ref];
+        if self.nuh_layer_id > 0
+            && let Some(ref vps) = self.active_vps
+        {
+            for i in 0..slh.num_active_ref_layer_pics as usize {
+                let layer_id_ref = slh.inter_layer_pred_layer_idc[i] as usize;
+                let view_id_cur = vps.view_id_val[self.nuh_layer_id as usize];
+                let view_id_zero = vps.view_id_val[0];
+                let view_id_ref = vps.view_id_val[layer_id_ref];
 
-                    let mut found_j = None;
-                    for j in 0..HEVC_DPB_SIZE {
-                        if self.dpb[j].layer_id as usize == layer_id_ref
-                            && self.dpb[j].state == DPB_STATE_IN_USE
-                            && self.dpb[j].marking != DPB_MARKING_UNUSED
-                            && self.dpb[j].pic_order_cnt_val == pic_order_cnt_val
-                        {
-                            found_j = Some(j);
-                            break;
-                        }
+                let mut found_j = None;
+                for j in 0..HEVC_DPB_SIZE {
+                    if self.dpb[j].layer_id as usize == layer_id_ref
+                        && self.dpb[j].state == DPB_STATE_IN_USE
+                        && self.dpb[j].marking != DPB_MARKING_UNUSED
+                        && self.dpb[j].pic_order_cnt_val == pic_order_cnt_val
+                    {
+                        found_j = Some(j);
+                        break;
                     }
+                }
 
-                    if let Some(j) = found_j {
-                        if (view_id_cur <= view_id_zero && view_id_cur <= view_id_ref)
-                            || (view_id_cur >= view_id_zero && view_id_cur >= view_id_ref)
-                        {
-                            self.ref_pic_set_inter_layer_0[num_active_ref_layer_pics_0 as usize] =
-                                j as i8;
-                            num_active_ref_layer_pics_0 += 1;
-                        } else {
-                            self.ref_pic_set_inter_layer_1[num_active_ref_layer_pics_1 as usize] =
-                                j as i8;
-                            num_active_ref_layer_pics_1 += 1;
-                        }
+                if let Some(j) = found_j {
+                    if (view_id_cur <= view_id_zero && view_id_cur <= view_id_ref)
+                        || (view_id_cur >= view_id_zero && view_id_cur >= view_id_ref)
+                    {
+                        self.ref_pic_set_inter_layer_0[num_active_ref_layer_pics_0 as usize] =
+                            j as i8;
+                        num_active_ref_layer_pics_0 += 1;
                     } else {
-                        tracing::warn!(
-                            "InterLayer reference picture not available (POC={})",
-                            pic_order_cnt_val
-                        );
+                        self.ref_pic_set_inter_layer_1[num_active_ref_layer_pics_1 as usize] =
+                            j as i8;
+                        num_active_ref_layer_pics_1 += 1;
                     }
+                } else {
+                    tracing::warn!(
+                        "InterLayer reference picture not available (POC={})",
+                        pic_order_cnt_val
+                    );
                 }
             }
         }

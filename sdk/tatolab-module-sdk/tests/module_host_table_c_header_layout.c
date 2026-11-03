@@ -95,7 +95,8 @@ _Static_assert(offsetof(ModuleHostTable, audio_playback_stream_start) == POINTER
 _Static_assert(offsetof(ModuleHostTable, audio_playback_stream_stop) == POINTER_SLOT(26), "ModuleHostTable.audio_playback_stream_stop");
 _Static_assert(offsetof(ModuleHostTable, audio_playback_stream_liveness) == POINTER_SLOT(27), "ModuleHostTable.audio_playback_stream_liveness");
 _Static_assert(offsetof(ModuleHostTable, audio_playback_stream_close) == POINTER_SLOT(28), "ModuleHostTable.audio_playback_stream_close");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(29), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, surface_import_iosurface) == POINTER_SLOT(29), "ModuleHostTable.surface_import_iosurface");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(30), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -111,8 +112,10 @@ _Static_assert(offsetof(ModuleHostTableNodeOutputTextureRequest, width) == 6 * P
 _Static_assert(sizeof(ModuleHostTableNodeOutputTextureRequest) == 6 * POINTER + 16, "ModuleHostTableNodeOutputTextureRequest size");
 _Static_assert(offsetof(ModuleHostTableColorInfo, matrix) == 4 * POINTER, "ModuleHostTableColorInfo.matrix");
 _Static_assert(sizeof(ModuleHostTableColorInfo) == 8 * POINTER, "ModuleHostTableColorInfo size");
+_Static_assert(offsetof(ModuleHostTableIOSurfaceImport, width) == 3 * POINTER, "ModuleHostTableIOSurfaceImport.width");
+_Static_assert(sizeof(ModuleHostTableIOSurfaceImport) == 3 * POINTER + 8, "ModuleHostTableIOSurfaceImport size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 3, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 4, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");

@@ -1294,10 +1294,10 @@ fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
 
     let mut hit_pixels = 0usize;
     let mut missed_pixels = 0usize;
-    for (pixel_index, pixel) in traced.chunks_exact(4).enumerate() {
-        if pixel == HIT_RGBA {
+    for (pixel_index, pixel) in traced.as_chunks::<4>().0.iter().enumerate() {
+        if *pixel == HIT_RGBA {
             hit_pixels += 1;
-        } else if pixel == MISSED_RGBA {
+        } else if *pixel == MISSED_RGBA {
             missed_pixels += 1;
         } else {
             panic!(

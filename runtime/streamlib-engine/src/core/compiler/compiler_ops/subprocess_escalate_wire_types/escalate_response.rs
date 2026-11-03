@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 /// Polyglot subprocess escalate-on-behalf response (host → subprocess)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one response per escalate round trip; boxing buys nothing measurable"
+)]
 pub(crate) enum EscalateResponse {
     #[serde(rename = "err")]
     Err(EscalateResponseErr),

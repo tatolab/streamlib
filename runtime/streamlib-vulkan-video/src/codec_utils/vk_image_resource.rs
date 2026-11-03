@@ -341,7 +341,7 @@ impl VkImageResource {
     pub fn is_exportable(&self) -> bool {
         self.device_memory
             .as_ref()
-            .map_or(false, |m| !m.export_handle_types.is_empty())
+            .is_some_and(|m| !m.export_handle_types.is_empty())
     }
 
     pub fn get_drm_format_modifier(&self) -> u64 {
@@ -411,7 +411,7 @@ impl VkImageResource {
 
         let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
             .memory(mem_info.memory)
-            .handle_type(handle_type.into());
+            .handle_type(handle_type);
 
         // Safety: the caller guarantees the device and memory are valid.
         let fd = unsafe {
@@ -449,7 +449,7 @@ impl VkImageResource {
 
             // Retrieve actual memory property flags from the chosen memory type.
             let mem_props = allocator.get_memory_properties();
-            let memory_type_index = alloc_info.memoryType as u32;
+            let memory_type_index = alloc_info.memoryType;
             let actual_flags = mem_props.memory_types[memory_type_index as usize].property_flags;
 
             let device_memory_info = DeviceMemoryInfo {
@@ -636,72 +636,68 @@ impl VkImageResource {
             }
 
             // NVIDIA WORKAROUND: If MEMORY_PLANE_1+ returned zeros, calculate offsets
-            if let Some(mp_info) = ycbcr_vk_format_info(format) {
-                if self.memory_plane_count >= 2
-                    && self.memory_plane_layouts[1].size == 0
-                    && self.memory_plane_layouts[1].row_pitch == 0
+            if let Some(mp_info) = ycbcr_vk_format_info(format)
+                && self.memory_plane_count >= 2
+                && self.memory_plane_layouts[1].size == 0
+                && self.memory_plane_layouts[1].row_pitch == 0
+            {
+                let width = self.image_create_info.extent.width;
+                let height = self.image_create_info.extent.height;
+                let bytes_per_pixel: u64 = if mp_info.planes_layout.bpp == YcbcrBpp::Bpp8 {
+                    1
+                } else {
+                    2
+                };
+
+                // Plane 0 (Y): Full resolution
+                if self.memory_plane_layouts[0].row_pitch == 0 {
+                    self.memory_plane_layouts[0].row_pitch = width as u64 * bytes_per_pixel;
+                }
+                if self.memory_plane_layouts[0].size == 0 {
+                    self.memory_plane_layouts[0].size =
+                        self.memory_plane_layouts[0].row_pitch * height as u64;
+                }
+                self.memory_plane_layouts[0].offset = 0;
+
+                // Plane 1 (UV/CbCr): Subsampled based on format
+                let chroma_width = if mp_info.planes_layout.secondary_plane_subsampled_x {
+                    width.div_ceil(2)
+                } else {
+                    width
+                };
+                let chroma_height = if mp_info.planes_layout.secondary_plane_subsampled_y {
+                    height.div_ceil(2)
+                } else {
+                    height
+                };
+
+                // For semi-planar (NV12, P010, etc.), UV plane has 2 components interleaved
+                let uv_bytes_per_pixel = bytes_per_pixel * 2;
+
+                self.memory_plane_layouts[1].offset = self.memory_plane_layouts[0].size;
+                self.memory_plane_layouts[1].row_pitch = chroma_width as u64 * uv_bytes_per_pixel;
+                self.memory_plane_layouts[1].size =
+                    self.memory_plane_layouts[1].row_pitch * chroma_height as u64;
+                self.memory_plane_layouts[1].array_pitch = 0;
+                self.memory_plane_layouts[1].depth_pitch = 0;
+
+                // For 3-plane formats (I420, etc.)
+                if self.memory_plane_count >= 3
+                    && self.memory_plane_layouts[2].size == 0
+                    && self.memory_plane_layouts[2].row_pitch == 0
                 {
-                    let width = self.image_create_info.extent.width;
-                    let height = self.image_create_info.extent.height;
-                    let bytes_per_pixel: u64 = if mp_info.planes_layout.bpp == YcbcrBpp::Bpp8 {
-                        1
-                    } else {
-                        2
-                    };
-
-                    // Plane 0 (Y): Full resolution
-                    if self.memory_plane_layouts[0].row_pitch == 0 {
-                        self.memory_plane_layouts[0].row_pitch = width as u64 * bytes_per_pixel;
-                    }
-                    if self.memory_plane_layouts[0].size == 0 {
-                        self.memory_plane_layouts[0].size =
-                            self.memory_plane_layouts[0].row_pitch * height as u64;
-                    }
-                    self.memory_plane_layouts[0].offset = 0;
-
-                    // Plane 1 (UV/CbCr): Subsampled based on format
-                    let chroma_width = if mp_info.planes_layout.secondary_plane_subsampled_x {
-                        (width + 1) / 2
-                    } else {
-                        width
-                    };
-                    let chroma_height = if mp_info.planes_layout.secondary_plane_subsampled_y {
-                        (height + 1) / 2
-                    } else {
-                        height
-                    };
-
-                    // For semi-planar (NV12, P010, etc.), UV plane has 2 components interleaved
-                    let uv_bytes_per_pixel = bytes_per_pixel * 2;
-
-                    self.memory_plane_layouts[1].offset = self.memory_plane_layouts[0].size;
-                    self.memory_plane_layouts[1].row_pitch =
-                        chroma_width as u64 * uv_bytes_per_pixel;
+                    // Cb and Cr are separate planes, each single component
+                    self.memory_plane_layouts[1].row_pitch = chroma_width as u64 * bytes_per_pixel;
                     self.memory_plane_layouts[1].size =
                         self.memory_plane_layouts[1].row_pitch * chroma_height as u64;
-                    self.memory_plane_layouts[1].array_pitch = 0;
-                    self.memory_plane_layouts[1].depth_pitch = 0;
 
-                    // For 3-plane formats (I420, etc.)
-                    if self.memory_plane_count >= 3
-                        && self.memory_plane_layouts[2].size == 0
-                        && self.memory_plane_layouts[2].row_pitch == 0
-                    {
-                        // Cb and Cr are separate planes, each single component
-                        self.memory_plane_layouts[1].row_pitch =
-                            chroma_width as u64 * bytes_per_pixel;
-                        self.memory_plane_layouts[1].size =
-                            self.memory_plane_layouts[1].row_pitch * chroma_height as u64;
-
-                        self.memory_plane_layouts[2].offset =
-                            self.memory_plane_layouts[1].offset + self.memory_plane_layouts[1].size;
-                        self.memory_plane_layouts[2].row_pitch =
-                            chroma_width as u64 * bytes_per_pixel;
-                        self.memory_plane_layouts[2].size =
-                            self.memory_plane_layouts[2].row_pitch * chroma_height as u64;
-                        self.memory_plane_layouts[2].array_pitch = 0;
-                        self.memory_plane_layouts[2].depth_pitch = 0;
-                    }
+                    self.memory_plane_layouts[2].offset =
+                        self.memory_plane_layouts[1].offset + self.memory_plane_layouts[1].size;
+                    self.memory_plane_layouts[2].row_pitch = chroma_width as u64 * bytes_per_pixel;
+                    self.memory_plane_layouts[2].size =
+                        self.memory_plane_layouts[2].row_pitch * chroma_height as u64;
+                    self.memory_plane_layouts[2].array_pitch = 0;
+                    self.memory_plane_layouts[2].depth_pitch = 0;
                 }
             }
         }
@@ -730,7 +726,7 @@ impl VkImageResource {
         self.query_format_flags_from_mp_info(&mp_info);
 
         // External/non-owning wrapper has no device memory — skip host-visible queries
-        let is_host_visible = self.device_memory.as_ref().map_or(false, |m| {
+        let is_host_visible = self.device_memory.as_ref().is_some_and(|m| {
             m.memory_property_flags
                 .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
         });
@@ -840,10 +836,10 @@ impl VkImageResource {
                     if self.image != vk::Image::null() {
                         self.device.destroy_image(self.image, None);
                     }
-                    if let Some(ref mem) = self.device_memory {
-                        if mem.memory != vk::DeviceMemory::null() {
-                            self.device.free_memory(mem.memory, None);
-                        }
+                    if let Some(ref mem) = self.device_memory
+                        && mem.memory != vk::DeviceMemory::null()
+                    {
+                        self.device.free_memory(mem.memory, None);
                     }
                 }
             }
@@ -1046,16 +1042,14 @@ impl VkImageResourceView {
         let mut usage_create_info =
             vk::ImageViewUsageCreateInfo::builder().usage(plane_usage_override);
 
-        if !skip_combined_view {
-            if mp_info.is_some() {
-                let mut combined_usage = image_usage;
-                combined_usage &= !(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED);
-                if combined_usage.is_empty() {
-                    skip_combined_view = true;
-                } else {
-                    usage_create_info = usage_create_info.usage(combined_usage);
-                    view_info = view_info.push_next(&mut usage_create_info);
-                }
+        if !skip_combined_view && mp_info.is_some() {
+            let mut combined_usage = image_usage;
+            combined_usage &= !(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED);
+            if combined_usage.is_empty() {
+                skip_combined_view = true;
+            } else {
+                usage_create_info = usage_create_info.usage(combined_usage);
+                view_info = view_info.push_next(&mut usage_create_info);
             }
         }
 

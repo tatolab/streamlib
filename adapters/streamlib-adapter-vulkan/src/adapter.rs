@@ -43,6 +43,12 @@ use streamlib_consumer_rhi::VulkanLayout;
 use crate::state::{HostSurfaceRegistration, SurfaceState};
 use crate::view::{VulkanReadView, VulkanWriteView};
 
+/// The `consume_done` timeline a releasing reader signals, and the value it signals.
+type ConsumeDoneSignal<D> = (
+    Arc<<<D as VulkanRhiDevice>::Privilege as DevicePrivilege>::TimelineSemaphore>,
+    u64,
+);
+
 /// Default per-acquire timeline-wait timeout. Long enough to cover any
 /// realistic compositor queue; short enough that a deadlock turns into
 /// an `AdapterError::SyncTimeout` rather than wedging the consumer.
@@ -632,21 +638,17 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
         // can wait on it before re-writing. Inner Option: `None` means
         // "not the last reader, skip signal". Outer Option: `None`
         // means "surface raced an unregister".
-        let signal: Option<
-            Option<(
-                Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
-                u64,
-            )>,
-        > = self.surfaces.with_mut(surface_id, |state| {
-            debug_assert!(state.read_holders > 0, "read release without acquire");
-            state.dec_read_holders();
-            if state.read_holders > 0 {
-                return None;
-            }
-            let next = state.next_signal_value();
-            state.current_signal_value = next;
-            Some((Arc::clone(&state.consume_done), next))
-        });
+        let signal: Option<Option<ConsumeDoneSignal<D>>> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.read_holders > 0, "read release without acquire");
+                state.dec_read_holders();
+                if state.read_holders > 0 {
+                    return None;
+                }
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                Some((Arc::clone(&state.consume_done), next))
+            });
         let signal = match signal {
             Some(s) => s,
             None => {

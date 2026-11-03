@@ -21,6 +21,10 @@ pub mod vk_encoder_dpb_av1;
 pub mod vk_encoder_dpb_h264;
 pub mod vk_encoder_dpb_h265;
 pub mod vk_encoder_h264;
+#[expect(
+    clippy::module_inception,
+    reason = "module names follow the nvpro-samples sources they port"
+)]
 pub mod vk_video_encoder;
 pub mod vk_video_encoder_av1;
 pub mod vk_video_encoder_h264;

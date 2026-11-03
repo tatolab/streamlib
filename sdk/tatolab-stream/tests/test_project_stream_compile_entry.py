@@ -824,7 +824,7 @@ def test_an_entry_that_defines_no_stream_is_a_project_with_no_stream_and_a_sampl
 
     assert "stream.py` defines no @stream function" in message
     assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
-    assert "stream_builder.add(CameraSource)" in message
+    assert "stream_builder.add(TestPatternSource)" in message
     assert "-f <file>" not in message
 
 

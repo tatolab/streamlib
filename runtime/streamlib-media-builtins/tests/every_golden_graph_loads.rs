@@ -24,20 +24,20 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0011-every-key-every-built-in-and-the-audio-and-opus-modules.json",
-        "11f3985b4b8c1fc288ccb7d2387759e1c243e98550f9ddd9da24cadd64b3fc0f",
+        "0015-every-key-every-built-in-and-the-audio-camera-and-opus-modules.json",
+        "bd0ade9c6386a1ebdec74a31023ee3f3c863645cb1339352ff07ff0e38c9eb19",
     ),
     (
-        "0012-every-key-with-exposure-levels-and-the-audio-and-opus-modules.json",
-        "f427ca66e328f8023573a79de14cb921bbed976ca661c402e07a039f041599bb",
+        "0016-every-key-with-exposure-levels-and-the-audio-camera-and-opus-modules.json",
+        "7815007feaeca43f50c328433ae0f48652409c570e32291f9d5fb6bfad8f39b2",
     ),
     (
-        "0013-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-and-opus-modules.json",
-        "a562cb735c0beb7a1144d250ce57c3c789a062e2dfedd67c0a855830c035e330",
+        "0017-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-and-opus-modules.json",
+        "57a43d8fa90c7c1f7f314fed7aac497757be9dbb12e0b00cc1872d1f2dbe0555",
     ),
     (
-        "0014-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-and-opus-modules.json",
-        "342e9b72ce48c8106a0fc373339338e8a3b880db1132104b93626ce4d4fad31c",
+        "0018-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-and-opus-modules.json",
+        "82e4bc7f63959da1d80b41fe39fc009e95e152c697bbdb2892734532b4133256",
     ),
 ];
 
@@ -199,6 +199,7 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
     for path in golden_graph_paths() {
         let node_types = node_types_in(&golden_graph_document(&path));
         for module_node_type in [
+            "tatolab.camera:CameraSource",
             "tatolab.microphone:MicrophoneSource",
             "tatolab.speaker:SpeakerSink",
             "tatolab.opus:OpusEncoder",

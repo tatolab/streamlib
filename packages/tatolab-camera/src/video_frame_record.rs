@@ -4,7 +4,7 @@
 //! The `VideoFrame` message this camera publishes: the msgpack map
 //! `tatolab.stream.VideoFrame.from_bytes` reads.
 
-use crate::v4l2_colour_description::CapturedFrameColourDescription;
+use crate::captured_frame_colour_description::CapturedFrameColourDescription;
 
 /// One converted frame, named by the surface its pixels sit in.
 #[derive(Debug, Clone, Copy)]

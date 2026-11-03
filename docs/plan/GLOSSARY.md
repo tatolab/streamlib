@@ -66,10 +66,10 @@ also brings a capability.
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
-**Built-in**: a first-party native processor shipped inside the runtime, never on pip (camera,
-display, audio, the seven codec blocks, the virtual camera) — added and configured from
+**Built-in**: a first-party native processor shipped inside the runtime, never on pip (display,
+audio, the seven codec blocks, the virtual camera) — added and configured from
 Python through the class `tatolab.stream` carries generated for it, its type that class's import
-path (`tatolab.stream:CameraSource`), never where its native code lives; its per-frame path
+path (`tatolab.stream:TestPatternSource`), never where its native code lives; its per-frame path
 never enters an interpreter. Since the 2026-09-04 extension-model pivot, not the default home
 for a first-party capability: a new built-in must meet the criterion in §Packages & extension
 model — a deadline the interpreter hop cannot meet, an engine-only primitive, or an OS-facing

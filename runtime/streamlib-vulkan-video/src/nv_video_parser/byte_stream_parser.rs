@@ -474,7 +474,7 @@ mod tests {
         parser.parse_byte_stream(&pck2).unwrap();
         // Now we should have two NALUs: one from the start code boundary,
         // one flushed by EOP.
-        assert!(parser.completed_nalus.len() >= 1);
+        assert!(!parser.completed_nalus.is_empty());
     }
 
     #[test]

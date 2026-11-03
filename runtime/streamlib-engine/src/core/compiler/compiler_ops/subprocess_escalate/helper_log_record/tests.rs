@@ -303,8 +303,7 @@ fn cross_language_source_seq_monotonic_within_source() {
     // strictly increases, which is the stronger property — the
     // contract only requires non-decreasing.
     const ROUNDS: u64 = 16;
-    let mut py_seq = 0u64;
-    for _ in 0..ROUNDS {
+    for py_seq in 0..ROUNDS {
         tracing::info!(round = py_seq, "rust-merged");
         std::thread::sleep(Duration::from_micros(50));
 
@@ -323,7 +322,6 @@ fn cross_language_source_seq_monotonic_within_source() {
             attrs: HashMap::new(),
         };
         dispatch_log(py_log);
-        py_seq += 1;
         std::thread::sleep(Duration::from_micros(50));
     }
 
