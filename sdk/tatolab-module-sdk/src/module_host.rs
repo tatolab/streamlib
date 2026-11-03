@@ -14,9 +14,9 @@ use crate::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
     ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableStatus,
-    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableErrorMessage, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
+    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 /// Why the module host table, or one of its verbs, refused.
@@ -377,6 +377,43 @@ impl ModuleHost {
         })
     }
 
+    /// Adopt a foreign IOSurface as a surface the graph can resolve: the
+    /// `IOSurfaceRef` stays the caller's, and the host keeps its own reference
+    /// for as long as the returned surface lives. macOS only.
+    pub fn import_iosurface(
+        &self,
+        iosurface: &ModuleHostForeignIOSurface<'_>,
+    ) -> Result<ModuleHostSurface, ModuleHostError> {
+        if iosurface.iosurface.is_null() {
+            return Err(ModuleHostError::VerbRefused {
+                verb: "surface_import_iosurface",
+                refusal: "an IOSurface import names a null IOSurfaceRef".to_string(),
+            });
+        }
+        let iosurface_import = ModuleHostTableIOSurfaceImport {
+            iosurface: iosurface.iosurface,
+            pixel_format: ModuleHostTableUtf8::of(iosurface.pixel_format),
+            width: iosurface.width,
+            height: iosurface.height,
+        };
+        let mut imported_surface = ModuleHostTableSurfaceHandle { value: 0 };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`.
+        let status = unsafe {
+            (self.module_host_table.surface_import_iosurface)(
+                self.module_host_table.node_host,
+                &iosurface_import,
+                &mut imported_surface,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_import_iosurface", status, &error_message)?;
+        Ok(ModuleHostSurface {
+            module_host: self.clone(),
+            handle: imported_surface,
+        })
+    }
+
     /// Take the next texture out of the node output pool `pool_key`.
     pub fn acquire_texture_from_node_output_pool(
         &self,
@@ -486,6 +523,17 @@ pub struct ModuleHostForeignDmaBuf<'description> {
     pub plane_strides_bytes: &'description [u64],
     /// `0`, `DRM_FORMAT_MOD_LINEAR`: the only layout a plane stride describes.
     pub drm_format_modifier: u64,
+}
+
+/// A foreign IOSurface as [`ModuleHost::import_iosurface`] adopts it.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostForeignIOSurface<'description> {
+    /// An `IOSurfaceRef`, live for the length of the call.
+    pub iosurface: *const std::ffi::c_void,
+    /// A pixel format wire name, such as `nv12_video_range`.
+    pub pixel_format: &'description str,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// What [`ModuleHost::acquire_texture_from_node_output_pool`] takes a texture by.

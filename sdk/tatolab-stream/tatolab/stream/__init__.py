@@ -22,8 +22,6 @@ from . import catalog as catalog
 from . import clock as clock
 from . import log as log
 from . import msgpack as msgpack
-from ._built_in_nodes import CameraSource as CameraSource
-from ._built_in_nodes import CameraSourceConfig as CameraSourceConfig
 from ._built_in_nodes import H264Decoder as H264Decoder
 from ._built_in_nodes import H264DecoderConfig as H264DecoderConfig
 from ._built_in_nodes import H264Encoder as H264Encoder
@@ -118,8 +116,6 @@ __all__ = [
     "AccelerationStructureHandle",
     "AudioBlock",
     "AudioWindowContract",
-    "CameraSource",
-    "CameraSourceConfig",
     "CastFromMessagePayloadBytes",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",

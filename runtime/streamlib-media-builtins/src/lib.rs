@@ -11,7 +11,6 @@
 
 pub mod audio_block;
 pub mod audio_window_to_encoded_packet_encoder;
-pub mod camera_source;
 pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
 pub mod encoded_frame_to_published_surface_decoder;
@@ -41,7 +40,6 @@ pub mod virtual_camera_sink;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
-pub use camera_source::{CameraSource, CameraSourceConfig};
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use h264_decoder::H264Decoder;
 pub use h264_encoder::H264Encoder;
@@ -68,6 +66,11 @@ const BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY: &[(&str, &str)] =
 /// name, with the module's node type and the distribution that installs it.
 const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
     (
+        "CameraSource",
+        "tatolab.camera:CameraSource",
+        "tatolab-camera",
+    ),
+    (
         "MicrophoneSource",
         "tatolab.microphone:MicrophoneSource",
         "tatolab-microphone",
@@ -87,7 +90,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
-    PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
@@ -161,7 +163,10 @@ mod built_in_node_type_tests {
     fn every_built_in_is_registered_as_its_authored_name_in_the_stream_package() {
         let built_ins = every_built_in_registered_on_this_floor();
 
-        assert!(built_ins.contains(&camera_source::CameraSource::processor_class_import_path()));
+        assert!(
+            built_ins
+                .contains(&test_pattern_source::TestPatternSource::processor_class_import_path())
+        );
         let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
             .registered_processor_class_import_paths()
             .into_iter()
@@ -186,7 +191,6 @@ mod built_in_node_type_tests {
             mime: Some("application/msgpack".to_string()),
         });
         for (class_name, output_port) in [
-            ("CameraSource", "video"),
             ("TestPatternSource", "video"),
             ("H264Decoder", "video"),
             ("H265Decoder", "video"),
@@ -268,10 +272,15 @@ mod built_in_node_type_tests {
     /// A graph recorded before a built-in moved to a module names its former
     /// type, and is refused naming the module's type and what to install.
     #[test]
-    fn the_former_audio_built_ins_are_refused_naming_the_module_to_install() {
+    fn the_former_camera_and_audio_built_ins_are_refused_naming_the_module_to_install() {
         register_media_builtin_processor_types();
 
         for (former_class_name, module_node_type, module_distribution) in [
+            (
+                "CameraSource",
+                "tatolab.camera:CameraSource",
+                "tatolab-camera",
+            ),
             (
                 "MicrophoneSource",
                 "tatolab.microphone:MicrophoneSource",

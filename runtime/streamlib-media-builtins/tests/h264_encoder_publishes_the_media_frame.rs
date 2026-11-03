@@ -3,7 +3,7 @@
 
 #![cfg(target_os = "linux")]
 
-//! Camera → `H264Encoder` in a real graph: frames leave as the media frames a
+//! Test pattern → `H264Encoder` in a real graph: frames leave as the media frames a
 //! moq-dev player reads — a varint timestamp then an Annex-B access unit, a
 //! keyframe opening a group — under a catalog entry naming the codec string
 //! the stream's own SPS spells.
@@ -15,9 +15,8 @@
 //! publishing what a player reads.
 //!
 //! Rig-tier by construction, not by choice: starting the `App`'s stream
-//! brings up a real `GpuContext`, the mint needs a Vulkan Video encode queue,
-//! and the source needs a `/dev/video*` capture device (vivid acceptable) —
-//! so CI compiles this binary and the rig runs it.
+//! brings up a real `GpuContext` and the mint needs a Vulkan Video encode
+//! queue, so CI compiles this binary and the rig runs it.
 
 #[path = "../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
 mod rig_only_capability_skip;
@@ -31,15 +30,17 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib::sdk::iceoryx2::MessageGroupBoundary;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ReactiveProcessor};
-use streamlib_media_builtins::{CameraSource, H264Encoder, register_media_builtin_processor_types};
+use streamlib_media_builtins::{
+    H264Encoder, TestPatternSource, register_media_builtin_processor_types,
+};
 
-/// How long a processor may take to open the camera, bring up the GPU, and
+/// How long a processor may take to bring up the GPU and
 /// reach Running.
 const READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The run is bounded by observation, not wall time: the IDR cadence is
 /// `keyframe_interval_seconds × the session's fps` counted in *encoded
-/// frames*, and the session's fps is whatever the camera negotiated — so a
+/// frames*, and the session's fps is whatever the source states — so a
 /// wall-clock run length proves nothing about how many sync points landed.
 /// The graph runs until this many media frames and this many keyframes are
 /// collected, under a generous cap.
@@ -153,7 +154,7 @@ fn h264_nal_unit_types(access_unit: &[u8]) -> Vec<u8> {
     nal_unit_types
 }
 
-/// A camera's frames leave the graph as media frames a player reads: the
+/// A source's frames leave the graph as media frames a player reads: the
 /// varint carries the envelope's stamp in microseconds, a keyframe and only a
 /// keyframe opens a group and carries its parameter sets, and the port's
 /// catalog entry names the codec string the SPS spells.
@@ -162,15 +163,8 @@ fn h264_nal_unit_types(access_unit: &[u8]) -> Vec<u8> {
 /// flag then no longer tracks the IDRs, and the keyframe assertion below is
 /// what notices.
 #[test]
-fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
-    use streamlib::sdk::context::probe_video_device_backend;
-    let this_machine_has_a_camera = probe_video_device_backend()
-        .list_capture_devices()
-        .is_ok_and(|cameras| !cameras.is_empty());
+fn source_frames_leave_the_graph_as_media_frames_a_player_reads() {
     if rig_only_capability_skip::skip_unless_this_machine_has(
-        rig_only_capability_skip::RigOnlyCapability::Camera,
-        this_machine_has_a_camera,
-    ) || rig_only_capability_skip::skip_unless_this_machine_has(
         rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
         streamlib::sdk::engine::host_rhi::HostVulkanDevice::new()
             .expect("a Vulkan device comes up on this machine")
@@ -182,13 +176,13 @@ fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
 
     let project_directory = tempfile::tempdir().expect("a project directory");
     let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
-    let camera = app
+    let source = app
         .add(
-            CameraSource::Processor::processor_class_import_path(),
+            TestPatternSource::Processor::processor_class_import_path(),
             serde_json::json!({}),
-            Some("camera"),
+            Some("source"),
         )
-        .expect("the camera");
+        .expect("the test pattern");
     let encoder = app
         .add(
             H264Encoder::Processor::processor_class_import_path(),
@@ -203,8 +197,8 @@ fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
             Some("collector"),
         )
         .expect("the collector");
-    app.connect((&camera, "video"), (&encoder, "video"))
-        .expect("the camera to the encoder");
+    app.connect((&source, "video"), (&encoder, "video"))
+        .expect("the test pattern to the encoder");
     app.connect((&encoder, "encoded_video"), (&collector, "encoded_video"))
         .expect("the encoder to the collector");
 
@@ -234,8 +228,7 @@ fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
     };
     let stop_outcome = app.stream().stop();
 
-    // Readiness covers setup only — the camera opening its device and the
-    // GPU bring-up. The lazy session mint happens in the first process()
+    // Readiness covers setup only — the GPU bring-up. The lazy session mint happens in the first process()
     // and a failed mint leaves the processor Running; what notices it is
     // the collected stream staying empty below.
     readiness.expect("every processor must reach Running");
@@ -249,7 +242,7 @@ fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
     );
     assert!(
         enough_was_collected,
-        "a camera run must land {ENOUGH_COLLECTED_MEDIA_FRAMES} media frames carrying \
+        "a run must land {ENOUGH_COLLECTED_MEDIA_FRAMES} media frames carrying \
          {ENOUGH_SYNC_POINTS} keyframes inside {COLLECTION_TIMEOUT:?}; got {} frames with {} \
          keyframes — an encoder whose session mint failed leaves this stream empty",
         observations.collected.len(),
@@ -333,6 +326,6 @@ fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
     let opening_access_unit_bytes = observations.collected[0].annex_b_access_unit_bytes.len();
     assert!(
         opening_access_unit_bytes > 1_000,
-        "an IDR of a camera frame is KBs, got {opening_access_unit_bytes} bytes"
+        "an IDR of a 720p frame is KBs, got {opening_access_unit_bytes} bytes"
     );
 }

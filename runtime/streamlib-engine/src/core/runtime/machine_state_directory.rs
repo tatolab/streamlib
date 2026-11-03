@@ -820,7 +820,7 @@ mod tests {
             },
             serde_json::json!({
                 "stream": function,
-                "nodes": [{"name": "camera", "type": "tatolab.stream:CameraSource", "config": {}}],
+                "nodes": [{"name": "camera", "type": "tatolab.stream:TestPatternSource", "config": {}}],
                 "links": [],
                 "exposed": [{"node": "camera", "port": "video", "level": "private"}],
             }),
@@ -890,7 +890,7 @@ mod tests {
             "interpreter": record.interpreter,
             "graph": {
                 "stream": "preview",
-                "nodes": [{"name": "camera", "type": "tatolab.stream:CameraSource", "config": {}}],
+                "nodes": [{"name": "camera", "type": "tatolab.stream:TestPatternSource", "config": {}}],
                 "links": [],
                 "exposed": [{"node": "camera", "port": "video", "level": "private"}],
             },
@@ -1320,7 +1320,7 @@ mod tests {
         serde_json::json!({
             "stream": "main",
             "nodes": [
-                {"name": "Camera", "type": "tatolab.stream:CameraSource"},
+                {"name": "Camera", "type": "tatolab.stream:TestPatternSource"},
                 {"name": "display", "type": "tatolab.stream:DisplaySink"}
             ],
             "links": [],
