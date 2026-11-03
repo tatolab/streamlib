@@ -8,7 +8,7 @@
 
 use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
-use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestColorInfoAxisNames, EscalateRequestConvertSurfaceInto,
     EscalateRequestReleaseHandle,
@@ -183,7 +183,7 @@ fn convert_through_the_escalate_op(
     let response = handle_escalate_op(
         &GpuContextLimitedAccess::new(gpu.clone()),
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ConvertSurfaceInto(EscalateRequestConvertSurfaceInto {
             request_id: "convert-1".into(),
             source_surface_id: source_surface_id.into(),
@@ -331,7 +331,7 @@ fn an_adopted_allocation_converts_through_the_padded_layout_its_registration_sta
     let released = handle_escalate_op(
         &GpuContextLimitedAccess::new(gpu.clone()),
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "release-1".into(),
             handle_id: source_id.clone(),

@@ -91,6 +91,8 @@ pub struct RuntimeContext {
     #[cfg(target_os = "macos")]
     surface_share_mach_service_rendezvous:
         crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
+    /// The native services the runtime's host offered every node.
+    shared_native_services: Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
     /// The loaded stream this context serves.
     loaded_stream: Arc<LoadedStreamARuntimeContextBelongsTo>,
 }
@@ -108,6 +110,9 @@ impl RuntimeContext {
         #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
         #[cfg(target_os = "macos")]
         surface_share_mach_service_rendezvous: crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
+        shared_native_services: Arc<
+            crate::core::shared_native_services::SharedNativeServicesOfTheEngine,
+        >,
         loaded_stream: Arc<LoadedStreamARuntimeContextBelongsTo>,
     ) -> Self {
         Self {
@@ -127,8 +132,16 @@ impl RuntimeContext {
             surface_socket_path,
             #[cfg(target_os = "macos")]
             surface_share_mach_service_rendezvous,
+            shared_native_services,
             loaded_stream,
         }
+    }
+
+    /// The native services the runtime's host offered every node.
+    pub(crate) fn shared_native_services(
+        &self,
+    ) -> &Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine> {
+        &self.shared_native_services
     }
 
     /// Current platform name.
@@ -303,6 +316,7 @@ impl RuntimeContext {
             surface_share_mach_service_rendezvous: self
                 .surface_share_mach_service_rendezvous
                 .clone(),
+            shared_native_services: Arc::clone(&self.shared_native_services),
             loaded_stream: Arc::clone(&self.loaded_stream),
         }
     }
@@ -328,6 +342,7 @@ impl RuntimeContext {
             surface_share_mach_service_rendezvous: self
                 .surface_share_mach_service_rendezvous
                 .clone(),
+            shared_native_services: Arc::clone(&self.shared_native_services),
             loaded_stream: Arc::clone(&self.loaded_stream),
         }
     }

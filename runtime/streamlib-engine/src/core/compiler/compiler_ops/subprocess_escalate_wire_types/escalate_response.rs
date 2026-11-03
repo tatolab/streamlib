@@ -95,6 +95,11 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) dtype: Option<String>,
 
+    /// The Unix socket a leased shared native service accepts on. Set on
+    /// `acquire_shared_native_service_lease` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) endpoint_socket_path: Option<String>,
+
     /// Lowercase hex of the exporting Vulkan device's
     /// `VkPhysicalDeviceIDProperties::deviceUUID` (32 characters, no
     /// separators). Set on `open_device_export_staging` responses. The external
@@ -112,6 +117,17 @@ pub(crate) struct EscalateResponseOk {
     /// responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) height: Option<u32>,
+
+    /// Why a leased shared native service failed for good. Set alongside a
+    /// `failed` state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shared_native_service_failure: Option<String>,
+
+    /// `running`, `starting_again` or `failed`. Set on
+    /// `acquire_shared_native_service_lease` and
+    /// `read_shared_native_service_lease_state` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shared_native_service_state: Option<String>,
 
     /// Dimensions of the acquired tensor storage buffer, outermost first. Set
     /// on `acquire_storage_buffer` responses.
@@ -139,6 +155,12 @@ pub(crate) struct EscalateResponseOk {
     /// the reply, and the subprocess waits on nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) timeline_value: Option<String>,
+
+    /// The stream a shared native service lease was granted to, which the
+    /// service keeps that stream's state apart by. Set on
+    /// `acquire_shared_native_service_lease` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tenant_stream_id: Option<String>,
 
     /// Resolved usage tokens (set on acquire_texture responses). Array reflects
     /// the exact flags the host honored.

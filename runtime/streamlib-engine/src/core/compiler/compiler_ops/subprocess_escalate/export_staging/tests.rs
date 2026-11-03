@@ -13,7 +13,7 @@
 
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::{handle_escalate_op, request_id};
-use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestOpenCpuReadbackStaging, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection,
@@ -68,7 +68,7 @@ fn an_unresolvable_surface_is_refused_by_name_and_never_by_a_missing_bridge() {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             request,
         )
         .expect("every readback op produces a response");
@@ -120,7 +120,7 @@ fn the_seam_lands_a_frames_pixels_in_cpu_readable_memory() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-seam-read".into(),
             surface_id: surface_id.clone(),
@@ -177,7 +177,7 @@ fn the_seam_refuses_to_publish_a_staging_no_frame_was_read_into() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-seam-write".into(),
             surface_id: pool_id.to_string(),
@@ -221,7 +221,7 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     let read = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-read".into(),
             surface_id: surface_id.clone(),
@@ -247,7 +247,7 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     let published = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-publish".into(),
             surface_id: surface_id.clone(),
@@ -303,7 +303,7 @@ fn the_seam_uploads_a_whole_staging_without_a_read_in() {
     let uploaded = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-upload".into(),
             surface_id: surface_id.clone(),
@@ -346,7 +346,7 @@ fn the_open_op_names_itself_and_not_its_device_export_twin() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
             request_id: "req-seam-open".into(),
             surface_id: pool_id.to_string(),
@@ -381,7 +381,7 @@ fn a_non_numeric_surface_id_is_not_a_parse_error() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-frame-id".into(),
             surface_id: "pool-slot-7#3".into(),
@@ -433,7 +433,7 @@ fn a_staging_copy_without_a_timeline_is_retired_before_the_reply() {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                 request_id: format!("req-round-{round_stamp}"),
                 surface_id: surface_id.clone(),

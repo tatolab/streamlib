@@ -115,6 +115,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) processor_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// The uv the host handed this runtime, which makes every project's `.venv`.
     pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
+    /// The native services the host offered every node, such as the browser host.
+    pub(crate) shared_native_services:
+        Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
     /// Whether [`Runner::shut_down`] has run.
     shut_down: AtomicBool,
     /// Whether this engine holds the machine's shutdown signals now, and so
@@ -696,6 +699,10 @@ impl Runner {
                 runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
                     "the runtime unit's uv",
                 ),
+                shared_native_services:
+                    crate::core::shared_native_services::SharedNativeServicesOfTheEngine::in_directory(
+                        runtime_directory.shared_native_services_directory(),
+                    ),
                 shut_down: AtomicBool::new(false),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]
@@ -861,6 +868,18 @@ impl Runner {
         self.engine_resources_shared_by_every_stream
             .runtime_unit_uv_executable
             .set(runtime_unit_uv)
+    }
+
+    /// Offer every node the native service `offer` names, started at its first
+    /// lease. The host offers each service once; a second offer of one name is
+    /// refused.
+    pub fn offer_shared_native_service(
+        &self,
+        offer: crate::core::shared_native_services::SharedNativeServiceOffer,
+    ) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .shared_native_services
+            .offer(offer)
     }
 
     // =========================================================================
@@ -1269,6 +1288,10 @@ impl Runner {
         let first_failed_end = self.shut_every_loaded_stream_down_and_wait_until_each_has_ended(
             "the engine is shutting down",
         );
+        crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+            "the shared native services",
+        );
+        engine.shared_native_services.stop_every_service();
         // The Mach service thread answers helpers' reports against the
         // timeline pairs, so it is joined before the pairs go, and both go
         // while the device that made their semaphores still exists.

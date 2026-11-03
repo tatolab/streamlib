@@ -31,6 +31,7 @@ mod hex_encoded_wire_bytes;
 mod kernel_shader_stage_source;
 mod port_catalog_entry;
 mod ray_tracing;
+pub(crate) mod shared_native_service_lease;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_bound_kernel_binding;
 mod surface_color_conversion;
@@ -39,7 +40,7 @@ mod surface_copy;
 mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
-pub(crate) use self::port_catalog_entry::CatalogEntriesAHelperPlacedProcessorReaches;
+pub(crate) use self::port_catalog_entry::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
@@ -68,6 +69,9 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireStorageBuffer(p) => Some(&p.request_id),
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
+        EscalateRequest::AcquireSharedNativeServiceLease(p) => Some(&p.request_id),
+        EscalateRequest::ReadSharedNativeServiceLeaseState(p) => Some(&p.request_id),
+        EscalateRequest::ReleaseSharedNativeServiceLease(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::CopySurfaceToSurface(p) => Some(&p.request_id),
         EscalateRequest::ConvertSurfaceInto(p) => Some(&p.request_id),
@@ -93,7 +97,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 }
 
 /// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a catalog-entry
-/// op — against the `catalog_entries` of the helper's node. Returns
+/// or shared native service lease op — against what the helper's node reaches. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
 /// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
@@ -109,7 +113,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -139,10 +143,35 @@ pub(crate) fn handle_escalate_op(
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
         }
         EscalateRequest::SetOutputPortCatalogEntry(req) => Some(
-            port_catalog_entry::handle_set_output_port_catalog_entry(catalog_entries, rid, req),
+            port_catalog_entry::handle_set_output_port_catalog_entry(what_the_node_reaches, rid, req),
         ),
         EscalateRequest::ReadInboundLinkCatalogEntry(req) => Some(
-            port_catalog_entry::handle_read_inbound_link_catalog_entry(catalog_entries, rid, req),
+            port_catalog_entry::handle_read_inbound_link_catalog_entry(
+                what_the_node_reaches,
+                rid,
+                req,
+            ),
+        ),
+        EscalateRequest::AcquireSharedNativeServiceLease(req) => Some(
+            shared_native_service_lease::handle_acquire_shared_native_service_lease(
+                &what_the_node_reaches.shared_native_service_leases,
+                rid,
+                req,
+            ),
+        ),
+        EscalateRequest::ReadSharedNativeServiceLeaseState(req) => Some(
+            shared_native_service_lease::handle_read_shared_native_service_lease_state(
+                &what_the_node_reaches.shared_native_service_leases,
+                rid,
+                req,
+            ),
+        ),
+        EscalateRequest::ReleaseSharedNativeServiceLease(req) => Some(
+            shared_native_service_lease::handle_release_shared_native_service_lease(
+                &what_the_node_reaches.shared_native_service_leases,
+                rid,
+                req,
+            ),
         ),
         EscalateRequest::OpenCpuReadbackStaging(req) => Some(
             export_staging::handle_open_cpu_readback_staging(sandbox, rid, req),
@@ -287,14 +316,14 @@ impl EscalateParseError {
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
         // Fire-and-forget ops (log) return `None` from the handler — no
         // reply is written back to the subprocess.
-        Ok(op) => handle_escalate_op(sandbox, registry, catalog_entries, op)?,
+        Ok(op) => handle_escalate_op(sandbox, registry, what_the_node_reaches, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))

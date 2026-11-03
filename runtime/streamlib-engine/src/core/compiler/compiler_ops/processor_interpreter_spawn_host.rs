@@ -30,7 +30,8 @@ use super::subprocess_bridge::{
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use super::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
+use super::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::subprocess_escalate::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::child_process_lifetime::{
     a_child_process_has_exited_without_being_reaped,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
@@ -254,8 +255,8 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     shutdown_was_already_asked_of_this_helper: bool,
     link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
     /// The node's catalog entries, which the helper replaces and reads over
-    /// its bridge.
-    catalog_entries: CatalogEntriesAHelperPlacedProcessorReaches,
+    /// its bridge; each helper it starts gets leases of its own.
+    what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches,
     /// The helper's admission to the engine's surface-share Mach service,
     /// held until the helper is reaped — from then on its pid may belong to
     /// any process on the machine.
@@ -826,7 +827,15 @@ impl ProcessorInterpreterSpawnHostProcessor {
             // registry, never also against this spawn host.
             GpuContextLimitedAccess::new(ctx.gpu_limited_access().host_inner().clone()),
             self.processor_id.clone(),
-            self.catalog_entries.clone(),
+            WhatTheNodeOfAHelperPlacedProcessorReaches {
+                shared_native_service_leases: Arc::new(
+                    SharedNativeServiceLeasesOfOneHelper::for_a_helper_of_the_stream(
+                        Arc::clone(ctx.host_base().shared_native_services()),
+                        ctx.stream_id().to_string(),
+                    ),
+                ),
+                ..self.what_the_node_reaches.clone()
+            },
         )?;
 
         let config = self
@@ -1528,11 +1537,12 @@ pub(crate) fn spawn_host_for_processor_node(
         link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
             child_execution_config.execution,
         )),
-        catalog_entries: CatalogEntriesAHelperPlacedProcessorReaches {
+        what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::clone(node.catalog_entries_of_output_ports()),
             upstream_catalog_entries_by_its_inbound_links: Arc::clone(
                 node.upstream_catalog_entries_by_inbound_link(),
             ),
+            shared_native_service_leases: Default::default(),
         },
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
