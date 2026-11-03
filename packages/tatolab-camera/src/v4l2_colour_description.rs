@@ -8,6 +8,8 @@
 //! in `<linux/videodev2.h>`; `V4L2_COLORSPACE_DEFAULT` and any enumerant H.273
 //! cannot name leave that axis unspecified.
 
+use crate::captured_frame_colour_description::CapturedFrameColourDescription;
+
 const V4L2_COLORSPACE_DEFAULT: u32 = 0;
 const V4L2_COLORSPACE_SMPTE170M: u32 = 1;
 const V4L2_COLORSPACE_SMPTE240M: u32 = 2;
@@ -54,15 +56,6 @@ pub struct V4l2CaptureFormatColourFields {
     pub quantization: u32,
 }
 
-/// The H.273 four-tuple, each axis spelled as `tatolab.stream.ColorInfo` spells it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CapturedFrameColourDescription {
-    pub primaries: Option<&'static str>,
-    pub transfer: Option<&'static str>,
-    pub matrix: Option<&'static str>,
-    pub range: Option<&'static str>,
-}
-
 impl V4l2CaptureFormatColourFields {
     /// The description every frame captured in this format carries.
     pub fn colour_description(&self) -> CapturedFrameColourDescription {
@@ -72,19 +65,6 @@ impl V4l2CaptureFormatColourFields {
             matrix: matrix_name(self.ycbcr_enc, self.colorspace),
             range: range_name(self.quantization, self.colorspace),
         }
-    }
-}
-
-/// The matrix a frame is decoded with: the one the driver named, else the one a
-/// player falls back to — BT.709 at HD and above, BT.601 below it.
-pub fn matrix_name_or_the_players_fallback(
-    matrix: Option<&'static str>,
-    frame_height: u32,
-) -> &'static str {
-    match matrix {
-        Some(matrix) => matrix,
-        None if frame_height >= 720 => "bt709",
-        None => "smpte170m",
     }
 }
 
@@ -239,15 +219,5 @@ mod tests {
         .colour_description();
         assert_eq!(description.matrix, Some("bt709"));
         assert_eq!(description.range, Some("full"));
-    }
-
-    #[test]
-    fn an_unspecified_matrix_decodes_by_the_frame_height() {
-        assert_eq!(matrix_name_or_the_players_fallback(None, 1080), "bt709");
-        assert_eq!(matrix_name_or_the_players_fallback(None, 480), "smpte170m");
-        assert_eq!(
-            matrix_name_or_the_players_fallback(Some("smpte170m"), 1080),
-            "smpte170m"
-        );
     }
 }

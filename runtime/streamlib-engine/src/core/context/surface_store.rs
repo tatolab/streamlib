@@ -608,6 +608,16 @@ pub(crate) struct DmaBufRegistrationWithItsPlaneLayout {
     pub(crate) planes: crate::core::rhi::PixelPlanesWithinOneAllocation,
 }
 
+/// A looked-up registration's IOSurface and the format and extent the
+/// registration states.
+#[cfg(target_os = "macos")]
+pub(crate) struct IOSurfaceRegistrationWithItsExtent {
+    pub(crate) iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+    pub(crate) pixel_format: crate::core::rhi::PixelFormat,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 /// A looked-up pixel buffer and what its registration says its pixels are.
 #[cfg(target_os = "linux")]
 pub(crate) struct PixelBufferWithItsPlaneLayout {
@@ -2103,6 +2113,56 @@ impl SurfaceStoreInner {
         )
     }
 
+    /// Look up a pixel-buffer registration and hand back the IOSurface its
+    /// port names, with the format and extent it states, importing nothing —
+    /// for a caller that reaches the surface's pages itself.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn lookup_iosurface_registration_without_importing_it(
+        &self,
+        surface_id: &str,
+    ) -> Result<IOSurfaceRegistrationWithItsExtent> {
+        use crate::core::rhi::PixelFormat;
+
+        let request = serde_json::json!({"op": "lookup", "surface_id": surface_id});
+        let (answer, reply_ports) =
+            self.send_surface_share_mach_request("lookup", &request, Vec::new())?;
+        let Some(iosurface_port) = reply_ports.into_iter().next() else {
+            return Err(Error::Configuration(format!(
+                "lookup: the answer for '{surface_id}' carried no IOSurface port"
+            )));
+        };
+        let iosurface =
+            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
+                .ok_or_else(|| {
+                    Error::Configuration(format!(
+                        "lookup: the port answered for '{surface_id}' names no IOSurface"
+                    ))
+                })?;
+        let stated_u32 = |key: &str| {
+            answer
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    Error::Configuration(format!(
+                        "lookup: the answer for '{surface_id}' states no {key}"
+                    ))
+                })
+        };
+        let pixel_format = answer
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("the answer for '{surface_id}' names no format"))
+            .and_then(PixelFormat::parse_wire_name)
+            .map_err(|unreadable| Error::Configuration(format!("lookup: {unreadable}")))?;
+        Ok(IOSurfaceRegistrationWithItsExtent {
+            iosurface,
+            pixel_format,
+            width: stated_u32("width")?,
+            height: stated_u32("height")?,
+        })
+    }
+
     /// Send one request under `operation`'s name and hold the service to its
     /// answer, returning it with the ports it carries.
     #[cfg(target_os = "macos")]
@@ -2617,6 +2677,22 @@ impl SurfaceStore {
         }
         self.host_inner()
             .lookup_pixel_buffer_with_its_plane_layout(surface_id)
+    }
+
+    /// See [`SurfaceStoreInner::lookup_iosurface_registration_without_importing_it`].
+    #[cfg(target_os = "macos")]
+    pub(crate) fn lookup_iosurface_registration_without_importing_it(
+        &self,
+        surface_id: &str,
+    ) -> Result<IOSurfaceRegistrationWithItsExtent> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::lookup_iosurface_registration_without_importing_it: null handle"
+                    .into(),
+            ));
+        }
+        self.host_inner()
+            .lookup_iosurface_registration_without_importing_it(surface_id)
     }
 
     /// See [`SurfaceStoreInner::lookup_dma_buf_registration_without_importing_it`].

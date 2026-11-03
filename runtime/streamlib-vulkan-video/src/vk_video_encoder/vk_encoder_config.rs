@@ -83,7 +83,7 @@ impl EncoderInputImageParameters {
             return false;
         }
 
-        let bytes_per_pixel = (self.bpp as u32 + 7) / 8;
+        let bytes_per_pixel = (self.bpp as u32).div_ceil(8);
         if !(1..=2).contains(&bytes_per_pixel) {
             tracing::error!("Invalid input bpp ({}) parameter!", self.bpp);
             return false;
@@ -99,10 +99,10 @@ impl EncoderInputImageParameters {
                     plane_stride = 0;
                     plane_height = 0;
                 } else if self.chroma_subsampling == vk::VideoChromaSubsamplingFlagsKHR::_420 {
-                    plane_stride = (plane_stride + 1) / 2;
-                    plane_height = (plane_height + 1) / 2;
+                    plane_stride = plane_stride.div_ceil(2);
+                    plane_height = plane_height.div_ceil(2);
                 } else if self.chroma_subsampling == vk::VideoChromaSubsamplingFlagsKHR::_422 {
-                    plane_stride = (plane_stride + 1) / 2;
+                    plane_stride = plane_stride.div_ceil(2);
                 }
                 // 444: no change
             }
@@ -165,7 +165,7 @@ impl EncoderInputFileHandler {
         bpp: u8,
         chroma_subsampling: vk::VideoChromaSubsamplingFlagsKHR,
     ) -> u32 {
-        let num_bytes = ((bpp as u32) + 7) / 8;
+        let num_bytes = (bpp as u32).div_ceil(8);
         let sampling_factor: f64 =
             if chroma_subsampling == vk::VideoChromaSubsamplingFlagsKHR::MONOCHROME {
                 1.0
@@ -222,23 +222,19 @@ impl EncoderQpMapFileHandler {
 /// QP map mode selection.
 ///
 /// Equivalent to the C++ `EncoderConfig::QpMapMode` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QpMapMode {
+    #[default]
     DeltaQpMap,
     EmphasisMap,
-}
-
-impl Default for QpMapMode {
-    fn default() -> Self {
-        Self::DeltaQpMap
-    }
 }
 
 /// Intra-refresh mode selection.
 ///
 /// Equivalent to the C++ `EncoderConfig::IntraRefreshMode` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IntraRefreshMode {
+    #[default]
     None,
     PerPartition,
     BlockRows,
@@ -246,26 +242,15 @@ pub enum IntraRefreshMode {
     Blocks,
 }
 
-impl Default for IntraRefreshMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Filter type (placeholder for VulkanFilterYuvCompute)
 // ---------------------------------------------------------------------------
 
 /// Placeholder for `VulkanFilterYuvCompute::FilterType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterType {
+    #[default]
     YcbcrCopy,
-}
-
-impl Default for FilterType {
-    fn default() -> Self {
-        Self::YcbcrCopy
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,8 @@
 
 One answer for the app that opens the camera and the test that gates on it:
 `STREAMLIB_CAMERA_DEVICE` when set, `/dev/video0` on Linux, and on macOS the
-first built-in camera — what `CameraSource` opens with no `device_id`.
+first built-in camera — what `tatolab.camera.CameraSource` opens with no
+`device_id`.
 """
 
 import os
@@ -13,13 +14,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tatolab.stream import CameraSourceConfig
 
 CAMERA_DEVICE_ENVIRONMENT_VARIABLE = "STREAMLIB_CAMERA_DEVICE"
 LINUX_DEFAULT_CAMERA_DEVICE = "/dev/video0"
 
 
-def camera_source_config() -> CameraSourceConfig:
+def camera_source_config() -> "dict[str, object]":
     """The `CameraSource` config that opens this rig's camera."""
     named = os.environ.get(CAMERA_DEVICE_ENVIRONMENT_VARIABLE)
     if named:

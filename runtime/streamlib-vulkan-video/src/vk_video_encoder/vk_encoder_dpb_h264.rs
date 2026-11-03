@@ -144,21 +144,11 @@ impl Default for DpbEntryH264 {
 // ---------------------------------------------------------------------------
 
 /// Reference picture list counts and slot usage mask.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DpbSlotInfoLists {
     pub ref_pic_list_count: [u32; 2],
     pub dpb_slots_use_mask: u32,
     pub ref_pic_list: [[u8; 16]; 2], // STD_VIDEO_H264_MAX_NUM_LIST_REF = 16
-}
-
-impl Default for DpbSlotInfoLists {
-    fn default() -> Self {
-        Self {
-            ref_pic_list_count: [0; 2],
-            dpb_slots_use_mask: 0,
-            ref_pic_list: [[0; 16]; 2],
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +325,7 @@ impl VkEncDpbH264 {
     /// Get current DPB entry info.
     pub fn get_current_dpb_entry(&self) -> (u32, i32) {
         let idx = self.curr_dpb_idx as usize;
-        debug_assert!(idx < MAX_DPB_SLOTS || idx == MAX_DPB_SLOTS);
+        debug_assert!(idx <= MAX_DPB_SLOTS);
         (
             self.dpb[idx].pic_info_frame_num,
             self.dpb[idx].pic_info_pic_order_cnt,
@@ -811,11 +801,12 @@ impl VkEncDpbH264 {
                     num_long += 1;
                 }
             }
-            if (num_short + num_long) >= sps_max_num_ref_frames as i32 {
-                if num_short > 0 && imin < MAX_DPB_SLOTS {
-                    self.dpb[imin].top_field_marking = MARKING_UNUSED;
-                    self.dpb[imin].bottom_field_marking = MARKING_UNUSED;
-                }
+            if (num_short + num_long) >= sps_max_num_ref_frames as i32
+                && num_short > 0
+                && imin < MAX_DPB_SLOTS
+            {
+                self.dpb[imin].top_field_marking = MARKING_UNUSED;
+                self.dpb[imin].bottom_field_marking = MARKING_UNUSED;
             }
         }
     }

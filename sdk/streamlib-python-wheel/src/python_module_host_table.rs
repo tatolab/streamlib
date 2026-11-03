@@ -33,7 +33,7 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
     ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
@@ -180,6 +180,7 @@ fn module_host_of_one_node(
                 audio_playback_stream_stop,
                 audio_playback_stream_liveness,
                 audio_playback_stream_close,
+                surface_import_iosurface,
                 surface_write_from_host_memory,
             },
             node_id: node_id.to_string(),
@@ -643,6 +644,32 @@ unsafe extern "C" fn surface_import_dma_buf(
     match node_host
         .surfaces_lent_to_native_code
         .import_dma_buf(dma_buf_import)
+    {
+        Ok(handle) => {
+            *imported_surface = handle;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_import_iosurface(
+    node_host: *mut c_void,
+    iosurface_import: *const ModuleHostTableIOSurfaceImport,
+    imported_surface: *mut ModuleHostTableSurfaceHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: as in `surface_import_dma_buf`.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(iosurface_import) = (unsafe { iosurface_import.as_ref() }) else {
+        return unsafe { refuse(error_message, "no IOSurface import was handed") };
+    };
+    let Some(imported_surface) = (unsafe { imported_surface.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the imported surface") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .import_iosurface(iosurface_import)
     {
         Ok(handle) => {
             *imported_surface = handle;

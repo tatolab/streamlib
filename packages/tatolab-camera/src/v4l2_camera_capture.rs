@@ -5,7 +5,6 @@
 //! adopted once through the module host table, and converted on the GPU into
 //! the node's output texture from a thread this wheel owns.
 
-use std::fmt;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,11 +21,16 @@ use v4l::v4l_sys::{v4l2_buffer, v4l2_exportbuffer, v4l2_requestbuffers};
 use v4l::v4l2;
 use v4l::video::Capture;
 
-use crate::capture_timestamp::{monotonic_now_ns, resolve_capture_timestamp};
-use crate::v4l2_colour_description::{
-    CapturedFrameColourDescription, V4l2CaptureFormatColourFields,
-    matrix_name_or_the_players_fallback,
+use crate::camera_frame_publication::{
+    CAMERA_LOG_TARGET, CONVERTED_FRAME_POOL_KEY, CONVERTED_FRAME_TEXTURE_FORMAT,
+    CONVERTED_FRAME_TEXTURE_USAGE, CameraCaptureRefusal, CaptureLoopReportingWindow,
+    FRAMES_BETWEEN_REPORTS,
 };
+use crate::capture_timestamp::{monotonic_now_ns, resolve_capture_timestamp};
+use crate::captured_frame_colour_description::{
+    CapturedFrameColourDescription, matrix_name_or_the_players_fallback,
+};
+use crate::v4l2_colour_description::V4l2CaptureFormatColourFields;
 use crate::video_frame_record::PublishedVideoFrame;
 
 /// How many driver buffers rotate: one being filled, one being converted, and
@@ -36,29 +40,6 @@ const V4L2_DRIVER_BUFFER_COUNT: u32 = 4;
 /// How long one wait for a filled buffer lasts before the capture thread looks
 /// at its stop flags again.
 const FILLED_BUFFER_WAIT_TIMEOUT_MS: i32 = 200;
-
-/// The node output pool the converted frames rotate through.
-const CONVERTED_FRAME_POOL_KEY: &str = "camera_converted_frames";
-const CONVERTED_FRAME_TEXTURE_FORMAT: &str = "rgba8_unorm";
-const CONVERTED_FRAME_TEXTURE_USAGE: [&str; 2] = ["storage_binding", "texture_binding"];
-
-/// Frames between two reports of the capture loop's counts and latency.
-const FRAMES_BETWEEN_REPORTS: u64 = 600;
-
-/// The log target this module's records carry.
-const CAMERA_LOG_TARGET: &str = "tatolab_camera";
-
-/// Why a camera could not be opened, or why its capture ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CameraCaptureRefusal(pub String);
-
-impl fmt::Display for CameraCaptureRefusal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for CameraCaptureRefusal {}
 
 /// The byte layout of one captured frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,13 +145,15 @@ struct ZeroCopyCaptureLoop {
 pub struct V4l2ZeroCopyCameraCapture {
     format: NegotiatedCaptureFormat,
     stop_requested: Arc<AtomicBool>,
+    /// The opened device and its adopted buffers, until [`Self::start`].
+    capture_loop_waiting_to_start: Option<ZeroCopyCaptureLoop>,
     capture_thread: Option<JoinHandle<()>>,
 }
 
 impl V4l2ZeroCopyCameraCapture {
-    /// Open `device_path`, or the first capture device found, adopt its
-    /// buffers and start publishing on `video_output_port_name`.
-    pub fn start(
+    /// Open `device_path`, or the first capture device found, negotiate its
+    /// format and adopt its buffers, publishing nothing until [`Self::start`].
+    pub fn open(
         module_host: ModuleHost,
         video_output_port_name: &str,
         device_path: Option<&str>,
@@ -205,7 +188,6 @@ impl V4l2ZeroCopyCameraCapture {
             .map_err(|refusal| CameraCaptureRefusal(refusal.to_string()))?;
         let adopted_driver_buffers =
             export_and_adopt_every_driver_buffer(&device, &format, &module_host)?;
-        queue_every_driver_buffer_and_stream_on(&device, adopted_driver_buffers.len() as u32)?;
 
         let stop_requested = Arc::new(AtomicBool::new(false));
         let capture_loop = ZeroCopyCaptureLoop {
@@ -217,6 +199,24 @@ impl V4l2ZeroCopyCameraCapture {
             adopted_driver_buffers,
             stop_requested: Arc::clone(&stop_requested),
         };
+        Ok(Self {
+            format,
+            stop_requested,
+            capture_loop_waiting_to_start: Some(capture_loop),
+            capture_thread: None,
+        })
+    }
+
+    /// Queue the adopted buffers, stream on and publish every frame from the
+    /// capture thread. A capture already started or stopped stays as it is.
+    pub fn start(&mut self) -> Result<(), CameraCaptureRefusal> {
+        let Some(capture_loop) = self.capture_loop_waiting_to_start.take() else {
+            return Ok(());
+        };
+        queue_every_driver_buffer_and_stream_on(
+            &capture_loop.device,
+            capture_loop.adopted_driver_buffers.len() as u32,
+        )?;
         let capture_thread = std::thread::Builder::new()
             .name("v4l2-zero-copy-camera".to_string())
             .spawn(move || capture_loop.run_until_stopped())
@@ -225,11 +225,8 @@ impl V4l2ZeroCopyCameraCapture {
                     "could not start the capture thread: {spawn_failure}"
                 ))
             })?;
-        Ok(Self {
-            format,
-            stop_requested,
-            capture_thread: Some(capture_thread),
-        })
+        self.capture_thread = Some(capture_thread);
+        Ok(())
     }
 
     /// What the device negotiated.
@@ -240,6 +237,7 @@ impl V4l2ZeroCopyCameraCapture {
     /// Stop streaming, give the adopted buffers back and join the capture
     /// thread. Idempotent.
     pub fn stop(&mut self) {
+        self.capture_loop_waiting_to_start = None;
         self.stop_requested.store(true, Ordering::Release);
         if let Some(capture_thread) = self.capture_thread.take() {
             let _ = capture_thread.join();
@@ -250,36 +248,6 @@ impl V4l2ZeroCopyCameraCapture {
 impl Drop for V4l2ZeroCopyCameraCapture {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-
-/// The counts and the capture-to-publish latency one reporting window saw.
-#[derive(Debug, Default)]
-struct CaptureLoopReportingWindow {
-    frames_published: u64,
-    frames_dropped: u64,
-    capture_to_publish_ns: Vec<i64>,
-}
-
-impl CaptureLoopReportingWindow {
-    fn summary(&mut self) -> String {
-        self.capture_to_publish_ns.sort_unstable();
-        let percentile = |fraction: f64| -> f64 {
-            if self.capture_to_publish_ns.is_empty() {
-                return 0.0;
-            }
-            let index = ((self.capture_to_publish_ns.len() - 1) as f64 * fraction).round();
-            self.capture_to_publish_ns[index as usize] as f64 / 1_000_000.0
-        };
-        format!(
-            "frames_published={} frames_dropped={} capture_to_publish_ms p50={:.2} p95={:.2} \
-             p99={:.2}",
-            self.frames_published,
-            self.frames_dropped,
-            percentile(0.5),
-            percentile(0.95),
-            percentile(0.99)
-        )
     }
 }
 

@@ -49,8 +49,11 @@ Version 1.3 adds playback through the same backend:
 - start and stop asking a callback on the backend's device thread to fill each
   device buffer;
 - read whether the device still serves the stream, and close it.
+Version 1.4 adds the macOS twin of the DMA-BUF import: an `IOSurfaceRef`, such
+as a camera's or a decoder's, adopted as a surface written by a foreign device,
+which the colour conversion reads where it sits.
 
-Version 1.4 adds a write from host memory, for a renderer that paints into CPU
+Version 1.5 adds a write from host memory, for a renderer that paints into CPU
 memory and cannot share a GPU buffer: `bgra32` or `rgba32` rows at any stride
 replace every pixel of an output-pool texture of the same extent, with the
 channel order swapped where the texture's differs. It costs one CPU copy into

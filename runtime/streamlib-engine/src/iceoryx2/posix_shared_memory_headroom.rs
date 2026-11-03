@@ -128,10 +128,13 @@ mod tests {
             posix_shared_memory_is_short_for_a_runtime(DOCKER_DEFAULT_SHARED_MEMORY_BYTES),
             "a default container must trip the headroom warning"
         );
-        assert!(
-            POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS > TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-            "the threshold must want more than one ceiling-sized chunk"
-        );
+        const {
+            assert!(
+                POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS
+                    > TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+                "the threshold must want more than one ceiling-sized chunk"
+            )
+        };
     }
 
     /// The threshold itself, over a chosen free-space reading rather than over

@@ -90,6 +90,17 @@ impl Av1BitWriter {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
+
+    /// Whether no bytes have been written.
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+impl Default for Av1BitWriter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +276,12 @@ impl VkVideoEncoderAV1 {
             dpb.dpb_destroy();
         }
         self.dpb_av1 = None;
+    }
+}
+
+impl Default for VkVideoEncoderAV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

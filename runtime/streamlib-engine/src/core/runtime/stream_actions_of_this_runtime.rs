@@ -6875,7 +6875,7 @@ mod tests {
                 &[&crasher],
             ));
 
-        assert_eq!(failed_by_the_second, [crasher.clone()]);
+        assert_eq!(failed_by_the_second, std::slice::from_ref(&crasher));
         let crasher_record = the_record_of(state_directory.path(), &crasher);
         assert_eq!(crasher_record.runtime_crashes_in_a_row_implicating_it, 2);
         let failed_because = crasher_record
@@ -8201,7 +8201,10 @@ mod tests {
         );
         assert_eq!(load_cancelled.failed_because, None);
         assert!(!project.path().join(".venv").exists());
-        assert_eq!(runner.ids_of_the_loaded_streams(), [camera.clone()]);
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&camera)
+        );
         assert!(!the_record_of(state_directory.path(), &camera).stopped);
         assert!(
             refusal_of(runner.cancel_stream_action(&load.action_id))

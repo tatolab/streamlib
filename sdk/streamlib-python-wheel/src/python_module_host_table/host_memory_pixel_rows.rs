@@ -111,14 +111,13 @@ pub(super) fn copy_four_byte_pixel_rows(
         match channel_order {
             FourBytePixelChannelOrder::Kept => destination_row.copy_from_slice(source_row),
             FourBytePixelChannelOrder::RedAndBlueSwapped => {
-                for (source_pixel, destination_pixel) in source_row
-                    .chunks_exact(4)
-                    .zip(destination_row.chunks_exact_mut(4))
+                let (source_pixels, _) = source_row.as_chunks::<4>();
+                let (destination_pixels, _) = destination_row.as_chunks_mut::<4>();
+                for (source_pixel, destination_pixel) in
+                    source_pixels.iter().zip(destination_pixels.iter_mut())
                 {
-                    destination_pixel[0] = source_pixel[2];
-                    destination_pixel[1] = source_pixel[1];
-                    destination_pixel[2] = source_pixel[0];
-                    destination_pixel[3] = source_pixel[3];
+                    let [red_or_blue, green, blue_or_red, alpha] = *source_pixel;
+                    *destination_pixel = [blue_or_red, green, red_or_blue, alpha];
                 }
             }
         }

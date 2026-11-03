@@ -196,7 +196,7 @@ impl VkEncDpbAV1 {
 
         self.max_dpb_size = user_dpb_size as u8;
         self.max_ref_frames_l0 = 4;
-        self.max_ref_frames_l1 = if num_b_frames > 0 { 3 } else { 3 };
+        self.max_ref_frames_l1 = 3;
 
         for i in 0..NUM_REF_FRAMES {
             self.ref_buf_id_map[i] = i as i32;
@@ -284,7 +284,7 @@ impl VkEncDpbAV1 {
 
     /// Get reference frame DPB ID for a reference name.
     pub fn get_ref_frame_dpb_id(&self, ref_name: u32) -> i32 {
-        if ref_name >= 1 && ref_name <= 7 {
+        if (1..=7).contains(&ref_name) {
             let buf_id = self.ref_buf_id_map[ref_name as usize];
             if buf_id >= 0 && (buf_id as usize) < NUM_REF_FRAMES {
                 return self.ref_frame_dpb_id_map[buf_id as usize] as i32;
@@ -295,7 +295,7 @@ impl VkEncDpbAV1 {
 
     /// Get reference buffer ID for a reference name.
     pub fn get_ref_buf_id(&self, ref_name: u32) -> i32 {
-        if ref_name >= 1 && ref_name <= 7 {
+        if (1..=7).contains(&ref_name) {
             return self.ref_buf_id_map[ref_name as usize];
         }
         INVALID_IDX

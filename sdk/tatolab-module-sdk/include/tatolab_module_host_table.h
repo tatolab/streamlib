@@ -18,8 +18,9 @@
  * Every verb is callable from any thread the module owns and never takes
  * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
  * which attaches to the interpreter for its round trip to the parent. The
- * surface verbs minors 2 and 4 add reach the parent over the helper's native
- * escalate channel, with no interpreter on either end.
+ * surface verbs minor 2 adds reach the parent over the helper's native escalate
+ * channel, with no interpreter on either end, as do the IOSurface import
+ * minor 4 adds and the host-memory write minor 5 adds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -40,7 +41,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(4)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(5)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -199,6 +200,23 @@ typedef struct ModuleHostTableDmaBufImport {
     uint64_t plane_offsets_bytes[MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
     uint64_t plane_strides_bytes[MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES];
 } ModuleHostTableDmaBufImport;
+
+/**
+ * One foreign IOSurface and the pixel format its planes hold.
+ *
+ * `iosurface` is an `IOSurfaceRef` that stays the caller's: the host takes
+ * its own reference and its own Mach port for as long as the import lives.
+ * The planes' offsets and strides are the surface's own.
+ */
+typedef struct ModuleHostTableIOSurfaceImport {
+    const void *iosurface;
+    /**
+     * A pixel format wire name, such as `nv12_video_range`.
+     */
+    ModuleHostTableUtf8 pixel_format;
+    uint32_t width;
+    uint32_t height;
+} ModuleHostTableIOSurfaceImport;
 
 /**
  * One texture out of a node output pool: a new `<slot>#<generation>` per
@@ -585,7 +603,13 @@ typedef struct ModuleHostTable {
      */
     void (*audio_playback_stream_close)(void *node_host, ModuleHostTableAudioStreamHandle stream);
     /**
-     * Minor 4: write CPU pixels over every pixel of an output-pool texture of
+     * Minor 4: adopt a foreign IOSurface as a surface the graph can resolve,
+     * registered as written by a foreign device. macOS only; refused by name
+     * elsewhere.
+     */
+    ModuleHostTableStatus (*surface_import_iosurface)(void *node_host, const ModuleHostTableIOSurfaceImport *iosurface_import, ModuleHostTableSurfaceHandle *imported_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 5: write CPU pixels over every pixel of an output-pool texture of
      * the same extent, swapping channel order between `bgra32` and `rgba32`
      * where the texture's differs, and return once the texture's next reader
      * sees them.

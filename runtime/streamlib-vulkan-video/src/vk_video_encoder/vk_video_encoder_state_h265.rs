@@ -120,21 +120,11 @@ pub struct H265Sps {
 }
 
 /// Placeholder for `StdVideoH265DecPicBufMgr`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct H265DecPicBufMgr {
     pub max_latency_increase_plus1: [u32; 7],
     pub max_dec_pic_buffering_minus1: [u8; 7],
     pub max_num_reorder_pics: [u8; 7],
-}
-
-impl Default for H265DecPicBufMgr {
-    fn default() -> Self {
-        Self {
-            max_latency_increase_plus1: [0; 7],
-            max_dec_pic_buffering_minus1: [0; 7],
-            max_num_reorder_pics: [0; 7],
-        }
-    }
 }
 
 /// Placeholder for `StdVideoH265ProfileTierLevel`.

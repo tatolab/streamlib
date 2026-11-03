@@ -187,14 +187,10 @@ impl std::ops::BitOr for DecoderFeatures {
 /// Placeholder for VulkanFilterYuvCompute::FilterType.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
+#[derive(Default)]
 pub enum FilterType {
+    #[default]
     YcbcrCopy = 0,
-}
-
-impl Default for FilterType {
-    fn default() -> Self {
-        Self::YcbcrCopy
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -782,13 +778,12 @@ impl VkVideoDecoder {
         curr_pic_idx
     }
 
-    /// Decode a single picture using the full Vulkan Video pipeline.
-    ///
-    /// This is the real implementation that records and submits the decode
-    /// command buffer. It replaces the stubbed decode_picture_with_parameters
-    /// for actual decode operations.
     /// Wait for any in-flight decode to complete. Must be called before
     /// reading the staging buffer from the previous submission.
+    ///
+    /// # Safety
+    ///
+    /// The decoder's Vulkan device must not have been destroyed.
     pub unsafe fn wait_for_decode(&mut self) -> VideoResult<()> {
         unsafe {
             if self.decode_in_flight {
@@ -802,6 +797,12 @@ impl VkVideoDecoder {
         }
     }
 
+    /// Record and submit the decode command buffer for one picture.
+    ///
+    /// # Safety
+    ///
+    /// The resources `submit` names must live on the decoder's device and stay
+    /// alive until the decode completes.
     #[allow(unused_assignments, unused_mut)]
     pub unsafe fn decode_frame(
         &mut self,
@@ -1360,8 +1361,7 @@ impl VkVideoDecoder {
                 .command_buffer_infos(&cb_submits)
                 .build();
             self.codec_device
-                .submit_to_queue(self.queue, &[submit_info], self.fence)
-                .map_err(VideoError::from)?;
+                .submit_to_queue(self.queue, &[submit_info], self.fence)?;
             self.decode_in_flight = true;
 
             // --- Update layout tracking ---

@@ -348,7 +348,7 @@ impl SimpleDecoder {
                         // TRAIL_N/R, TSA_N/R, STSA_N/R, RADL_N/R, RASL_N/R,
                         // BLA_W_LP, BLA_W_RADL, BLA_N_LP, CRA_NUT
                         debug!("H265 NAL: slice type {} ({} bytes)", nal_type, nal.len());
-                        let is_irap = nal_type >= 16 && nal_type <= 21;
+                        let is_irap = (16..=21).contains(&nal_type);
                         if let Some(frame) = self.handle_h265_slice(nal, is_irap)? {
                             frames.push(frame);
                         }
@@ -413,16 +413,12 @@ impl SimpleDecoder {
         self.frame_num = 0;
         self.idr_pic_id = self.idr_pic_id.wrapping_add(1);
         // Mark all DPB slots as unused
-        for slot in &mut self.dpb_slot_in_use {
-            *slot = false;
-        }
+        self.dpb_slot_in_use.fill(false);
         // Reset H.264 parser DPB and physical slot mappings
         if let Some(ref mut parser) = self.h264_parser {
             parser.flush_decoded_picture_buffer();
         }
-        for s in &mut self.h264_dpb_to_slot {
-            *s = -1;
-        }
+        self.h264_dpb_to_slot.fill(-1);
         info!("Discontinuity: waiting for next IDR");
     }
 
@@ -532,9 +528,9 @@ impl SimpleDecoder {
                     return None;
                 }
                 let vui = &sps.vui;
-                let primaries = decoded_byte_to_option(vui.colour_primaries as i32);
-                let transfer = decoded_byte_to_option(vui.transfer_characteristics as i32);
-                let matrix = decoded_byte_to_option(vui.matrix_coefficients as i32);
+                let primaries = decoded_byte_to_option(vui.colour_primaries);
+                let transfer = decoded_byte_to_option(vui.transfer_characteristics);
+                let matrix = decoded_byte_to_option(vui.matrix_coefficients);
                 let full_range = if vui.video_signal_type_present_flag {
                     Some(vui.video_full_range_flag)
                 } else {
@@ -593,18 +589,16 @@ impl SimpleDecoder {
     fn find_start_code_after(data: &[u8], pos: usize) -> Option<usize> {
         let mut i = pos + 1;
         while i + 2 < data.len() {
-            if i + 3 < data.len()
+            let is_four_byte_start_code = i + 3 < data.len()
                 && data[i] == 0
                 && data[i + 1] == 0
                 && data[i + 2] == 0
-                && data[i + 3] == 1
-            {
+                && data[i + 3] == 1;
+            let is_three_byte_start_code = data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1;
+            if is_four_byte_start_code || is_three_byte_start_code {
                 return Some(i);
-            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                return Some(i);
-            } else {
-                i += 1;
             }
+            i += 1;
         }
         None
     }
@@ -676,7 +670,7 @@ impl SimpleDecoder {
     fn ensure_readback_staging(&mut self, width: u32, height: u32) -> Result<(), VideoError> {
         let total = (width * height) as u64 + (width * height / 2) as u64;
 
-        if self.readback_staging.as_ref().map_or(true, |s| s.2 < total) {
+        if self.readback_staging.as_ref().is_none_or(|s| s.2 < total) {
             if let Some((buf, alloc, _, _)) = self.readback_staging.take() {
                 unsafe {
                     self.ctx.allocator().destroy_buffer(buf, alloc);
@@ -720,7 +714,7 @@ impl SimpleDecoder {
     fn ensure_rgba_staging(&mut self, width: u32, height: u32) -> Result<(), VideoError> {
         let total = (width as u64) * (height as u64) * 4;
 
-        if self.rgba_staging.as_ref().map_or(true, |s| s.2 < total) {
+        if self.rgba_staging.as_ref().is_none_or(|s| s.2 < total) {
             if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
                 unsafe {
                     self.ctx.allocator().destroy_buffer(buf, alloc);
@@ -853,9 +847,11 @@ impl SimpleDecoder {
                 let submit_info = vk::SubmitInfo2::builder()
                     .command_buffer_infos(&cb_submits)
                     .build();
-                self.codec_device
-                    .submit_to_queue(self.transfer_queue, &[submit_info], self.transfer_fence)
-                    .map_err(VideoError::from)?;
+                self.codec_device.submit_to_queue(
+                    self.transfer_queue,
+                    &[submit_info],
+                    self.transfer_fence,
+                )?;
                 self.device
                     .wait_for_fences(&[self.transfer_fence], true, u64::MAX)
                     .map_err(VideoError::from)?;
@@ -991,6 +987,37 @@ fn build_color_vui(
     })
 }
 
+impl Drop for SimpleDecoder {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.codec_device.wait_idle();
+
+            // Destroy NV12→RGBA converter (owns its own Vulkan resources)
+            self.nv12_converter.take();
+
+            // Destroy RGBA staging buffer
+            if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
+                self.ctx.allocator().destroy_buffer(buf, alloc);
+            }
+
+            // Destroy persistent NV12 staging buffer
+            if let Some((buf, alloc, _, _)) = self.readback_staging.take() {
+                self.ctx.allocator().destroy_buffer(buf, alloc);
+            }
+
+            // Destroy transfer resources
+            if self.transfer_fence != vk::Fence::null() {
+                self.device.destroy_fence(self.transfer_fence, None);
+            }
+            if self.transfer_pool != vk::CommandPool::null() {
+                self.device.destroy_command_pool(self.transfer_pool, None);
+            }
+
+            // VkVideoDecoder, device, instance are dropped via their own Drop impls.
+        }
+    }
+}
+
 #[cfg(test)]
 mod color_vui_helper_tests {
     use super::*;
@@ -1040,36 +1067,5 @@ mod color_vui_helper_tests {
         assert_eq!(vui.transfer, Some(16));
         assert_eq!(vui.matrix, Some(9));
         assert_eq!(vui.full_range, Some(true));
-    }
-}
-
-impl Drop for SimpleDecoder {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = self.codec_device.wait_idle();
-
-            // Destroy NV12→RGBA converter (owns its own Vulkan resources)
-            self.nv12_converter.take();
-
-            // Destroy RGBA staging buffer
-            if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
-                self.ctx.allocator().destroy_buffer(buf, alloc);
-            }
-
-            // Destroy persistent NV12 staging buffer
-            if let Some((buf, alloc, _, _)) = self.readback_staging.take() {
-                self.ctx.allocator().destroy_buffer(buf, alloc);
-            }
-
-            // Destroy transfer resources
-            if self.transfer_fence != vk::Fence::null() {
-                self.device.destroy_fence(self.transfer_fence, None);
-            }
-            if self.transfer_pool != vk::CommandPool::null() {
-                self.device.destroy_command_pool(self.transfer_pool, None);
-            }
-
-            // VkVideoDecoder, device, instance are dropped via their own Drop impls.
-        }
     }
 }

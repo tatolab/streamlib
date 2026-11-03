@@ -114,10 +114,10 @@ mod tests {
 
     #[test]
     fn a_built_in_nodes_type_is_its_class_in_the_stream_package() {
-        let camera = ProcessorClassImportPath::of_built_in_node("CameraSource");
+        let test_pattern = ProcessorClassImportPath::of_built_in_node("TestPatternSource");
 
-        assert_eq!(camera.as_str(), "tatolab.stream:CameraSource");
-        assert!(camera.names_a_built_in_node());
+        assert_eq!(test_pattern.as_str(), "tatolab.stream:TestPatternSource");
+        assert!(test_pattern.names_a_built_in_node());
     }
 
     #[test]

@@ -79,6 +79,10 @@ impl ConsumerVulkanTexture {
     ///
     /// Refused by name, before any Vulkan call, on a device without
     /// `VK_EXT_external_memory_dma_buf` or `VK_EXT_image_drm_format_modifier`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per field of the DMA-BUF import the producer describes"
+    )]
     pub fn import_render_target_dma_buf(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],

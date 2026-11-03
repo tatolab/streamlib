@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The surface verbs of the module host table: a foreign DMA-BUF import, a
-//! node output pool texture, the engine's colour conversion between them, and
-//! a write of host-memory pixels into a texture, each a round trip on the
-//! helper's native escalate channel or its surface-share socket, with no
+//! The surface verbs of the module host table: a foreign DMA-BUF or IOSurface
+//! import, a node output pool texture, the engine's colour conversion between
+//! them, and a write of host-memory pixels into a texture, each a round trip on
+//! the helper's native escalate channel or its surface-share socket, with no
 //! Python on either end.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, ModuleHostTableColorInfo,
-    ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
@@ -25,8 +25,9 @@ use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 /// it back owes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SurfaceLentToNativeCodeOrigin {
-    /// A foreign DMA-BUF this helper registered; its registration is removed.
-    AdoptedForeignDmaBuf,
+    /// A foreign DMA-BUF or IOSurface this helper registered; its registration
+    /// is removed.
+    AdoptedForeignSurface,
     /// A node output pool slot; the pool keeps it.
     NodeOutputPoolTexture,
 }
@@ -88,8 +89,8 @@ impl SurfacesLentToNativeCode {
         ModuleHostTableSurfaceHandle { value }
     }
 
-    /// The surface id an output-pool texture's handle names; a foreign
-    /// DMA-BUF's handle is refused, because its pixels are its producer's.
+    /// The surface id an output-pool texture's handle names; an imported
+    /// foreign surface's handle is refused, because its pixels are its producer's.
     #[cfg(target_os = "linux")]
     fn output_pool_texture_id_of_a_handle(
         &self,
@@ -100,7 +101,7 @@ impl SurfacesLentToNativeCode {
                 Ok(lent.surface_id.clone())
             }
             Some(lent) => Err(format!(
-                "surface {} is an imported DMA-BUF, which takes no write: acquire a texture \
+                "surface {} is an imported foreign surface, which takes no write: acquire a texture \
                  from a node output pool",
                 lent.surface_id
             )),
@@ -173,7 +174,7 @@ impl SurfacesLentToNativeCode {
             .map_err(|refusal| refusal.to_string())?;
         Ok(self.lend(
             adopted_surface_id,
-            SurfaceLentToNativeCodeOrigin::AdoptedForeignDmaBuf,
+            SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,
         ))
     }
 
@@ -184,6 +185,51 @@ impl SurfacesLentToNativeCode {
         _dma_buf_import: &ModuleHostTableDmaBufImport,
     ) -> Result<ModuleHostTableSurfaceHandle, String> {
         Err("surface_import_dma_buf is Linux-only: a DMA-BUF is a Linux fd".to_string())
+    }
+
+    /// Adopt the IOSurface `iosurface_import` names.
+    #[cfg(target_os = "macos")]
+    pub(super) fn import_iosurface(
+        &self,
+        iosurface_import: &ModuleHostTableIOSurfaceImport,
+    ) -> Result<ModuleHostTableSurfaceHandle, String> {
+        use streamlib::sdk::rhi::PixelFormat;
+
+        // SAFETY: the SDK hands a view live for the call.
+        let pixel_format_name = unsafe { iosurface_import.pixel_format.as_str() }
+            .map_err(|not_utf8| format!("a pixel format name is UTF-8: {not_utf8}"))?;
+        let pixel_format = PixelFormat::parse_wire_name(pixel_format_name)?;
+        let iosurface = std::ptr::NonNull::new(iosurface_import.iosurface.cast_mut())
+            .ok_or_else(|| "an IOSurface import names a null IOSurfaceRef".to_string())?;
+        // SAFETY: the SDK's contract is a live IOSurfaceRef the caller keeps
+        // for the call; this borrows it without taking a reference.
+        let iosurface: &objc2_io_surface::IOSurfaceRef = unsafe { iosurface.cast().as_ref() };
+        let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
+            "this helper was started without its surface-share service, so it adopts no \
+             IOSurface"
+                .to_string()
+        })?;
+        let adopted_surface_id = surface_share_client
+            .register_foreign_iosurface(
+                iosurface,
+                iosurface_import.width,
+                iosurface_import.height,
+                pixel_format,
+            )
+            .map_err(|refusal| refusal.to_string())?;
+        Ok(self.lend(
+            adopted_surface_id,
+            SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,
+        ))
+    }
+
+    /// Refuses by name: an IOSurface is a macOS handle.
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn import_iosurface(
+        &self,
+        _iosurface_import: &ModuleHostTableIOSurfaceImport,
+    ) -> Result<ModuleHostTableSurfaceHandle, String> {
+        Err("surface_import_iosurface is macOS-only: an IOSurface is a macOS handle".to_string())
     }
 
     /// Take the next texture out of the node output pool `request` names.
@@ -388,12 +434,12 @@ impl SurfacesLentToNativeCode {
                 lent.surface_id
             );
         }
-        if lent.origin == SurfaceLentToNativeCodeOrigin::AdoptedForeignDmaBuf {
+        if lent.origin == SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface {
             self.unregister_an_adoption(&lent.surface_id);
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn unregister_an_adoption(&self, surface_id: &str) {
         let Some(surface_share_client) = &self.surface_share_client else {
             return;
@@ -401,12 +447,12 @@ impl SurfacesLentToNativeCode {
         if let Err(release_failure) = surface_share_client.unregister_foreign_surface(surface_id) {
             tracing::warn!(
                 "unregistering adopted surface {surface_id} failed ({release_failure}); the \
-                 service's dup of the foreign fd stays open until this node stops"
+                 service's reference to the foreign surface stays until this node stops"
             );
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn unregister_an_adoption(&self, _surface_id: &str) {}
 }
 
@@ -511,7 +557,7 @@ mod tests {
         let surfaces = SurfacesLentToNativeCode::new(None, None);
         let imported = surfaces.lend(
             "foreign-dma-buf#1".to_string(),
-            SurfaceLentToNativeCodeOrigin::AdoptedForeignDmaBuf,
+            SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,
         );
         let pixels = [0u8; 16];
         let host_memory_pixels = ModuleHostTableHostMemoryPixels {
@@ -526,7 +572,7 @@ mod tests {
             .write_from_host_memory(imported, &host_memory_pixels)
             .unwrap_err();
 
-        assert!(refusal.contains("imported DMA-BUF"), "{refusal}");
+        assert!(refusal.contains("imported foreign surface"), "{refusal}");
     }
 
     #[test]

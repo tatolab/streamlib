@@ -149,9 +149,10 @@ impl Nv12ToRgbComputePipeline {
                     .push_constant_ranges(&push_constant_ranges),
                 None,
             )?;
-            let spirv_words: Vec<u32> = SHADER_SPIRV
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+            let (spirv_word_bytes, _) = SHADER_SPIRV.as_chunks::<4>();
+            let spirv_words: Vec<u32> = spirv_word_bytes
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .collect();
             let shader_module = device.create_shader_module(
                 &vk::ShaderModuleCreateInfo::builder()
@@ -331,6 +332,11 @@ impl Nv12ToRgbConverter {
     /// * `compute_queue` - Queue from the compute family
     /// * `decode_queue_family` - Queue family index for video decode (for CONCURRENT sharing)
     /// * `ycbcr_model_and_range` - The conversion baked into the immutable sampler
+    ///
+    /// # Safety
+    ///
+    /// `compute_queue` must be a queue of `compute_queue_family` on `ctx`'s device,
+    /// and `decode_queue_family` must be a queue family of that device.
     pub unsafe fn new(
         ctx: &Arc<VulkanVideoDecodeContext>,
         width: u32,
@@ -519,6 +525,11 @@ impl Nv12ToRgbConverter {
     /// accept DPB layout for sampled reads).
     ///
     /// Returns the RGBA image and view.
+    ///
+    /// # Safety
+    ///
+    /// `nv12_image` must be a live NV12 image on the converter's device, with
+    /// `array_layer` in range and the image in `src_layout`.
     pub unsafe fn convert(
         &mut self,
         nv12_image: vk::Image,
@@ -602,8 +613,8 @@ impl Nv12ToRgbConverter {
 
             // --- Bind compute pipeline + push descriptors + push constants + dispatch ---
             // Each thread handles one pixel, workgroup is 8x8.
-            let group_x = (self.width + 7) / 8;
-            let group_y = (self.height + 7) / 8;
+            let group_x = self.width.div_ceil(8);
+            let group_y = self.height.div_ceil(8);
             self.compute_pipeline.record(
                 &self.device,
                 cb,
@@ -652,8 +663,7 @@ impl Nv12ToRgbConverter {
 
             self.device.reset_fences(&[self.fence])?;
             self.codec_device
-                .submit_to_queue(self.compute_queue, &[submit], self.fence)
-                .map_err(VideoError::from)?;
+                .submit_to_queue(self.compute_queue, &[submit], self.fence)?;
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
             // Destroy temporary view
@@ -734,7 +744,7 @@ mod tests {
             "SPIR-V bytecode must not be empty"
         );
         assert!(
-            SHADER_SPIRV.len() % 4 == 0,
+            SHADER_SPIRV.len().is_multiple_of(4),
             "SPIR-V size must be multiple of 4"
         );
         let magic = u32::from_le_bytes([

@@ -161,7 +161,7 @@ fn sample_from_surface() {
 
             let prog = compile_program().expect("compile shaders");
             gl::UseProgram(prog);
-            let loc = gl::GetUniformLocation(prog, b"u_tex\0".as_ptr() as *const _);
+            let loc = gl::GetUniformLocation(prog, c"u_tex".as_ptr());
             gl::Uniform1i(loc, 0);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, texture_id);

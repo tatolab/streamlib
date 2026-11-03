@@ -187,7 +187,7 @@ impl SimpleDecoder {
 
         // H.265 NAL header: 2 bytes
         let nal_type = (nal[0] >> 1) & 0x3F;
-        let nuh_temporal_id_plus1 = (nal[1] & 0x07) as u8;
+        let nuh_temporal_id_plus1 = nal[1] & 0x07;
         let is_idr = nal_type == H265NalUnitType::IdrWRadl as u8
             || nal_type == H265NalUnitType::IdrNLp as u8;
 
@@ -600,15 +600,14 @@ impl SimpleDecoder {
             let mut best_poc = i32::MAX;
             for i in 0..HEVC_DPB_SIZE {
                 let phys = self.h265_dpb_to_slot[i];
-                if phys >= 0 && (phys as usize) < self.dpb_slot_in_use.len() {
-                    if parser.dpb[i].marking == h265dec::DPB_MARKING_UNUSED
-                        || parser.dpb[i].state == h265dec::DPB_STATE_EMPTY
-                    {
-                        if parser.dpb[i].pic_order_cnt_val < best_poc {
-                            best_poc = parser.dpb[i].pic_order_cnt_val;
-                            best_slot = Some(phys as usize);
-                        }
-                    }
+                if phys >= 0
+                    && (phys as usize) < self.dpb_slot_in_use.len()
+                    && (parser.dpb[i].marking == h265dec::DPB_MARKING_UNUSED
+                        || parser.dpb[i].state == h265dec::DPB_STATE_EMPTY)
+                    && parser.dpb[i].pic_order_cnt_val < best_poc
+                {
+                    best_poc = parser.dpb[i].pic_order_cnt_val;
+                    best_slot = Some(phys as usize);
                 }
             }
             if let Some(slot) = best_slot {

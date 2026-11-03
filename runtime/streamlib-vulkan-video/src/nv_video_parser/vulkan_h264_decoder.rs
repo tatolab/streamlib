@@ -276,15 +276,14 @@ impl<'a> BitstreamReader<'a> {
         }
         let k = code_num as u32;
         // Mapping: code_num -> (-1)^(code_num+1) * Ceil(code_num/2)
-        let val = ((k + 1) / 2) as i32;
-        if k % 2 == 0 { -val } else { val }
+        let val = k.div_ceil(2) as i32;
+        if k.is_multiple_of(2) { -val } else { val }
     }
 
     /// Peek at next n bits without consuming them.
     pub fn next_bits(&self, n: u32) -> u32 {
         let mut val: u32 = 0;
-        let mut off = self.bit_offset;
-        for _ in 0..n {
+        for off in self.bit_offset..self.bit_offset + n as usize {
             let byte_idx = off / 8;
             let bit_idx = 7 - (off % 8);
             if byte_idx < self.data.len() {
@@ -292,7 +291,6 @@ impl<'a> BitstreamReader<'a> {
             } else {
                 val <<= 1;
             }
-            off += 1;
         }
         val
     }
@@ -317,7 +315,7 @@ impl<'a> BitstreamReader<'a> {
         if self.available_bits() > 0 {
             self.u(1); // stop bit
         }
-        while self.bit_offset % 8 != 0 && self.available_bits() > 0 {
+        while !self.bit_offset.is_multiple_of(8) && self.available_bits() > 0 {
             self.u(1); // alignment zero bits
         }
     }
@@ -520,7 +518,7 @@ pub struct PpsFlags {
 }
 
 /// Picture Parameter Set.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PicParameterSet {
     pub pic_parameter_set_id: u8,
     pub seq_parameter_set_id: u8,
@@ -534,25 +532,6 @@ pub struct PicParameterSet {
     pub num_slice_groups_minus1: u8,
     pub flags: PpsFlags,
     pub pic_scaling_list: NvScalingListH264,
-}
-
-impl Default for PicParameterSet {
-    fn default() -> Self {
-        Self {
-            pic_parameter_set_id: 0,
-            seq_parameter_set_id: 0,
-            num_ref_idx_l0_default_active_minus1: 0,
-            num_ref_idx_l1_default_active_minus1: 0,
-            weighted_bipred_idc: 0,
-            pic_init_qp_minus26: 0,
-            pic_init_qs_minus26: 0,
-            chroma_qp_index_offset: 0,
-            second_chroma_qp_index_offset: 0,
-            num_slice_groups_minus1: 0,
-            flags: PpsFlags::default(),
-            pic_scaling_list: NvScalingListH264::default(),
-        }
-    }
 }
 
 /// Memory management control operation.
@@ -1115,7 +1094,7 @@ impl VulkanH264Decoder {
         sps.seq_parameter_set_id = sps_id;
         sps.profile_idc = profile_idc;
         sps.constraint_set_flags = constraint_set_flags;
-        sps.flags.constraint_set0_flag = (constraint_set_flags >> 0) & 1 != 0;
+        sps.flags.constraint_set0_flag = constraint_set_flags & 1 != 0;
         sps.flags.constraint_set1_flag = (constraint_set_flags >> 1) & 1 != 0;
         sps.flags.constraint_set2_flag = (constraint_set_flags >> 2) & 1 != 0;
         sps.flags.constraint_set3_flag = (constraint_set_flags >> 3) & 1 != 0;
@@ -1704,10 +1683,10 @@ impl VulkanH264Decoder {
                 } else {
                     sps.chroma_format_idc
                 };
-                if no_inter_layer_pred_flag != 0 || slh.base_pred_weight_table_flag == 0 {
-                    if !Self::parse_pred_weight_table(reader, &mut slh, chroma_array_type) {
-                        return None;
-                    }
+                if (no_inter_layer_pred_flag != 0 || slh.base_pred_weight_table_flag == 0)
+                    && !Self::parse_pred_weight_table(reader, &mut slh, chroma_array_type)
+                {
+                    return None;
                 }
             }
             if slh.nal_ref_idc != 0 {
@@ -1728,12 +1707,10 @@ impl VulkanH264Decoder {
             }
             reader.se(); // slice_qs_delta
         }
-        if pps.flags.deblocking_filter_control_present_flag {
-            if reader.ue() != 1 {
-                // disable_deblocking_filter_idc
-                reader.se(); // slice_alpha_c0_offset_div2
-                reader.se(); // slice_beta_offset_div2
-            }
+        if pps.flags.deblocking_filter_control_present_flag && reader.ue() != 1 {
+            // disable_deblocking_filter_idc
+            reader.se(); // slice_alpha_c0_offset_div2
+            reader.se(); // slice_beta_offset_div2
         }
 
         Some(slh)
@@ -1806,7 +1783,7 @@ impl VulkanH264Decoder {
                 let weight = reader.se();
                 let offset = reader.se();
                 slh.weights_out_of_range +=
-                    (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                    (!(-128..=127).contains(&weight) || !(-128..=127).contains(&offset)) as i32;
                 slh.luma_weight[0][i] = weight as i16;
                 slh.luma_offset[0][i] = offset as i16;
             } else {
@@ -1818,8 +1795,9 @@ impl VulkanH264Decoder {
                     for j in 0..2 {
                         let weight = reader.se();
                         let offset = reader.se();
-                        slh.weights_out_of_range +=
-                            (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                        slh.weights_out_of_range += (!(-128..=127).contains(&weight)
+                            || !(-128..=127).contains(&offset))
+                            as i32;
                         slh.chroma_weight[0][i][j] = weight as i16;
                         slh.chroma_offset[0][i][j] = offset as i16;
                     }
@@ -1837,7 +1815,7 @@ impl VulkanH264Decoder {
                     let weight = reader.se();
                     let offset = reader.se();
                     slh.weights_out_of_range +=
-                        (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                        (!(-128..=127).contains(&weight) || !(-128..=127).contains(&offset)) as i32;
                     slh.luma_weight[1][i] = weight as i16;
                     slh.luma_offset[1][i] = offset as i16;
                 } else {
@@ -1849,9 +1827,9 @@ impl VulkanH264Decoder {
                         for j in 0..2 {
                             let weight = reader.se();
                             let offset = reader.se();
-                            slh.weights_out_of_range +=
-                                (weight < -128 || weight > 127 || offset < -128 || offset > 127)
-                                    as i32;
+                            slh.weights_out_of_range += (!(-128..=127).contains(&weight)
+                                || !(-128..=127).contains(&offset))
+                                as i32;
                             slh.chroma_weight[1][i][j] = weight as i16;
                             slh.chroma_offset[1][i][j] = offset as i16;
                         }
@@ -2565,38 +2543,38 @@ impl VulkanH264Decoder {
             0 => {
                 // buffering_period (D.1.1)
                 let sps_id = reader.ue() as usize;
-                if sps_id < MAX_NUM_SPS {
-                    if let Some(sps) = &self.spss[sps_id] {
-                        if sps.vui.nal_hrd_parameters_present_flag {
-                            for _ in 0..=sps.vui.nal_hrd.cpb_cnt_minus1 {
-                                reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
-                                reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
-                            }
+                if sps_id < MAX_NUM_SPS
+                    && let Some(sps) = &self.spss[sps_id]
+                {
+                    if sps.vui.nal_hrd_parameters_present_flag {
+                        for _ in 0..=sps.vui.nal_hrd.cpb_cnt_minus1 {
+                            reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
+                            reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
                         }
-                        if sps.vui.vcl_hrd_parameters_present_flag {
-                            for _ in 0..=sps.vui.nal_hrd.cpb_cnt_minus1 {
-                                reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
-                                reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
-                            }
-                        }
-                        self.last_sps_id = sps_id as i32;
                     }
+                    if sps.vui.vcl_hrd_parameters_present_flag {
+                        for _ in 0..=sps.vui.nal_hrd.cpb_cnt_minus1 {
+                            reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
+                            reader.u(sps.vui.initial_cpb_removal_delay_length as u32);
+                        }
+                    }
+                    self.last_sps_id = sps_id as i32;
                 }
             }
             1 => {
                 // pic_timing (D.1.2)
                 let sid = self.last_sps_id as usize;
-                if sid < MAX_NUM_SPS {
-                    if let Some(sps) = &self.spss[sid] {
-                        if sps.vui.nal_hrd_parameters_present_flag
-                            || sps.vui.vcl_hrd_parameters_present_flag
-                        {
-                            reader.u((sps.vui.cpb_removal_delay_length_minus1 + 1) as u32);
-                            reader.u((sps.vui.dpb_output_delay_length_minus1 + 1) as u32);
-                        }
-                        if sps.vui.pic_struct_present_flag {
-                            self.last_sei_pic_struct = reader.u(4) as i32;
-                        }
+                if sid < MAX_NUM_SPS
+                    && let Some(sps) = &self.spss[sid]
+                {
+                    if sps.vui.nal_hrd_parameters_present_flag
+                        || sps.vui.vcl_hrd_parameters_present_flag
+                    {
+                        reader.u((sps.vui.cpb_removal_delay_length_minus1 + 1) as u32);
+                        reader.u((sps.vui.dpb_output_delay_length_minus1 + 1) as u32);
+                    }
+                    if sps.vui.pic_struct_present_flag {
+                        self.last_sei_pic_struct = reader.u(4) as i32;
                     }
                 }
             }
@@ -2634,8 +2612,8 @@ pub fn reference_picture_list_initialization_p_frame(
         }
     }
 
-    short_term.sort_by(|a, b| b.0.cmp(&a.0)); // descending PicNum
-    long_term.sort_by(|a, b| a.0.cmp(&b.0)); // ascending LongTermPicNum
+    short_term.sort_by_key(|a| std::cmp::Reverse(a.0)); // descending PicNum
+    long_term.sort_by_key(|a| a.0); // ascending LongTermPicNum
 
     for &(_, dpb_idx) in &short_term {
         if idx < MAX_REFS {
@@ -2680,9 +2658,9 @@ pub fn reference_picture_list_initialization_b_frame(
         }
     }
 
-    short_before.sort_by(|a, b| b.0.cmp(&a.0)); // descending
-    short_after.sort_by(|a, b| a.0.cmp(&b.0)); // ascending
-    long_term_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    short_before.sort_by_key(|a| std::cmp::Reverse(a.0)); // descending
+    short_after.sort_by_key(|a| a.0); // ascending
+    long_term_entries.sort_by_key(|a| a.0);
 
     // List 0
     let mut idx0 = 0usize;
@@ -3315,27 +3293,6 @@ mod tests {
     #[test]
     fn parse_minimal_sps() {
         // Build a minimal SPS bitstream (Baseline, level 3.0, 176x144)
-        let mut bits: Vec<u8> = Vec::new();
-        // We'll manually construct the bitstream
-        // This tests the parsing infrastructure rather than a real bitstream
-
-        // profile_idc = 66 (Baseline)
-        bits.push(66);
-        // constraint_set_flags = 0
-        bits.push(0);
-        // level_idc = 30
-        bits.push(30);
-        // sps_id = 0 -> ue(0) = "1"
-        // log2_max_frame_num_minus4 = 0 -> ue(0) = "1"
-        // pic_order_cnt_type = 0 -> ue(0) = "1"
-        // log2_max_pic_order_cnt_lsb_minus4 = 0 -> ue(0) = "1"
-        // max_num_ref_frames = 1 -> ue(1) = "010"
-        // gaps_in_frame_num = 0 -> "0"
-        // pic_width_in_mbs_minus1 = 10 -> ue(10) = "00010110"
-        // ... this gets complex; let's just verify the reader infrastructure
-        // by testing what we can parse from a hand-crafted byte sequence.
-
-        // For simplicity, just verify the SPS id and profile parsing:
         let data = [
             66u8,       // profile_idc
             0x40,       // constraint_set_flags (constraint_set1_flag set)

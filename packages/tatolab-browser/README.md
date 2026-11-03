@@ -8,7 +8,7 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   its own helper process. On `start()` it lends its ports to this wheel's Rust,
   which runs CEF's browser process on one thread of that helper. Each frame CEF
   paints is written from host memory into a texture from the node's output
-  pool (`surface_write_from_host_memory`, module host table 1.4) and published
+  pool (`surface_write_from_host_memory`, module host table 1.5) and published
   as an RGBA `VideoFrame`. Python never runs at frame or sample cadence.
 - `data` input: each msgpack map reaches the page as
   `window.dispatchEvent(new CustomEvent("tatolab:data", { detail }))`.
