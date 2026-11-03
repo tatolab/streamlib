@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestReadInboundLinkCatalogEntry, EscalateRequestSetOutputPortCatalogEntry,
@@ -14,7 +15,6 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::descriptors::CatalogEntry;
 use crate::core::output_port_catalog_entries::{
     CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,

@@ -72,16 +72,20 @@ impl SharedNativeServiceLeasesHeldByNativeCode {
         &self,
         service_name: &str,
     ) -> Result<ModuleHostTableSharedNativeServiceLease, String> {
-        let answer = self.native_escalate_channel()?.request_from_parent(serde_json::json!({
-            "op": "acquire_shared_native_service_lease",
-            "service_name": service_name,
-        }))?;
+        let answer = self
+            .native_escalate_channel()?
+            .request_from_parent(serde_json::json!({
+                "op": "acquire_shared_native_service_lease",
+                "service_name": service_name,
+            }))?;
         let text_field = |field: &str| {
             answer
                 .get(field)
                 .and_then(|value| value.as_str())
                 .map(str::to_string)
-                .ok_or_else(|| format!("the parent granted a lease on {service_name} without {field}"))
+                .ok_or_else(|| {
+                    format!("the parent granted a lease on {service_name} without {field}")
+                })
         };
         let lease_held = SharedNativeServiceLeaseHeldByNativeCode {
             lease_id: text_field("handle_id")?,
@@ -107,10 +111,12 @@ impl SharedNativeServiceLeasesHeldByNativeCode {
         lease: ModuleHostTableSharedNativeServiceLeaseHandle,
     ) -> Result<SharedNativeServiceStateTheParentAnswered, String> {
         let lease_id = self.lease_id_of_a_handle(lease)?;
-        let answer = self.native_escalate_channel()?.request_from_parent(serde_json::json!({
-            "op": "read_shared_native_service_lease_state",
-            "lease_id": lease_id,
-        }))?;
+        let answer = self
+            .native_escalate_channel()?
+            .request_from_parent(serde_json::json!({
+                "op": "read_shared_native_service_lease_state",
+                "lease_id": lease_id,
+            }))?;
         state_the_parent_answered(&answer)
     }
 
@@ -199,13 +205,19 @@ mod tests {
 
     fn read_one_request(parent_end: &mut UnixStream) -> serde_json::Value {
         let mut length = [0u8; 4];
-        parent_end.read_exact(&mut length).expect("a request length");
+        parent_end
+            .read_exact(&mut length)
+            .expect("a request length");
         let mut request = vec![0u8; u32::from_be_bytes(length) as usize];
         parent_end.read_exact(&mut request).expect("a request");
         serde_json::from_slice(&request).expect("a JSON request")
     }
 
-    fn answer_ok(parent_end: &mut UnixStream, request: &serde_json::Value, mut fields: serde_json::Value) {
+    fn answer_ok(
+        parent_end: &mut UnixStream,
+        request: &serde_json::Value,
+        mut fields: serde_json::Value,
+    ) {
         fields["request_id"] = request["request_id"].clone();
         fields["result"] = "ok".into();
         let payload = serde_json::to_vec(&fields).expect("an answer encodes");
@@ -250,10 +262,16 @@ mod tests {
             let release = read_one_request(&mut parent_end);
             assert_eq!(release["op"], "release_shared_native_service_lease");
             assert_eq!(release["lease_id"], "browser-host-1");
-            answer_ok(&mut parent_end, &release, serde_json::json!({"handle_id": "browser-host-1"}));
+            answer_ok(
+                &mut parent_end,
+                &release,
+                serde_json::json!({"handle_id": "browser-host-1"}),
+            );
         });
 
-        let granted = leases.acquire("browser-host").expect("the parent grants the lease");
+        let granted = leases
+            .acquire("browser-host")
+            .expect("the parent grants the lease");
         // SAFETY: the lease is held, so its text is alive.
         unsafe {
             assert_eq!(
@@ -270,24 +288,36 @@ mod tests {
         );
         leases.release(granted.lease);
         parent.join().expect("the parent stand-in");
-        assert!(leases.state(granted.lease).unwrap_err().contains("names no lease"));
+        assert!(
+            leases
+                .state(granted.lease)
+                .unwrap_err()
+                .contains("names no lease")
+        );
     }
 
     #[test]
     fn a_helper_without_a_native_escalate_channel_is_refused() {
         let leases = SharedNativeServiceLeasesHeldByNativeCode::new(None);
         let refusal = leases.acquire("browser-host").unwrap_err();
-        assert!(refusal.contains("without a native escalate channel"), "{refusal}");
+        assert!(
+            refusal.contains("without a native escalate channel"),
+            "{refusal}"
+        );
     }
 
     #[test]
     fn each_state_the_parent_spells_is_read_and_another_is_refused() {
         assert_eq!(
-            state_the_parent_answered(&serde_json::json!({"shared_native_service_state": "starting_again"})),
+            state_the_parent_answered(
+                &serde_json::json!({"shared_native_service_state": "starting_again"})
+            ),
             Ok(SharedNativeServiceStateTheParentAnswered::StartingAgain)
         );
         assert_eq!(
-            state_the_parent_answered(&serde_json::json!({"shared_native_service_state": "running"})),
+            state_the_parent_answered(
+                &serde_json::json!({"shared_native_service_state": "running"})
+            ),
             Ok(SharedNativeServiceStateTheParentAnswered::Running)
         );
         assert!(state_the_parent_answered(&serde_json::json!({})).is_err());

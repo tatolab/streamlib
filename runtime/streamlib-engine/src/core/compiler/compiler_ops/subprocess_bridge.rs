@@ -59,7 +59,7 @@ use super::subprocess_escalate::handle_lifecycle::{
     EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
 };
 use super::subprocess_escalate::{
-    WhatTheNodeOfAHelperPlacedProcessorReaches, ESCALATE_OP_ANSWERED_BY_NOTHING,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatTheNodeOfAHelperPlacedProcessorReaches,
     process_bridge_message, refusal_of_an_escalate_request,
     shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
 };

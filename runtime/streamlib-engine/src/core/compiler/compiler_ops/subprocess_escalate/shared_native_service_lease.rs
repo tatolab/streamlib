@@ -89,10 +89,7 @@ pub(super) fn handle_acquire_shared_native_service_lease(
     rid: String,
     request: EscalateRequestAcquireSharedNativeServiceLease,
 ) -> EscalateResponse {
-    let lease = match leases
-        .shared_native_services
-        .lease(&request.service_name)
-    {
+    let lease = match leases.shared_native_services.lease(&request.service_name) {
         Ok(lease) => lease,
         Err(refusal) => return refused(rid, refusal.to_string()),
     };
@@ -252,7 +249,11 @@ mod tests {
         for (state, wire_state, failure) in [
             (SharedNativeServiceState::Running, "running", None),
             (SharedNativeServiceState::Starting, "starting_again", None),
-            (SharedNativeServiceState::StartingAgain, "starting_again", None),
+            (
+                SharedNativeServiceState::StartingAgain,
+                "starting_again",
+                None,
+            ),
             (SharedNativeServiceState::Stopped, "starting_again", None),
             (
                 SharedNativeServiceState::Failed("it crashed".to_string()),
@@ -262,7 +263,10 @@ mod tests {
         ] {
             let mut answer = EscalateResponseOk::default();
             write_the_state_into(&mut answer, &state);
-            assert_eq!(answer.shared_native_service_state.as_deref(), Some(wire_state));
+            assert_eq!(
+                answer.shared_native_service_state.as_deref(),
+                Some(wire_state)
+            );
             assert_eq!(answer.shared_native_service_failure, failure);
         }
     }

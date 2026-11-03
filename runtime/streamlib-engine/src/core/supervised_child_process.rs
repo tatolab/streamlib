@@ -203,7 +203,13 @@ impl Drop for SupervisedChildProcess {
 fn supervisor_thread_name(child_name_for_the_log: &str) -> String {
     let mut name: String = child_name_for_the_log
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
         .take(15)
         .collect();
     if name.is_empty() {
@@ -539,7 +545,11 @@ mod tests {
         }
     }
 
-    fn launch_in(directory: &Path, executable: PathBuf, runs_user_code: bool) -> SupervisedChildProcessLaunch {
+    fn launch_in(
+        directory: &Path,
+        executable: PathBuf,
+        runs_user_code: bool,
+    ) -> SupervisedChildProcessLaunch {
         SupervisedChildProcessLaunch {
             child_name_for_the_log: "the stand-in service".to_string(),
             executable,
@@ -578,12 +588,9 @@ mod tests {
             false,
         );
         let events = Arc::new(Mutex::new(Vec::new()));
-        let mut supervisor = SupervisedChildProcess::start(
-            launch.clone(),
-            Box::new(|| true),
-            events_into(&events),
-        )
-        .unwrap();
+        let mut supervisor =
+            SupervisedChildProcess::start(launch.clone(), Box::new(|| true), events_into(&events))
+                .unwrap();
 
         assert!(wait_until(Duration::from_secs(10), || {
             supervisor.running_child_process_id().is_some() && launch.pidfile_path.is_file()
@@ -629,10 +636,12 @@ mod tests {
             .running_child_process_id()
             .is_some()));
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!events
-            .lock()
-            .unwrap()
-            .contains(&SupervisedChildProcessEvent::Ready));
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .contains(&SupervisedChildProcessEvent::Ready)
+        );
         supervisor.stop();
     }
 
@@ -646,8 +655,7 @@ mod tests {
         );
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut supervisor =
-            SupervisedChildProcess::start(launch, Box::new(|| true), events_into(&events))
-                .unwrap();
+            SupervisedChildProcess::start(launch, Box::new(|| true), events_into(&events)).unwrap();
         assert!(wait_until(Duration::from_secs(10), || supervisor
             .running_child_process_id()
             .is_some()));
@@ -658,7 +666,10 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .any(|event| matches!(event, SupervisedChildProcessEvent::NotRunning { .. }))));
+            .any(|event| matches!(
+                event,
+                SupervisedChildProcessEvent::NotRunning { .. }
+            ))));
         assert!(wait_until(Duration::from_secs(10), || {
             supervisor
                 .running_child_process_id()
@@ -677,15 +688,17 @@ mod tests {
         );
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut supervisor =
-            SupervisedChildProcess::start(launch, Box::new(|| true), events_into(&events))
-                .unwrap();
+            SupervisedChildProcess::start(launch, Box::new(|| true), events_into(&events)).unwrap();
 
         // Five failed starts wait 1 + 2 + 4 + 8 seconds between them.
         assert!(wait_until(Duration::from_secs(25), || events
             .lock()
             .unwrap()
             .iter()
-            .any(|event| matches!(event, SupervisedChildProcessEvent::GivenUp { .. }))));
+            .any(|event| matches!(
+                event,
+                SupervisedChildProcessEvent::GivenUp { .. }
+            ))));
         let events = events.lock().unwrap().clone();
         let not_running = events
             .iter()
@@ -761,7 +774,10 @@ mod tests {
 
     #[test]
     fn a_thread_name_fits_the_kernels_fifteen_bytes() {
-        assert_eq!(supervisor_thread_name("the browser host"), "the-browser-hos");
+        assert_eq!(
+            supervisor_thread_name("the browser host"),
+            "the-browser-hos"
+        );
         assert_eq!(supervisor_thread_name(""), "child");
     }
 

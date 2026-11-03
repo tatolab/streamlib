@@ -92,7 +92,8 @@ pub struct RuntimeContext {
     surface_share_mach_service_rendezvous:
         crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
     /// The native services the runtime's host offered every node.
-    shared_native_services: Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
+    shared_native_services:
+        Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
     /// The loaded stream this context serves.
     loaded_stream: Arc<LoadedStreamARuntimeContextBelongsTo>,
 }

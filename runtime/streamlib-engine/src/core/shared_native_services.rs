@@ -521,8 +521,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let services = services_offering_the_stand_in(directory.path(), Duration::from_secs(60));
         let first = services.lease("stand-in").unwrap();
-        let process_id = std::fs::read_to_string(directory.path().join("services/stand-in.pid"))
-            .unwrap();
+        let process_id =
+            std::fs::read_to_string(directory.path().join("services/stand-in.pid")).unwrap();
         let second = services.lease("stand-in").unwrap();
         assert_eq!(first.endpoint_socket_path(), second.endpoint_socket_path());
         assert_eq!(
@@ -541,7 +541,10 @@ mod tests {
         drop(services.lease("stand-in").unwrap());
         let leased_again = services.lease("stand-in").unwrap();
         std::thread::sleep(Duration::from_millis(600));
-        assert_eq!(services.state_of("stand-in"), SharedNativeServiceState::Running);
+        assert_eq!(
+            services.state_of("stand-in"),
+            SharedNativeServiceState::Running
+        );
         assert!(pidfile.is_file());
 
         drop(leased_again);
@@ -556,7 +559,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let services = services_offering_the_stand_in(directory.path(), Duration::from_secs(60));
         let refusal = services.lease("browser-host").unwrap_err().to_string();
-        assert!(refusal.contains("no shared native service named browser-host"), "{refusal}");
+        assert!(
+            refusal.contains("no shared native service named browser-host"),
+            "{refusal}"
+        );
         let refusal = services
             .offer(SharedNativeServiceOffer {
                 service_name: "stand-in".to_string(),

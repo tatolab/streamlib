@@ -78,7 +78,6 @@ pub mod sdk {
 
     pub use streamlib_engine::core::child_process_lifetime;
     pub use streamlib_engine::core::child_process_restart_backoff;
-    pub use streamlib_engine::core::supervised_child_process;
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
@@ -95,6 +94,8 @@ pub mod sdk {
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
+    pub use streamlib_engine::core::shared_native_services;
+    pub use streamlib_engine::core::supervised_child_process;
     pub use streamlib_engine::core::unix_socket_path_cleared_for_bind;
 
     pub use streamlib_engine::core::texture;

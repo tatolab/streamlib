@@ -142,16 +142,20 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
         }
-        EscalateRequest::SetOutputPortCatalogEntry(req) => Some(
-            port_catalog_entry::handle_set_output_port_catalog_entry(what_the_node_reaches, rid, req),
-        ),
-        EscalateRequest::ReadInboundLinkCatalogEntry(req) => Some(
-            port_catalog_entry::handle_read_inbound_link_catalog_entry(
+        EscalateRequest::SetOutputPortCatalogEntry(req) => {
+            Some(port_catalog_entry::handle_set_output_port_catalog_entry(
                 what_the_node_reaches,
                 rid,
                 req,
-            ),
-        ),
+            ))
+        }
+        EscalateRequest::ReadInboundLinkCatalogEntry(req) => {
+            Some(port_catalog_entry::handle_read_inbound_link_catalog_entry(
+                what_the_node_reaches,
+                rid,
+                req,
+            ))
+        }
         EscalateRequest::AcquireSharedNativeServiceLease(req) => Some(
             shared_native_service_lease::handle_acquire_shared_native_service_lease(
                 &what_the_node_reaches.shared_native_service_leases,
