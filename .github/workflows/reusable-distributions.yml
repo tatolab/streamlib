@@ -685,11 +685,29 @@ jobs:
       # `--check-url` skips a file PyPI already holds byte for byte, so re-running
       # this job in the original run after a partial upload sends only the rest;
       # a rebuilt distribution differs and fails on a hash mismatch.
+      #
+      # One file at a time, carrying on past a refusal: PyPI rate-limits the
+      # creation of new project names (`429 Too many new projects created`), and
+      # a first release of a new distribution must not hold back every
+      # distribution PyPI already has. The job still fails, naming each refused
+      # file, so a re-run sends what is left.
       - name: Upload every distribution to PyPI
         if: ${{ !inputs.dry_run }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: uv publish --trusted-publishing never --check-url https://pypi.org/simple/ dist/*
+        run: |
+          refused_distribution_files=()
+          for distribution_path in dist/*; do
+            if ! uv publish --trusted-publishing never --check-url https://pypi.org/simple/ "$distribution_path"; then
+              refused_distribution_files+=("$(basename "$distribution_path")")
+            fi
+          done
+          if [ "${#refused_distribution_files[@]}" -gt 0 ]; then
+            for refused_distribution_file in "${refused_distribution_files[@]}"; do
+              echo "::error::PyPI did not take $refused_distribution_file; re-run this job to send it"
+            done
+            exit 1
+          fi
 
   # Versioned files first and `latest` last, so an install that reads `latest`
   # always finds the tarball it names.
