@@ -5,8 +5,9 @@
 //! parent reads `graph`'s `metrics` off.
 //!
 //! One board per helper spawn: the parent creates it before the child starts
-//! and holds it until the processor is removed, so the counts a crashed helper
-//! last wrote stay readable. Its keys are fixed at creation and links are wired
+//! and holds it until the next spawn's board replaces it, then adds what it
+//! last held to the new board's counts, so a link's losses never go backwards
+//! across a restart. Its keys are fixed at creation and links are wired
 //! live, so the board declares a slot per permitted inbound link and an entry
 //! per declared output port, and the parent assigns each inbound link a slot and
 //! each output port's channel a wiring generation. An entry renders as its

@@ -18,7 +18,7 @@ stream keeps running around a hole until the stream is re-run.
   ever reaches the dead instance. Its id, config, links and place in the graph never
   change, so nothing upstream or downstream is re-planned.
 - **A crash loop ends.** A helper that keeps dying soon after it starts is given up on: the node
-  is `failed`, with the last death's reason, and the rest of the stream keeps running as it does
+  reads `Error`, with the last death's reason, and the rest of the stream keeps running as it does
   today.
 - **`graph` says what happened.** A node between a death and its next start reads `Restarting`,
   with how many times it has been restarted and why it last died.
@@ -82,20 +82,21 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   with its process: a fresh interpreter re-imports the class and constructs the instance, `setup()`
   runs on it with the node's current config, the setup command carries every link the node holds, `run`
   follows. A link's `graph` state is not re-stamped across a restart: a link `wired` before the
-  death reads `wired` throughout, and one still `pending` at the death is refused on the death path
-  and reads `error`, though the new helper's setup command still carries it. A frame or
+  death reads `wired` throughout, and one still `pending` at the death is refused on the death path,
+  reads `error`, and is left off the new helper's setup command, so an `error` link never carries
+  a bag; it is disconnected and connected again like any refused link. A frame or
   message in flight at the death is lost and never replayed; a Python processor's in-memory state
   is gone, as it is at every start. A restart gets a fresh loss-count board, as every spawn does.
   Budgets are engine-chosen and not authorable. [helper-process-restart]
 - **ADDED (§Processor model & scheduling, DECIDED):** One restart policy for every child process
   the runtime keeps alive. An engine type, `ChildProcessRestartBackoff`, holds the wait before each
-  start — 1 s, doubling to 30 s, back to 1 s after a run of 60 s — and an optional crash-loop limit
+  start — 1 s, doubling to 30 s, back to 1 s after a run of 60 s — and a crash-loop limit
   counting deaths in a row that each came within 60 s of their start. The local relay's children
   run it with no limit; a helper and the shared browser host run it with a limit of 5 — the fifth
   such death in a row is the last. Each owner keeps its own loop (the relay's supervision thread,
   the helper's thread-runner poll, the browser host's supervisor) and asks the type when to start
   and whether to give up. [helper-process-restart]
-- **ADDED (§Processor model & scheduling, DECIDED):** A node past its crash-loop limit is `failed`
+- **ADDED (§Processor model & scheduling, DECIDED):** A node past its crash-loop limit reads `Error`
   with the last death's reason and stays down; the rest of its stream keeps running. Re-running the
   stream (`tatolab run`, or `tatolab start` after a stop) starts it with a fresh count. A restart
   whose `setup()` refuses, or whose helper refuses the engine's build id, counts as one death in a
@@ -104,8 +105,8 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   reads `Restarting` between a death and its next `ready`, and its
   `components.helper_process_restarts` carries `restart_count` (restarts since the stream loaded)
   and `last_exit_reason` (the exit status or signal, its pid, and the tail of the helper's standard
-  error, as the setup refusal already quotes it). A node past its limit reads `Error`, and the
-  readiness error names the crash loop and the last death's reason. The MCP instructions name
+  error, as the setup refusal already quotes it). A node past its limit reads `Error`; readiness
+  waits through `Restarting`, so its error names the crash loop and the last death's reason. The MCP instructions name
   `Restarting` and the restart record. [helper-process-restart]
 
 ## MODIFIED
@@ -114,8 +115,8 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   detects by the process itself" keeps its whole death path and is followed by the restart entry
   above; the ladder itself is unchanged, and a helper on the ladder is never restarted.
 - **MODIFIED (§Processor model, the link-confirmation entry, `:1440-1452`):** a helper that dies
-  with a link unconfirmed still takes the link down on the death path; the restarted helper's setup
-  command carries it again, so it reads `pending` and then `wired` or `error`.
+  with a link unconfirmed still takes the link down on the death path; it reads `error` and the
+  restarted helper's setup command leaves it off.
 - **MODIFIED (§Processor model, the loss-count board entry, `:1114-1137`):** a restarted helper
   gets a fresh board, and each wiring's counts stay cumulative across the restart: the parent
   keeps what the dead helper's board last held for every wiring still in place and adds it to what
@@ -135,15 +136,19 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   - `thread_runner.rs:826-835` — the Manual loop asks the host to restart instead of latching
     `Error`, and moves the state to `Restarting`, `Running` and `Error` with reasons; the backoff
     is a monotonic deadline checked in the existing 100 ms poll, never a sleep, so a shutdown
-    during the wait is seen within one poll.
+    during the wait is seen within one poll. A helper whose escalate socket closed is given 5 s
+    to exit before it is taken to have stopped answering, so a dying helper is restarted rather
+    than failed.
   - `ProcessorInterpreterSpawnHostProcessor` gains the restart: reset `child_is_gone`,
     `shutdown_was_already_asked_of_this_helper` and the bridge, reopen the envelope, then run
     `start_the_helper_process_and_await_its_registration` and `start` again.
   - `OutOfProcessLinkWiringEnvelope` gains reopening for a new far side: from
-    `RefusedBecauseTheFarSideIsGone` back to `WaitsForTheSetupCommandToGoOut`, keeping the recorded
-    links.
+    `RefusedBecauseTheFarSideIsGone` back to `RidesTheSetupCommand`, keeping every recorded link
+    but one handed over past the setup command that the dead helper never opened.
   - `ProcessorState` gains `Restarting`; the state component keeps a reason on every `Error`.
-  - `local_relay_child_supervision.rs` reads its waits from `ChildProcessRestartBackoff`.
+  - The local relay reads its waits from `ChildProcessRestartBackoff` through the engine's
+    `SupervisedChildProcess` (`core/supervised_child_process.rs`), which the shared native
+    services run on too.
 
 ## REMOVED
 
@@ -169,3 +174,7 @@ spawn host's restart, the thread-runner states and the `graph` fields, proven by
 whose fixture helper `os._exit`s after its first message and is seen `restarting`, then `wired`
 and running again, and a second fixture that dies in `setup()` and is seen `failed` after five
 tries. The browser host's supervisor adopts the type when it is built, under its own change.
+
+As built, the fixtures die in `process()`: one beside a source-sink pair, proven in CI without a
+GPU (`test_helper_placement.py`), and one that dies on every start and is left `Error` after five
+(`test_helper_process_restart.py`, GPU rig only). No fixture yet dies in a restart's `setup()`.

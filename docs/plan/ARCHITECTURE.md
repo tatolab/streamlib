@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -48,13 +48,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2618,
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
   #2682; stream-identity-and-persistence — SHIPPED #2962; create-project — SHIPPED #2995;
-  queued-stream-actions — SHIPPED #3004, #3009]
+  queued-stream-actions — SHIPPED #3004, #3009; amended by stream-interface-and-routing-policy:
+  `add` also takes a `@stream` function as a subgraph]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
   processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
-  — SHIPPED #1814]
+  — SHIPPED #1814; amended by strict-port-families: messages are five fixed families, a port's
+  family compared at `connect`, still with no versions and no schema registry]
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
@@ -104,9 +106,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
-  SHIPPED #2866]
+  SHIPPED #2866; amended by stream-interface-and-routing-policy: the scaffold's `expose` takes no
+  level]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
+- **DECIDED** — The lead demo is an agent building a live visual system while the person
+  watches. Its first form is a stream overlay an agent assembles over the MCP tools from the
+  browser source, Rive and the compositor, served to a browser by URL; its second is
+  data-driven motion graphics, scrubbable and exportable, once stream clocks land (§Processor
+  model). A release, the docs and the samples lead with it; camera and microphone capture
+  stay modules, never the headline. Owner, 2026-11-03. [lead-demo-agent-built-live-visuals]
+  Rejected: a Kerbal-style parts garage as the lead — it needs all three engine milestones and
+  its own app before anyone can touch it (owner, 2026-11-03).
 - **DECIDED** — `tatolabd` takes no stream and no argument: it is the machine's one runtime
   process — one engine, its built-ins, the local API on `<runtime directory>/local-api.sock`,
   the engine's signal ladder, and no Python in its process. It runs in the foreground and
@@ -249,7 +260,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by
+  stream-interface-and-routing-policy: `expose_port` gives way to the routing policy's tools]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -946,7 +958,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, linux-pool-slot-import-once; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -968,7 +980,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   no contract is unchanged in every respect — still pure plumbing, `connect` still
   compares nothing, and the frame header still carries no schema ident. Owner, 2026-10-16
   and 2026-10-17. [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED
-  #2033; moq-relays — SHIPPED #2821, #2850]
+  #2033; moq-relays — SHIPPED #2821, #2850; amended by strict-port-families: a link joins two
+  ports of one family, `connect` compares it, and msgpack leaves user code]
   Rejected: an encoding applied inside `write` and `read` — it stood between an encoder's port
   and a stock MoQ player (owner, 2026-10-16).
 - **DECIDED** — A port declares three things, plus an optional window contract on an
@@ -983,7 +996,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `read(port, into=T)` the opt-in strictness dial, casting the bytes through `T.from_bytes`
   and raising at read; in Rust the read target's `Deserialize` impl is the validation,
   always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812; moq-relays —
-  SHIPPED #2821, #2840]
+  SHIPPED #2821, #2840; amended by strict-port-families: a port also declares its family, and an
+  input the names it requires]
   Rejected: a port declaring a shape or a convention name the engine compares — the 2026-09-10
   ruling, whose reason (agents on a mesh reading dynamically coded nodes) no longer exists;
   the entry is documentation, not a contract (owner, 2026-10-16).
@@ -1249,19 +1263,74 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the five values its device settled — machine-dependent because the device format is,
   which is truer than a static lie — and renders the sentinel itself while nothing has
   settled it. [schema-free-ports — SHIPPED #1816; audio-port-window-contract — SHIPPED
-  #2032, #2034; moq-relays — SHIPPED #2840]
-- **OPEN** — What a port reports about the messages it produces or accepts, and how a message
-  shape is described and served at all — by any author, the built-ins included — so an
-  agent can wire a custom processor it did not write: an input that only receives and
-  may be fed several shapes, an output that may write a duck-typed message, nothing
-  required, and a form that survives a transport where no link names the producer.
-  Undecided; the shapes considered and set aside are recorded in
-  `docs/research/2026-09-10-bag-shape-hints-for-agents.md`. Do not build; ports render
-  exactly as the entry above states until this closes. [agent-readable-processor-catalog]
+  #2032, #2034; moq-relays — SHIPPED #2840; amended by strict-port-families: a port renders its
+  family and its declared or required names]
+- **DECIDED** — A port carries one of five families, each one engine-owned memory layout:
+  **Image** — a GPU surface of a pixel format from a closed enum (`rgba8`, `rgba16f`, `r8`,
+  `nv12`, `p010`, …), its size and colour; **Array** — named attributes (`P`, `Cd`, `logits`),
+  each a dtype and a shape, in a GPU pool slot or CPU shared memory, an unchanged attribute
+  passed by reference — tensors, point clouds, detections, meshes; **Channels** — planar `f32`
+  or `f64` samples `[channel][sample]` at a rate, with `start_sample` and channel names
+  declared on the port — audio, FMU signals, sensors, control values; **Packets** — opaque
+  encoded bytes with a pts, the keyframe flag as `starts_group` and the codec string the port
+  declares; **Records** — a small open keyed map of bounded size, which the runtime encodes, so
+  a writer hands it a plain dict and msgpack never appears in user code. A sixth family is
+  admitted only for a distinct memory layout, never for a new domain. A `@stream` subgraph is
+  a container, never a family, and latest-value control is a transport detail of Channels or
+  Records under `newest`. Built-ins never publish Records for data another family fits, and
+  the node catalog marks a Records port unchecked. Owner, 2026-11-03. [strict-port-families]
+  Rejected: audio as its own family — Channels is the same layout (owner, 2026-11-03).
+- **DECIDED** — The families are the engine's foundation of primitives, as Holoscan's and
+  TouchDesigner's are: a small, clearly defined set in place of a loose system or a
+  negotiated one. `connect` compares two ports' families by equality and refuses a mismatch,
+  naming both sides, before a frame flows. Inside a family names are open — channel names,
+  attribute names, record keys and codec strings pass through unknown — and an input may
+  require names (`requires=("rpm",)`), checked at `connect` against the output's declared
+  names. The trade is accepted: a person or an agent converts between families explicitly,
+  with a node they place (`ChannelsToImage`, `ImageToArray`, a decoder), and no conversion is
+  ever automatic or implied — the engine inserts none and never moves a payload between GPU
+  and CPU on its own — so a slow path is always one somebody wrote and can see in the graph.
+  `ImageToArray` is zero-copy where the layouts match. Ports are class attributes carrying their family (`Input(Image,
+  delivery="newest")`, `Output(Channels, names=(…), rate=…)`), so pyright infers what a read
+  returns and a mistyped port fails at import. Owner, 2026-11-03. [strict-port-families]
+  Rejected: capability negotiation between ports (GStreamer's caps), and converters the engine
+  inserts (Holoscan's `auto_insert_converters`) — a link's path and its cost stop being visible
+  to an author or an agent (owner, 2026-11-03).
+- **OPEN** — How a port's names and `requires=` are spelled beyond the shape above. Decided with
+  the change that builds the families. [strict-port-families]
+- **DECIDED** — The data plane is zero-copy by family. Each family's descriptor is a fixed
+  `#[repr(C)]` value in the iceoryx2 user header, `FrameHeader` leaves the payload, and the
+  payload starts 64-byte aligned. A read borrows the sample in place — a pyclass owning it,
+  offering the buffer protocol and `__dlpack__` — with borrows bounded per port, past which the
+  link drops and counts, and a borrow stays counted while any export of it lives. A write loans
+  its destination (`with ctx.loan(port, …) as out:`) and publishes on exit. An Image or GPU
+  Array crosses as `{pool, slot, generation, timeline_value}`: the surface service hands a
+  pool's slot set to each processor interpreter once, which imports every slot once, and a
+  per-pool claim table in shared memory replaces the per-frame socket check-out, its generation
+  re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
+  Linux import-once ships first and on its own [linux-pool-slot-import-once — IN-FLIGHT]. Every descriptor, being a cross-language ABI,
+  carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
+- **OPEN** — Fan-out under zero copy: a borrow pins the producer's own slot, so readers of one
+  output share its pool, and a slow reader that holds slots can starve a timely one. Direction
+  (review, not decided): each link gets its own borrow quota and the pool is sized for the
+  producer's in-flight frames plus every link's quota, so a link past its quota drops only its
+  own frames and no reader ever copies; memory grows with fan-out. Settled in the change that
+  builds the data plane. [strict-port-families]
+- **DECIDED** — The families migrate the whole tree in the same work: every built-in port, every
+  cast type, the stream package, the scaffold and the first-party modules in `packages/`.
+  Records carries a node not yet converted. Owner, 2026-11-03. [strict-port-families]
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
   (setup/teardown vs process). [execution-model; reopened by one-runtime-per-machine: scheduling across streams]
+- **DECIDED** — Each stream runs on one stream clock over `MediaClock`: real time, the default;
+  scaled, `base + scale × elapsed`; or stepped. Stepped and faster than real time run behind a
+  cross-process step barrier — the clock advances only once every node of the stream finished
+  the step, FMI co-simulation's barrier. Device sources and live output stay on real time; a
+  stepped stream renders to a file or a simulation view. A nested `@stream` may carry its own
+  clock. Every stamp is still read from the machine's monotonic clock. Rendering to a file
+  also needs a file source and an MP4 file sink. Owner, 2026-11-03. [stream-clocks]
+  Rejected: a clock per node — nodes of one stream would disagree on time (owner, 2026-11-03).
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
   processor waits on one readiness queue — epoll on Linux, kqueue `EVFILT_READ` on macOS,
   level-triggered on both, with one 500 ms bound — holding its inbound listener and its
@@ -1587,6 +1656,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   import or carries no stamp is refused by name, quoting the interpreter's stderr. It costs one
   interpreter start per load and per live add of an undescribed type. [package-split-and-lend
   — SHIPPED #2689; runtime-hosting — SHIPPED #2711, #2721]
+- **DECIDED** — A stream's interface is what it exposes: `expose` declares its inputs and its
+  outputs, with no level and nothing about networks, and an optional stream-level name that
+  defaults to the port's own. `stream_builder.add` takes a `@stream` function as it takes a node
+  class: its extra parameters are promoted config, so binding them is partial application; its
+  exposed ports are the only ones reachable from outside; and it flattens at compile, its nodes
+  named under the reference's name (`overlay/comp`). An added subgraph's exposed ports are its
+  interface to the stream that adds it and are wired inside that stream like any node's; only
+  the outermost stream's exposures reach the routing policy. The same function still runs alone
+  as a stream. Owner, 2026-11-03. [stream-interface-and-routing-policy]
+- **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether
+  every installed `@stream` is addable or only marked ones. [stream-interface-and-routing-policy]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
@@ -2953,7 +3033,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-installed-as-a-component: the helper
   bundle credited in the app's place]
 
-## Networking — transport, moq, webrtc — SHIPPED (unbuilt: a publicly valid certificate on the every-interface listener)
+## Networking — transport, moq, webrtc — SHIPPED (unbuilt: the routing policy, a publicly valid certificate on the every-interface listener)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3158,7 +3238,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   insides are seen. Nothing leaves the machine until a port is public. The CLI and the app
   list every running stream with its private and public ports; an internal port may be
   listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
-  one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853]
+  one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853; amended by
+  stream-interface-and-routing-policy: levels leave code for the routing policy below; amended by
+  strict-port-families: the machine's owner previews any port on the machine, exposed or not]
+- **DECIDED** — What goes out where is decided on the publisher's side, by the runtime, never
+  in the stream's code, and applied live with the edge check above. For now that is one toggle:
+  every exposed output is published to every relay the machine has joined, and the owner turns
+  it off per relay in the app, the CLI or MCP. Relays are destinations: the runtime keeps a
+  transport-neutral manifest of exposed ports — name, stream, family and its names — and the
+  MoQ catalog and `.hang` are one projection of it, beside which WebRTC, NDI, SRT or a file
+  sink is each one adapter. In the app the toggle lives in the Relays settings section, a page
+  per relay. The local relay's loopback listener is outside the toggle: the preview page and
+  every reader on the machine always see every exposed port. Owner, 2026-11-03. [stream-interface-and-routing-policy]
+  Rejected: exposure levels and a `local_only` veto in code — where a port goes is the
+  machine's owner's call, not the author's (owner, 2026-11-03).
+- **OPEN** — The routing policy's final form, settled after the toggle has been tested: per-output
+  toggles and segments ("only `kind:video` to Cloudflare"); ingress, the same shape for exposed
+  inputs, binding an input to another stream's output or a remote track, off by default, with the
+  runtime inserting the receive node for a remote track, and whether it needs its own consent
+  step; a compose-style file that seeds it; and whether the publisher and the relays stay
+  separate concerns. Direction (review, not decided): routing logic on the publisher's side,
+  in the spirit of Docker's `EXPOSE` and `-p`. [stream-interface-and-routing-policy]
 - **DECIDED** — Every exposed port is a track at a relay, named by its address, and that is the
   one way a port is read from outside its stream — by another stream through the relay source
   node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,
@@ -3189,7 +3289,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is inspected by exposing it — private keeps it on the machine — or by chaining nodes off it
   at the access level its author chooses, and an internal port is seen through its stream's
   logs alone. The engine's internals are proven by unit tests; the engine is never proven by
-  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875]
+  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875; amended by
+  strict-port-families: an internal port is also seen through an on-machine preview]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
   for the rigs, an MCP image tool — side paths past exposure and the relays, which agents
   reach for over the product's own doors (owner, 2026-10-17).
@@ -3391,6 +3492,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   relay already has its own player (owner, 2026-10-16).
   Rejected: the player's published package copied in with no build — it is a library of many
   packages a browser cannot load unbundled (owner, 2026-10-17).
+- **DECIDED** — The machine's owner can preview any port of any node on the machine, exposed or
+  not, the way TouchDesigner shows every wire: a view per family — a thumbnail for Image, shape
+  and statistics or a point view for Array, a waveform for Channels, keyframes and bitrate with
+  an on-demand decode for Packets, a table or a tree for Records. A preview is on the machine
+  only: it never reaches a relay's every-interface listener or a hosted relay, and it changes
+  no stream's interface. Owner, 2026-11-03. [strict-port-families]
+- **OPEN** — How a preview reads a port that is not exposed, and who on the machine may open one.
+  Direction (review, not decided): the runtime publishes the previewed port to the local relay's
+  loopback listener alone while a preview is open, so the relay stays the one way a port is read.
+  Settled in the change that builds the families. [strict-port-families]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; Red5's adapter; and a zero-copy

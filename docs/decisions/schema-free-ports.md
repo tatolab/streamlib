@@ -1,5 +1,9 @@
 # Schema-free ports
 
+> Partially superseded 2026-11-03 by `strict-port-families.md`: a port declares one of five
+> families and `connect` compares it. Class identity, no codegen, no schema registry and no
+> versions stand.
+
 Rationale for the `[schema-free-ports]` entries in `docs/plan/ARCHITECTURE.md`
 §Processor model & scheduling, decided 2026-08-03. Supersedes
 `data-plane-cast-not-contract.md`, which kept unilateral hints, an advisory connect

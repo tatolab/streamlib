@@ -159,12 +159,14 @@ impl ObservableProcessorState {
     /// giving up at `deadline`. Returns the state it settled on.
     ///
     /// `Running` means setup returned; `Error` means it failed. A state still
-    /// [`before setup completed`] is the deadline expiring.
+    /// [`before setup completed`] is the deadline expiring. A helper-placed
+    /// processor that reads `Restarting` is waited on until its next start
+    /// resolves.
     ///
     /// [`before setup completed`]: ProcessorState::is_before_setup_completed
     pub fn wait_until_setup_resolved(&self, deadline: Instant) -> ProcessorState {
         let mut current = self.current.lock();
-        while current.is_before_setup_completed() {
+        while current.is_before_setup_completed() || *current == ProcessorState::Restarting {
             if self.changed.wait_until(&mut current, deadline).timed_out() {
                 break;
             }
@@ -411,6 +413,25 @@ mod tests {
 
         assert_eq!(settled, ProcessorState::Pending);
         assert!(settled.is_before_setup_completed());
+    }
+
+    /// Readiness waits through a helper restart for the state the next start
+    /// settles on.
+    #[test]
+    fn a_restarting_processor_is_waited_on_until_its_next_start_resolves() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Restarting));
+        let restarter = {
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(30));
+                state.transition_to(ProcessorState::Running);
+            })
+        };
+
+        let settled = state.wait_until_setup_resolved(Instant::now() + Duration::from_secs(5));
+        restarter.join().expect("the restarting thread finishes");
+
+        assert_eq!(settled, ProcessorState::Running);
     }
 
     /// `graph` renders a helper-placed processor's restarts beside its state,

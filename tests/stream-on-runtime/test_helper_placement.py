@@ -387,8 +387,10 @@ def test_a_crashed_helper_is_restarted_in_a_new_process_and_the_pipeline_keeps_r
     """
     tatolabd = start_tatolabd_running_stream(dies_abruptly_beside_a_survivor_pair)
     first_helper_pid = tatolabd.await_marker("ABOUT_TO_DIE")["pid"]
-    death_line = tatolabd.await_stderr_containing("a new one starts in")
-    assert f"pid={first_helper_pid}" in death_line, death_line
+    death_line = tatolabd.await_stderr_containing(
+        f"its helper process (pid={first_helper_pid}) died"
+    )
+    tatolabd.await_stderr_containing("a new one starts in")
     sink_reports_before_the_death_was_surfaced = sum(
         1
         for line in tatolabd.stderr_lines[: tatolabd.stderr_lines.index(death_line) + 1]
