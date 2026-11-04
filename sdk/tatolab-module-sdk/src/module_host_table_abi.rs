@@ -134,8 +134,9 @@ pub const MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES: usize = 4;
 /// One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
 ///
 /// `fd` stays the caller's: the host dups it. Offsets and strides past
-/// `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
-/// refused.
+/// `plane_count` are ignored. A `drm_format_modifier` other than linear (`0`)
+/// is taken for one plane of `rgba32` or `bgra32` only, which the host imports
+/// as a texture laid out by that modifier.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleHostTableDmaBufImport {

@@ -623,3 +623,124 @@ fn a_yuyv_pixel_buffer_of_another_extent_is_refused() {
     .expect_err("the conversion scales nothing");
     assert!(refusal.contains("scales nothing"), "{refusal}");
 }
+
+/// The test frame's RGBA bytes: every channel varies across the frame, so a
+/// swapped channel or a misread tile shows.
+#[cfg(target_os = "linux")]
+fn rgba_test_pattern() -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((PIXEL_WIDTH * PIXEL_HEIGHT * 4) as usize);
+    for row in 0..PIXEL_HEIGHT {
+        for column in 0..PIXEL_WIDTH {
+            rgba.extend_from_slice(&[
+                (column * 7) as u8,
+                (row * 13) as u8,
+                ((column + row) * 3) as u8,
+                255,
+            ]);
+        }
+    }
+    rgba
+}
+
+/// Copy `rgba` over every pixel of `texture`, leaving it in `GENERAL`.
+#[cfg(target_os = "linux")]
+fn fill_texture_with(gpu: &GpuContext, texture: &crate::core::rhi::Texture, rgba: &[u8]) {
+    let staging = gpu
+        .acquire_storage_buffer(
+            &crate::core::rhi::TensorStorageBufferLayout::of_bytes(rgba.len() as u64)
+                .expect("a non-zero staging buffer"),
+        )
+        .expect("staging allocation");
+    unsafe { std::ptr::copy_nonoverlapping(rgba.as_ptr(), staging.mapped_ptr(), rgba.len()) };
+    let mut recorder = gpu
+        .create_command_recorder("surface_color_conversion_test_fill")
+        .expect("recorder");
+    recorder.begin().expect("begin");
+    recorder
+        .record_image_barrier(
+            texture,
+            VulkanLayout::UNDEFINED,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            VulkanStage::HOST,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::HOST_WRITE,
+            VulkanAccess::TRANSFER_WRITE,
+        )
+        .expect("to transfer-dst");
+    recorder
+        .record_copy_buffer_to_image(
+            &staging,
+            texture,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            ImageCopyRegion::tightly_packed(PIXEL_WIDTH, PIXEL_HEIGHT),
+        )
+        .expect("fill");
+    recorder
+        .record_image_barrier(
+            texture,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            VulkanLayout::GENERAL,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_WRITE,
+            VulkanAccess::MEMORY_READ,
+        )
+        .expect("to general");
+    recorder.submit_and_wait().expect("submit the fill");
+}
+
+/// A texture another process registered with a tiled DRM format modifier —
+/// the way a browser page's paint arrives — is imported through its modifier
+/// and copied into the RGBA destination texel for texel, on the first
+/// conversion and on the one after.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
+    use crate::host_rhi::HostTextureExt as _;
+    let Some(gpu) =
+        gpu_or_skip("a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture")
+    else {
+        return;
+    };
+    let service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let source = gpu
+        .acquire_render_target_dma_buf_image(PIXEL_WIDTH, PIXEL_HEIGHT, TextureFormat::Rgba8Unorm)
+        .expect("a render-target DMA-BUF image");
+    if source.vulkan_inner().chosen_drm_format_modifier() == 0 {
+        println!("the driver chose the linear modifier, so nothing here is tiled — skipping");
+        service.stop();
+        return;
+    }
+    let rgba = rgba_test_pattern();
+    fill_texture_with(&gpu, &source, &rgba);
+    let source_id = uuid::Uuid::new_v4().to_string();
+    gpu.surface_store()
+        .expect("the service's store is installed")
+        .host_register_texture(&source_id, &source, None, None, VulkanLayout::GENERAL)
+        .expect("the service registers the tiled texture");
+    let destination_id = a_storage_texture(&gpu, PIXEL_WIDTH, storage_and_copy_usage());
+    let registry = EscalateHandleRegistry::new();
+
+    for conversion in ["first", "second"] {
+        convert_through_the_escalate_op(
+            &gpu,
+            &registry,
+            &source_id,
+            &destination_id,
+            bt709_limited(),
+        )
+        .unwrap_or_else(|refusal| panic!("the {conversion} conversion is refused: {refusal}"));
+        assert_eq!(
+            read_registered_texture(&gpu, &destination_id),
+            rgba,
+            "the {conversion} conversion copies every texel"
+        );
+    }
+    assert!(
+        registry
+            .surface_color_conversion_session()
+            .forget_resolved_surface(&source_id),
+        "the session kept the imported texture as a source"
+    );
+    service.stop();
+}

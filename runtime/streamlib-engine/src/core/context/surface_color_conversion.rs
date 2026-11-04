@@ -68,6 +68,7 @@ struct AdoptedNv12IOSurfaceConversionDestination {
 pub(crate) struct SurfaceColorConversionSession {
     sources_by_surface_id: HashMap<String, SurfaceColorConversionSource>,
     color_converters_by_source_format: HashMap<PixelFormat, RhiColorConverter>,
+    rgba_or_bgra_texture_sources_by_surface_id: HashMap<String, TextureRegistration>,
     #[cfg(target_os = "linux")]
     yuyv_pixel_buffer_destinations_by_surface_id: HashMap<String, PixelBuffer>,
     #[cfg(target_os = "linux")]
@@ -117,6 +118,13 @@ impl SurfaceColorConversionSession {
                 source_surface_id,
                 destination_surface_id,
                 ycbcr_side_color,
+            );
+        }
+        if self.converts_from_an_rgba_or_bgra_texture(gpu, source_surface_id)? {
+            return self.convert_an_rgba_or_bgra_texture_into_an_rgba_texture(
+                gpu,
+                source_surface_id,
+                destination_surface_id,
             );
         }
         let source_color = ycbcr_side_color;
@@ -317,6 +325,147 @@ impl SurfaceColorConversionSession {
         Ok((destination_surface_id.to_string(), destination))
     }
 
+    /// Whether `source_surface_id` is an RGBA or BGRA texture another process
+    /// registered, imported and kept the first time a conversion names it. A
+    /// source this session already reads as YCbCr, or a pooled frame, never
+    /// asks the surface store.
+    fn converts_from_an_rgba_or_bgra_texture(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+    ) -> Result<bool> {
+        if self
+            .rgba_or_bgra_texture_sources_by_surface_id
+            .contains_key(source_surface_id)
+        {
+            return Ok(true);
+        }
+        if self.sources_by_surface_id.contains_key(source_surface_id)
+            || crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
+        {
+            return Ok(false);
+        }
+        let Some(store) = gpu.surface_store() else {
+            return Ok(false);
+        };
+        let Ok((texture, layout_the_producer_left_it_in)) = store.lookup_texture(source_surface_id)
+        else {
+            return Ok(false);
+        };
+        if !matches!(
+            texture.format(),
+            TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm
+        ) {
+            return Ok(false);
+        }
+        self.rgba_or_bgra_texture_sources_by_surface_id.insert(
+            source_surface_id.to_string(),
+            TextureRegistration::new(texture, layout_the_producer_left_it_in),
+        );
+        Ok(true)
+    }
+
+    /// Copy the RGBA or BGRA texture `source_surface_id` into the RGBA
+    /// texture `destination_surface_id`, texel for texel, and return once the
+    /// destination's next reader sees it — with the destination's
+    /// registration, whose layout the conversion settled.
+    ///
+    /// The source is another process's image this one imported, so its
+    /// contents reach this queue through no earlier submission: the barrier
+    /// that makes them visible waits on nothing, and leaves the image in the
+    /// layout the next conversion transitions it from.
+    fn convert_an_rgba_or_bgra_texture_into_an_rgba_texture(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+        destination_surface_id: &str,
+    ) -> Result<(String, TextureRegistration)> {
+        const LAYOUT_THE_CONVERSION_SAMPLES_IN: VulkanLayout =
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+        let source = self
+            .rgba_or_bgra_texture_sources_by_surface_id
+            .get(source_surface_id)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "surface {source_surface_id} was resolved and is gone"
+                ))
+            })?;
+        let source_texture = source.texture();
+        let destination = resolve_color_conversion_destination(gpu, destination_surface_id)?;
+        let destination_texture = destination.texture();
+        let source_pixel_format = match source_texture.format() {
+            TextureFormat::Bgra8Unorm => PixelFormat::Bgra32,
+            _ => PixelFormat::Rgba32,
+        };
+        let color_converter = match self
+            .color_converters_by_source_format
+            .get(&source_pixel_format)
+        {
+            Some(color_converter) => color_converter,
+            None => self
+                .color_converters_by_source_format
+                .entry(source_pixel_format)
+                .or_insert(gpu.create_color_converter(source_pixel_format, PixelFormat::Rgba32)?),
+        };
+        let kernel =
+            color_converter.prepare_image_to_image_storage(source_texture, destination_texture)?;
+        let recorder = match self.conversion_recorder.as_mut() {
+            Some(recorder) => recorder,
+            None => self
+                .conversion_recorder
+                .insert(gpu.create_command_recorder("surface_color_conversion")?),
+        };
+        recorder.begin()?;
+        let recorded = (|| -> Result<()> {
+            recorder.record_image_barrier(
+                source_texture,
+                source.current_layout(),
+                LAYOUT_THE_CONVERSION_SAMPLES_IN,
+                VulkanStage::NONE,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::NONE,
+                VulkanAccess::SHADER_SAMPLED_READ,
+            )?;
+            recorder.record_image_barrier(
+                destination_texture,
+                destination.current_layout(),
+                VulkanLayout::GENERAL,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::MEMORY_WRITE | VulkanAccess::MEMORY_READ,
+                VulkanAccess::SHADER_WRITE,
+            )?;
+            recorder.record_dispatch(
+                &kernel,
+                destination_texture
+                    .width()
+                    .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                destination_texture
+                    .height()
+                    .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                1,
+            )?;
+            recorder.record_image_barrier(
+                destination_texture,
+                VulkanLayout::GENERAL,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanStage::ALL_COMMANDS,
+                VulkanAccess::SHADER_WRITE,
+                VulkanAccess::MEMORY_READ,
+            )
+        })();
+        if let Err(record_failure) = recorded {
+            recorder.abort_recording();
+            return Err(record_failure);
+        }
+        recorder.submit()?;
+        source.update_layout(LAYOUT_THE_CONVERSION_SAMPLES_IN);
+        destination.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+        recorder.wait_for_completion()?;
+        Ok((destination_surface_id.to_string(), destination))
+    }
+
     /// Resolve `surface_id` as a foreign device's DMA-BUF read through a host
     /// mapping, the way a device that cannot import the buffer resolves it.
     #[cfg(all(test, target_os = "linux"))]
@@ -351,7 +500,11 @@ impl SurfaceColorConversionSession {
     /// Forget what this session resolved for `surface_id`, as a source or a
     /// destination, answering whether it held anything.
     pub(crate) fn forget_resolved_surface(&mut self, surface_id: &str) -> bool {
-        let forgot_a_source = self.sources_by_surface_id.remove(surface_id).is_some();
+        let forgot_a_source = self.sources_by_surface_id.remove(surface_id).is_some()
+            | self
+                .rgba_or_bgra_texture_sources_by_surface_id
+                .remove(surface_id)
+                .is_some();
         #[cfg(target_os = "macos")]
         let forgot_a_destination = self
             .nv12_iosurface_destinations_by_surface_id
@@ -383,6 +536,9 @@ impl SurfaceColorConversionSession {
             return Ok(true);
         }
         if self.sources_by_surface_id.contains_key(source_surface_id)
+            || self
+                .rgba_or_bgra_texture_sources_by_surface_id
+                .contains_key(source_surface_id)
             || a_pooled_ycbcr_frame_held_in_this_process(gpu, source_surface_id)
         {
             return Ok(false);

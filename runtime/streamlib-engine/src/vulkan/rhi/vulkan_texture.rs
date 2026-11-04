@@ -1164,29 +1164,19 @@ impl HostVulkanTexture {
             .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))
     }
 
-    /// Subprocess-side import of a render-target DMA-BUF image.
-    ///
-    /// The host allocated the image via [`Self::new_render_target_dma_buf`]
-    /// with a tiled DRM modifier (LINEAR is sampler-only on NVIDIA). The
-    /// subprocess receives:
-    /// - `plane_fds` — DMA-BUF file descriptors, one per plane.
-    /// - `plane_offsets` / `plane_strides` — exact layout the host's
-    ///   `vkGetImageSubresourceLayout` reported.
-    /// - `drm_format_modifier` — the modifier the host's driver chose;
-    ///   non-zero, must match an `external_only=FALSE` modifier on the
-    ///   subprocess's GPU.
-    ///
-    /// Builds a subprocess-local `VkImage` with
-    /// `VkImageDrmFormatModifierExplicitCreateInfoEXT` chained, imports
-    /// the DMA-BUF memory, and binds the image. Symmetric to the host
-    /// allocation; same modifier on both sides keeps the GPU memory
-    /// layout consistent.
+    /// Import a DMA-BUF image laid out by a tiled DRM format modifier, with
+    /// the plane offsets and strides its exporter reported, as an image of
+    /// `usage`.
     ///
     /// Consumes every plane fd: plane 0 is handed to the driver at
     /// `vkAllocateMemory`, whatever that call returns (see
     /// [`HostVulkanDevice::import_dma_buf_memory`]), and the rest close
     /// here — multi-plane binding is not wired yet.
-    pub fn import_render_target_dma_buf(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one property of the exported image the import must match"
+    )]
+    pub fn import_dma_buf_with_drm_format_modifier(
         vulkan_device: &Arc<HostVulkanDevice>,
         plane_fds: Vec<std::os::fd::OwnedFd>,
         plane_offsets: &[u64],
@@ -1196,45 +1186,32 @@ impl HostVulkanTexture {
         height: u32,
         format: TextureFormat,
         allocation_size: vk::DeviceSize,
+        usage: streamlib_consumer_rhi::VulkanImageUsage,
     ) -> Result<Self> {
+        const OPERATION: &str = "HostVulkanTexture::import_dma_buf_with_drm_format_modifier";
         if plane_fds.is_empty() {
-            return Err(Error::GpuError(
-                "import_render_target_dma_buf: empty fd vec".into(),
-            ));
+            return Err(Error::GpuError(format!("{OPERATION}: no plane fd")));
         }
         if plane_offsets.len() != plane_fds.len() || plane_strides.len() != plane_fds.len() {
             return Err(Error::GpuError(format!(
-                "import_render_target_dma_buf: plane arrays length mismatch — fds={} offsets={} strides={}",
+                "{OPERATION}: plane arrays length mismatch — fds={} offsets={} strides={}",
                 plane_fds.len(),
                 plane_offsets.len(),
                 plane_strides.len()
             )));
         }
         if drm_format_modifier == 0 {
-            return Err(Error::GpuError(
-                "import_render_target_dma_buf: zero (LINEAR) modifier — host should have allocated a tiled modifier; LINEAR DMA-BUFs are sampler-only on NVIDIA"
-                    .into(),
-            ));
+            return Err(Error::GpuError(format!(
+                "{OPERATION}: the linear modifier is no tiled layout; a linear DMA-BUF imports \
+                 through HostVulkanTexture::from_dma_buf_fd"
+            )));
         }
+        let usage_flags = usage
+            .as_vk_or_refusal()
+            .map_err(|refusal| Error::GpuError(format!("{OPERATION}: {refusal}")))?;
 
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
-        // Same usage set as the create_info builder below — tracked
-        // separately so VulkanTextureLike::vk_image_usage_flags can
-        // report it without re-reading the image_create_info chain.
-        // TRANSFER_DST is required by Skia's `check_image_info` gate
-        // (and by symmetric host↔consumer parity); see the matching
-        // comment in
-        // `streamlib::sdk::context::GpuContext::acquire_render_target_dma_buf_image`.
-        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::COLOR_ATTACHMENT
-            // STORAGE for subprocess compute shaders that bind the
-            // imported VkImage as a storage image (#531). Must match
-            // the host's `acquire_render_target_dma_buf_image` usage
-            // flags or the cross-process import fails.
-            | vk::ImageUsageFlags::STORAGE;
 
         let plane_layouts: Vec<vk::SubresourceLayout> = plane_offsets
             .iter()
@@ -1275,7 +1252,7 @@ impl HostVulkanTexture {
 
         let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
             Error::GpuError(format!(
-                "import_render_target_dma_buf: create_image failed (modifier=0x{:016x}): {e}",
+                "{OPERATION}: create_image failed (modifier=0x{:016x}): {e}",
                 drm_format_modifier
             ))
         })?;
@@ -1283,11 +1260,7 @@ impl HostVulkanTexture {
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
         let alloc_size = allocation_size.max(mem_requirements.size);
 
-        // Use plane 0's fd for the import; multi-plane DRM modifiers
-        // bind separate memory per plane via VkBindImageMemoryInfo +
-        // VkBindImagePlaneMemoryInfo, which we'll wire when a multi-plane
-        // consumer surfaces. Single-plane covers BGRA / RGBA — the
-        // formats #510 publishes RT modifiers for today.
+        // A single-plane BGRA or RGBA image binds plane 0's memory alone.
         let mut plane_fds = plane_fds.into_iter();
         let plane_0_fd = plane_fds.next().expect("checked non-empty above");
         drop(plane_fds);
@@ -1305,9 +1278,7 @@ impl HostVulkanTexture {
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
             unsafe { device.destroy_image(image, None) };
-            Error::GpuError(format!(
-                "import_render_target_dma_buf: bind_image_memory failed: {e}"
-            ))
+            Error::GpuError(format!("{OPERATION}: bind_image_memory failed: {e}"))
         })?;
 
         Ok(Self {

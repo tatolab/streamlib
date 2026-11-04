@@ -71,10 +71,10 @@ pub(crate) use gpu_kernels::{
 use linux::HelperPixelBufferMemoryFlavour;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
-    CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
-    HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
-    HelperForeignSurfaceUnregisterDebt, OpaqueFdAllocationExportDescription,
-    foreign_dma_buf_plane_layout,
+    CpuReadbackCopyDirection, DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
+    HelperAcquiredTexture, HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
+    HelperCpuReadbackExport, HelperDeviceExport, HelperForeignSurfaceUnregisterDebt,
+    OpaqueFdAllocationExportDescription, foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{

@@ -28,6 +28,7 @@ pub(crate) use export_staging::{
     CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
 };
 pub(crate) use foreign_dma_buf::{
+    DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
     HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
 };
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;

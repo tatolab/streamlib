@@ -460,6 +460,55 @@ fn plane_fds_of_reply(
     Ok(reply_fds)
 }
 
+/// Where a single-plane texture with a tiled DRM format modifier sits in its
+/// DMA-BUF, and the usage its registration states, as a lookup reply carries
+/// them.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TiledDmaBufTextureOfALookupReply {
+    plane_offset_bytes: u64,
+    plane_stride_bytes: u64,
+    allocation_byte_size: u64,
+    usage: streamlib_consumer_rhi::VulkanImageUsage,
+}
+
+#[cfg(target_os = "linux")]
+impl TiledDmaBufTextureOfALookupReply {
+    /// The one plane's offset and stride, the allocation's size — the larger
+    /// of `plane_sizes[0]` and `vk_image_allocation_size` — and the usage,
+    /// refused unless the reply states exactly one offset and one stride.
+    fn of(response: &serde_json::Value) -> Result<Self> {
+        let only_plane_value = |key: &str| -> Result<u64> {
+            match response
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(serde_json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                })
+                .as_deref()
+            {
+                Some([Some(value)]) => Ok(*value),
+                _ => Err(Error::Configuration(format!(
+                    "lookup_texture: a texture with a tiled DRM format modifier states one \
+                     plane's {key}, and the reply states {:?}",
+                    response.get(key)
+                ))),
+            }
+        };
+        let plane_size_bytes = plane_sizes_of_reply(response, 1)[0];
+        let vk_image = super::surface_share_wire_verbs::parse_vk_image_create_info_fields(response);
+        Ok(Self {
+            plane_offset_bytes: only_plane_value("plane_offsets")?,
+            plane_stride_bytes: only_plane_value("plane_strides")?,
+            allocation_byte_size: plane_size_bytes.max(vk_image.vk_image_allocation_size),
+            usage: streamlib_consumer_rhi::VulkanImageUsage(vk_image.vk_image_usage),
+        })
+    }
+}
+
 /// The `plane_sizes` a lookup reply states, one per plane fd; zeros when
 /// the reply states none or a different count.
 #[cfg(target_os = "linux")]
@@ -1581,11 +1630,12 @@ impl SurfaceStoreInner {
         }
     }
 
-    /// Lookup a texture from the surface-share service via Unix socket.
-    /// Returns the imported [`Texture`] paired with the
-    /// producer's last-published `current_image_layout`. Cross-process
-    /// consumers feed the layout into the source layout of their first
-    /// QFOT acquire barrier (#633).
+    /// Look a texture up from the surface-share service via Unix socket and
+    /// import it — through its DRM format modifier when the registration
+    /// states a tiled one, as a linear image otherwise. Returns the imported
+    /// [`Texture`] paired with the producer's last-published
+    /// `current_image_layout`, the source layout of a cross-process
+    /// consumer's first acquire barrier.
     #[cfg(target_os = "linux")]
     pub fn lookup_texture(
         &self,
@@ -1641,7 +1691,6 @@ impl SurfaceStoreInner {
             .expect("plane_fds_of_reply refuses an empty plane list");
         drop(plane_fds);
 
-        // Extract width, height, format from the response
         let width = response
             .get("width")
             .and_then(|v| v.as_u64())
@@ -1669,8 +1718,6 @@ impl SurfaceStoreInner {
             Error::Configuration(format!("lookup_texture: unknown format '{}'", format_str))
         })?;
 
-        let allocation_size = (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
-
         let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
             .get()
             .ok_or_else(|| {
@@ -1679,19 +1726,39 @@ impl SurfaceStoreInner {
                 )
             })?;
 
-        let vulkan_texture = crate::vulkan::rhi::HostVulkanTexture::from_dma_buf_fd(
-            vulkan_device,
-            dma_buf_fd,
-            width,
-            height,
-            format,
-            allocation_size,
-        )?;
+        let drm_format_modifier = response
+            .get("drm_format_modifier")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let vulkan_texture = if drm_format_modifier == 0 {
+            let allocation_size =
+                (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
+            crate::vulkan::rhi::HostVulkanTexture::from_dma_buf_fd(
+                vulkan_device,
+                dma_buf_fd,
+                width,
+                height,
+                format,
+                allocation_size,
+            )?
+        } else {
+            let tiled = TiledDmaBufTextureOfALookupReply::of(&response)?;
+            crate::vulkan::rhi::HostVulkanTexture::import_dma_buf_with_drm_format_modifier(
+                vulkan_device,
+                vec![dma_buf_fd],
+                &[tiled.plane_offset_bytes],
+                &[tiled.plane_stride_bytes],
+                drm_format_modifier,
+                width,
+                height,
+                format,
+                tiled.allocation_byte_size,
+                tiled.usage,
+            )?
+        };
 
-        // Parse the producer's last-published `VkImageLayout` from the
-        // response (#633). Absent or unparseable defaults to UNDEFINED
-        // — back-compat for surface-share daemons / clients that haven't
-        // been updated yet.
+        // Absent or unparseable is UNDEFINED: the producer published no
+        // layout.
         let current_image_layout = response
             .get("current_image_layout")
             .and_then(|v| v.as_i64())
@@ -4506,5 +4573,46 @@ mod mach_surface_share_pool_tests {
             slot_key_of(&frame_id) == held_slot_key
         });
         assert!(the_slot_came_back, "the slot returns once nothing uses it");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tiled_dma_buf_texture_lookup_reply_tests {
+    use super::TiledDmaBufTextureOfALookupReply;
+    use streamlib_consumer_rhi::VulkanImageUsage;
+
+    #[test]
+    fn a_tiled_texture_reply_names_its_plane_its_allocation_and_its_usage() {
+        let reply = serde_json::json!({
+            "resource_type": "texture",
+            "drm_format_modifier": 0x0300_0000_0060_6014u64,
+            "plane_sizes": [8_388_608u64],
+            "plane_offsets": [0u64],
+            "plane_strides": [7680u64],
+            "vk_image_usage": 0x05,
+            "vk_image_allocation_size": 8_294_400u64,
+        });
+        assert_eq!(
+            TiledDmaBufTextureOfALookupReply::of(&reply).unwrap(),
+            TiledDmaBufTextureOfALookupReply {
+                plane_offset_bytes: 0,
+                plane_stride_bytes: 7680,
+                allocation_byte_size: 8_388_608,
+                usage: VulkanImageUsage(0x05),
+            }
+        );
+    }
+
+    #[test]
+    fn a_tiled_texture_reply_without_one_plane_stride_is_refused() {
+        let reply = serde_json::json!({
+            "drm_format_modifier": 0x0300_0000_0060_6014u64,
+            "plane_sizes": [8_388_608u64],
+            "plane_offsets": [0u64],
+            "plane_strides": [],
+        });
+        let refusal = TiledDmaBufTextureOfALookupReply::of(&reply)
+            .expect_err("a tiled image needs its plane's stride");
+        assert!(refusal.to_string().contains("plane_strides"), "{refusal}");
     }
 }

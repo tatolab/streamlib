@@ -615,7 +615,8 @@ pub struct ModuleHostForeignDmaBuf<'description> {
     pub allocation_byte_size: u64,
     pub plane_offsets_bytes: &'description [u64],
     pub plane_strides_bytes: &'description [u64],
-    /// `0`, `DRM_FORMAT_MOD_LINEAR`: the only layout a plane stride describes.
+    /// `0`, `DRM_FORMAT_MOD_LINEAR`, for rows at the plane strides; a tiled
+    /// modifier for one plane of `rgba32` or `bgra32`, imported as a texture.
     pub drm_format_modifier: u64,
 }
 

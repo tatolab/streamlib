@@ -369,3 +369,145 @@ fn a_tiled_modifier_is_refused_by_value() {
     .expect_err("a tiled buffer must be refused");
     assert!(refusal.contains("0x100000000000001"), "{refusal:?}");
 }
+
+/// NVIDIA's block-linear layout, the modifier a page CEF paints on an NVIDIA
+/// GPU arrives with.
+const NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER: u64 = 0x0300_0000_0060_6014;
+
+fn a_tiled_bgra_texture() -> ForeignDmaBufTextureWithATiledModifier {
+    ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[0],
+        &[ADOPTED_WIDTH as u64 * 4],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER,
+    )
+    .expect("one bgra32 plane with a tiled modifier is a texture")
+}
+
+/// A tiled BGRA paint registers as a texture the parent imports through its
+/// modifier: the lookup answers the texture vocabulary, the one plane's
+/// layout, and the read-only usage the parent imports it with.
+#[test]
+fn a_tiled_bgra_dma_buf_registers_as_a_texture_with_its_modifier() {
+    let share = SurfaceShareUnderTest::start("adoption-tiled-texture");
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
+    let foreign_fd = a_foreign_memory_fd();
+
+    let adopted_surface_id = exchange_client
+        .register_foreign_dma_buf_texture_with_a_tiled_modifier(
+            foreign_fd.as_raw_fd(),
+            &a_tiled_bgra_texture(),
+        )
+        .expect("the service adopts the tiled texture");
+    drop(foreign_fd);
+
+    let (lookup_response, received_fds) = exchange_client
+        .surface_share_request_with_fds(
+            &serde_json::json!({"op": "lookup", "surface_id": adopted_surface_id}),
+            &[],
+        )
+        .expect("the lookup round trip completes");
+    drop(received_fds);
+    assert!(
+        lookup_response.get("error").is_none(),
+        "the lookup must not refuse: {lookup_response}"
+    );
+    assert_eq!(lookup_response["resource_type"], "texture");
+    assert_eq!(lookup_response["format"], "bgra8_unorm");
+    assert_eq!(
+        lookup_response["drm_format_modifier"],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER
+    );
+    assert_eq!(lookup_response["plane_offsets"], serde_json::json!([0]));
+    assert_eq!(
+        lookup_response["plane_strides"],
+        serde_json::json!([ADOPTED_WIDTH * 4])
+    );
+    assert_eq!(
+        lookup_response["vk_image_allocation_size"],
+        ADOPTED_BYTE_SIZE
+    );
+    assert_eq!(lookup_response["vk_image_usage"], 0x05);
+
+    exchange_client
+        .unregister_foreign_surface(&adopted_surface_id)
+        .expect("the adoption unregisters");
+}
+
+#[test]
+fn a_tiled_rgba_dma_buf_is_an_rgba8_texture() {
+    let texture = ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Rgba32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[0],
+        &[256],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER,
+    )
+    .expect("one rgba32 plane with a tiled modifier is a texture");
+    assert_eq!(texture.texture_format, TextureFormat::Rgba8Unorm);
+}
+
+#[test]
+fn a_tiled_ycbcr_dma_buf_is_refused_naming_its_format() {
+    let refusal = ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Nv12FullRange,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[0, 1024],
+        &[64, 64],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER,
+    )
+    .expect_err("a tiled YCbCr buffer is no texture the converter samples");
+    assert!(refusal.contains("nv12"), "{refusal:?}");
+}
+
+#[test]
+fn a_tiled_dma_buf_with_two_planes_is_refused() {
+    let refusal = ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[0, 2048],
+        &[256, 256],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER,
+    )
+    .expect_err("a tiled image binds one plane");
+    assert!(refusal.contains("one plane"), "{refusal:?}");
+}
+
+#[test]
+fn a_tiled_plane_outside_its_allocation_is_refused() {
+    let refusal = ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[ADOPTED_BYTE_SIZE],
+        &[256],
+        NVIDIA_BLOCK_LINEAR_DRM_FORMAT_MODIFIER,
+    )
+    .expect_err("the plane must start inside the allocation");
+    assert!(refusal.contains("outside"), "{refusal:?}");
+}
+
+#[test]
+fn a_linear_dma_buf_is_not_a_tiled_texture() {
+    let refusal = ForeignDmaBufTextureWithATiledModifier::described_by(
+        PixelFormat::Bgra32,
+        ADOPTED_WIDTH,
+        ADOPTED_HEIGHT,
+        ADOPTED_BYTE_SIZE,
+        &[0],
+        &[256],
+        DRM_FORMAT_MOD_LINEAR,
+    )
+    .expect_err("a linear buffer reads through its plane layout");
+    assert!(refusal.contains("linear"), "{refusal:?}");
+}
