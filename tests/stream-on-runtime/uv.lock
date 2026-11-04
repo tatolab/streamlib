@@ -1852,7 +1852,7 @@ wheels = [
 
 [[package]]
 name = "tatolab-camera"
-version = "0.1.0"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-camera" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1863,7 +1863,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
 
 [[package]]
 name = "tatolab-compositor"
-version = "0.1.0"
+version = "0.68.20"
 source = { editable = "../../packages/tatolab-compositor" }
 dependencies = [
     { name = "tatolab-stream" },
