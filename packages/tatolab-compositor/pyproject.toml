@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-compositor"
-version = "0.68.18"
+version = "0.68.20"
 description = "Video compositing nodes for Tatolab streams: layer frames with alpha on the GPU."
 readme = "README.md"
 requires-python = ">=3.10"
