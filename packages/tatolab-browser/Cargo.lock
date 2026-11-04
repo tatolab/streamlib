@@ -1111,6 +1111,7 @@ dependencies = [
  "cef",
  "libc",
  "objc2",
+ "serde_json",
  "tatolab-browser-page-bridge",
  "tatolab-browser-tab-protocol",
  "tracing",
@@ -1137,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "pyo3",
  "tracing",

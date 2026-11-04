@@ -4,6 +4,7 @@
 //! One tab: the page a node asked for, and everything CEF's handlers send that
 //! node over its connection.
 
+use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -12,8 +13,9 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use tatolab_browser_tab_protocol::PaintedIOSurfaceSenderOfTheBrowserHost;
 use tatolab_browser_tab_protocol::{
-    BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest, TAB_PROTOCOL_VERSION,
-    TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter, TabProtocolSocketFailure,
+    BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest, PageInputTrackKind,
+    TAB_PROTOCOL_VERSION, TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter,
+    TabProtocolSocketFailure,
 };
 
 /// How many painted frames go by between two reports of what a tab painted.
@@ -24,6 +26,13 @@ const PAINTS_BETWEEN_REPORTS: u64 = 600;
 const MOST_PAGE_DATA_REQUESTS_QUEUED: u32 = 256;
 /// How many bytes of `data` one tab may queue for the CEF thread.
 const MOST_PAGE_DATA_BYTES_QUEUED: u64 = 64 * 1024 * 1024;
+
+/// The most frames of one video input queued for the page; past it, the
+/// newest is dropped so the page draws the latest frames the CEF thread keeps
+/// up with.
+const MOST_PAGE_INPUT_VIDEO_FRAMES_QUEUED_PER_INPUT: u32 = 2;
+/// The most blocks of one audio input queued for the page.
+const MOST_PAGE_INPUT_AUDIO_BLOCKS_QUEUED_PER_INPUT: u32 = 32;
 
 /// How long the CEF thread waits for the node to copy a painted texture
 /// before the page may paint into it again; past it, the page goes on and the
@@ -51,6 +60,8 @@ pub struct BrowserHostTab {
     page_data_requests_queued: AtomicU32,
     page_data_bytes_queued: AtomicU64,
     page_data_requests_dropped: AtomicU64,
+    page_input_chunks_queued_by_input_port_name: Mutex<HashMap<String, u32>>,
+    page_input_chunks_dropped: AtomicU64,
     next_painted_texture_number: AtomicU64,
     last_painted_texture_number_the_node_copied: Mutex<u64>,
     painted_texture_copied_by_the_node: Condvar,
@@ -106,6 +117,8 @@ impl BrowserHostTab {
             page_data_requests_queued: AtomicU32::new(0),
             page_data_bytes_queued: AtomicU64::new(0),
             page_data_requests_dropped: AtomicU64::new(0),
+            page_input_chunks_queued_by_input_port_name: Mutex::new(HashMap::new()),
+            page_input_chunks_dropped: AtomicU64::new(0),
             next_painted_texture_number: AtomicU64::new(1),
             last_painted_texture_number_the_node_copied: Mutex::new(0),
             painted_texture_copied_by_the_node: Condvar::new(),
@@ -238,6 +251,69 @@ impl BrowserHostTab {
             .fetch_sub(1, Ordering::AcqRel);
         self.page_data_bytes_queued
             .fetch_sub(byte_count as u64, Ordering::AcqRel);
+    }
+
+    /// Count one more chunk of `input_port_name` queued for the CEF thread;
+    /// `false`, and the chunk dropped, when the input is not one the tab was
+    /// opened with or its queue is full.
+    pub fn page_input_chunk_queued(&self, input_port_name: &str) -> bool {
+        let most_queued = match self
+            .tab_request
+            .page_input_tracks
+            .iter()
+            .find(|track| track.input_port_name == input_port_name)
+            .map(|track| track.kind)
+        {
+            Some(PageInputTrackKind::Video) => MOST_PAGE_INPUT_VIDEO_FRAMES_QUEUED_PER_INPUT,
+            Some(PageInputTrackKind::Audio) => MOST_PAGE_INPUT_AUDIO_BLOCKS_QUEUED_PER_INPUT,
+            None => {
+                self.page_input_chunk_dropped(input_port_name);
+                return false;
+            }
+        };
+        let mut queued_by_input_port_name = self
+            .page_input_chunks_queued_by_input_port_name
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queued = queued_by_input_port_name
+            .entry(input_port_name.to_string())
+            .or_insert(0);
+        if *queued < most_queued {
+            *queued += 1;
+            return true;
+        }
+        drop(queued_by_input_port_name);
+        self.page_input_chunk_dropped(input_port_name);
+        false
+    }
+
+    /// The CEF thread took one queued chunk of `input_port_name`.
+    pub fn page_input_chunk_dequeued(&self, input_port_name: &str) {
+        if let Some(queued) = self
+            .page_input_chunks_queued_by_input_port_name
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_mut(input_port_name)
+        {
+            *queued = queued.saturating_sub(1);
+        }
+    }
+
+    /// Count one chunk of `input_port_name` that never reached the page.
+    pub fn page_input_chunk_dropped(&self, input_port_name: &str) {
+        let dropped = self
+            .page_input_chunks_dropped
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if dropped == 1 || dropped.is_multiple_of(PAINTS_BETWEEN_REPORTS) {
+            self.log_to_the_node(
+                BrowserHostTabLogLevel::Info,
+                format!(
+                    "{dropped} input chunks dropped before reaching the page, the latest of \
+                     {input_port_name}"
+                ),
+            );
+        }
     }
 
     /// Log `message` under this tab in the node's log.
@@ -511,7 +587,7 @@ fn painted_iosurface_sender_of(
 mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
-    use tatolab_browser_tab_protocol::TabProtocolMessageReader;
+    use tatolab_browser_tab_protocol::{PageInputTrack, TabProtocolMessageReader};
 
     fn tab_with_slots(slot_count: u32) -> (BrowserHostTab, TabProtocolMessageReader) {
         let (host_end, node_end) = UnixStream::pair().unwrap();
@@ -528,11 +604,28 @@ mod tests {
                 frame_slot_count: slot_count,
                 paint_into_shared_textures: false,
                 painted_iosurface_mach_service_name: None,
+                page_input_tracks: vec![PageInputTrack {
+                    input_port_name: "video_in_0".to_string(),
+                    kind: PageInputTrackKind::Video,
+                }],
             },
             TabProtocolMessageWriter::over(host_end),
             BrowserHostTabFrameSlots::create(slot_count, 2, 1).unwrap(),
         );
         (tab, TabProtocolMessageReader::over(node_end))
+    }
+
+    #[test]
+    fn a_video_input_queues_two_frames_and_an_input_the_tab_was_not_opened_with_none() {
+        let (tab, _reader) = tab_with_slots(1);
+
+        assert!(tab.page_input_chunk_queued("video_in_0"));
+        assert!(tab.page_input_chunk_queued("video_in_0"));
+        assert!(!tab.page_input_chunk_queued("video_in_0"));
+        tab.page_input_chunk_dequeued("video_in_0");
+        assert!(tab.page_input_chunk_queued("video_in_0"));
+        assert!(!tab.page_input_chunk_queued("audio_in_0"));
+        assert_eq!(tab.page_input_chunks_dropped.load(Ordering::Relaxed), 2);
     }
 
     #[test]

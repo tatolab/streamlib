@@ -31,10 +31,29 @@ pub use tab_protocol_socket::{
 use serde::{Deserialize, Serialize};
 
 /// The protocol version this build speaks; a peer speaking another is refused.
-pub const TAB_PROTOCOL_VERSION: u32 = 3;
+pub const TAB_PROTOCOL_VERSION: u32 = 4;
 
 /// The shared service name a node leases the browser host by.
 pub const BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "browser-host";
+
+/// What kind of `MediaStreamTrack` a page input becomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageInputTrackKind {
+    Video,
+    Audio,
+}
+
+/// One wired input the page reaches as
+/// `window.tatolab.inputTrack(input_port_name)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageInputTrack {
+    pub input_port_name: String,
+    pub kind: PageInputTrackKind,
+}
+
+/// The most inputs one page may be handed.
+pub const MOST_PAGE_INPUT_TRACKS_PER_TAB: usize = 16;
 
 /// What a node asks the host for a page with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +77,8 @@ pub struct BrowserHostTabRequest {
     /// The bootstrap name of the Mach port the node receives painted
     /// IOSurfaces on, macOS only.
     pub painted_iosurface_mach_service_name: Option<String>,
+    /// The node's wired page inputs; an input not listed has no track.
+    pub page_input_tracks: Vec<PageInputTrack>,
 }
 
 /// One message a node sends the host.
@@ -78,6 +99,26 @@ pub enum TabProtocolMessageFromNode {
     /// [`TabProtocolMessageFromBrowserHost::TexturePainted`]
     /// `painted_texture_number`, so the page may paint into it again.
     PaintedTextureCopied { painted_texture_number: u64 },
+    /// One frame of the page input `input_port_name`: RGBA rows, top first,
+    /// `width × 4` bytes apart.
+    DeliverPageInputVideoFrame {
+        input_port_name: String,
+        width: u32,
+        height: u32,
+        timestamp_ns: i64,
+        #[serde(with = "serde_bytes_as_bin")]
+        rgba_pixels: Vec<u8>,
+    },
+    /// One block of the page input `input_port_name`: interleaved
+    /// little-endian `f32` samples.
+    DeliverPageInputAudioBlock {
+        input_port_name: String,
+        sample_rate: u32,
+        channel_count: u32,
+        first_sample_timestamp_ns: i64,
+        #[serde(with = "serde_bytes_as_bin")]
+        interleaved_samples_le_f32: Vec<u8>,
+    },
     /// Close the page; the host closes it as well when the connection ends.
     CloseTab,
 }
@@ -226,6 +267,26 @@ impl BrowserHostTabRequest {
                 self.frame_slot_count
             ));
         }
+        if self.page_input_tracks.len() > MOST_PAGE_INPUT_TRACKS_PER_TAB {
+            return Err(format!(
+                "a page is handed at most {MOST_PAGE_INPUT_TRACKS_PER_TAB} inputs, not {}",
+                self.page_input_tracks.len()
+            ));
+        }
+        for (index, track) in self.page_input_tracks.iter().enumerate() {
+            if track.input_port_name.is_empty() {
+                return Err("a page input names its input port".to_string());
+            }
+            if self.page_input_tracks[..index]
+                .iter()
+                .any(|earlier| earlier.input_port_name == track.input_port_name)
+            {
+                return Err(format!(
+                    "the page input {:?} is listed twice",
+                    track.input_port_name
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -255,6 +316,16 @@ mod tests {
             frame_slot_count: 3,
             paint_into_shared_textures: true,
             painted_iosurface_mach_service_name: Some("com.tatolab.browser.paint.1.1".into()),
+            page_input_tracks: vec![
+                PageInputTrack {
+                    input_port_name: "video_in_0".into(),
+                    kind: PageInputTrackKind::Video,
+                },
+                PageInputTrack {
+                    input_port_name: "audio_in_0".into(),
+                    kind: PageInputTrackKind::Audio,
+                },
+            ],
         }
     }
 
@@ -271,6 +342,20 @@ mod tests {
             TabProtocolMessageFromNode::ReleaseFrameSlot { slot: 2 },
             TabProtocolMessageFromNode::PaintedTextureCopied {
                 painted_texture_number: 7,
+            },
+            TabProtocolMessageFromNode::DeliverPageInputVideoFrame {
+                input_port_name: "video_in_0".to_string(),
+                width: 2,
+                height: 1,
+                timestamp_ns: 9,
+                rgba_pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            },
+            TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
+                input_port_name: "audio_in_0".to_string(),
+                sample_rate: 48_000,
+                channel_count: 1,
+                first_sample_timestamp_ns: 10,
+                interleaved_samples_le_f32: 0.5f32.to_le_bytes().to_vec(),
             },
             TabProtocolMessageFromNode::CloseTab,
         ] {
@@ -448,6 +533,29 @@ mod tests {
                     ..tab_request()
                 },
                 "1 to 8",
+            ),
+            (
+                BrowserHostTabRequest {
+                    page_input_tracks: vec![
+                        PageInputTrack {
+                            input_port_name: "video_in_0".into(),
+                            kind: PageInputTrackKind::Video,
+                        };
+                        2
+                    ],
+                    ..tab_request()
+                },
+                "listed twice",
+            ),
+            (
+                BrowserHostTabRequest {
+                    page_input_tracks: vec![PageInputTrack {
+                        input_port_name: String::new(),
+                        kind: PageInputTrackKind::Audio,
+                    }],
+                    ..tab_request()
+                },
+                "names its input port",
             ),
         ] {
             let refusal = broken.refuse_what_cef_cannot_render().expect_err(named);

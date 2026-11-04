@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- Copyright (c) 2025 Jonathan Fontanez -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>BrowserSource page mixing its inputs</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0f14; color: #f2f2f2; font: 600 40px system-ui, sans-serif; overflow: hidden; }
+  #camera { position: absolute; left: 96px; top: 96px; width: 1280px; height: 720px; border-radius: 24px; box-shadow: 0 0 0 6px #38bdf8; background: #1e293b; }
+  #panel { position: absolute; left: 1440px; top: 96px; width: 384px; }
+  #panel h1 { margin: 0 0 24px; font-size: 44px; color: #38bdf8; }
+  .label { font-size: 28px; color: #94a3b8; margin-top: 32px; }
+  #meter { margin-top: 12px; height: 560px; width: 96px; background: #1e293b; border-radius: 12px; position: relative; overflow: hidden; }
+  #meter-level { position: absolute; bottom: 0; width: 100%; height: 0; background: linear-gradient(#f43f5e, #fbbf24 30%, #22c55e 60%); }
+  #status { position: absolute; left: 96px; top: 864px; font-size: 32px; color: #cbd5e1; }
+  #wave { position: absolute; left: 96px; top: 930px; width: 1728px; height: 110px; }
+</style>
+</head>
+<body>
+<canvas id="camera" width="1280" height="720"></canvas>
+<div id="panel">
+  <h1>LIVE MIX</h1>
+  <div class="label">microphone</div>
+  <div id="meter"><div id="meter-level"></div></div>
+</div>
+<div id="status">waiting for inputs</div>
+<canvas id="wave" width="1728" height="110"></canvas>
+<script>
+  // Every chunk drawn or heard reports its own timestamp, so the probe can
+  // measure each input from capture to the page.
+  const AUDIO_CHUNKS_BETWEEN_REPORTS = 10;
+  const status = document.getElementById("status");
+  const cameraCanvas = document.getElementById("camera");
+  const camera = cameraCanvas.getContext("2d");
+  const meterLevel = document.getElementById("meter-level");
+  const wave = document.getElementById("wave").getContext("2d");
+  let videoFramesDrawn = 0;
+  let audioChunksHeard = 0;
+
+  function reportInputChunk(inputPortName, timestampMicroseconds) {
+    window.tatolab.publish({
+      page_input_port_name: inputPortName,
+      page_input_timestamp_ns: Math.round(timestampMicroseconds * 1000),
+    });
+  }
+
+  async function drawVideoInput(inputPortName) {
+    const track = window.tatolab.inputTrack(inputPortName);
+    if (track === null) {
+      return;
+    }
+    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    for (;;) {
+      const { value: frame, done } = await reader.read();
+      if (done) {
+        return;
+      }
+      camera.drawImage(frame, 0, 0, cameraCanvas.width, cameraCanvas.height);
+      reportInputChunk(inputPortName, frame.timestamp);
+      frame.close();
+      videoFramesDrawn += 1;
+    }
+  }
+
+  async function playAudioInput(inputPortName) {
+    const track = window.tatolab.inputTrack(inputPortName);
+    if (track === null) {
+      return;
+    }
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    audioContext.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+    analyser.connect(audioContext.destination);
+    const samples = new Float32Array(analyser.fftSize);
+    function drawLevel() {
+      analyser.getFloatTimeDomainData(samples);
+      let sumOfSquares = 0;
+      for (const sample of samples) {
+        sumOfSquares += sample * sample;
+      }
+      const rms = Math.sqrt(sumOfSquares / samples.length);
+      meterLevel.style.height = `${Math.min(100, rms * 400)}%`;
+      wave.clearRect(0, 0, 1728, 110);
+      wave.strokeStyle = "#38bdf8";
+      wave.lineWidth = 4;
+      wave.beginPath();
+      for (let index = 0; index < samples.length; index += 4) {
+        const x = (index / samples.length) * 1728;
+        const y = 55 - samples[index] * 220;
+        index === 0 ? wave.moveTo(x, y) : wave.lineTo(x, y);
+      }
+      wave.stroke();
+      requestAnimationFrame(drawLevel);
+    }
+    requestAnimationFrame(drawLevel);
+
+    const reader = new MediaStreamTrackProcessor({ track: track.clone() }).readable.getReader();
+    for (;;) {
+      const { value: audio, done } = await reader.read();
+      if (done) {
+        return;
+      }
+      audioChunksHeard += 1;
+      if (audioChunksHeard % AUDIO_CHUNKS_BETWEEN_REPORTS === 0) {
+        reportInputChunk(inputPortName, audio.timestamp);
+      }
+      audio.close();
+    }
+  }
+
+  function showStatus() {
+    status.textContent = `video frames drawn ${videoFramesDrawn} · audio chunks heard ${audioChunksHeard}`;
+    requestAnimationFrame(showStatus);
+  }
+  requestAnimationFrame(showStatus);
+
+  drawVideoInput("video_in_0");
+  playAudioInput("audio_in_0");
+</script>
+</body>
+</html>

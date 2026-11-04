@@ -17,8 +17,8 @@
 //! channel, with no interpreter on either end, as do the IOSurface import
 //! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
 //! id minor 6 adds and the shared native service leases and node failure
-//! minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
-//! itself.
+//! minor 7 adds and the host-memory read minor 9 adds. The virtual camera
+//! verbs minor 8 adds act in the helper itself.
 
 use std::ffi::{CStr, c_void};
 
@@ -27,7 +27,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 8;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 9;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -97,6 +97,16 @@ pub struct ModuleHostTableBytes {
     /// The first byte of the payload.
     pub bytes: *const u8,
     /// The payload's length in bytes.
+    pub length: usize,
+}
+
+/// Memory the caller owns and the host writes into for the length of the call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableMutableBytes {
+    /// The first byte of the memory.
+    pub bytes: *mut u8,
+    /// The memory's length in bytes.
     pub length: usize,
 }
 
@@ -214,6 +224,21 @@ pub struct ModuleHostTableHostMemoryPixels {
     /// The first byte of the first row; at least
     /// `row_stride_bytes × (height − 1) + width × 4` bytes long.
     pub pixels: ModuleHostTableBytes,
+    /// A pixel format wire name: `bgra32` or `rgba32`.
+    pub pixel_format: ModuleHostTableUtf8,
+    pub width: u32,
+    pub height: u32,
+    pub row_stride_bytes: u64,
+}
+
+/// The caller's memory a host-memory read fills: `height` rows of `width`
+/// four-byte pixels each, `row_stride_bytes` apart.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableHostMemoryPixelsToFill {
+    /// The first byte of the first row; at least
+    /// `row_stride_bytes × (height − 1) + width × 4` bytes long.
+    pub pixels: ModuleHostTableMutableBytes,
     /// A pixel format wire name: `bgra32` or `rgba32`.
     pub pixel_format: ModuleHostTableUtf8,
     pub width: u32,
@@ -668,6 +693,16 @@ pub struct ModuleHostTable {
         node_host: *mut c_void,
         camera: ModuleHostTableVirtualCameraStreamHandle,
     ),
+    /// Minor 9: read every pixel of a four-byte surface of the same extent,
+    /// such as an upstream node's frame lent by surface id, into the caller's
+    /// memory, swapping channel order between `bgra32` and `rgba32` where the
+    /// surface's differs.
+    pub surface_read_into_host_memory: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        source: ModuleHostTableSurfaceHandle,
+        host_memory_pixels_to_fill: *const ModuleHostTableHostMemoryPixelsToFill,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTableUtf8 {
@@ -1106,7 +1141,33 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_appended_at_minor_8.into_iter().enumerate() {
             assert_eq!(offset, 16 + (36 + slot) * POINTER, "minor 8 slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 41 * POINTER);
+    }
+
+    /// Minor 9 appends its host-memory read after the minor 8 camera verbs.
+    #[test]
+    fn the_v1_9_table_appends_its_host_memory_read_after_every_v1_8_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, surface_read_into_host_memory),
+            16 + 41 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 42 * POINTER);
+    }
+
+    #[test]
+    fn pixels_to_fill_lay_out_as_the_pixels_a_write_hands() {
+        assert_eq!(size_of::<ModuleHostTableMutableBytes>(), 2 * POINTER);
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixelsToFill, width),
+            offset_of!(ModuleHostTableHostMemoryPixels, width)
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableHostMemoryPixelsToFill, row_stride_bytes),
+            offset_of!(ModuleHostTableHostMemoryPixels, row_stride_bytes)
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableHostMemoryPixelsToFill>(),
+            size_of::<ModuleHostTableHostMemoryPixels>()
+        );
     }
 
     #[test]

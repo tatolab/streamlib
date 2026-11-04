@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// The longest one message may be; a longer length prefix ends the connection.
-pub const MOST_TAB_PROTOCOL_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+/// The longest one message may be, room for one 3840×2160 RGBA page input
+/// frame; a longer length prefix ends the connection.
+pub const MOST_TAB_PROTOCOL_MESSAGE_BYTES: usize = 40 * 1024 * 1024;
 
 /// The most descriptors one read takes in.
 const MOST_DESCRIPTORS_RECEIVED_PER_READ: usize = 8;

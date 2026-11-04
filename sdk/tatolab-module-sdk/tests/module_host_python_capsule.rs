@@ -174,6 +174,15 @@ unsafe extern "C" fn refuse_host_memory_write(
     MODULE_HOST_TABLE_STATUS_REFUSED
 }
 
+unsafe extern "C" fn refuse_host_memory_read(
+    _: *mut c_void,
+    _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSurfaceHandle,
+    _: *const tatolab_module_sdk::module_host_table_abi::ModuleHostTableHostMemoryPixelsToFill,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+
 unsafe extern "C" fn refuse_audio_capture_open(
     _: *mut c_void,
     _: *const ModuleHostTableAudioCaptureStreamRequest,
@@ -307,6 +316,7 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         virtual_camera_stream_write_yuyv_frame: refuse_virtual_camera_write,
         virtual_camera_stream_liveness: refuse_virtual_camera_liveness,
         virtual_camera_stream_close: close_no_virtual_camera,
+        surface_read_into_host_memory: refuse_host_memory_read,
     }));
     NonNull::from(table).cast()
 }

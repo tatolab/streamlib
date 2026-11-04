@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 cef = { version = "=156.3.0", default-features = false }
 libc = "0.2"
+serde_json = "1"
 tatolab-browser-page-bridge = { path = "../page-bridge" }
 tatolab-browser-tab-protocol = { path = "../tab-protocol" }
 tracing = "0.1"

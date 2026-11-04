@@ -11,7 +11,7 @@ __all__ = ["BrowserPageRendering"]
 class BrowserPageRendering:
     """A web page rendering as a tab in the machine's browser host, publishing its frames on
     `video`, its audio on `audio` and its published objects on `events`, and
-    handed every `data` message as a DOM event."""
+    handed every `data` message as a DOM event and every wired input as a track."""
 
     def __new__(
         cls,
@@ -20,6 +20,8 @@ class BrowserPageRendering:
         events_output_port: str,
         audio_output_port: str,
         data_input_port: str,
+        video_input_ports: list[str],
+        audio_input_ports: list[str],
         url: str,
         width: int,
         height: int,
@@ -31,7 +33,7 @@ class BrowserPageRendering:
         """Lease the machine's browser host and open `url` as a tab in it.
 
         `module_host_table` is what `ctx.open_module_host_table(...)` returns with the three
-        output ports and the input port lent.
+        output ports, the data port and each wired video and audio input lent.
         """
     @property
     def frames_published(self) -> int: ...
@@ -48,6 +50,13 @@ class BrowserPageRendering:
     def data_messages_delivered(self) -> int: ...
     @property
     def data_messages_refused(self) -> int: ...
+    @property
+    def page_input_video_frames_delivered(self) -> int: ...
+    @property
+    def page_input_audio_blocks_delivered(self) -> int: ...
+    @property
+    def page_input_chunks_refused(self) -> int:
+        """Input frames and blocks that never reached the page."""
     @property
     def browser_host_reconnects(self) -> int: ...
     def close(self) -> None:
