@@ -84,7 +84,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   it green; and a test skipped off
   Linux carries `linux_only_capability(reason=…)`, whose
   reason `test_platform_markers.py` holds to the closed list plus one named group — a
-  test whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev,
+  test whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev, PipeWire,
   the boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS
   for any other reason is a parity bug, never a skip.
   [macos-capability-parity — SHIPPED #2400, #2403, #2405; package-split-and-lend — SHIPPED
