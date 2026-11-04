@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.20](https://github.com/tatolab/streamlib/compare/v0.68.19...v0.68.20) (2026-11-04)
+
+
+### Bug Fixes
+
+* **examples:** import the camera, codec, Opus, microphone and speaker nodes from their modules ([#3118](https://github.com/tatolab/streamlib/issues/3118)) ([e7536f3](https://github.com/tatolab/streamlib/commit/e7536f36067555b5168434cb5f795c7a5a06674d))
+
 ## [0.68.19](https://github.com/tatolab/streamlib/compare/v0.68.18...v0.68.19) (2026-11-04)
 
 
