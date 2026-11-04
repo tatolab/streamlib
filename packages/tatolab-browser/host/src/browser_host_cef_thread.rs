@@ -360,7 +360,7 @@ fn open_a_tab(
     )?;
     let window_info = WindowInfo {
         windowless_rendering_enabled: 1,
-        shared_texture_enabled: 0,
+        shared_texture_enabled: i32::from(tab_request.paint_into_shared_textures),
         bounds: Rect {
             x: 0,
             y: 0,

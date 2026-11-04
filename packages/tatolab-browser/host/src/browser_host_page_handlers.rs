@@ -13,7 +13,7 @@ use tatolab_browser_page_bridge::PAGE_PUBLISH_PROCESS_MESSAGE_NAME;
 use tatolab_browser_tab_protocol::{BrowserHostTabLogLevel, TabProtocolMessageFromBrowserHost};
 
 use crate::browser_host_cef_thread::{CefThreadRequest, CefThreadRequestSender};
-use crate::browser_host_tab::BrowserHostTab;
+use crate::browser_host_tab::{BrowserHostTab, PaintedTextureOfThePage};
 
 /// The CEF client of `tab`'s page.
 pub fn browser_host_page_client(
@@ -67,7 +67,69 @@ wrap_render_handler! {
             };
             self.tab.hand_a_painted_frame_to_the_node(painted_bgra_rows, width, height);
         }
+
+        fn on_accelerated_paint(
+            &self,
+            _browser: Option<&mut Browser>,
+            type_: PaintElementType,
+            _dirty_rects: Option<&[Rect]>,
+            info: Option<&AcceleratedPaintInfo>,
+        ) {
+            if type_ != PaintElementType::VIEW {
+                return;
+            }
+            let Some(info) = info else {
+                return;
+            };
+            if let Some(painted) = painted_texture_of_the_page(info, &self.tab) {
+                self.tab.hand_a_painted_texture_to_the_node(painted);
+            }
+        }
     }
+}
+
+/// The texture `info` describes, cut to the tab's extent, or `None` when CEF
+/// painted something the node cannot import.
+fn painted_texture_of_the_page(
+    info: &AcceleratedPaintInfo,
+    tab: &BrowserHostTab,
+) -> Option<PaintedTextureOfThePage> {
+    let pixel_format = if info.format == ColorType::BGRA_8888 {
+        "bgra32"
+    } else if info.format == ColorType::RGBA_8888 {
+        "rgba32"
+    } else {
+        return None;
+    };
+    let plane_count = usize::try_from(info.plane_count).ok()?;
+    let planes = info
+        .planes
+        .get(..plane_count)
+        .filter(|planes| !planes.is_empty())?;
+    let (width, height) = (tab.tab_request.width, tab.tab_request.height);
+    let coded_height = u64::try_from(info.extra.coded_size.height).ok()?;
+    if i64::from(info.extra.coded_size.width) < i64::from(width) || coded_height < u64::from(height)
+    {
+        return None;
+    }
+    let allocation_byte_size = planes
+        .iter()
+        .map(|plane| {
+            plane
+                .size
+                .max(plane.offset + u64::from(plane.stride) * coded_height)
+        })
+        .max()?;
+    Some(PaintedTextureOfThePage {
+        width,
+        height,
+        pixel_format,
+        plane_descriptors: Vec::from_iter(planes.iter().map(|plane| plane.fd)),
+        plane_offsets_bytes: Vec::from_iter(planes.iter().map(|plane| plane.offset)),
+        plane_strides_bytes: Vec::from_iter(planes.iter().map(|plane| u64::from(plane.stride))),
+        allocation_byte_size,
+        drm_format_modifier: info.modifier,
+    })
 }
 
 wrap_audio_handler! {

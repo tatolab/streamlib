@@ -36,6 +36,9 @@ class BrowserPageRendering:
     @property
     def frames_published(self) -> int: ...
     @property
+    def frames_published_from_painted_textures(self) -> int:
+        """Of `frames_published`, those copied on the GPU from a texture the page painted into."""
+    @property
     def frames_dropped(self) -> int: ...
     @property
     def audio_blocks_published(self) -> int: ...
