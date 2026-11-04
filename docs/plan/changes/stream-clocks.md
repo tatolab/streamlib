@@ -203,14 +203,21 @@ the step barrier. Those meet at a scale above 1, and the scale changes live.
 
 ## [NEEDS DECISION] B — a node paced by real time in a scaled or stepped stream
 
-The ADR leaves this to the change that builds it.
+The ADR leaves this to the change that builds it. A recorded source follows any clock; a live
+device cannot: above 1× the frames it has not captured yet do not exist, and below 1× it captures
+more frames per stream second than the stream reads. Through a live device the scene stays
+real-time while the rest of the stream warps.
 
-- **B1 (recommended) — refused at load.** A scaled or stepped stream refuses a node declaring
-  `paced_by_real_time`, naming it. A device then lives in its own real-time stream, and a
-  scaled or stepped stream renders to a file or a simulation view, as the plan already says.
-  One rule, no mixed epochs inside a stream.
-- **B2 — refused only when stepped.** A scaled stream admits it; its stamps stay machine time
+- **B3 (recommended) — admitted, retimed at the edge.** A node declaring `paced_by_real_time` loads
+  in any stream. What it captures is stamped with stream time on arrival; in a stepped stream it
+  stands outside the step barrier and each step reads the newest it delivered; a sink presents
+  what arrives. Nothing is refused and every node sees one epoch. A slow-motion replay of a live
+  device is a separate recording node, not part of this change.
+- **B2 — admitted, machine time kept.** A scaled stream admits it; its stamps stay machine time
   while the rest of the stream runs scaled, and a node joining the two must translate.
+- **B1 — refused at load.** A scaled or stepped stream refuses it, naming it; a device lives only
+  in a real-time stream. Owner, 2026-11-04: rejected as the recommendation, since it breaks
+  streams that mix devices with a warped clock.
 
 ## Tickets (expected)
 
