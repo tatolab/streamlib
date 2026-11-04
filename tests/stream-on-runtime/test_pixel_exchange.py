@@ -194,20 +194,20 @@ def test_a_dlpack_consumer_sees_the_same_pixels(start_tatolabd_running_stream):
 def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd_running_stream):
     """The user-facing story: source → effect → the pixels really changed.
 
-    A native source produces frames the interpreter never touches; a Python
-    processor in its own child reaches into one and rewrites it. Re-resolving
+    The test pattern renders frames in a child of its own; a Python
+    processor in another child reaches into one and rewrites it. Re-resolving
     the surface afterwards is what proves the edit went into the engine's
     memory rather than a copy handed to Python.
     """
     observation = run_probe(start_tatolabd_running_stream, "inverting_effect")
     assert observation["frame_size"] == [320, 180]
-    # The pattern's leftmost SMPTE bar is white, written by the native fill
-    # through the engine's own view of the allocation. Reading it back at a
+    # The pattern's leftmost SMPTE bar is white, written by the pattern's
+    # compute kernel on the device. Reading it back at a
     # known coordinate through the child's independently-derived strides is
     # what catches the two derivations disagreeing — a systematic stride
     # divergence passes every self-consistent assertion below.
     assert observation["before"] == [255, 255, 255, 255], (
-        f"pixel (10, 10) should be the white SMPTE bar the native source wrote; "
+        f"pixel (10, 10) should be the white SMPTE bar the test pattern wrote; "
         f"the child's view read {observation['before']}"
     )
     assert observation["after_through_this_view"] == [
@@ -240,9 +240,9 @@ def run_cross_process_edit(
 def test_an_edit_lands_in_the_engines_memory_where_another_process_reads_it(
     start_tatolabd_running_stream,
 ):
-    """The scaffold's story across three processes: `tatolabd`'s native source
-    writes a frame, one child inverts it in place through a numpy view, and a
-    second child reads the frame back.
+    """The scaffold's story across three children: the test pattern writes a
+    frame, a second child inverts it in place through a numpy view, and a third
+    reads the frame back.
 
     Every pixel is compared, through a digest: a copy handed to the editor, a
     stride the two children derive differently, or a write that never reached

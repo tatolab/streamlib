@@ -318,14 +318,17 @@ impl TatolabTestMachineRoot {
     }
 }
 
-/// A stream of one test pattern.
+/// The node [`a_native_only_stream_graph`] holds.
+pub const NATIVE_ONLY_STREAM_NODE_NAME: &str = "relaytrack";
+
+/// A stream of one native relay track source.
 pub fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
     serde_json::json!({
         "stream": stream_id,
         "nodes": [{
-            "name": "testpattern",
-            "type": "tatolab.stream:TestPatternSource",
-            "config": {"width": 320, "height": 240},
+            "name": NATIVE_ONLY_STREAM_NODE_NAME,
+            "type": "tatolab.stream:RelayTrackSource",
+            "config": {"broadcast": "desk/native-only.hang", "track": "pattern/video"},
         }],
     })
 }

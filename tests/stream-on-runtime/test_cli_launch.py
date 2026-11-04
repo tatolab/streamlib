@@ -44,7 +44,6 @@ from conftest import (
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
 from stream_runs_on_tatolabd import TatolabRunOfAProject, stream_id_of_the_location
-from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
 
 pytestmark = pytest.mark.requires_gpu
@@ -69,8 +68,12 @@ SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SE
 # not on a slow machine.
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
-STREAM_WITH_ONE_NATIVE_SOURCE = '''\
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+#: The test pattern module's node type, which the suite venv installs.
+TEST_PATTERN_SOURCE_NODE_TYPE = "tatolab.testpattern:TestPatternSource"
+
+STREAM_WITH_ONE_TEST_PATTERN_SOURCE = '''\
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 
 @stream
@@ -99,7 +102,8 @@ FIRST_FRAME_REPORTER_MODULE = STREAM_ON_RUNTIME_SUITE_DIRECTORY / "first_frame_r
 # project, and the scaffold covers the packaged one.
 STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 
 @stream
@@ -176,7 +180,7 @@ def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
 
 
 def project_files_with_helper_placed_processors(helper_count: int) -> "dict[str, str]":
-    """A project whose `stream.py` wires `helper_count` copies of the reporter to one native source."""
+    """A project whose `stream.py` wires `helper_count` copies of the reporter to one test pattern source."""
     return {
         "stream.py": STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % helper_count,
         FIRST_FRAME_REPORTER_MODULE.name: FIRST_FRAME_REPORTER_MODULE.read_text(encoding="utf-8"),
@@ -203,7 +207,7 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
     `tatolab stop` — so a divergence in load, listing or persistence between
     them is a defect in the load path itself.
     """
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
+    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_TEST_PATTERN_SOURCE})
     stream_id = stream_id_of_the_project(app_directory)
     tatolabd = start_tatolabd()
 
@@ -233,7 +237,7 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
     }
     assert listed_streams == [listed_running]
     assert running_graph["stream"] == stream_id
-    assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1, (
+    assert [node["type"] for node in running_graph["nodes"]].count(TEST_PATTERN_SOURCE_NODE_TYPE) == 1, (
         running_graph["nodes"]
     )
     assert_only_its_owner_can_open(tatolabd.local_api_socket_path)
@@ -415,7 +419,7 @@ def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone(
     the runtime has to answer over it, so what the scan reports of the runtime
     is the runtime's own and not a scan that saw nothing.
     """
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
+    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_TEST_PATTERN_SOURCE})
     loopback_http_port = a_tcp_port_free_on_loopback()
     tatolabd = start_tatolabd(
         extra_environment={TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE: str(loopback_http_port)}
@@ -546,7 +550,8 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+                "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
                 "\n"
                 "\n"
                 "@stream\n"
@@ -562,7 +567,7 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     running_graph = tatolabd.local_api_client().await_every_node_running(
         stream=stream_id_of_the_project(app_directory)
     )
-    assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1
+    assert [node["type"] for node in running_graph["nodes"]].count(TEST_PATTERN_SOURCE_NODE_TYPE) == 1
 
     assert stream_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
@@ -927,12 +932,14 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+                "from tatolab.stream import RelayTrackSource, StreamBuilder, stream\n"
                 "\n"
                 "\n"
                 "@stream\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
-                '    stream_builder.add(TestPatternSource, config={"width": "not a number"})\n'
+                "    stream_builder.add(\n"
+                '        RelayTrackSource, config={"broadcast": 7, "track": "pattern/video"}\n'
+                "    )\n"
             )
         }
     )
@@ -947,8 +954,8 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
         f"an engine-side failure must not arrive as a launcher traceback; it was:\n{failed_because}"
     )
     assert failed_stream_id == stream_id_of_the_project(app_directory)
-    assert "`tatolab.stream:TestPatternSource`" in failed_because, failed_because
-    assert "width: invalid type" in failed_because, failed_because
+    assert "`tatolab.stream:RelayTrackSource`" in failed_because, failed_because
+    assert "broadcast: invalid type" in failed_because, failed_because
     assert ENGINE_STARTED_LOG_LINE not in tatolabd.stderr_text
     [listed] = tatolabd.local_api_client().list_streams()
     assert (listed["stream"], listed["state"]) == (failed_stream_id, "failed"), listed
@@ -1027,7 +1034,8 @@ def test_a_stream_py_defining_no_stream_is_a_failed_project_until_a_run_defines_
     assert listed["location"]["stream_function"] == "", listed
 
     (app_directory / "stream.py").write_text(
-        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1044,7 +1052,8 @@ def test_a_stream_py_defining_no_stream_is_a_failed_project_until_a_run_defines_
 
 
 STREAM_PY_WITH_TWO_STREAMS = (
-    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
     "@stream\n"
@@ -1072,7 +1081,7 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     unsyncable_directory = tmp_path / "unsyncable"
     unsyncable_directory.mkdir()
     (unsyncable_directory / "pyproject.toml").write_text("this is [not toml\n", encoding="utf-8")
-    (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE, encoding="utf-8")
+    (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_TEST_PATTERN_SOURCE, encoding="utf-8")
     unsynced_run = client.call_tool(
         "run_project", {"project_directory": str(unsyncable_directory.resolve())}
     )
@@ -1124,7 +1133,8 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
 
 
 STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING = (
-    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
     "@stream\n"

@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-media-builtins"
-description = "First-party media built-ins: native pre-built blocks (test-pattern source, camera, video codecs) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
+description = "First-party media built-ins: native pre-built blocks (the relay track source, the virtual camera) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

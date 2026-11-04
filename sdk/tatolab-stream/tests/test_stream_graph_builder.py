@@ -42,7 +42,11 @@ STREAM_GRAPH_BUILDER_SOURCE = (
     Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
 )
 
-TEST_PATTERN_SOURCE_TYPE = "tatolab.stream:TestPatternSource"
+RELAY_TRACK_SOURCE_TYPE = "tatolab.stream:RelayTrackSource"
+RIG_RELAY_TRACK: tatolab.stream.RelayTrackSourceConfig = {
+    "broadcast": "desk/rig.hang",
+    "track": "pattern/video",
+}
 VIRTUAL_CAMERA_SINK_TYPE = "tatolab.stream:VirtualCameraSink"
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
@@ -110,15 +114,13 @@ def every_kind_of_node(stream_builder: StreamBuilder) -> None:
 @stream
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
-    source = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 1280, "height": 720}
-    )
+    source = stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
     inverter = stream_builder.add(FrameInverter)
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
     second_inverter = stream_builder.add(FrameInverter)
     camera = stream_builder.add(tatolab.stream.VirtualCameraSink, config={"name": "Rig Camera"})
-    stream_builder.connect(source.output("video"), inverter.input("video_from_upstream"))
+    stream_builder.connect(source.output("track"), inverter.input("video_from_upstream"))
     stream_builder.connect(
         inverter.output("video_to_downstream"),
         first_reader.input("VIDEO_FROM_UPSTREAM"),
@@ -128,7 +130,7 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
         backup_reader.input("video_from_upstream"),
     )
     stream_builder.connect(
-        source.output("Video"),
+        source.output("Track"),
         second_inverter.input("video_from_upstream"),
     )
     stream_builder.connect(second_inverter.output("video_to_downstream"), camera.input("Video"))
@@ -138,7 +140,7 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
 
 @stream
 def two_markers(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.TestPatternSource)
+    stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
     stream_builder.add(tatolab.stream.VirtualCameraSink)
 
 
@@ -375,7 +377,7 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
     assert compile_stream_to_graph(two_markers)["nodes"] == [
-        {"name": "testpatternsource", "type": TEST_PATTERN_SOURCE_TYPE, "config": {}},
+        {"name": "relaytracksource", "type": RELAY_TRACK_SOURCE_TYPE, "config": RIG_RELAY_TRACK},
         {"name": "virtualcamerasink", "type": VIRTUAL_CAMERA_SINK_TYPE, "config": {}},
     ]
 
@@ -941,9 +943,9 @@ def test_a_stream_compiles_to_its_graph() -> None:
         "stream": "camera_rig",
         "nodes": [
             {
-                "name": "testpatternsource",
-                "type": TEST_PATTERN_SOURCE_TYPE,
-                "config": {"width": 1280, "height": 720},
+                "name": "relaytracksource",
+                "type": RELAY_TRACK_SOURCE_TYPE,
+                "config": RIG_RELAY_TRACK,
             },
             {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
             {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
@@ -957,7 +959,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
         ],
         "links": [
             {
-                "source": {"node": "testpatternsource", "port": "video"},
+                "source": {"node": "relaytracksource", "port": "track"},
                 "target": {"node": "frameinverter", "port": "video_from_upstream"},
             },
             {
@@ -969,7 +971,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "backup-meter", "port": "video_from_upstream"},
             },
             {
-                "source": {"node": "testpatternsource", "port": "video"},
+                "source": {"node": "relaytracksource", "port": "track"},
                 "target": {"node": "frameinverter-2", "port": "video_from_upstream"},
             },
             {

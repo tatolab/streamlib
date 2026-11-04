@@ -1192,7 +1192,7 @@ mod tests {
     fn only_a_module_and_qualname_that_names_no_built_in_is_described() {
         assert!(a_processor_interpreter_describes(&import_path(GOOD_TYPE)));
         assert!(!a_processor_interpreter_describes(&import_path(
-            "tatolab.stream:TestPatternSource"
+            "tatolab.stream:RelayTrackSource"
         )));
         assert!(!a_processor_interpreter_describes(&import_path(
             "my_crate::processors::Blur"

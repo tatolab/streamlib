@@ -29,7 +29,7 @@ from helper_placement_processors import (
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
-    native_test_pattern_into_python_video_sink,
+    native_relay_track_into_python_track_sink,
     one_probe_forking_a_worker_that_outlives_it,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
@@ -240,18 +240,17 @@ def test_a_native_builtin_stays_in_the_app_process(
     """The other side of the boundary, discriminated.
 
     Every Python processor is a child; a native built-in is not.
-    `TestPatternSource` is statically linked into `tatolabd` and runs on an
-    engine thread, so the frames the Python sink reads were produced in
-    `tatolabd`'s own process — and the way to see that is that nothing was
-    spawned for it. A two-processor stream starts exactly one helper, and it
+    `RelayTrackSource` is statically linked into `tatolabd` and runs on an
+    engine thread, in `tatolabd`'s own process — and the way to see that is
+    that nothing was spawned for it. A two-processor stream starts exactly one helper, and it
     belongs to the sink.
 
     This is the clause that keeps the ban from reading as "nothing may run in
     the runtime process". Native built-ins do, by design — their per-frame path
     never enters an interpreter.
     """
-    tatolabd = start_tatolabd_running_stream(native_test_pattern_into_python_video_sink)
-    sink_pid = tatolabd.await_marker("VIDEO_SINK_PID")["pid"]
+    tatolabd = start_tatolabd_running_stream(native_relay_track_into_python_track_sink)
+    sink_pid = tatolabd.await_marker("TRACK_SINK_PID")["pid"]
     assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

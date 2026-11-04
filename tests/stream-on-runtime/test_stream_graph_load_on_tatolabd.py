@@ -56,7 +56,6 @@ from stream_runs_on_tatolabd import (
 )
 from tatolab.stream import (
     RelayTrackSource,
-    TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
 )
@@ -64,6 +63,8 @@ from tatolab.stream._built_in_node import BuiltInNode
 
 #: The H.264 encoder module's node type, which the suite venv installs.
 H264_ENCODER_MODULE_TYPE = "tatolab.h264.processors:H264Encoder"
+#: The test pattern module's node type, which the suite venv installs.
+TEST_PATTERN_MODULE_TYPE = "tatolab.testpattern:TestPatternSource"
 
 EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
     exported
@@ -103,7 +104,7 @@ def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder"
     return {
         "stream": stream_function_name,
         "nodes": [
-            {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
+            {"name": "testpatternsource", "type": TEST_PATTERN_MODULE_TYPE, "config": {}},
             {
                 "name": "h264encoder",
                 "type": H264_ENCODER_MODULE_TYPE,
@@ -278,7 +279,7 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
         {
             "stream": "relayed",
             "nodes": [
-                {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
+                {"name": "testpatternsource", "type": TEST_PATTERN_MODULE_TYPE, "config": {}},
                 {"name": "loadedframerelay", "type": DESCRIBED_NODE_TYPE, "config": {}},
                 {"name": "h264encoder", "type": H264_ENCODER_MODULE_TYPE, "config": {}},
             ],
@@ -415,13 +416,19 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
         run_stream_on_tatolabd_with_no_vulkan_driver(
             {
                 "stream": "pattern",
-                "nodes": [{"name": "pattern", "type": TestPatternSource.type, "config": {"widht": 640}}],
+                "nodes": [
+                    {
+                        "name": "pattern",
+                        "type": RelayTrackSource.type,
+                        "config": {"broadcast": "desk/pattern.hang", "track": "pattern/video", "widht": 640},
+                    }
+                ],
             }
         )
     )
 
     assert "node `pattern`" in refusal
-    assert "`tatolab.stream:TestPatternSource`" in refusal
+    assert "`tatolab.stream:RelayTrackSource`" in refusal
     assert "`widht`" in refusal
 
 

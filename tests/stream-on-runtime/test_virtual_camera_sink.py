@@ -40,6 +40,7 @@ from typing import Literal
 import pytest
 
 import tatolab.stream
+from tatolab.testpattern import TestPatternSource
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -368,7 +369,7 @@ def _add_a_test_pattern_into_virtual_cameras(
     taking the other door.
     """
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": width, "height": height}
+        TestPatternSource, config={"width": width, "height": height}
     )
     for camera_name in camera_names:
         sink = stream_builder.add(

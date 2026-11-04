@@ -30,7 +30,8 @@ STREAM_PACKAGE_DIRECTORY = Path(_cross_floor_check.__file__).resolve().parent
 FIXTURE_FILE = Path("nodes/effect.py")
 FIXTURE_MANIFEST = Path("pyproject.toml")
 FLOOR_CLEAN_STREAM_SOURCE = (
-    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
     "@stream\n"

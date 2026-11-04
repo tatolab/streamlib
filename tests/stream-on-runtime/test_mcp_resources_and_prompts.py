@@ -55,7 +55,8 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 from processors.marked_bag_sink import MarkedBagSink
 
 

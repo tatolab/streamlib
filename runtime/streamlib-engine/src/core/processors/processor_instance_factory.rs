@@ -1061,7 +1061,7 @@ mod tests {
         ));
         factory
             .refuse_a_built_in_node_type_this_runtime_lacks(&class_import_path(
-                "tatolab.stream:TestPatternSource",
+                "tatolab.stream:RelayTrackSource",
             ))
             .unwrap();
     }

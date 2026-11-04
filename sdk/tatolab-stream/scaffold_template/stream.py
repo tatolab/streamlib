@@ -14,12 +14,8 @@ own child interpreter, which imports the class by name.
 """
 
 from tatolab.h264 import H264Encoder
-from tatolab.stream import (
-    Exposure,
-    StreamBuilder,
-    TestPatternSource,
-    stream,
-)
+from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.halftone_lens_effect import HalftoneLensEffect

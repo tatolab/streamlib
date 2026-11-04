@@ -43,6 +43,11 @@ const PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-s
 /// the module is released at.
 const PYPROJECT_TOML_TATOLAB_H264_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-h264>=0.68.13\"";
 
+/// The template's `tatolab-testpattern` requirement, raised on render to this runtime's own
+/// version, which the module is released at.
+const PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER: &str =
+    "\"tatolab-testpattern>=0.68.18\"";
+
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
@@ -76,6 +81,10 @@ pub(crate) fn render_scaffold_template_files(
         .replace(
             PYPROJECT_TOML_TATOLAB_H264_REQUIREMENT_PLACEHOLDER,
             &format!("\"tatolab-h264>={}\"", env!("CARGO_PKG_VERSION")),
+        )
+        .replace(
+            PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER,
+            &format!("\"tatolab-testpattern>={}\"", env!("CARGO_PKG_VERSION")),
         );
 
     vec![
@@ -289,11 +298,12 @@ mod tests {
         assert!(
             rendered_files[4].rendered_contents.contains(&format!(
                 "dependencies = [\"tatolab-stream>={runtime_version}\", \
-                 \"tatolab-h264>={runtime_version}\", \"numpy>=2.1\"]",
+                 \"tatolab-h264>={runtime_version}\", \
+                 \"tatolab-testpattern>={runtime_version}\", \"numpy>=2.1\"]",
                 runtime_version = env!("CARGO_PKG_VERSION")
             )),
-            "a new project floors tatolab-stream and tatolab-h264 at the version of the runtime \
-             that created it"
+            "a new project floors tatolab-stream, tatolab-h264 and tatolab-testpattern at the \
+             version of the runtime that created it"
         );
         assert!(
             rendered_files[4]

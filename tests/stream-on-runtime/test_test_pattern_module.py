@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The native built-in blocks: built-in classes resolved by `stream_builder.add`, frames
-produced by native code the interpreter never enters.
+"""The test pattern module on `tatolabd`: frames its processor renders on the device,
+read by another Python processor in an interpreter of its own.
 
-The graph test starts the engine on `tatolabd`. The built-in classes and the
-`VideoFrame` cast are pure Python, tested in the stream suite.
+The module's declaration, config and placement math are tested with no GPU in
+`packages/tatolab-testpattern/tests`.
 """
 
 from collections.abc import Callable
@@ -13,23 +13,20 @@ from collections.abc import Callable
 import pytest
 
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
-from native_builtin_streams import (
+from test_pattern_module_streams import (
     a_test_pattern_into_a_video_frame_probe,
     a_test_pattern_source_alone,
 )
 from tatolab.stream import VideoFrame, compile_stream_to_graph
 
 
-# ---- the native block in a real graph (GPU) --------------------------------
-
-
 @pytest.mark.requires_gpu
 def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """The whole built-in mechanism, end to end: built-in class → native
-    registration → native production in `tatolabd` → message read by a Python
-    processor in its own processor interpreter — no camera, no window."""
+    """The module end to end: the installed module's class → its processor
+    rendering frames in an interpreter of its own → message read by another
+    Python processor in its own interpreter — no camera, no window."""
     tatolabd = start_tatolabd_running_stream(a_test_pattern_into_a_video_frame_probe)
     frames_seen = tatolabd.await_marker("FRAMES_SEEN")
     tatolabd.interrupt()

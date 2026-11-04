@@ -82,7 +82,8 @@ BRAVO_STREAM_FUNCTION = "bravo_pattern"
 #: which an owner's ruling overrides.
 PROJECT_STREAM_SOURCE_TEMPLATE = '''\
 from frame_reader import PatternFrameReader
-from tatolab.stream import Exposure, StreamBuilder, TestPatternSource, stream
+from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 
 @stream

@@ -28,7 +28,7 @@ from mcp_types.version import LATEST_PROTOCOL_VERSION
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
 from runtime_unit_under_test import RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import TatolabRunOfAProject
-from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_NATIVE_SOURCE
+from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_TEST_PATTERN_SOURCE
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -74,7 +74,7 @@ def a_runtime_running_one_stream(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> TatolabdUnderTest:
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
+    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_TEST_PATTERN_SOURCE})
     tatolabd = start_tatolabd()
     tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory)).await_loaded(
         timeout=NODE_READY_TIMEOUT_SECONDS

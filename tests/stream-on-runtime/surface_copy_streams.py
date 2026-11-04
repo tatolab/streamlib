@@ -6,8 +6,8 @@ which runs in a processor interpreter of its own."""
 
 from typing import Any
 
-import tatolab.stream
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 import surface_copy_probes
 
@@ -16,7 +16,7 @@ def _wire_a_test_pattern_into_probe(
     stream_builder: StreamBuilder, probe_class: type, probe_config: dict[str, Any]
 ) -> None:
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource,
+        TestPatternSource,
         config={
             "width": surface_copy_probes.FRAME_WIDTH,
             "height": surface_copy_probes.FRAME_HEIGHT,

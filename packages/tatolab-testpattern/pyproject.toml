@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tatolab-testpattern"
+version = "0.68.18"
+description = "A test-pattern video source for Tatolab streams: SMPTE bars and a bouncing potato, rendered on the GPU."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BUSL-1.1"
+license-files = ["LICENSE"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+    "Typing :: Typed",
+]
+# The stream package and nothing of the engine: the node runs in a processor
+# interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
+# A minimum, never an exact pin, as a third party's package depends on it.
+dependencies = ["tatolab-stream>=0.68.7"]
+
+# The node catalog lists this in every stream whose environment installs this
+# distribution, before a graph names it.
+[project.entry-points."tatolab.nodes"]
+TestPatternSource = "tatolab.testpattern:TestPatternSource"
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
+
+[dependency-groups]
+test = ["pytest>=7.0"]
+
+[tool.hatch.build.targets.wheel]
+# `tatolab` is a PEP 420 namespace shared with `tatolab.stream`, so no
+# distribution ships `tatolab/__init__.py`. The kernel source and the two baked
+# overlays ship beside the module that reads them.
+packages = ["python/tatolab"]
+exclude = ["**/__pycache__"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["python/tatolab", "tests", "README.md", "pyproject.toml", "hatch_build.py"]
+exclude = ["**/__pycache__"]
+
+[tool.hatch.build.targets.sdist.hooks.custom]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["python", "tests"]
+extraPaths = ["python"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"

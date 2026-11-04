@@ -23,10 +23,10 @@ import json
 import os
 import urllib.request
 
-import tatolab.stream
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
     "h264": (H264Encoder, H264Decoder),
@@ -79,7 +79,7 @@ def test_pattern_through_the_encoder_exposing_its_encoded_port(
     encoder_marker, _ = _codec_markers()
 
     test_pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, name="test_pattern"
+        TestPatternSource, name="test_pattern"
     )
     encoder = stream_builder.add(
         encoder_marker,

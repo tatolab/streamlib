@@ -22,6 +22,10 @@ from typing import Any, Optional
 
 import pytest
 from h264_module_stand_in import write_the_h264_module_stand_in_into
+from testpattern_module_stand_in import (
+    TESTPATTERN_MODULE_NODE_TYPE,
+    write_the_testpattern_module_stand_in_into,
+)
 
 COMPILE_ENTRY_MODULE = "tatolab.stream._project_stream_compile_entry"
 SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_template"
@@ -29,7 +33,8 @@ SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_te
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
 MINIMAL_STREAM_SOURCE = (
-    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
     "@stream\n"
@@ -39,7 +44,8 @@ MINIMAL_STREAM_SOURCE = (
 APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
 FRONT_STREAM_SOURCE = (
-    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
     "@stream\n"
@@ -61,7 +67,7 @@ TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
 FRONT_STREAM_GRAPH = {
     "stream": "front",
     "nodes": [
-        {"name": "testpatternsource", "type": "tatolab.stream:TestPatternSource", "config": {}},
+        {"name": "testpatternsource", "type": TESTPATTERN_MODULE_NODE_TYPE, "config": {}},
     ],
     "links": [],
     "exposed": [{"node": "testpatternsource", "port": "video", "level": "private"}],
@@ -69,7 +75,7 @@ FRONT_STREAM_GRAPH = {
 BACK_STREAM_GRAPH = {
     "stream": "back",
     "nodes": [
-        {"name": "back-pattern", "type": "tatolab.stream:TestPatternSource", "config": {}}
+        {"name": "back-pattern", "type": TESTPATTERN_MODULE_NODE_TYPE, "config": {}}
     ],
     "links": [],
     "exposed": [],
@@ -83,9 +89,13 @@ def anchor_directory(tmp_path: Path) -> Path:
 
 
 def write_app(directory: Path, file_name: str, source: str) -> Path:
+    """Write the entry `file_name` under `directory`, with the test-pattern module it imports
+    importable both from the entry's own directory and from `directory`."""
     entry_file = directory / file_name
     entry_file.parent.mkdir(parents=True, exist_ok=True)
     entry_file.write_text(source, encoding="utf-8")
+    write_the_testpattern_module_stand_in_into(directory)
+    write_the_testpattern_module_stand_in_into(entry_file.parent)
     return entry_file
 
 
@@ -1007,7 +1017,8 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: 
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1022,7 +1033,7 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: 
 
     first_frame = failed_because.index("File ")
     assert failed_because.startswith(
-        f'File "{anchor_directory / "stream.py"}", line 7, in main', first_frame
+        f'File "{anchor_directory / "stream.py"}", line 8, in main', first_frame
     ), failed_because
     assert "casts to `pattern`" in failed_because
 
@@ -1061,6 +1072,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tm
     app_directory = tmp_path.resolve() / "demo"
     shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
     write_the_h264_module_stand_in_into(app_directory)
+    write_the_testpattern_module_stand_in_into(app_directory)
     (app_directory / "nodes" / "halftone_lens_effect.py").write_text(
         "def process(self ctx:\n    this does not parse\n"
     )
@@ -1195,7 +1207,8 @@ def test_what_the_app_arranges_to_print_after_the_compile_never_follows_the_docu
         "import threading\n"
         "import time\n"
         "\n"
-        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "atexit.register(lambda: print('printed at exit'))\n"
         "\n"
@@ -1262,7 +1275,8 @@ def test_a_config_at_the_deepest_a_graph_carries_compiles_to_a_document_serde_js
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "nested = []\n"
         "for _ in range(121):\n"

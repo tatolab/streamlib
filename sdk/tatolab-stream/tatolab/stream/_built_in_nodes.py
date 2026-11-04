@@ -16,8 +16,6 @@ from ._built_in_node import BuiltInNode
 __all__ = [
     "RelayTrackSource",
     "RelayTrackSourceConfig",
-    "TestPatternSource",
-    "TestPatternSourceConfig",
     "VirtualCameraSink",
     "VirtualCameraSinkConfig",
 ]
@@ -96,39 +94,6 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RelayTrackSource"
-
-
-class TestPatternSourceConfig(TypedDict, total=False):
-    """`TestPatternSource`'s config: the keys `stream_builder.add` takes."""
-
-    height: int
-    """Frame height in pixels.
-
-    Default: `720`.
-    """
-
-    width: int
-    """Frame width in pixels.
-
-    Default: `1280`.
-    """
-
-
-class TestPatternSource(BuiltInNode[TestPatternSourceConfig]):
-    """Synthetic SMPTE-style color bars with a bouncing potato and the sample stream's
-    captions, rendered on the GPU — demos a pipeline with no camera attached.
-
-    Outputs:
-        `video`: Test-pattern video frames.
-            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-
-    Config: `TestPatternSourceConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:TestPatternSource"
-
-    # Keeps pytest from collecting the `Test*`-named class in user suites.
-    __test__: ClassVar[bool] = False
 
 
 class VirtualCameraSinkConfig(TypedDict, total=False):

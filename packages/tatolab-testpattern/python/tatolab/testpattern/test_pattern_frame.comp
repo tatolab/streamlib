@@ -1,0 +1,96 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// One test-pattern frame: SMPTE bars, the potato sprite over them, the caption
+// panel over both. Every channel is blended as a whole byte, so every device
+// writes the same bytes for the same push constants.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D potato_sprite_texture;
+layout(set = 0, binding = 1) uniform sampler2D caption_panel_texture;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D test_pattern_frame;
+
+layout(push_constant) uniform TestPatternFramePushConstants {
+    uint frame_width;
+    uint frame_height;
+    int potato_sprite_left;
+    int potato_sprite_top;
+    uint potato_sprite_width;
+    uint potato_sprite_height;
+    int caption_panel_left;
+    int caption_panel_top;
+    uint caption_panel_width;
+    uint caption_panel_height;
+} placement;
+
+const uint SMPTE_BAR_COUNT = 8u;
+const uvec4 SMPTE_BAR_COLORS_RGBA[SMPTE_BAR_COUNT] = uvec4[](
+    uvec4(255u, 255u, 255u, 255u), // white
+    uvec4(255u, 255u, 0u, 255u),   // yellow
+    uvec4(0u, 255u, 255u, 255u),   // cyan
+    uvec4(0u, 255u, 0u, 255u),     // green
+    uvec4(255u, 0u, 255u, 255u),   // magenta
+    uvec4(255u, 0u, 0u, 255u),     // red
+    uvec4(0u, 0u, 255u, 255u),     // blue
+    uvec4(0u, 0u, 0u, 255u)        // black
+);
+
+// An `rgba8_unorm` texel holds `byte / 255` exactly enough that rounding
+// recovers the byte.
+uvec4 texel_bytes(sampler2D overlay_texture, ivec2 within_overlay) {
+    return uvec4(round(texelFetch(overlay_texture, within_overlay, 0) * 255.0));
+}
+
+// `above` composited over an opaque `below`, rounded to the nearest byte.
+uvec4 composite_over_opaque(uvec4 above, uvec4 below) {
+    if (above.a == 0u) {
+        return below;
+    }
+    if (above.a == 255u) {
+        return above;
+    }
+    uvec3 blended = (above.rgb * above.a + below.rgb * (255u - above.a) + 127u) / 255u;
+    return uvec4(blended, 255u);
+}
+
+// The overlay byte quadruple covering frame pixel `at`, or a transparent one
+// where the overlay placed at `top_left` does not cover it.
+uvec4 overlay_bytes_at(
+    sampler2D overlay_texture, ivec2 at, ivec2 top_left, uvec2 overlay_extent) {
+    ivec2 within_overlay = at - top_left;
+    if (any(lessThan(within_overlay, ivec2(0)))
+        || any(greaterThanEqual(uvec2(within_overlay), overlay_extent))) {
+        return uvec4(0u);
+    }
+    return texel_bytes(overlay_texture, within_overlay);
+}
+
+void main() {
+    uvec2 at = gl_GlobalInvocationID.xy;
+    if (at.x >= placement.frame_width || at.y >= placement.frame_height) {
+        return;
+    }
+
+    uint bar = min((at.x * SMPTE_BAR_COUNT) / placement.frame_width, SMPTE_BAR_COUNT - 1u);
+    uvec4 pixel = SMPTE_BAR_COLORS_RGBA[bar];
+
+    pixel = composite_over_opaque(
+        overlay_bytes_at(
+            potato_sprite_texture,
+            ivec2(at),
+            ivec2(placement.potato_sprite_left, placement.potato_sprite_top),
+            uvec2(placement.potato_sprite_width, placement.potato_sprite_height)),
+        pixel);
+    pixel = composite_over_opaque(
+        overlay_bytes_at(
+            caption_panel_texture,
+            ivec2(at),
+            ivec2(placement.caption_panel_left, placement.caption_panel_top),
+            uvec2(placement.caption_panel_width, placement.caption_panel_height)),
+        pixel);
+
+    imageStore(test_pattern_frame, ivec2(at), vec4(pixel) / 255.0);
+}
