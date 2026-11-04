@@ -52,11 +52,8 @@ fn serve_one_tab_connection(
     connection: UnixStream,
     cef_thread_requests: &CefThreadRequestSender,
 ) {
-    let timeouts_set = connection
-        .set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET))
-        .and_then(|()| connection.set_write_timeout(Some(SEND_TO_THE_NODE_BUDGET)));
-    if let Err(failure) = timeouts_set {
-        tracing::warn!("tab {tab_id}'s connection takes no timeouts: {failure}");
+    if let Err(failure) = connection.set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET)) {
+        tracing::warn!("tab {tab_id}'s connection takes no read timeout: {failure}");
         return;
     }
     let split = connection
@@ -65,7 +62,7 @@ fn serve_one_tab_connection(
     let (reader, writer) = match split {
         Ok((reading_half, writing_half)) => (
             TabProtocolMessageReader::over(reading_half),
-            TabProtocolMessageWriter::over(writing_half),
+            TabProtocolMessageWriter::over(writing_half).sending_within(SEND_TO_THE_NODE_BUDGET),
         ),
         Err(failure) => {
             tracing::warn!("tab {tab_id}'s connection could not be split: {failure}");

@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -55,11 +56,21 @@ impl From<std::io::Error> for TabProtocolSocketFailure {
 /// The sending side of a tab connection.
 pub struct TabProtocolMessageWriter {
     socket: UnixStream,
+    longest_send: Option<Duration>,
 }
 
 impl TabProtocolMessageWriter {
     pub fn over(socket: UnixStream) -> Self {
-        Self { socket }
+        Self {
+            socket,
+            longest_send: None,
+        }
+    }
+
+    /// Fail any send not finished within `longest_send`, however the peer drains it.
+    pub fn sending_within(mut self, longest_send: Duration) -> Self {
+        self.longest_send = Some(longest_send);
+        self
     }
 
     /// Send `message`, with `attached_descriptors` riding on its first byte.
@@ -79,12 +90,40 @@ impl TabProtocolMessageWriter {
         let mut framed = Vec::with_capacity(LENGTH_PREFIX_BYTES + encoded.len());
         framed.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
         framed.extend_from_slice(&encoded);
-        if attached_descriptors.is_empty() {
-            self.socket.write_all(&framed)?;
-            return Ok(());
+        let send_deadline = self
+            .longest_send
+            .map(|longest_send| Instant::now() + longest_send);
+        let sent = if attached_descriptors.is_empty() {
+            0
+        } else {
+            self.limit_the_next_write_to(send_deadline)?;
+            send_with_descriptors(self.socket.as_raw_fd(), &framed, attached_descriptors)?
+        };
+        let mut unsent = &framed[sent..];
+        while !unsent.is_empty() {
+            self.limit_the_next_write_to(send_deadline)?;
+            match self.socket.write(unsent) {
+                Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+                Ok(written) => unsent = &unsent[written..],
+                Err(failure) if failure.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(failure) => return Err(failure.into()),
+            }
         }
-        let sent = send_with_descriptors(self.socket.as_raw_fd(), &framed, attached_descriptors)?;
-        self.socket.write_all(&framed[sent..])?;
+        Ok(())
+    }
+
+    fn limit_the_next_write_to(
+        &self,
+        send_deadline: Option<Instant>,
+    ) -> Result<(), TabProtocolSocketFailure> {
+        let Some(send_deadline) = send_deadline else {
+            return Ok(());
+        };
+        let remaining = send_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        }
+        self.socket.set_write_timeout(Some(remaining))?;
         Ok(())
     }
 
@@ -271,6 +310,23 @@ mod tests {
     use super::*;
     use crate::{TabProtocolMessageFromBrowserHost, TabProtocolMessageFromNode};
     use std::io::{Read, Seek};
+
+    #[test]
+    fn a_send_the_peer_never_reads_fails_by_its_deadline() {
+        let (node_end, _host_end_that_never_reads) = UnixStream::pair().unwrap();
+        let mut writer =
+            TabProtocolMessageWriter::over(node_end).sending_within(Duration::from_millis(200));
+        let message_larger_than_the_socket_buffer = TabProtocolMessageFromBrowserHost::TabLog {
+            level: crate::BrowserHostTabLogLevel::Info,
+            message: "x".repeat(8 * 1024 * 1024),
+        };
+
+        let started = Instant::now();
+        let sent = writer.send(&message_larger_than_the_socket_buffer, &[]);
+
+        assert!(sent.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn messages_cross_in_order() {
