@@ -76,6 +76,9 @@ const PAINTS_BETWEEN_REPORTS: u64 = 600;
 /// How many painted textures in a row may fail to copy, once one has copied,
 /// before the tab opens again painting into frame slots.
 const MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW: u32 = 30;
+/// How long a tab asked to paint into textures has to hand the first one
+/// over before it opens again painting into frame slots.
+const FIRST_PAINTED_TEXTURE_BUDGET: Duration = Duration::from_secs(10);
 
 /// Why a connection to the host stopped being served.
 enum BrowserHostConnectionEnd {
@@ -170,6 +173,9 @@ struct OpenBrowserHostTabConnection {
     frame_slots: BrowserHostTabFrameSlots,
     painted_textures_adopted: PaintedTexturesAdoptedByTheNode<ModuleHostSurface>,
     painted_texture_copies_failed_in_a_row: u32,
+    /// When the first painted texture is due, until one arrives; `None` for a
+    /// tab painting into frame slots.
+    first_painted_texture_deadline: Option<Instant>,
 }
 
 impl BrowserHostTabOfOneNode {
@@ -242,6 +248,7 @@ impl BrowserHostTabOfOneNode {
             paint_into_shared_textures: self.paints_into_painted_textures.load(Ordering::Acquire),
             ..self.tab_request.clone()
         };
+        let paints_into_painted_textures = tab_request.paint_into_shared_textures;
         writer
             .send(
                 &TabProtocolMessageFromNode::OpenTab {
@@ -299,6 +306,8 @@ impl BrowserHostTabOfOneNode {
             frame_slots,
             painted_textures_adopted: PaintedTexturesAdoptedByTheNode::default(),
             painted_texture_copies_failed_in_a_row: 0,
+            first_painted_texture_deadline: paints_into_painted_textures
+                .then(|| Instant::now() + FIRST_PAINTED_TEXTURE_BUDGET),
         })
     }
 
@@ -318,11 +327,30 @@ impl BrowserHostTabOfOneNode {
         connection: &mut OpenBrowserHostTabConnection,
     ) -> BrowserHostConnectionEnd {
         loop {
-            let message = match connection
-                .reader
-                .receive::<TabProtocolMessageFromBrowserHost>()
-            {
+            let received = match connection.first_painted_texture_deadline {
+                Some(deadline) => connection
+                    .reader
+                    .receive_within::<TabProtocolMessageFromBrowserHost>(
+                        deadline.saturating_duration_since(Instant::now()),
+                    ),
+                None => connection
+                    .reader
+                    .receive::<TabProtocolMessageFromBrowserHost>(),
+            };
+            let message = match received {
                 Ok(message) => message,
+                Err(TabProtocolSocketFailure::Io(failure))
+                    if connection.first_painted_texture_deadline.is_some()
+                        && matches!(
+                            failure.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    return BrowserHostConnectionEnd::PaintedTextureRefused(format!(
+                        "the page painted no texture within {FIRST_PAINTED_TEXTURE_BUDGET:?} of \
+                         opening, so the GPU cannot share what it paints here"
+                    ));
+                }
                 Err(TabProtocolSocketFailure::Ended) => return BrowserHostConnectionEnd::Ended,
                 Err(failure) => {
                     if !self.closing.load(Ordering::Acquire) {
@@ -345,6 +373,7 @@ impl BrowserHostTabOfOneNode {
                     plane_strides_bytes,
                     drm_format_modifier,
                 } => {
+                    connection.first_painted_texture_deadline = None;
                     let published = self.publish_the_painted_texture(
                         connection,
                         PaintedTextureHandedOver {
