@@ -9,7 +9,7 @@
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
-# lib/tatolab/watch/ — plus the systemd user units in lib/systemd/user/, where
+# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus the systemd user units in lib/systemd/user/, where
 # install.sh takes them from, and streamlib-commit, the commit it was built
 # from, which names the build install.sh installs it as.
 #
@@ -92,10 +92,22 @@ export PATH="/opt/glslc/bin:$PATH"
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv
-export PATH="/opt/bun/bin:$PATH"
+export PATH="/opt/bun/bin:$VIRTUAL_ENV/bin:$PATH"
+
+# The browser host BrowserSource opens pages in ships in the unit, built
+# against the CEF distribution cef-dll-sys pins.
+python3.12 -I scripts/fetch_cef_binary_distribution.py /tmp/cef-binary-distribution
+export CEF_PATH=/tmp/cef-binary-distribution
 cargo xtask build-runtime --release
 
 runtime_unit_root="$PWD/target/tatolab-runtime"
+for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.so LICENSE.txt; do
+	[ -f "$runtime_unit_root/lib/tatolab/browser-host/$browser_host_file" ] || {
+		echo "the runtime unit has no lib/tatolab/browser-host/$browser_host_file: a release ships the browser host" >&2
+		exit 1
+	}
+done
+
 mkdir -p "$runtime_unit_root/lib/systemd/user"
 cp installer/tatolabd.service "$runtime_unit_root/lib/systemd/user/"
 
