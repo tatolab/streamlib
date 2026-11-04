@@ -15,7 +15,11 @@ use tatolab_browser_tab_protocol::{
     TabProtocolSocketFailure, refusal_of_another_tab_protocol_version,
 };
 
-use crate::browser_host_cef_thread::{CefThreadRequest, CefThreadRequestSender};
+use tatolab_browser_page_bridge::PageInputChunkKind;
+
+use crate::browser_host_cef_thread::{
+    CefThreadRequest, CefThreadRequestSender, PageInputChunkForTheCefThread,
+};
 use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
 
 /// How long a new connection has to send its `OpenTab`.
@@ -262,6 +266,54 @@ fn serve_the_open_tab(
                 if !cef_thread_requests.send(CefThreadRequest::DeliverPageData {
                     tab_id: tab.tab_id,
                     detail_json,
+                }) {
+                    return;
+                }
+            }
+            Ok(TabProtocolMessageFromNode::DeliverPageInputVideoFrame {
+                input_port_name,
+                width,
+                height,
+                timestamp_ns,
+                rgba_pixels,
+            }) => {
+                if !tab.page_input_chunk_queued(&input_port_name) {
+                    continue;
+                }
+                if !cef_thread_requests.send(CefThreadRequest::DeliverPageInputChunk {
+                    tab_id: tab.tab_id,
+                    chunk: PageInputChunkForTheCefThread {
+                        kind: PageInputChunkKind::VideoFrameRgba,
+                        input_port_name,
+                        width_or_sample_rate: width,
+                        height_or_channel_count: height,
+                        timestamp_ns,
+                        payload: rgba_pixels,
+                    },
+                }) {
+                    return;
+                }
+            }
+            Ok(TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
+                input_port_name,
+                sample_rate,
+                channel_count,
+                first_sample_timestamp_ns,
+                interleaved_samples_le_f32,
+            }) => {
+                if !tab.page_input_chunk_queued(&input_port_name) {
+                    continue;
+                }
+                if !cef_thread_requests.send(CefThreadRequest::DeliverPageInputChunk {
+                    tab_id: tab.tab_id,
+                    chunk: PageInputChunkForTheCefThread {
+                        kind: PageInputChunkKind::AudioBlockF32,
+                        input_port_name,
+                        width_or_sample_rate: sample_rate,
+                        height_or_channel_count: channel_count,
+                        timestamp_ns: first_sample_timestamp_ns,
+                        payload: interleaved_samples_le_f32,
+                    },
                 }) {
                     return;
                 }

@@ -14,9 +14,11 @@ use crate::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK,
     MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
     ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
-    ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
-    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableMutableBytes, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableStatus,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 /// Why the module host table, or one of its verbs, refused.
@@ -575,6 +577,66 @@ impl ModuleHost {
         refuse_unless_ok("surface_write_from_host_memory", status, &error_message)
     }
 
+    /// Read every pixel of `source`, a four-byte surface of the same extent,
+    /// into `pixels`.
+    pub fn read_surface_into_host_memory(
+        &self,
+        source: &ModuleHostSurface,
+        pixels: &mut ModuleHostHostMemoryPixelsToFill<'_>,
+    ) -> Result<(), ModuleHostError> {
+        let rows = ModuleHostHostMemoryPixels {
+            pixels: pixels.pixels,
+            pixel_format: pixels.pixel_format,
+            width: pixels.width,
+            height: pixels.height,
+            row_stride_bytes: pixels.row_stride_bytes,
+        };
+        let bytes_the_rows_span =
+            rows.bytes_the_rows_span()
+                .ok_or_else(|| ModuleHostError::VerbRefused {
+                    verb: "surface_read_into_host_memory",
+                    refusal: format!(
+                        "{}x{} pixels {} bytes apart do not fit in memory",
+                        pixels.width, pixels.height, pixels.row_stride_bytes
+                    ),
+                })?;
+        if (pixels.pixels.len() as u64) < bytes_the_rows_span {
+            return Err(ModuleHostError::VerbRefused {
+                verb: "surface_read_into_host_memory",
+                refusal: format!(
+                    "{} rows of {} four-byte pixels, {} bytes apart, span {bytes_the_rows_span} \
+                     bytes; {} were handed",
+                    pixels.height,
+                    pixels.width,
+                    pixels.row_stride_bytes,
+                    pixels.pixels.len()
+                ),
+            });
+        }
+        let table_pixels = ModuleHostTableHostMemoryPixelsToFill {
+            pixels: ModuleHostTableMutableBytes {
+                bytes: pixels.pixels.as_mut_ptr(),
+                length: pixels.pixels.len(),
+            },
+            pixel_format: ModuleHostTableUtf8::of(pixels.pixel_format),
+            width: pixels.width,
+            height: pixels.height,
+            row_stride_bytes: pixels.row_stride_bytes,
+        };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `import_dma_buf`; the surface is this host's, and the
+        // memory is borrowed mutably for the length of the call.
+        let status = unsafe {
+            (self.module_host_table.surface_read_into_host_memory)(
+                self.module_host_table.node_host,
+                source.handle,
+                &table_pixels,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_read_into_host_memory", status, &error_message)
+    }
+
     /// What the host offers, as one JSON object.
     pub fn host_capabilities_json(&self) -> &str {
         // SAFETY: the host keeps the text alive while the node host is
@@ -679,6 +741,19 @@ impl ModuleHostHostMemoryPixels<'_> {
             .checked_mul(u64::from(self.height) - 1)?
             .checked_add(row_bytes)
     }
+}
+
+/// The module's memory [`ModuleHost::read_surface_into_host_memory`] fills
+/// with four-byte pixels.
+#[derive(Debug)]
+pub struct ModuleHostHostMemoryPixelsToFill<'pixels> {
+    pub pixels: &'pixels mut [u8],
+    /// A pixel format wire name: `bgra32` or `rgba32`.
+    pub pixel_format: &'pixels str,
+    pub width: u32,
+    pub height: u32,
+    /// The distance from one row's first byte to the next row's.
+    pub row_stride_bytes: u64,
 }
 
 /// A surface lent to native code; dropping it gives it back.

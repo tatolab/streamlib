@@ -8,7 +8,11 @@ message every `frames_between_data_messages` frames. A page that answers each
 one by publishing `{"data_painted": <the message's sent_ns>}` from the first
 animation frame after it handled the event lets the probe report how long a
 `data` message takes to reach the page's next animation frame callback and come
-back; it does not wait for that frame's paint to reach `video`.
+back; it does not wait for that frame's paint to reach `video`. A page that
+publishes `{"page_input_port_name": <port>, "page_input_timestamp_ns": <the
+chunk's timestamp>}` as it draws or plays an input's chunk lets the probe report
+each input's latency: from the chunk's own timestamp, through the page, to the
+probe reading the event.
 """
 
 from __future__ import annotations
@@ -72,6 +76,9 @@ class BrowserSourceOutputProbe:
         self._audio_timeline_breaks = 0
         self._next_audio_sample_timestamp_ns: "int | None" = None
         self._events_read = 0
+        self._page_input_latency_by_input_port_name: dict[
+            str, DurationSamplesInOneReportingWindow
+        ] = {}
 
     @node.input(delivery_profile="ordered", description="Frames from the browser under test")
     def video_from_browser(self) -> VideoFrame: ...
@@ -114,8 +121,16 @@ class BrowserSourceOutputProbe:
 
     def _measure_published_event(self, event: Any) -> None:
         self._events_read += 1
-        if isinstance(event, dict) and isinstance(event.get("data_painted"), int):
+        if not isinstance(event, dict):
+            return
+        if isinstance(event.get("data_painted"), int):
             self._data_round_trip.add(monotonic_now_ns() - event["data_painted"])
+        input_port_name = event.get("page_input_port_name")
+        input_timestamp_ns = event.get("page_input_timestamp_ns")
+        if isinstance(input_port_name, str) and isinstance(input_timestamp_ns, int):
+            self._page_input_latency_by_input_port_name.setdefault(
+                input_port_name, DurationSamplesInOneReportingWindow()
+            ).add(monotonic_now_ns() - input_timestamp_ns)
 
     def _measure_frame(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> None:
         read_ns = monotonic_now_ns()
@@ -143,5 +158,11 @@ class BrowserSourceOutputProbe:
             f"silent_audio_blocks={self._silent_audio_blocks} "
             f"audio_timeline_breaks={self._audio_timeline_breaks} "
             f"events_read={self._events_read}"
+            + "".join(
+                f" | {input_port_name}_latency_ms {latency.summary_in_milliseconds()}"
+                for input_port_name, latency in sorted(
+                    self._page_input_latency_by_input_port_name.items()
+                )
+            )
         )
         self._window_first_frame_read_ns = None

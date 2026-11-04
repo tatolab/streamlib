@@ -14,6 +14,7 @@ compile_error!("tatolab-browser runs on Linux and macOS");
 pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
 pub mod page_data_messages;
+pub mod page_input_messages;
 pub mod painted_textures_adopted_by_the_node;
 pub mod video_frame_record;
 
@@ -23,11 +24,15 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::ModuleHost;
 
-use crate::browser_host_tab_client::{BrowserPageConfig, BrowserPagePorts, BrowserPageRendering};
+use tatolab_browser_tab_protocol::{PageInputTrack, PageInputTrackKind};
+
+use crate::browser_host_tab_client::{
+    BrowserPageConfig, BrowserPagePorts, BrowserPageRendering, PageInputPort,
+};
 
 /// A web page rendering as a tab in the machine's browser host, publishing its frames on
 /// `video`, its audio on `audio` and its published objects on `events`, and
-/// handed every `data` message as a DOM event.
+/// handed every `data` message as a DOM event and every wired input as a track.
 #[pyclass(name = "BrowserPageRendering")]
 struct PythonBrowserPageRendering {
     rendering: BrowserPageRendering,
@@ -42,6 +47,8 @@ impl PythonBrowserPageRendering {
         events_output_port,
         audio_output_port,
         data_input_port,
+        video_input_ports,
+        audio_input_ports,
         url,
         width,
         height,
@@ -58,6 +65,8 @@ impl PythonBrowserPageRendering {
         events_output_port: String,
         audio_output_port: String,
         data_input_port: String,
+        video_input_ports: Vec<String>,
+        audio_input_ports: Vec<String>,
         url: String,
         width: u32,
         height: u32,
@@ -69,6 +78,26 @@ impl PythonBrowserPageRendering {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
         let rendering = python
             .detach(|| -> Result<BrowserPageRendering, String> {
+                let tracks = video_input_ports
+                    .into_iter()
+                    .map(|input_port_name| (input_port_name, PageInputTrackKind::Video))
+                    .chain(
+                        audio_input_ports
+                            .into_iter()
+                            .map(|input_port_name| (input_port_name, PageInputTrackKind::Audio)),
+                    );
+                let mut page_input_ports = Vec::new();
+                for (input_port_name, kind) in tracks {
+                    page_input_ports.push(PageInputPort {
+                        input_port: module_host
+                            .open_input_port(&input_port_name)
+                            .map_err(|refusal| refusal.to_string())?,
+                        track: PageInputTrack {
+                            input_port_name,
+                            kind,
+                        },
+                    });
+                }
                 let ports = BrowserPagePorts {
                     video_output_port: module_host
                         .open_output_port(&video_output_port)
@@ -82,6 +111,7 @@ impl PythonBrowserPageRendering {
                     data_input_port: module_host
                         .open_input_port(&data_input_port)
                         .map_err(|refusal| refusal.to_string())?,
+                    page_input_ports,
                     module_host,
                 };
                 BrowserPageRendering::open(
@@ -154,6 +184,30 @@ impl PythonBrowserPageRendering {
         self.rendering
             .counters()
             .data_messages_refused
+            .load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn page_input_video_frames_delivered(&self) -> u64 {
+        self.rendering
+            .counters()
+            .page_input_video_frames_delivered
+            .load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn page_input_audio_blocks_delivered(&self) -> u64 {
+        self.rendering
+            .counters()
+            .page_input_audio_blocks_delivered
+            .load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn page_input_chunks_refused(&self) -> u64 {
+        self.rendering
+            .counters()
+            .page_input_chunks_refused
             .load(Ordering::Relaxed)
     }
 

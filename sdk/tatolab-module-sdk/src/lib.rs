@@ -27,9 +27,10 @@ pub mod module_host_virtual_camera;
 
 pub use module_host::{
     ModuleHost, ModuleHostColorInfo, ModuleHostError, ModuleHostForeignDmaBuf,
-    ModuleHostForeignIOSurface, ModuleHostHostMemoryPixels, ModuleHostInputPort,
-    ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort,
-    ModuleHostReadMessage, ModuleHostSurface, refuse_a_module_host_table_this_module_cannot_read,
+    ModuleHostForeignIOSurface, ModuleHostHostMemoryPixels, ModuleHostHostMemoryPixelsToFill,
+    ModuleHostInputPort, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
+    ModuleHostOutputPort, ModuleHostReadMessage, ModuleHostSurface,
+    refuse_a_module_host_table_this_module_cannot_read,
 };
 pub use module_host_audio_capture::{
     ModuleHostAudioCaptureStream, ModuleHostAudioCaptureStreamLiveness,

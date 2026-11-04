@@ -9,7 +9,10 @@ every stream, giving each stream a profile of its own. Each frame the host
 paints is written from host memory into a texture from the node's output pool
 and published as a `VideoFrame`; the page's audio is published on `audio`;
 every `data` message reaches the page as a `tatolab:data` DOM event, and every
-`window.tatolab.publish(object)` call is written to `events`. When the host
+`window.tatolab.publish(object)` call is written to `events`. Each wired
+`video_in_N` and `audio_in_N` reaches the page as a `MediaStreamTrack`,
+`window.tatolab.inputTrack("video_in_0")`, which a page draws or plays like any
+camera or microphone track; an unwired one is `null`. When the host
 ends, the runtime starts it again and the page opens again in it, receiving the
 latest `data` messages that arrived meanwhile, up to 256 of them and 64 MiB.
 A page the host can no longer render, or a host the runtime gives up on, fails
@@ -30,6 +33,8 @@ VIDEO_OUTPUT_PORT = "video"
 EVENTS_OUTPUT_PORT = "events"
 AUDIO_OUTPUT_PORT = "audio"
 DATA_INPUT_PORT = "data"
+VIDEO_INPUT_PORTS = ("video_in_0", "video_in_1", "video_in_2", "video_in_3")
+AUDIO_INPUT_PORTS = ("audio_in_0", "audio_in_1", "audio_in_2", "audio_in_3")
 
 
 @dataclasses.dataclass
@@ -69,6 +74,46 @@ class BrowserSource:
         """One msgpack map per message, dispatched to the page as `tatolab:data`."""
         ...
 
+    @node.input(delivery_profile="newest")
+    def video_in_0(self) -> VideoFrame:
+        """A video the page takes as `window.tatolab.inputTrack("video_in_0")`."""
+        ...
+
+    @node.input(delivery_profile="newest")
+    def video_in_1(self) -> VideoFrame:
+        """A video the page takes as `window.tatolab.inputTrack("video_in_1")`."""
+        ...
+
+    @node.input(delivery_profile="newest")
+    def video_in_2(self) -> VideoFrame:
+        """A video the page takes as `window.tatolab.inputTrack("video_in_2")`."""
+        ...
+
+    @node.input(delivery_profile="newest")
+    def video_in_3(self) -> VideoFrame:
+        """A video the page takes as `window.tatolab.inputTrack("video_in_3")`."""
+        ...
+
+    @node.input(delivery_profile="ordered")
+    def audio_in_0(self) -> bytes:
+        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_0")`."""
+        ...
+
+    @node.input(delivery_profile="ordered")
+    def audio_in_1(self) -> bytes:
+        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_1")`."""
+        ...
+
+    @node.input(delivery_profile="ordered")
+    def audio_in_2(self) -> bytes:
+        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_2")`."""
+        ...
+
+    @node.input(delivery_profile="ordered")
+    def audio_in_3(self) -> bytes:
+        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_3")`."""
+        ...
+
     @node.output(description="The painted page, as VideoFrame records")
     def video(self) -> VideoFrame: ...
 
@@ -81,9 +126,15 @@ class BrowserSource:
         """One msgpack map per `window.tatolab.publish(object)` call."""
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
+        wired_video_input_ports = [
+            port for port in VIDEO_INPUT_PORTS if ctx.inputs.inbound_link_names(port)
+        ]
+        wired_audio_input_ports = [
+            port for port in AUDIO_INPUT_PORTS if ctx.inputs.inbound_link_names(port)
+        ]
         module_host_table = ctx.open_module_host_table(
             output_ports=[VIDEO_OUTPUT_PORT, EVENTS_OUTPUT_PORT, AUDIO_OUTPUT_PORT],
-            input_ports=[DATA_INPUT_PORT],
+            input_ports=[DATA_INPUT_PORT, *wired_video_input_ports, *wired_audio_input_ports],
         )
         config = self._config
         self._rendering = _native.BrowserPageRendering(
@@ -92,6 +143,8 @@ class BrowserSource:
             EVENTS_OUTPUT_PORT,
             AUDIO_OUTPUT_PORT,
             DATA_INPUT_PORT,
+            wired_video_input_ports,
+            wired_audio_input_ports,
             config.url,
             config.width,
             config.height,
@@ -102,7 +155,8 @@ class BrowserSource:
         )
         log.info(
             f"BrowserSource: rendering {config.url} at {config.width}x{config.height}, "
-            f"up to {config.frame_rate} fps, audio at {config.audio_sample_rate} Hz"
+            f"up to {config.frame_rate} fps, audio at {config.audio_sample_rate} Hz, "
+            f"inputs {wired_video_input_ports + wired_audio_input_ports}"
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
@@ -127,6 +181,9 @@ class BrowserSource:
             f"events_published={rendering.events_published} "
             f"data_messages_delivered={rendering.data_messages_delivered} "
             f"data_messages_refused={rendering.data_messages_refused} "
+            f"page_input_video_frames_delivered={rendering.page_input_video_frames_delivered} "
+            f"page_input_audio_blocks_delivered={rendering.page_input_audio_blocks_delivered} "
+            f"page_input_chunks_refused={rendering.page_input_chunks_refused} "
             f"browser_host_reconnects={rendering.browser_host_reconnects}"
         )
         self._rendering = None

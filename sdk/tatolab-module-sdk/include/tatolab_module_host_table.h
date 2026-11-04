@@ -22,8 +22,8 @@
  * channel, with no interpreter on either end, as do the IOSurface import
  * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
  * id minor 6 adds and the shared native service leases and node failure
- * minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
- * itself.
+ * minor 7 adds and the host-memory read minor 9 adds. The virtual camera
+ * verbs minor 8 adds act in the helper itself.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -44,7 +44,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(8)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(9)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -176,6 +176,20 @@ typedef struct ModuleHostTableBytes {
      */
     size_t length;
 } ModuleHostTableBytes;
+
+/**
+ * Memory the caller owns and the host writes into for the length of the call.
+ */
+typedef struct ModuleHostTableMutableBytes {
+    /**
+     * The first byte of the memory.
+     */
+    uint8_t *bytes;
+    /**
+     * The memory's length in bytes.
+     */
+    size_t length;
+} ModuleHostTableMutableBytes;
 
 /**
  * A port lent to native code, valid for as long as the node host is retained;
@@ -319,6 +333,25 @@ typedef struct ModuleHostTableHostMemoryPixels {
     uint32_t height;
     uint64_t row_stride_bytes;
 } ModuleHostTableHostMemoryPixels;
+
+/**
+ * The caller's memory a host-memory read fills: `height` rows of `width`
+ * four-byte pixels each, `row_stride_bytes` apart.
+ */
+typedef struct ModuleHostTableHostMemoryPixelsToFill {
+    /**
+     * The first byte of the first row; at least
+     * `row_stride_bytes × (height − 1) + width × 4` bytes long.
+     */
+    ModuleHostTableMutableBytes pixels;
+    /**
+     * A pixel format wire name: `bgra32` or `rgba32`.
+     */
+    ModuleHostTableUtf8 pixel_format;
+    uint32_t width;
+    uint32_t height;
+    uint64_t row_stride_bytes;
+} ModuleHostTableHostMemoryPixelsToFill;
 
 /**
  * The caller's buffer a refused verb writes its message into.
@@ -732,6 +765,13 @@ typedef struct ModuleHostTable {
      * Minor 8: remove the camera node; its handle names nothing after.
      */
     void (*virtual_camera_stream_close)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera);
+    /**
+     * Minor 9: read every pixel of a four-byte surface of the same extent,
+     * such as an upstream node's frame lent by surface id, into the caller's
+     * memory, swapping channel order between `bgra32` and `rgba32` where the
+     * surface's differs.
+     */
+    ModuleHostTableStatus (*surface_read_into_host_memory)(void *node_host, ModuleHostTableSurfaceHandle source, const ModuleHostTableHostMemoryPixelsToFill *host_memory_pixels_to_fill, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

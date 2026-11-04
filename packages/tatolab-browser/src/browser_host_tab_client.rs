@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 
 use tatolab_browser_tab_protocol::{
     BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME, BrowserHostTabFrameSlots, BrowserHostTabLogLevel,
-    BrowserHostTabRequest, TAB_PROTOCOL_VERSION, TabProtocolMessageFromBrowserHost,
-    TabProtocolMessageFromNode, TabProtocolMessageReader, TabProtocolMessageWriter,
-    TabProtocolSocketFailure,
+    BrowserHostTabRequest, PageInputTrack, PageInputTrackKind, TAB_PROTOCOL_VERSION,
+    TabProtocolMessageFromBrowserHost, TabProtocolMessageFromNode, TabProtocolMessageReader,
+    TabProtocolMessageWriter, TabProtocolSocketFailure,
 };
 #[cfg(target_os = "macos")]
 use tatolab_browser_tab_protocol::{PaintedIOSurfaceReceiverOfTheNode, RetainedPaintedIOSurface};
@@ -33,15 +33,17 @@ use tatolab_module_sdk::ModuleHostForeignDmaBuf;
 #[cfg(target_os = "macos")]
 use tatolab_module_sdk::ModuleHostForeignIOSurface;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostColorInfo, ModuleHostHostMemoryPixels, ModuleHostInputPort,
-    ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort,
-    ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState, ModuleHostSurface,
+    ModuleHost, ModuleHostColorInfo, ModuleHostHostMemoryPixels, ModuleHostHostMemoryPixelsToFill,
+    ModuleHostInputPort, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
+    ModuleHostOutputPort, ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,
+    ModuleHostSurface,
 };
 
 use crate::page_audio_blocks::PageAudioStreamTimeline;
 use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
 };
+use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameRecord};
 #[cfg(target_os = "linux")]
 use crate::painted_textures_adopted_by_the_node::PaintedTextureDmaBufIdentity;
 use crate::painted_textures_adopted_by_the_node::{
@@ -73,6 +75,10 @@ const BROWSER_HOST_RECONNECT_REPORT_INTERVAL: Duration = Duration::from_secs(30)
 /// How long a running browser host may keep refusing to open the page again
 /// before the node fails.
 const LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST: Duration = Duration::from_secs(60);
+
+/// The pixel format a video input is read back in, the one a page's
+/// `VideoFrame` of format `RGBA` takes.
+const PAGE_INPUT_VIDEO_PIXEL_FORMAT: &str = "rgba32";
 
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
 /// How many `data` messages wait for a restarting browser host before the oldest is dropped.
@@ -151,6 +157,14 @@ pub struct BrowserPagePorts {
     pub events_output_port: ModuleHostOutputPort,
     pub audio_output_port: ModuleHostOutputPort,
     pub data_input_port: ModuleHostInputPort,
+    /// The wired video and audio inputs the page takes as tracks.
+    pub page_input_ports: Vec<PageInputPort>,
+}
+
+/// One wired input the page takes as a track, and the port it is read from.
+pub struct PageInputPort {
+    pub track: PageInputTrack,
+    pub input_port: ModuleHostInputPort,
 }
 
 /// How much a page has published and dropped since it opened.
@@ -165,6 +179,11 @@ pub struct BrowserPageCounters {
     pub events_published: AtomicU64,
     pub data_messages_delivered: AtomicU64,
     pub data_messages_refused: AtomicU64,
+    pub page_input_video_frames_delivered: AtomicU64,
+    pub page_input_audio_blocks_delivered: AtomicU64,
+    /// Input frames and blocks that never reached the page: unreadable, not
+    /// read back, or sent while the browser host was away.
+    pub page_input_chunks_refused: AtomicU64,
     pub browser_host_reconnects: AtomicU64,
 }
 
@@ -1070,6 +1089,11 @@ impl BrowserPageRendering {
             frame_slot_count: BROWSER_HOST_TAB_FRAME_SLOT_COUNT,
             paint_into_shared_textures: true,
             painted_iosurface_mach_service_name: None,
+            page_input_tracks: ports
+                .page_input_ports
+                .iter()
+                .map(|page_input_port| page_input_port.track.clone())
+                .collect(),
         };
         tab_request.refuse_what_cef_cannot_render()?;
         let tab = Arc::new(BrowserHostTabOfOneNode {
@@ -1100,11 +1124,18 @@ impl BrowserPageRendering {
                 format!("the tab's connection thread did not start: {failure}")
             })?;
         let data_input_thread = std::thread::Builder::new()
-            .name("tatolab-browser-data".to_string())
+            .name("tatolab-browser-inputs".to_string())
             .spawn({
                 let tab = Arc::clone(&tab);
                 let data_input_port = ports.data_input_port;
-                move || deliver_data_messages_to_the_page(&tab, &data_input_port)
+                let page_input_ports = ports.page_input_ports;
+                move || {
+                    deliver_data_and_page_inputs_to_the_page(
+                        &tab,
+                        &data_input_port,
+                        &page_input_ports,
+                    )
+                }
             });
         let mut rendering = Self {
             tab,
@@ -1115,7 +1146,7 @@ impl BrowserPageRendering {
             Ok(data_input_thread) => rendering.data_input_thread = Some(data_input_thread),
             Err(failure) => {
                 rendering.close();
-                return Err(format!("the data thread did not start: {failure}"));
+                return Err(format!("the inputs thread did not start: {failure}"));
             }
         }
         Ok(rendering)
@@ -1176,14 +1207,33 @@ pub fn refuse_a_config_cef_cannot_render(config: &BrowserPageConfig) -> Result<(
     Ok(())
 }
 
-fn deliver_data_messages_to_the_page(
+/// Deliver `data` messages and every wired input's frames and blocks to the
+/// page, on one thread since any port's message wakes the wait.
+fn deliver_data_and_page_inputs_to_the_page(
     tab: &BrowserHostTabOfOneNode,
     data_input_port: &ModuleHostInputPort,
+    page_input_ports: &[PageInputPort],
 ) {
     let module_host = &tab.module_host;
     let delivery_stopped = || tab.closing.load(Ordering::Acquire) || module_host.stop_requested();
     let mut held_while_the_browser_host_is_away = DataMessagesHeldForTheBrowserHost::default();
+    let mut read_back_rgba_pixels_by_input: Vec<Vec<u8>> =
+        page_input_ports.iter().map(|_| Vec::new()).collect();
     while !delivery_stopped() {
+        for (page_input_port, read_back_rgba_pixels) in page_input_ports
+            .iter()
+            .zip(read_back_rgba_pixels_by_input.iter_mut())
+        {
+            if let Err(refusal) =
+                deliver_what_one_page_input_holds(tab, page_input_port, read_back_rgba_pixels)
+            {
+                tab.fail_the_node(&format!(
+                    "{} stopped reaching the page: {refusal}",
+                    page_input_port.track.input_port_name
+                ));
+                return;
+            }
+        }
         send_the_data_messages_held_for_the_browser_host(
             tab,
             &mut held_while_the_browser_host_is_away,
@@ -1221,6 +1271,177 @@ fn deliver_data_messages_to_the_page(
                 Err(refusal) => count_a_data_message_that_did_not_reach_the_page(tab, &refusal),
             }
         }
+    }
+}
+
+/// Send the newest frame of a video input, or every block of an audio input,
+/// waiting on its port; `Err` once the port cannot be read.
+fn deliver_what_one_page_input_holds(
+    tab: &BrowserHostTabOfOneNode,
+    page_input_port: &PageInputPort,
+    read_back_rgba_pixels: &mut Vec<u8>,
+) -> Result<(), String> {
+    let input_port_name = &page_input_port.track.input_port_name;
+    match page_input_port.track.kind {
+        PageInputTrackKind::Video => {
+            let mut newest = None;
+            while let Some(message) = page_input_port
+                .input_port
+                .read()
+                .map_err(|refusal| refusal.to_string())?
+            {
+                newest = Some(message);
+            }
+            let Some(message) = newest else {
+                return Ok(());
+            };
+            match read_back_one_page_input_video_frame(
+                tab,
+                message.payload(),
+                read_back_rgba_pixels,
+            ) {
+                Ok(frame) => {
+                    let delivery = TabProtocolMessageFromNode::DeliverPageInputVideoFrame {
+                        input_port_name: input_port_name.clone(),
+                        width: frame.width,
+                        height: frame.height,
+                        timestamp_ns: frame.timestamp_ns,
+                        rgba_pixels: std::mem::take(read_back_rgba_pixels),
+                    };
+                    let outcome = tab.send_to_the_browser_host(&delivery);
+                    if let TabProtocolMessageFromNode::DeliverPageInputVideoFrame {
+                        rgba_pixels,
+                        ..
+                    } = delivery
+                    {
+                        *read_back_rgba_pixels = rgba_pixels;
+                    }
+                    count_one_page_input_send(
+                        tab,
+                        input_port_name,
+                        outcome,
+                        &tab.counters.page_input_video_frames_delivered,
+                    );
+                }
+                Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
+                    tab,
+                    input_port_name,
+                    &refusal,
+                ),
+            }
+        }
+        PageInputTrackKind::Audio => {
+            while let Some(message) = page_input_port
+                .input_port
+                .read()
+                .map_err(|refusal| refusal.to_string())?
+            {
+                match PageInputAudioBlock::from_msgpack(message.payload()) {
+                    Ok(block) => {
+                        let outcome = tab.send_to_the_browser_host(
+                            &TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
+                                input_port_name: input_port_name.clone(),
+                                sample_rate: block.sample_rate,
+                                channel_count: block.channel_count,
+                                first_sample_timestamp_ns: block.first_sample_timestamp_ns,
+                                interleaved_samples_le_f32: block.interleaved_samples_le_f32,
+                            },
+                        );
+                        count_one_page_input_send(
+                            tab,
+                            input_port_name,
+                            outcome,
+                            &tab.counters.page_input_audio_blocks_delivered,
+                        );
+                    }
+                    Err(refusal) => count_a_page_input_chunk_that_did_not_reach_the_page(
+                        tab,
+                        input_port_name,
+                        &refusal,
+                    ),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read the surface a `VideoFrame` message names back into
+/// `read_back_rgba_pixels` as packed RGBA rows.
+fn read_back_one_page_input_video_frame(
+    tab: &BrowserHostTabOfOneNode,
+    video_frame_message: &[u8],
+    read_back_rgba_pixels: &mut Vec<u8>,
+) -> Result<PageInputVideoFrameRecord, String> {
+    let frame = PageInputVideoFrameRecord::from_msgpack(video_frame_message)?;
+    let row_stride_bytes = u64::from(frame.width) * 4;
+    let byte_count = usize::try_from(row_stride_bytes * u64::from(frame.height)).map_err(|_| {
+        format!(
+            "a {}x{} frame does not fit in memory",
+            frame.width, frame.height
+        )
+    })?;
+    read_back_rgba_pixels.resize(byte_count, 0);
+    let surface = tab
+        .module_host
+        .lend_surface_a_message_names(&frame.surface_id)
+        .map_err(|refusal| refusal.to_string())?;
+    tab.module_host
+        .read_surface_into_host_memory(
+            &surface,
+            &mut ModuleHostHostMemoryPixelsToFill {
+                pixels: read_back_rgba_pixels,
+                pixel_format: PAGE_INPUT_VIDEO_PIXEL_FORMAT,
+                width: frame.width,
+                height: frame.height,
+                row_stride_bytes,
+            },
+        )
+        .map_err(|refusal| refusal.to_string())?;
+    Ok(frame)
+}
+
+fn count_one_page_input_send(
+    tab: &BrowserHostTabOfOneNode,
+    input_port_name: &str,
+    outcome: SendToTheBrowserHostOutcome,
+    delivered: &AtomicU64,
+) {
+    match outcome {
+        SendToTheBrowserHostOutcome::Sent => {
+            delivered.fetch_add(1, Ordering::Relaxed);
+        }
+        SendToTheBrowserHostOutcome::RefusedBeforeWriting(refusal) => {
+            count_a_page_input_chunk_that_did_not_reach_the_page(tab, input_port_name, &refusal)
+        }
+        SendToTheBrowserHostOutcome::BrowserHostAway => {
+            count_a_page_input_chunk_that_did_not_reach_the_page(
+                tab,
+                input_port_name,
+                "the browser host is away",
+            )
+        }
+    }
+}
+
+fn count_a_page_input_chunk_that_did_not_reach_the_page(
+    tab: &BrowserHostTabOfOneNode,
+    input_port_name: &str,
+    refusal: &str,
+) {
+    let refused = tab
+        .counters
+        .page_input_chunks_refused
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    if refused == 1 || refused.is_multiple_of(PAINTS_BETWEEN_REPORTS) {
+        tab.log(
+            ModuleHostLogLevel::Warn,
+            &format!(
+                "{refused} input frames or blocks did not reach the page, the latest of \
+                 {input_port_name}: {refusal}"
+            ),
+        );
     }
 }
 

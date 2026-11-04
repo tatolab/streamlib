@@ -15,8 +15,14 @@ use std::time::{Duration, Instant};
 
 use cef::rc::Rc as _;
 use cef::*;
-use tatolab_browser_page_bridge::{BROWSER_PROCESS_PID_SWITCH_NAME, page_data_dispatch_script};
-use tatolab_browser_tab_protocol::{BrowserHostTabLogLevel, TabProtocolMessageFromBrowserHost};
+use tatolab_browser_page_bridge::{
+    BROWSER_PROCESS_PID_SWITCH_NAME, PAGE_INPUT_PROCESS_MESSAGE_NAME,
+    PAGE_INPUT_TRACKS_EXTRA_INFO_KEY, PageInputChunk, PageInputChunkKind,
+    page_data_dispatch_script,
+};
+use tatolab_browser_tab_protocol::{
+    BrowserHostTabLogLevel, BrowserHostTabRequest, TabProtocolMessageFromBrowserHost,
+};
 
 use crate::browser_host_page_handlers::browser_host_page_client;
 use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
@@ -48,6 +54,10 @@ pub enum CefThreadRequest {
         tab_id: BrowserHostTabId,
         detail_json: String,
     },
+    DeliverPageInputChunk {
+        tab_id: BrowserHostTabId,
+        chunk: PageInputChunkForTheCefThread,
+    },
     CloseTab {
         tab_id: BrowserHostTabId,
     },
@@ -57,6 +67,29 @@ pub enum CefThreadRequest {
     PumpWithin {
         delay: Duration,
     },
+}
+
+/// One frame or block of a node input, owned on its way to the CEF thread.
+pub struct PageInputChunkForTheCefThread {
+    pub kind: PageInputChunkKind,
+    pub input_port_name: String,
+    pub width_or_sample_rate: u32,
+    pub height_or_channel_count: u32,
+    pub timestamp_ns: i64,
+    pub payload: Vec<u8>,
+}
+
+impl PageInputChunkForTheCefThread {
+    fn borrowed(&self) -> PageInputChunk<'_> {
+        PageInputChunk {
+            kind: self.kind,
+            input_port_name: &self.input_port_name,
+            width_or_sample_rate: self.width_or_sample_rate,
+            height_or_channel_count: self.height_or_channel_count,
+            timestamp_ns: self.timestamp_ns,
+            payload: &self.payload,
+        }
+    }
 }
 
 /// The way every other thread reaches the CEF thread.
@@ -232,6 +265,45 @@ impl OpenTab {
         );
     }
 
+    /// Hand `chunk` to the page's renderer in shared memory; dropped, and
+    /// counted, before the page has loaded.
+    fn send_the_page_input_chunk_to_the_renderer(&self, chunk: &PageInputChunkForTheCefThread) {
+        let main_frame = self
+            .browser
+            .main_frame()
+            .filter(|_| self.main_frame_document_loaded());
+        let Some(main_frame) = main_frame else {
+            self.tab.page_input_chunk_dropped(&chunk.input_port_name);
+            return;
+        };
+        let chunk = chunk.borrowed();
+        let Some(builder) = shared_process_message_builder_create(
+            Some(&CefString::from(PAGE_INPUT_PROCESS_MESSAGE_NAME)),
+            chunk.encoded_byte_size(),
+        ) else {
+            self.tab.page_input_chunk_dropped(chunk.input_port_name);
+            return;
+        };
+        if builder.is_valid() == 0 || builder.memory().is_null() {
+            self.tab.page_input_chunk_dropped(chunk.input_port_name);
+            return;
+        }
+        // SAFETY: the builder maps `size` writable bytes at `memory` until
+        // `build` hands them to the message.
+        let memory = unsafe {
+            std::slice::from_raw_parts_mut(builder.memory().cast::<u8>(), builder.size())
+        };
+        if chunk.encode_into(memory).is_err() {
+            self.tab.page_input_chunk_dropped(chunk.input_port_name);
+            return;
+        }
+        let Some(mut message) = builder.build() else {
+            self.tab.page_input_chunk_dropped(chunk.input_port_name);
+            return;
+        };
+        main_frame.send_process_message(ProcessId::RENDERER, Some(&mut message));
+    }
+
     fn close(&self) {
         if let Some(host) = self.browser.host() {
             host.close_browser(1);
@@ -329,6 +401,14 @@ pub fn serve_the_cef_thread_until_stopped(
                     open_tab.dispatch_or_hold_data_script(page_data_dispatch_script(&detail_json));
                 }
             }
+            Ok(CefThreadRequest::DeliverPageInputChunk { tab_id, chunk }) => {
+                if let Some(open_tab) = open_tabs.get(&tab_id) {
+                    open_tab
+                        .tab
+                        .page_input_chunk_dequeued(&chunk.input_port_name);
+                    open_tab.send_the_page_input_chunk_to_the_renderer(&chunk);
+                }
+            }
             Ok(CefThreadRequest::ReloadTabAfterItsRendererEnded { tab_id }) => {
                 if let Some(open_tab) = open_tabs.get_mut(&tab_id) {
                     open_tab.reload_after_the_renderer_ended();
@@ -418,15 +498,35 @@ fn open_a_tab(
         ..Default::default()
     };
     let mut client = browser_host_page_client(tab, cef_thread_requests);
+    let mut extra_info = page_input_tracks_extra_info(tab_request)?;
     browser_host_create_browser_sync(
         Some(&window_info),
         Some(&mut client),
         Some(&CefString::from(tab_request.url.as_str())),
         Some(&browser_settings),
-        None,
+        extra_info.as_mut(),
         Some(&mut tenant_profile),
     )
     .ok_or_else(|| format!("CEF refused to open {}", tab_request.url))
+}
+
+/// The extra info that tells the renderer which inputs the page may take,
+/// `None` when the tab was opened with none.
+fn page_input_tracks_extra_info(
+    tab_request: &BrowserHostTabRequest,
+) -> Result<Option<DictionaryValue>, String> {
+    if tab_request.page_input_tracks.is_empty() {
+        return Ok(None);
+    }
+    let page_input_tracks_json = serde_json::to_string(&tab_request.page_input_tracks)
+        .map_err(|failure| format!("the page's inputs could not be written as JSON: {failure}"))?;
+    let extra_info =
+        dictionary_value_create().ok_or("CEF refused a dictionary for the page's inputs")?;
+    extra_info.set_string(
+        Some(&CefString::from(PAGE_INPUT_TRACKS_EXTRA_INFO_KEY)),
+        Some(&CefString::from(page_input_tracks_json.as_str())),
+    );
+    Ok(Some(extra_info))
 }
 
 /// The profile every tab of `tenant_stream_id` shares, made on its first tab.

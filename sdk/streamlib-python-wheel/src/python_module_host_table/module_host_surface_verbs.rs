@@ -4,7 +4,7 @@
 //! The surface verbs of the module host table: a foreign DMA-BUF or IOSurface
 //! import, a node output pool texture, a lend of a surface a message names, the
 //! engine's colour conversion between them, and a write of host-memory pixels
-//! into a texture, each a round trip on the helper's native escalate channel or
+//! into a texture or a read of a surface's pixels into host memory, each a round trip on the helper's native escalate channel or
 //! its surface-share socket, with no Python on either end.
 
 use std::collections::HashMap;
@@ -16,8 +16,8 @@ use parking_lot::Mutex;
 use tatolab_module_sdk::module_host_table_abi::MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES;
 use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableHostMemoryPixels,
-    ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
@@ -48,9 +48,10 @@ struct SurfaceLentToNativeCode {
 /// and the channels their verbs ride.
 pub(super) struct SurfacesLentToNativeCode {
     surfaces_by_handle_value: Mutex<HashMap<u64, SurfaceLentToNativeCode>>,
-    /// Held across one host-memory write, so two never fill the same rows at once.
+    /// Held across one host-memory read or write, so two never use the same
+    /// staging rows at once.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    host_memory_write_in_progress: Mutex<()>,
+    host_memory_copy_in_progress: Mutex<()>,
     next_handle_value: AtomicU64,
     native_escalate_channel: Option<Arc<HelperProcessNativeEscalateChannel>>,
     surface_share_client: Option<Arc<HelperProcessGpuExchangeClient>>,
@@ -64,7 +65,7 @@ impl SurfacesLentToNativeCode {
         Self {
             surfaces_by_handle_value: Mutex::new(HashMap::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            host_memory_write_in_progress: Mutex::new(()),
+            host_memory_copy_in_progress: Mutex::new(()),
             next_handle_value: AtomicU64::new(1),
             native_escalate_channel,
             surface_share_client,
@@ -386,7 +387,7 @@ impl SurfacesLentToNativeCode {
              staging to write host memory through"
                 .to_string()
         })?;
-        let _only_write_through_this_nodes_stagings = self.host_memory_write_in_progress.lock();
+        let _only_write_through_this_nodes_stagings = self.host_memory_copy_in_progress.lock();
         let staging = surface_share_client.open_cpu_readback_export_from_native_code(
             native_escalate_channel,
             &destination_surface_id,
@@ -440,7 +441,7 @@ impl SurfacesLentToNativeCode {
              IOSurface to write host memory into"
                 .to_string()
         })?;
-        let _only_write_through_this_nodes_surfaces = self.host_memory_write_in_progress.lock();
+        let _only_write_through_this_nodes_surfaces = self.host_memory_copy_in_progress.lock();
         let checked_out = surface_share_client
             .check_out_and_import(&destination_surface_id)
             .map_err(|check_out_failure| check_out_failure.to_string())?;
@@ -489,6 +490,144 @@ impl SurfacesLentToNativeCode {
         )?;
         drop(checked_out);
         Ok(())
+    }
+
+    /// Read every pixel of `source` into the module's memory: the surface into
+    /// its host-visible staging, then the staging's rows out.
+    #[cfg(target_os = "linux")]
+    pub(super) fn read_into_host_memory(
+        &self,
+        source: ModuleHostTableSurfaceHandle,
+        pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
+    ) -> Result<(), String> {
+        use super::host_memory_pixel_rows::{FourBytePixelRows, copy_four_byte_pixel_rows};
+        use crate::python_helper_process_pixel_exchange::CpuReadbackCopyDirection;
+
+        let source_surface_id = self.surface_id_of_a_handle(source)?;
+        let (destination_format, destination_bytes) =
+            four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)?;
+        let native_escalate_channel = self.native_escalate_channel()?;
+        let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
+            "this helper was started without its surface-share socket, so it reaches no \
+             staging to read host memory through"
+                .to_string()
+        })?;
+        let _only_read_through_this_nodes_stagings = self.host_memory_copy_in_progress.lock();
+        let staging = surface_share_client.open_cpu_readback_export_from_native_code(
+            native_escalate_channel,
+            &source_surface_id,
+        )?;
+        surface_share_client.run_cpu_readback_copy_from_native_code(
+            native_escalate_channel,
+            CpuReadbackCopyDirection::SurfaceIntoStaging,
+            &source_surface_id,
+            &staging,
+        )?;
+        let staging_byte_size = staging.consumer_buffer.size() as usize;
+        // SAFETY: the mapping spans the staging's whole allocation and lives
+        // as long as the memoised import; the copy above has completed, and the
+        // lock above keeps every other host-memory copy of this node out of it.
+        let staging_bytes = unsafe {
+            std::slice::from_raw_parts(staging.consumer_buffer.mapped_ptr(), staging_byte_size)
+        };
+        copy_four_byte_pixel_rows(
+            &FourBytePixelRows {
+                bytes: staging_bytes,
+                format: staging.format,
+                width: staging.width,
+                height: staging.height,
+                row_stride_bytes: u64::from(staging.bytes_per_row),
+            },
+            destination_format,
+            pixels_to_fill.row_stride_bytes,
+            pixels_to_fill.width,
+            pixels_to_fill.height,
+            destination_bytes,
+        )
+    }
+
+    /// Read every pixel of `source` into the module's memory: the rows straight
+    /// out of its IOSurface under a read-only lock.
+    #[cfg(target_os = "macos")]
+    pub(super) fn read_into_host_memory(
+        &self,
+        source: ModuleHostTableSurfaceHandle,
+        pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
+    ) -> Result<(), String> {
+        use super::host_memory_pixel_rows::{FourBytePixelRows, copy_four_byte_pixel_rows};
+        use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+
+        let source_surface_id = self.surface_id_of_a_handle(source)?;
+        let (destination_format, destination_bytes) =
+            four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)?;
+        let surface_share_client = self.surface_share_client.as_ref().ok_or_else(|| {
+            "this helper was started without its surface-share connection, so it reaches no \
+             IOSurface to read host memory from"
+                .to_string()
+        })?;
+        let _only_read_through_this_nodes_surfaces = self.host_memory_copy_in_progress.lock();
+        let checked_out = surface_share_client
+            .check_out_and_import(&source_surface_id)
+            .map_err(|check_out_failure| check_out_failure.to_string())?;
+        let source_view = match &checked_out {
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface
+                    .lock_the_iosurface_for_cpu_access_once(true)
+                    .map_err(|lock_failure| lock_failure.to_string())?;
+                texture_surface
+                    .host_visible_pixel_plane_view()
+                    .map_err(|view_failure| view_failure.to_string())?
+            }
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface
+                    .lock_the_iosurface_for_cpu_access_once(true)
+                    .map_err(|lock_failure| lock_failure.to_string())?;
+                pixel_surface.host_visible_pixel_plane_view()
+            }
+            HelperCheckedOutSurface::StorageBuffer(_) => {
+                return Err(format!(
+                    "surface {source_surface_id} is a tensor, which holds no pixel rows"
+                ));
+            }
+        };
+        if source_view.base_address.is_null() {
+            return Err(format!(
+                "surface {source_surface_id}'s IOSurface has no host mapping to read from"
+            ));
+        }
+        let source_byte_size = source_view.bytes_per_row as usize * source_view.height as usize;
+        // SAFETY: the IOSurface holds `height` rows of `bytes_per_row` bytes at
+        // its base address, mapped and read-locked for as long as the
+        // check-out lives, which outlasts this borrow.
+        let source_bytes =
+            unsafe { std::slice::from_raw_parts(source_view.base_address, source_byte_size) };
+        copy_four_byte_pixel_rows(
+            &FourBytePixelRows {
+                bytes: source_bytes,
+                format: source_view.format,
+                width: source_view.width,
+                height: source_view.height,
+                row_stride_bytes: u64::from(source_view.bytes_per_row),
+            },
+            destination_format,
+            pixels_to_fill.row_stride_bytes,
+            pixels_to_fill.width,
+            pixels_to_fill.height,
+            destination_bytes,
+        )?;
+        drop(checked_out);
+        Ok(())
+    }
+
+    /// Refuses by name: a host-memory read reaches a surface through Linux's
+    /// staging or macOS's IOSurface.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub(super) fn read_into_host_memory(
+        &self,
+        _source: ModuleHostTableSurfaceHandle,
+        _pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
+    ) -> Result<(), String> {
+        Err("surface_read_into_host_memory is served on Linux and macOS".to_string())
     }
 
     /// Refuses by name: a host-memory write reaches a texture through Linux's
@@ -599,6 +738,25 @@ fn four_byte_pixel_rows_handed_by_the_module(
     })
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn four_byte_pixel_memory_handed_by_the_module_to_fill(
+    pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
+) -> Result<(streamlib::sdk::rhi::PixelFormat, &mut [u8]), String> {
+    // SAFETY: the SDK hands a view live for the call.
+    let format_name = unsafe { pixels_to_fill.pixel_format.as_str() }
+        .map_err(|_| "the pixel format name is not UTF-8".to_string())?;
+    let format = streamlib::sdk::rhi::PixelFormat::parse_wire_name(format_name)?;
+    if pixels_to_fill.pixels.bytes.is_null() {
+        return Err("no memory was handed to fill".to_string());
+    }
+    // SAFETY: the SDK lends `length` bytes at `bytes` mutably for the call,
+    // and no other view of them is live while the verb runs.
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(pixels_to_fill.pixels.bytes, pixels_to_fill.pixels.length)
+    };
+    Ok((format, bytes))
+}
+
 fn color_axis_name(axis: &str, name: ModuleHostTableUtf8) -> Result<&str, String> {
     if name.length == 0 {
         return Ok("");
@@ -701,6 +859,48 @@ mod tests {
             .unwrap_err();
 
         assert!(refusal.contains("imported foreign surface"), "{refusal}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_host_memory_read_is_refused_by_name_before_it_reaches_the_parent() {
+        let surfaces = SurfacesLentToNativeCode::new(None, None);
+        let upstream_frame = surfaces.lend(
+            "camera#4".to_string(),
+            SurfaceLentToNativeCodeOrigin::NamedByAMessage,
+        );
+        let mut pixels = [0u8; 16];
+        let to_fill =
+            |pixel_format: &'static str, pixels: &mut [u8]| ModuleHostTableHostMemoryPixelsToFill {
+                pixels: tatolab_module_sdk::module_host_table_abi::ModuleHostTableMutableBytes {
+                    bytes: pixels.as_mut_ptr(),
+                    length: pixels.len(),
+                },
+                pixel_format: ModuleHostTableUtf8::of(pixel_format),
+                width: 2,
+                height: 2,
+                row_stride_bytes: 8,
+            };
+
+        let never_lent = surfaces
+            .read_into_host_memory(
+                ModuleHostTableSurfaceHandle { value: 99 },
+                &to_fill("rgba32", &mut pixels),
+            )
+            .unwrap_err();
+        let unknown_format = surfaces
+            .read_into_host_memory(upstream_frame, &to_fill("not_a_format", &mut pixels))
+            .unwrap_err();
+        let no_channel = surfaces
+            .read_into_host_memory(upstream_frame, &to_fill("rgba32", &mut pixels))
+            .unwrap_err();
+
+        assert!(never_lent.contains("handle 99"), "{never_lent}");
+        assert!(unknown_format.contains("not_a_format"), "{unknown_format}");
+        assert!(
+            no_channel.contains("native escalate channel"),
+            "{no_channel}"
+        );
     }
 
     #[test]

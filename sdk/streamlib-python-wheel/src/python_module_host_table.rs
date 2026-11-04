@@ -37,10 +37,11 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_REFUSED, MODULE_HOST_TABLE_STATUS_TIMED_OUT,
     MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable, ModuleHostTableBytes,
     ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
-    ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
-    ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
-    ModuleHostTableSharedNativeServiceLease, ModuleHostTableSharedNativeServiceLeaseHandle,
-    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableHostMemoryPixels, ModuleHostTableHostMemoryPixelsToFill,
+    ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
+    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableSharedNativeServiceLease,
+    ModuleHostTableSharedNativeServiceLeaseHandle, ModuleHostTableStatus,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use self::module_host_surface_verbs::SurfacesLentToNativeCode;
@@ -213,6 +214,7 @@ fn module_host_of_one_node(
                 virtual_camera_stream_write_yuyv_frame,
                 virtual_camera_stream_liveness,
                 virtual_camera_stream_close,
+                surface_read_into_host_memory,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -824,6 +826,26 @@ unsafe extern "C" fn surface_write_from_host_memory(
     match node_host
         .surfaces_lent_to_native_code
         .write_from_host_memory(destination, host_memory_pixels)
+    {
+        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_read_into_host_memory(
+    node_host: *mut c_void,
+    source: ModuleHostTableSurfaceHandle,
+    host_memory_pixels_to_fill: *const ModuleHostTableHostMemoryPixelsToFill,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: as in `surface_import_dma_buf`.
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(host_memory_pixels_to_fill) = (unsafe { host_memory_pixels_to_fill.as_ref() }) else {
+        return unsafe { refuse(error_message, "no host memory was handed to fill") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .read_into_host_memory(source, host_memory_pixels_to_fill)
     {
         Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
