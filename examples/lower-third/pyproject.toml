@@ -1,0 +1,39 @@
+[project]
+name = "lower-third"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "tatolab-stream>=0.68.8",
+    "tatolab-camera",
+    "tatolab-browser",
+    "tatolab-rive",
+    "tatolab-compositor",
+    "tatolab-h264",
+]
+
+# The nodes live in an installable package, so `uv sync` installs it into the
+# stream's venv and every node's child interpreter imports it by name.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lower_third"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src"]
+
+# The module wheels as a third party's stream would take them, built from this
+# checkout rather than an index.
+[tool.uv.sources]
+tatolab-camera = { path = "../../packages/tatolab-camera", editable = false }
+tatolab-browser = { path = "../../packages/tatolab-browser", editable = false }
+tatolab-rive = { path = "../../packages/tatolab-rive", editable = false }
+tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = false }
+tatolab-h264 = { path = "../../packages/streamlib-h264", editable = false }

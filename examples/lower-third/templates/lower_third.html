@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- Copyright (c) 2025 Jonathan Fontanez -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1280px; height: 220px; overflow: hidden; background: transparent; }
+  body { font-family: "Inter", "Helvetica Neue", "DejaVu Sans", sans-serif; }
+
+  .lower-third {
+    --accent: #e5213a;
+    --accent-glow: rgba(229, 33, 58, 0.55);
+    position: absolute; left: 0; top: 30px; height: 160px; width: 1240px;
+    display: flex; align-items: stretch;
+    transform: translateX(0); opacity: 1;
+    transition: transform 420ms cubic-bezier(.2,.9,.25,1.15), opacity 300ms ease-out;
+  }
+  .lower-third.live     { --accent: #e5213a; --accent-glow: rgba(229, 33, 58, 0.55); }
+  .lower-third.guest    { --accent: #2f7cf6; --accent-glow: rgba(47, 124, 246, 0.55); }
+  .lower-third.breaking { --accent: #f5a300; --accent-glow: rgba(245, 163, 0, 0.6); }
+  .lower-third.leaving  { transform: translateX(-110%); opacity: 0; transition: transform 320ms ease-in, opacity 320ms ease-in; }
+
+  .tag {
+    width: 190px; background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 34px; letter-spacing: 4px; text-transform: uppercase;
+    box-shadow: 0 0 40px var(--accent-glow);
+  }
+  .tag .dot { width: 16px; height: 16px; border-radius: 50%; background: #fff; margin-right: 14px; animation: pulse 1s ease-in-out infinite; }
+  .card {
+    position: relative; flex: 1; overflow: hidden;
+    background: linear-gradient(90deg, rgba(12, 14, 22, 0.94), rgba(22, 26, 40, 0.86) 70%, rgba(22, 26, 40, 0));
+    padding: 22px 40px; color: #fff;
+  }
+  .card::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 180px; left: -200px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+    animation: shine 3s linear infinite;
+  }
+  .title { font-size: 62px; font-weight: 800; line-height: 1.05; white-space: nowrap; }
+  .subtitle { margin-top: 10px; font-size: 32px; color: rgba(255, 255, 255, 0.82); white-space: nowrap; }
+  .rule { position: absolute; left: 0; bottom: 0; height: 6px; width: 100%; background: var(--accent); transform-origin: left; animation: rule 4s linear infinite; }
+
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  @keyframes shine { to { left: 110%; } }
+  @keyframes rule { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+</style>
+</head>
+<body>
+<div id="lower-third" class="lower-third live">
+  <div class="tag"><span class="dot"></span><span id="tag-text">Live</span></div>
+  <div class="card">
+    <div id="title" class="title">Tatolab Live</div>
+    <div id="subtitle" class="subtitle">Waiting for the rundown</div>
+    <div class="rule"></div>
+  </div>
+</div>
+<script>
+  // Each `data` message is a LowerThirdTemplate: { variant, title, subtitle }.
+  const TAG_TEXT_OF_VARIANT = { live: "Live", guest: "Guest", breaking: "Breaking" };
+  const lowerThird = document.getElementById("lower-third");
+
+  function showLowerThird(template) {
+    lowerThird.classList.add("leaving");
+    setTimeout(() => {
+      lowerThird.className = "lower-third leaving " + template.variant;
+      document.getElementById("tag-text").textContent = TAG_TEXT_OF_VARIANT[template.variant] || template.variant;
+      document.getElementById("title").textContent = template.title;
+      document.getElementById("subtitle").textContent = template.subtitle;
+      const rule = lowerThird.querySelector(".rule");
+      rule.style.animation = "none";
+      void rule.offsetWidth;
+      rule.style.animation = "";
+      requestAnimationFrame(() => lowerThird.classList.remove("leaving"));
+    }, 340);
+  }
+
+  window.addEventListener("tatolab:data", (event) => showLowerThird(event.detail));
+</script>
+</body>
+</html>
