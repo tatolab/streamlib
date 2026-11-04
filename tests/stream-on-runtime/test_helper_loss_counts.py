@@ -340,16 +340,17 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
     loss_counting_stream.tatolabd.await_stderr_containing("refused a", timeout=COUNT_TIMEOUT_SECONDS)
 
 
-def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
+def test_a_killed_helper_is_restarted_and_its_counts_keep_counting_from_where_it_died(
     make_tatolab_project, start_tatolabd
 ):
-    """The board belongs to `tatolabd`: a helper killed without warning leaves
-    the counts it last wrote rendering in `graph`, where they stay until the
+    """A helper killed without warning is started again as the same node, with
+    a new instance of its class in a new process, and its link's counts carry
+    on from what the dead helper last wrote — never back to zero — until the
     processor is removed.
 
-    Fail-without-fix: drop the board with the helper, or read the counts over a
-    channel to the child, and the killed sink's node renders nothing — or
-    zeros — for losses that happened.
+    Fail-without-fix: leave a dead helper down and the node never reads
+    `Running` again; drop the dead board's counts and the link's losses go
+    backwards in `graph` at the restart.
     """
     loss_counting_stream = launch_the_loss_counting_node(make_tatolab_project, start_tatolabd)
     tatolabd = loss_counting_stream.tatolabd
@@ -358,22 +359,40 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
         loss_counting_stream, "slow-sink", any_dropped_bags_on(link_id), f"dropped bags on {link_id}"
     )
     slow_sink_pid = tatolabd.await_marker("SLOW_SINK_PID")["pid"]
-    counted_before_the_kill = loss_counting_stream.metrics_of("slow-sink")["dropped_bags_by_link"][
-        link_id
-    ]
 
     os.kill(slow_sink_pid, signal.SIGKILL)
     tatolabd.await_stderr_containing("its helper process (pid=", timeout=COUNT_TIMEOUT_SECONDS)
+    counted_after_the_kill = loss_counting_stream.metrics_of("slow-sink")["dropped_bags_by_link"][
+        link_id
+    ]
+    restarted_slow_sink_pid = tatolabd.await_marker(
+        "SLOW_SINK_PID", occurrence=2, timeout=COUNT_TIMEOUT_SECONDS
+    )["pid"]
 
-    after_the_kill = loss_counting_stream.metrics_of("slow-sink")
-    time.sleep(1.0)
-    a_second_later = loss_counting_stream.metrics_of("slow-sink")
-    assert after_the_kill == a_second_later, "a dead helper's counts no longer move"
-    assert set(after_the_kill) == APP_PROCESS_METRICS_KEYS, after_the_kill
-    assert after_the_kill["dropped_bags_by_link"][link_id] >= counted_before_the_kill > 0, (
-        f"the counts the helper last wrote must still render: before the kill "
-        f"{counted_before_the_kill}, after {after_the_kill}"
+    assert restarted_slow_sink_pid != slow_sink_pid, "the restart is a new helper process"
+    deadline = time.monotonic() + COUNT_TIMEOUT_SECONDS
+    slow_sink = node_named(loss_counting_stream.graph(), "slow-sink")
+    while slow_sink["components"]["state"] != "Running" and time.monotonic() < deadline:
+        time.sleep(0.2)
+        slow_sink = node_named(loss_counting_stream.graph(), "slow-sink")
+    assert slow_sink["components"]["state"] == "Running", slow_sink
+    restarts = slow_sink["components"]["helper_process_restarts"]
+    assert restarts["restart_count"] == 1, restarts
+    assert "signal: 9" in restarts["last_exit_reason"], restarts
+    counted_once_running_again = loss_counting_stream.metrics_of("slow-sink")[
+        "dropped_bags_by_link"
+    ][link_id]
+    assert counted_once_running_again >= counted_after_the_kill, (
+        f"the link's losses went backwards at the restart: {counted_after_the_kill} at the "
+        f"kill, {counted_once_running_again} once the new helper ran"
     )
+    after_the_restart = await_metrics_satisfying(
+        loss_counting_stream,
+        "slow-sink",
+        lambda metrics: metrics["dropped_bags_by_link"][link_id] > counted_after_the_kill,
+        f"dropped bags on {link_id} past the {counted_after_the_kill} counted at the kill",
+    )
+    assert set(after_the_restart) == APP_PROCESS_METRICS_KEYS, after_the_restart
 
     loss_counting_stream.local_api.call_tool(
         "remove_node", {"stream": loss_counting_stream.stream_id, "name": "slow-sink"}

@@ -97,6 +97,20 @@ impl ProcessorInstance {
         self.0.has_failed_unrecoverably()
     }
 
+    /// Why this processor's helper process died on its own, once noticed.
+    pub fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
+        self.0.why_the_out_of_process_helper_died_on_its_own()
+    }
+
+    /// Start a new helper process, with a new processor instance, in place of
+    /// one that died on its own.
+    pub fn restart_the_out_of_process_helper_that_died(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        self.0.restart_the_out_of_process_helper_that_died(ctx)
+    }
+
     /// Where this processor's link wiring goes when its iceoryx2 ports live
     /// outside the engine's address space, and `None` when the engine wires it
     /// itself.

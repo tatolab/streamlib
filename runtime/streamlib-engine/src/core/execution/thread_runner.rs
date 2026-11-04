@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
@@ -14,6 +15,9 @@ use std::os::fd::OwnedFd;
 use parking_lot::Mutex;
 
 use crate::core::RuntimeContext;
+use crate::core::child_process_restart_backoff::{
+    CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF, ChildProcessRestartBackoff,
+};
 use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId};
@@ -795,6 +799,10 @@ fn run_manual_mode(
     // Real work happens on OS-managed callback threads
     let mut was_paused = false;
     let mut already_reported_failure = false;
+    let mut restart_backoff = ChildProcessRestartBackoff::new();
+    let mut current_helper_process_started_at = Instant::now();
+    let mut next_helper_process_restart_at: Option<Instant> = None;
+    let mut helper_process_stopped_answering_at: Option<Instant> = None;
 
     loop {
         // Check for shutdown
@@ -808,30 +816,112 @@ fn run_manual_mode(
 
         if is_paused && !was_paused {
             dispatch_on_pause(id, processor, runtime_ctx);
+            // A pause that landed while the node read `Restarting` set the
+            // gate but could not move the state.
+            state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
             was_paused = true;
         } else if !is_paused && was_paused {
             dispatch_on_resume(id, processor, runtime_ctx);
             was_paused = false;
         }
 
-        // A processor whose work happens elsewhere reports a failure here or
-        // nowhere. The loop keeps running rather than breaking: the rest of
-        // the pipeline is unaffected, and breaking would run teardown and
-        // then overwrite the state with `Stopped`, hiding what happened.
-        //
-        // Asked before it is read, under one lock: a helper process that died
-        // on its own is noticed here, by the process rather than by its
-        // escalate socket, whose EOF a surviving descendant defers
-        // indefinitely.
-        let has_failed_unrecoverably = {
-            let mut processor = processor.lock();
-            processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
-            processor.has_failed_unrecoverably()
-        };
-        if !already_reported_failure && has_failed_unrecoverably {
-            tracing::error!("[{}] Processor failed unrecoverably", id);
-            state.transition_to(ProcessorState::Error);
-            already_reported_failure = true;
+        if let Some(restart_at) = next_helper_process_restart_at {
+            if Instant::now() >= restart_at {
+                next_helper_process_restart_at = None;
+                match restart_the_out_of_process_helper_that_died(
+                    id,
+                    processor,
+                    runtime_ctx,
+                    isolation_tier,
+                ) {
+                    Ok(()) => {
+                        state.note_a_helper_process_restart();
+                        current_helper_process_started_at = Instant::now();
+                        helper_process_stopped_answering_at = None;
+                        if pause_gate.load(Ordering::Acquire) {
+                            dispatch_on_pause(id, processor, runtime_ctx);
+                            was_paused = true;
+                            state.transition_to_only_from(
+                                ProcessorState::Restarting,
+                                ProcessorState::Paused,
+                            );
+                        } else {
+                            was_paused = false;
+                            state.transition_to_only_from(
+                                ProcessorState::Restarting,
+                                ProcessorState::Running,
+                            );
+                        }
+                    }
+                    Err(_) if shutdown_rx.try_recv().is_ok() => {
+                        tracing::info!(
+                            "[{}] Received shutdown signal while its helper process restarted",
+                            id
+                        );
+                        break;
+                    }
+                    Err(restart_refusal) => {
+                        next_helper_process_restart_at = after_a_helper_process_death(
+                            id,
+                            state,
+                            &mut restart_backoff,
+                            restart_refusal.to_string(),
+                            Duration::ZERO,
+                        );
+                        already_reported_failure = next_helper_process_restart_at.is_none();
+                    }
+                }
+            }
+        } else if !already_reported_failure {
+            // A processor whose work happens elsewhere reports a failure here
+            // or nowhere. The loop keeps running rather than breaking: the rest
+            // of the pipeline is unaffected, and breaking would run teardown
+            // and then overwrite the state with `Stopped`, hiding what
+            // happened.
+            //
+            // Asked before it is read, under one lock: a helper process that
+            // died on its own is noticed here, by the process rather than by
+            // its escalate socket, whose EOF a surviving descendant defers
+            // indefinitely.
+            let (has_failed_unrecoverably, why_the_helper_process_died_on_its_own) = {
+                let mut processor = processor.lock();
+                processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+                (
+                    processor.has_failed_unrecoverably(),
+                    processor.why_the_out_of_process_helper_died_on_its_own(),
+                )
+            };
+            match (
+                has_failed_unrecoverably,
+                why_the_helper_process_died_on_its_own,
+            ) {
+                (_, Some(exit_reason)) => {
+                    helper_process_stopped_answering_at = None;
+                    next_helper_process_restart_at = after_a_helper_process_death(
+                        id,
+                        state,
+                        &mut restart_backoff,
+                        exit_reason,
+                        current_helper_process_started_at.elapsed(),
+                    );
+                    already_reported_failure = next_helper_process_restart_at.is_none();
+                }
+                (true, None) => {
+                    // A helper that is exiting closes its escalate socket
+                    // before its process can be collected; only one still
+                    // there after the grace has stopped answering.
+                    let stopped_answering_at =
+                        *helper_process_stopped_answering_at.get_or_insert_with(Instant::now);
+                    if stopped_answering_at.elapsed()
+                        >= GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED
+                    {
+                        tracing::error!("[{}] Processor failed unrecoverably", id);
+                        state.fail_with("its helper process stopped answering the engine");
+                        already_reported_failure = true;
+                    }
+                }
+                (false, None) => {}
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -859,6 +949,66 @@ fn run_manual_mode(
             );
         }
     }
+}
+
+/// How long a helper process whose escalate socket closed gets to exit before
+/// it is taken to have stopped answering rather than to be dying.
+const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Duration =
+    Duration::from_secs(5);
+
+/// Start a new helper process in place of one that died on its own, under a
+/// fresh full-access grant as the processor's first `setup()` and `start()`
+/// had.
+fn restart_the_out_of_process_helper_that_died(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+    isolation_tier: IsolationTier,
+) -> crate::core::Result<()> {
+    let restart_grant = isolation_tier.grant_full_access().ok_or_else(|| {
+        crate::core::Error::Runtime(format!(
+            "[{id}] untrusted isolation tier ({}): no full access to restart its helper process",
+            isolation_tier.as_str()
+        ))
+    })?;
+    let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, restart_grant);
+    processor
+        .lock()
+        .restart_the_out_of_process_helper_that_died(&full_ctx)
+}
+
+/// Record a helper process death for `exit_reason` after a run of
+/// `run_before_the_death`, and return when to start the next helper — or
+/// `None` once the crash-loop limit is reached and the processor has failed.
+fn after_a_helper_process_death(
+    id: &ProcessorUniqueId,
+    state: &ObservableProcessorState,
+    restart_backoff: &mut ChildProcessRestartBackoff,
+    exit_reason: String,
+    run_before_the_death: Duration,
+) -> Option<Instant> {
+    let restart_wait = restart_backoff
+        .wait_before_starting_again_after_a_death_ending_a_run_of(run_before_the_death);
+    state.note_a_helper_process_death(exit_reason.clone());
+    if restart_backoff.has_reached_the_crash_loop_limit_of_a_child_running_user_code() {
+        let deaths_in_a_row = restart_backoff.deaths_in_a_row_before_a_healthy_run();
+        tracing::error!(
+            "[{id}] its helper process died {deaths_in_a_row} times in a row, each within \
+             {}s of starting; giving up on it: {exit_reason}",
+            CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF.as_secs(),
+        );
+        state.fail_with(format!(
+            "its helper process died {deaths_in_a_row} times in a row, each within {}s of \
+             starting; the last time: {exit_reason}",
+            CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF.as_secs(),
+        ));
+        return None;
+    }
+    tracing::warn!(
+        "[{id}] its helper process died ({exit_reason}); a new one starts in {restart_wait:?}"
+    );
+    state.transition_to(ProcessorState::Restarting);
+    Some(Instant::now() + restart_wait)
 }
 
 fn dispatch_on_pause(
@@ -1659,5 +1809,74 @@ mod tests {
             "a notify on the reconnected link must wake the runner; got {outcome:?}"
         );
         second_listener.try_wait(|_| {}).unwrap();
+    }
+
+    /// A helper that keeps dying soon after it starts reads `Restarting`, with
+    /// the last death's reason, until its fifth death in a row fails the
+    /// processor with that reason; a helper that ran healthily starts again.
+    ///
+    /// Fail-without-fix: skip the crash-loop check and a processor whose
+    /// `setup()` always raises reads `Restarting` forever.
+    #[test]
+    fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
+        let id = ProcessorUniqueId::from("Pblur");
+        let state = ObservableProcessorState::new(ProcessorState::Running);
+        let mut restart_backoff = ChildProcessRestartBackoff::new();
+
+        for death in 1..=4 {
+            let next_start = after_a_helper_process_death(
+                &id,
+                &state,
+                &mut restart_backoff,
+                format!("its helper process ended with exit status: {death}"),
+                Duration::from_millis(200),
+            );
+            assert!(next_start.is_some(), "death {death} gave up");
+            assert_eq!(state.current(), ProcessorState::Restarting);
+        }
+        let fifth = after_a_helper_process_death(
+            &id,
+            &state,
+            &mut restart_backoff,
+            "its helper process ended with exit status: 5".to_string(),
+            Duration::ZERO,
+        );
+
+        assert!(fifth.is_none());
+        assert_eq!(state.current(), ProcessorState::Error);
+        let failure_reason = state.failure_reason().expect("the failure is explained");
+        assert!(
+            failure_reason.contains("died 5 times in a row")
+                && failure_reason.ends_with("exit status: 5"),
+            "{failure_reason}"
+        );
+        assert_eq!(
+            state
+                .helper_process_restart_record()
+                .last_exit_reason
+                .as_deref(),
+            Some("its helper process ended with exit status: 5")
+        );
+    }
+
+    #[test]
+    fn a_helper_that_ran_healthily_before_dying_starts_again_after_the_first_wait() {
+        let id = ProcessorUniqueId::from("Pblur");
+        let state = ObservableProcessorState::new(ProcessorState::Running);
+        let mut restart_backoff = ChildProcessRestartBackoff::new();
+        let before = Instant::now();
+
+        let next_start = after_a_helper_process_death(
+            &id,
+            &state,
+            &mut restart_backoff,
+            "its helper process ended with signal: 11 (SIGSEGV)".to_string(),
+            Duration::from_secs(3600),
+        )
+        .expect("a healthy helper is never given up on");
+
+        assert_eq!(state.current(), ProcessorState::Restarting);
+        assert!(next_start >= before + Duration::from_secs(1));
+        assert!(next_start < before + Duration::from_secs(2));
     }
 }

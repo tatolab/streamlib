@@ -77,6 +77,7 @@ pub mod sdk {
     // `engine_internal` namespace.
 
     pub use streamlib_engine::core::child_process_lifetime;
+    pub use streamlib_engine::core::child_process_restart_backoff;
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;

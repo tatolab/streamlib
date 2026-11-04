@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::ProcessorInstanceComponent;
+use super::{HelperProcessRestartsComponent, ProcessorInstanceComponent, StateComponent};
 use crate::core::graph::{GraphNodeWithComponents, ProcessorNode};
 use crate::core::processors::{OutOfProcessLinkWiringEnvelope, ProcessorInstance};
 
@@ -46,6 +46,12 @@ impl ProcessorInstanceWithItsOutOfProcessLinkWiring {
             node.insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
                 out_of_process_link_wiring,
             ));
+            if let Some(observable_state) = node
+                .get::<StateComponent>()
+                .map(StateComponent::clone_inner)
+            {
+                node.insert(HelperProcessRestartsComponent(observable_state));
+            }
         }
         self.processor_instance
     }

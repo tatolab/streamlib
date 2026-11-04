@@ -23,6 +23,9 @@ pub enum ProcessorState {
     Stopped,
     /// Error state (processing failed).
     Error,
+    /// Its helper process died on its own and a new one starts after the
+    /// restart backoff.
+    Restarting,
 }
 
 impl ProcessorState {
@@ -50,6 +53,7 @@ impl std::fmt::Display for ProcessorState {
             Self::Stopping => write!(f, "Stopping"),
             Self::Stopped => write!(f, "Stopped"),
             Self::Error => write!(f, "Error"),
+            Self::Restarting => write!(f, "Restarting"),
         }
     }
 }

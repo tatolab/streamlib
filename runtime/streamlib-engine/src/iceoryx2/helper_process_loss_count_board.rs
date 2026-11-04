@@ -5,8 +5,9 @@
 //! parent reads `graph`'s `metrics` off.
 //!
 //! One board per helper spawn: the parent creates it before the child starts
-//! and holds it until the processor is removed, so the counts a crashed helper
-//! last wrote stay readable. Its keys are fixed at creation and links are wired
+//! and holds it until the next spawn's board replaces it, then adds what it
+//! last held to the new board's counts, so a link's losses never go backwards
+//! across a restart. Its keys are fixed at creation and links are wired
 //! live, so the board declares a slot per permitted inbound link and an entry
 //! per declared output port, and the parent assigns each inbound link a slot and
 //! each output port's channel a wiring generation. An entry renders as its
@@ -14,7 +15,7 @@
 //! parent assigned.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use iceoryx2::port::reader::{EntryHandle, Reader};
 use iceoryx2::port::writer::{EntryHandleMut, Writer};
@@ -512,12 +513,14 @@ impl HelperPlacedProcessorLossCountWiring {
 }
 
 /// A helper-placed processor's loss counts as its parent reads them: the slot
-/// each inbound link was assigned, the output ports with a link, and the board
-/// the helper writes on.
+/// each inbound link was assigned, the output ports with a link, the board the
+/// current helper writes on, and what the boards of earlier helpers — ones that
+/// died and were restarted — last held for wirings still in place.
 #[derive(Default)]
 pub struct HelperPlacedProcessorLossCounts {
     wiring: Mutex<HelperPlacedProcessorLossCountWiring>,
-    board: OnceLock<HelperProcessLossCountBoard>,
+    board: Mutex<Option<HelperProcessLossCountBoard>>,
+    counts_earlier_spawns_left: Mutex<ProcessorLossCountSnapshot>,
 }
 
 impl std::fmt::Debug for HelperPlacedProcessorLossCounts {
@@ -528,7 +531,8 @@ impl std::fmt::Debug for HelperPlacedProcessorLossCounts {
                 "board",
                 &self
                     .board
-                    .get()
+                    .lock()
+                    .as_ref()
                     .map(HelperProcessLossCountBoard::service_name),
             )
             .finish_non_exhaustive()
@@ -553,6 +557,67 @@ pub struct ProcessorLossCountSnapshot {
     pub given_up_groups_by_output_port: BTreeMap<String, u64>,
 }
 
+impl ProcessorLossCountSnapshot {
+    fn add(&mut self, counts_to_add: &ProcessorLossCountSnapshot) {
+        fn add_each(totals: &mut BTreeMap<String, u64>, counts_to_add: &BTreeMap<String, u64>) {
+            for (name, count) in counts_to_add {
+                if let Some(total) = totals.get_mut(name) {
+                    *total += count;
+                } else {
+                    totals.insert(name.clone(), *count);
+                }
+            }
+        }
+        add_each(
+            &mut self.dropped_bags_by_inbound_link,
+            &counts_to_add.dropped_bags_by_inbound_link,
+        );
+        add_each(
+            &mut self.discarded_samples_by_inbound_link,
+            &counts_to_add.discarded_samples_by_inbound_link,
+        );
+        add_each(
+            &mut self.refused_bags_by_output_port,
+            &counts_to_add.refused_bags_by_output_port,
+        );
+        add_each(
+            &mut self.written_bags_by_output_port,
+            &counts_to_add.written_bags_by_output_port,
+        );
+        add_each(
+            &mut self.given_up_groups_by_output_port,
+            &counts_to_add.given_up_groups_by_output_port,
+        );
+    }
+
+    /// Drop every count whose link or output port `wiring` no longer holds, so
+    /// a reconnect starts from zero.
+    fn forget_every_count_not_in(&mut self, wiring: &HelperPlacedProcessorLossCountWiring) {
+        let inbound_link_is_wired = |link_id: &String| {
+            wiring
+                .inbound_link_slots
+                .iter()
+                .flatten()
+                .any(|assignment| &assignment.link_id == link_id)
+        };
+        let output_port_is_linked = |output_port: &String| {
+            wiring
+                .output_ports_with_outbound_links
+                .contains_key(output_port)
+        };
+        self.dropped_bags_by_inbound_link
+            .retain(|link_id, _| inbound_link_is_wired(link_id));
+        self.discarded_samples_by_inbound_link
+            .retain(|link_id, _| inbound_link_is_wired(link_id));
+        self.refused_bags_by_output_port
+            .retain(|output_port, _| output_port_is_linked(output_port));
+        self.written_bags_by_output_port
+            .retain(|output_port, _| output_port_is_linked(output_port));
+        self.given_up_groups_by_output_port
+            .retain(|output_port, _| output_port_is_linked(output_port));
+    }
+}
+
 impl HelperPlacedProcessorLossCounts {
     /// Give `link_id` the lowest free slot and a generation no wiring has had.
     ///
@@ -565,6 +630,9 @@ impl HelperPlacedProcessorLossCounts {
     ) -> Result<InboundLinkLossCountBoardSlotAndWiringGeneration> {
         let mut wiring = self.wiring.lock();
         wiring.release_inbound_link_slot(link_id);
+        self.counts_earlier_spawns_left
+            .lock()
+            .forget_every_count_not_in(&wiring);
         let Some(slot) = wiring.inbound_link_slots.iter().position(Option::is_none) else {
             return Err(Error::Configuration(format!(
                 "link '{link_id}' would be a helper-placed processor's inbound link past the \
@@ -595,6 +663,9 @@ impl HelperPlacedProcessorLossCounts {
             return port.wiring_generation;
         }
         let wiring_generation = wiring.next_wiring_generation();
+        self.counts_earlier_spawns_left
+            .lock()
+            .forget_every_count_not_in(&wiring);
         wiring.output_ports_with_outbound_links.insert(
             output_port.to_string(),
             OutputPortWithOutboundLinks {
@@ -615,26 +686,40 @@ impl HelperPlacedProcessorLossCounts {
             port.outbound_link_ids.retain(|noted| noted != link_id);
             !port.outbound_link_ids.is_empty()
         });
+        let mut counts_earlier_spawns_left = self.counts_earlier_spawns_left.lock();
+        counts_earlier_spawns_left.forget_every_count_not_in(&wiring);
     }
 
-    /// Hold the board this spawn's helper writes on.
-    pub(crate) fn hold_the_board_of_this_spawn(
-        &self,
-        board: HelperProcessLossCountBoard,
-    ) -> Result<()> {
-        self.board.set(board).map_err(|refused| {
-            Error::Runtime(format!(
-                "a helper-placed processor already holds a loss-count board, so the board \
-                 '{}' of a second spawn has nowhere to be read",
-                refused.service_name()
-            ))
-        })
+    /// Hold the board this spawn's helper writes on, keeping what the board of
+    /// a helper before it last held so each wiring's counts stay cumulative
+    /// across a restart.
+    pub(crate) fn hold_the_board_of_this_spawn(&self, board: HelperProcessLossCountBoard) {
+        let wiring = self.wiring.lock();
+        let mut held_board = self.board.lock();
+        if let Some(earlier_spawns_board) = held_board.take() {
+            let counts_the_earlier_board_left =
+                Self::loss_count_snapshot_read_off(&wiring, Some(&earlier_spawns_board));
+            self.counts_earlier_spawns_left
+                .lock()
+                .add(&counts_the_earlier_board_left);
+        }
+        *held_board = Some(board);
     }
 
-    /// Every count as it stands, each read only for the wiring it belongs to.
+    /// Every count as it stands, each read only for the wiring it belongs to,
+    /// with what earlier spawns' boards left for that wiring added.
     pub fn loss_count_snapshot(&self) -> ProcessorLossCountSnapshot {
         let wiring = self.wiring.lock();
-        let board = self.board.get();
+        let held_board = self.board.lock();
+        let mut snapshot = Self::loss_count_snapshot_read_off(&wiring, held_board.as_ref());
+        snapshot.add(&self.counts_earlier_spawns_left.lock());
+        snapshot
+    }
+
+    fn loss_count_snapshot_read_off(
+        wiring: &HelperPlacedProcessorLossCountWiring,
+        board: Option<&HelperProcessLossCountBoard>,
+    ) -> ProcessorLossCountSnapshot {
         let mut snapshot = ProcessorLossCountSnapshot::default();
         for (assignment, this_wirings_counts) in
             wiring.assigned_slots_with_their_wirings_counts(board)
@@ -667,10 +752,9 @@ impl HelperPlacedProcessorLossCounts {
     /// This processor's dropped bags across every inbound link, each read for
     /// its link's own wiring.
     pub fn total_dropped_bag_count(&self) -> u64 {
-        self.wiring
-            .lock()
-            .assigned_slots_with_their_wirings_counts(self.board.get())
-            .map(|(_, this_wirings_counts)| this_wirings_counts.dropped_bags)
+        self.loss_count_snapshot()
+            .dropped_bags_by_inbound_link
+            .values()
             .sum()
     }
 }
@@ -884,7 +968,7 @@ mod tests {
         let (board, writer, _helper_node) =
             a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
         let counts = HelperPlacedProcessorLossCounts::default();
-        counts.hold_the_board_of_this_spawn(board).unwrap();
+        counts.hold_the_board_of_this_spawn(board);
         let refused_bags_of_video = || counts.loss_count_snapshot().refused_bags_by_output_port;
         let written_bags_of_video = || counts.loss_count_snapshot().written_bags_by_output_port;
 
@@ -935,6 +1019,63 @@ mod tests {
             counts.total_dropped_bag_count(),
             0,
             "the total reads each link for its own wiring"
+        );
+    }
+
+    /// A restarted helper writes on a fresh board, and each wiring's counts
+    /// keep counting from what the dead helper's board last held rather than
+    /// going back to zero; a reconnect still starts from zero.
+    ///
+    /// Fail-without-fix: keep one board per processor and the restarted
+    /// helper's board is refused; drop the earlier board's counts and a link's
+    /// losses go backwards in `graph` at every restart.
+    #[test]
+    fn a_restarted_helpers_board_keeps_each_wirings_counts_cumulative() {
+        let counts = HelperPlacedProcessorLossCounts::default();
+        let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
+        let video_channel = counts.note_outbound_link("video", "L-out");
+        let (dead_helpers_board, dead_helpers_writer, dead_helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+        counts.hold_the_board_of_this_spawn(dead_helpers_board);
+        dead_helpers_writer
+            .claim_inbound_link_slot(inbound)
+            .unwrap()
+            .mirror_dropped_bags(6);
+        dead_helpers_writer
+            .claim_output_port_entry("video", video_channel)
+            .unwrap()
+            .mirror_written_bags(100);
+        drop(dead_helpers_writer);
+        drop(dead_helper_node);
+
+        let (new_helpers_board, new_helpers_writer, _new_helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+        counts.hold_the_board_of_this_spawn(new_helpers_board);
+        assert_eq!(counts.total_dropped_bag_count(), 6);
+        new_helpers_writer
+            .claim_inbound_link_slot(inbound)
+            .unwrap()
+            .mirror_dropped_bags(2);
+        new_helpers_writer
+            .claim_output_port_entry("video", video_channel)
+            .unwrap()
+            .mirror_written_bags(5);
+
+        let snapshot = counts.loss_count_snapshot();
+        assert_eq!(
+            snapshot.dropped_bags_by_inbound_link,
+            BTreeMap::from([("L-in".to_string(), 8)])
+        );
+        assert_eq!(
+            snapshot.written_bags_by_output_port,
+            BTreeMap::from([("video".to_string(), 105)])
+        );
+
+        counts.assign_inbound_link_slot("L-in", false).unwrap();
+        assert_eq!(
+            counts.total_dropped_bag_count(),
+            0,
+            "a reconnected link starts from zero, restarts or not"
         );
     }
 

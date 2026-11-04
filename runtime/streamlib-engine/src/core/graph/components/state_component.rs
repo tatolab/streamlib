@@ -27,6 +27,17 @@ pub struct ObservableProcessorState {
     /// The capture device whose access was never asked for, when that is why
     /// `setup()` refused.
     capture_device_access_never_asked_for: Mutex<Option<PrivacyGatedCaptureDevice>>,
+    helper_process_restarts: Mutex<HelperProcessRestartRecord>,
+}
+
+/// How often a helper-placed processor's helper process has been started again
+/// after dying on its own, and why it last died.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HelperProcessRestartRecord {
+    /// New helper processes started since the stream loaded.
+    pub restart_count: u32,
+    /// The last death's exit and the end of its standard error.
+    pub last_exit_reason: Option<String>,
 }
 
 impl ObservableProcessorState {
@@ -37,6 +48,7 @@ impl ObservableProcessorState {
             changed: Condvar::new(),
             failure_reason: Mutex::new(None),
             capture_device_access_never_asked_for: Mutex::new(None),
+            helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
         }
     }
 
@@ -95,6 +107,22 @@ impl ObservableProcessorState {
         *self.capture_device_access_never_asked_for.lock()
     }
 
+    /// Note that the processor's helper process died on its own, for
+    /// `exit_reason`.
+    pub fn note_a_helper_process_death(&self, exit_reason: String) {
+        self.helper_process_restarts.lock().last_exit_reason = Some(exit_reason);
+    }
+
+    /// Note that a new helper process was started in place of one that died.
+    pub fn note_a_helper_process_restart(&self) {
+        self.helper_process_restarts.lock().restart_count += 1;
+    }
+
+    /// How often the helper process was restarted, and why it last died.
+    pub fn helper_process_restart_record(&self) -> HelperProcessRestartRecord {
+        self.helper_process_restarts.lock().clone()
+    }
+
     /// Move the processor to `state`, unless it has already failed.
     ///
     /// A thread that unwinds after `Error` would otherwise report the state it
@@ -131,12 +159,14 @@ impl ObservableProcessorState {
     /// giving up at `deadline`. Returns the state it settled on.
     ///
     /// `Running` means setup returned; `Error` means it failed. A state still
-    /// [`before setup completed`] is the deadline expiring.
+    /// [`before setup completed`] is the deadline expiring. A helper-placed
+    /// processor that reads `Restarting` is waited on until its next start
+    /// resolves.
     ///
     /// [`before setup completed`]: ProcessorState::is_before_setup_completed
     pub fn wait_until_setup_resolved(&self, deadline: Instant) -> ProcessorState {
         let mut current = self.current.lock();
-        while current.is_before_setup_completed() {
+        while current.is_before_setup_completed() || *current == ProcessorState::Restarting {
             if self.changed.wait_until(&mut current, deadline).timed_out() {
                 break;
             }
@@ -186,6 +216,24 @@ impl StateComponent {
     /// for.
     pub fn clone_inner(&self) -> Arc<ObservableProcessorState> {
         Arc::clone(&self.0)
+    }
+}
+
+/// The restart record of a helper-placed processor, rendered beside its
+/// state: `restart_count` and `last_exit_reason`.
+pub struct HelperProcessRestartsComponent(pub Arc<ObservableProcessorState>);
+
+impl JsonSerializableComponent for HelperProcessRestartsComponent {
+    fn json_key(&self) -> &'static str {
+        "helper_process_restarts"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        let record = self.0.helper_process_restart_record();
+        serde_json::json!({
+            "restart_count": record.restart_count,
+            "last_exit_reason": record.last_exit_reason,
+        })
     }
 }
 
@@ -365,5 +413,52 @@ mod tests {
 
         assert_eq!(settled, ProcessorState::Pending);
         assert!(settled.is_before_setup_completed());
+    }
+
+    /// Readiness waits through a helper restart for the state the next start
+    /// settles on.
+    #[test]
+    fn a_restarting_processor_is_waited_on_until_its_next_start_resolves() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Restarting));
+        let restarter = {
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(30));
+                state.transition_to(ProcessorState::Running);
+            })
+        };
+
+        let settled = state.wait_until_setup_resolved(Instant::now() + Duration::from_secs(5));
+        restarter.join().expect("the restarting thread finishes");
+
+        assert_eq!(settled, ProcessorState::Running);
+    }
+
+    /// `graph` renders a helper-placed processor's restarts beside its state,
+    /// from the same shared state the lifecycle thread writes.
+    #[test]
+    fn the_restart_record_renders_its_count_and_the_last_exit_reason() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let rendered = HelperProcessRestartsComponent(Arc::clone(&state));
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!({"restart_count": 0, "last_exit_reason": null})
+        );
+
+        state.note_a_helper_process_death("its helper process ended with exit status: 1".into());
+        state.transition_to(ProcessorState::Restarting);
+        state.note_a_helper_process_restart();
+
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!({
+                "restart_count": 1,
+                "last_exit_reason": "its helper process ended with exit status: 1",
+            })
+        );
+        assert_eq!(
+            StateComponent(state).to_json(),
+            serde_json::json!("Restarting")
+        );
     }
 }
