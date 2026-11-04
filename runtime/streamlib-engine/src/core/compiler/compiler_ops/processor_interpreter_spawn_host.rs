@@ -1424,7 +1424,14 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
             .set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
                 host.start_the_helper_process_and_await_its_registration(ctx)
             })
-            .and_then(|()| self.start(ctx));
+            .and_then(|()| match self.failure_the_node_reported_of_itself() {
+                Some(reason_the_node_gave) => Err(Error::Runtime(format!(
+                    "[{}] the node failed itself while its new helper process set up: \
+                     {reason_the_node_gave}",
+                    self.processor_display_name
+                ))),
+                None => self.start(ctx),
+            });
         if let Err(restart_refusal) = &restarted {
             // A restart that failed is one more death, and the next restart
             // starts from it.

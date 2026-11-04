@@ -37,6 +37,10 @@ use crate::core::child_process_restart_backoff::ChildProcessRestartBackoff;
 /// How long a child a previous run left behind has to disappear once killed.
 const LEFT_BEHIND_CHILD_DISAPPEARANCE_BUDGET: Duration = Duration::from_secs(5);
 
+/// The most of one child log line forwarded; the rest of a longer line is
+/// dropped.
+const MOST_FORWARDED_CHILD_LOG_LINE_BYTES: usize = 16 * 1024;
+
 /// How often a disappearance, a readiness or an exit is looked for.
 const CHILD_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -381,9 +385,16 @@ fn forward_the_childs_log_lines(child_name_for_the_log: &str, stream: impl Read 
                 .collect::<String>()
         ))
         .spawn(move || {
-            for line in BufReader::new(stream).lines() {
-                let Ok(line) = line else { break };
-                match supervised_child_log_line_level(&line) {
+            let mut child_output = BufReader::new(stream);
+            let mut line_bytes = Vec::new();
+            while let Ok(true) = read_one_line_keeping_at_most(
+                &mut child_output,
+                &mut line_bytes,
+                MOST_FORWARDED_CHILD_LOG_LINE_BYTES,
+            ) {
+                let line = String::from_utf8_lossy(&line_bytes);
+                let line = line.trim_end_matches(['\n', '\r']);
+                match supervised_child_log_line_level(line) {
                     SupervisedChildLogLineLevel::Error => {
                         tracing::error!(child = %forwarded_child_name, "{line}")
                     }
@@ -398,6 +409,33 @@ fn forward_the_childs_log_lines(child_name_for_the_log: &str, stream: impl Read 
         });
     if let Err(failure) = forwarded {
         tracing::warn!("{child_name_for_the_log}'s log is not forwarded: {failure}");
+    }
+}
+
+/// Read through the next newline into `line_bytes`, keeping at most
+/// `most_bytes_kept` of it and dropping the rest; `false` at the end of the
+/// output.
+fn read_one_line_keeping_at_most(
+    child_output: &mut impl BufRead,
+    line_bytes: &mut Vec<u8>,
+    most_bytes_kept: usize,
+) -> std::io::Result<bool> {
+    line_bytes.clear();
+    let mut read_anything = false;
+    loop {
+        let available = child_output.fill_buf()?;
+        if available.is_empty() {
+            return Ok(read_anything);
+        }
+        read_anything = true;
+        let newline_at = available.iter().position(|byte| *byte == b'\n');
+        let through = newline_at.map_or(available.len(), |newline_at| newline_at + 1);
+        let room = most_bytes_kept.saturating_sub(line_bytes.len());
+        line_bytes.extend_from_slice(&available[..through.min(room)]);
+        child_output.consume(through);
+        if newline_at.is_some() {
+            return Ok(true);
+        }
     }
 }
 
@@ -420,8 +458,30 @@ fn supervised_child_log_line_level(line: &str) -> SupervisedChildLogLineLevel {
     }
 }
 
+/// A pidfile's lines: the child's process id, then the start time the system
+/// gave that process, so a later run ends it only while that process id still
+/// names the same process.
+fn the_pidfile_text_of(process_id: u32) -> String {
+    match the_start_time_of_the_process(process_id) {
+        Some(start_time) => format!("{process_id}\n{start_time}\n"),
+        None => format!("{process_id}\n"),
+    }
+}
+
+/// The process id and start time a pidfile's text names.
+fn the_process_a_pidfile_names(pidfile_text: &str) -> Option<(u32, Option<String>)> {
+    let mut lines = pidfile_text.lines();
+    let process_id = lines.next()?.trim().parse::<u32>().ok()?;
+    let start_time = lines
+        .next()
+        .map(str::trim)
+        .filter(|start_time| !start_time.is_empty())
+        .map(str::to_string);
+    Some((process_id, start_time))
+}
+
 fn write_the_pidfile(launch: &SupervisedChildProcessLaunch, process_id: u32) {
-    if let Err(failure) = std::fs::write(&launch.pidfile_path, format!("{process_id}\n")) {
+    if let Err(failure) = std::fs::write(&launch.pidfile_path, the_pidfile_text_of(process_id)) {
         tracing::warn!(
             "{} {process_id}'s pidfile {} could not be written, so a crash of this runtime may \
              leave it running: {failure}",
@@ -464,24 +524,30 @@ fn take_the_supervisor_lock_of(
 /// Remove `pidfile_path` only while it still holds `process_id`, so a
 /// successor supervisor's pidfile for the same service is kept.
 fn remove_the_pidfile_while_it_names(pidfile_path: &Path, process_id: u32) {
-    let names_the_process = std::fs::read_to_string(pidfile_path)
-        .is_ok_and(|pidfile| pidfile.trim().parse::<u32>() == Ok(process_id));
+    let names_the_process = std::fs::read_to_string(pidfile_path).is_ok_and(|pidfile| {
+        the_process_a_pidfile_names(&pidfile)
+            .is_some_and(|(named_process_id, _)| named_process_id == process_id)
+    });
     if names_the_process {
         let _ = std::fs::remove_file(pidfile_path);
     }
 }
 
-/// End the child whose process id `pidfile_path` holds when it is still
-/// running `executable`, and remove the pidfile.
+/// End the child `pidfile_path` names when that process id still names the
+/// process the pidfile recorded, started at the same time and running
+/// `executable`, and remove the pidfile.
 fn end_the_child_a_previous_run_left_behind(pidfile_path: &Path, executable: &Path) {
     let Ok(pidfile) = std::fs::read_to_string(pidfile_path) else {
         return;
     };
     let _ = std::fs::remove_file(pidfile_path);
-    let Ok(process_id) = pidfile.trim().parse::<u32>() else {
+    let Some((process_id, Some(recorded_start_time))) = the_process_a_pidfile_names(&pidfile)
+    else {
         return;
     };
-    if !the_process_runs_the_executable(process_id, executable) {
+    if the_start_time_of_the_process(process_id).as_deref() != Some(recorded_start_time.as_str())
+        || !the_process_runs_the_executable(process_id, executable)
+    {
         return;
     }
     tracing::warn!(
@@ -499,6 +565,52 @@ fn end_the_child_a_previous_run_left_behind(pidfile_path: &Path, executable: &Pa
 /// process id the system has since given another program ends nothing.
 fn the_process_runs_the_executable(process_id: u32, executable: &Path) -> bool {
     the_executable_of_the_process(process_id).is_some_and(|running| running == executable)
+}
+
+/// When the system started process `process_id`, in its own clock's units: a
+/// reused process id names a process with another start time.
+#[cfg(target_os = "linux")]
+fn the_start_time_of_the_process(process_id: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{process_id}/stat")).ok()?;
+    // `/proc/<pid>/stat`'s 22nd field; the fields after the parenthesised
+    // command name start at the 3rd.
+    let after_the_command_name = &stat[stat.rfind(')')? + 1..];
+    after_the_command_name
+        .split_whitespace()
+        .nth(19)
+        .map(str::to_string)
+}
+
+#[cfg(target_os = "macos")]
+fn the_start_time_of_the_process(process_id: u32) -> Option<String> {
+    let process_id = libc::c_int::try_from(process_id).ok()?;
+    let mut process_information = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let information_size = std::mem::size_of::<libc::proc_bsdinfo>();
+    // SAFETY: the buffer is one `proc_bsdinfo` and that is the size passed;
+    // `proc_pidinfo` writes at most that many bytes and returns how many.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            process_id,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            process_information.as_mut_ptr().cast(),
+            libc::c_int::try_from(information_size).ok()?,
+        )
+    };
+    if usize::try_from(written).ok()? != information_size {
+        return None;
+    }
+    // SAFETY: `proc_pidinfo` filled the whole struct, which was zeroed first.
+    let process_information = unsafe { process_information.assume_init() };
+    Some(format!(
+        "{}.{:06}",
+        process_information.pbi_start_tvsec, process_information.pbi_start_tvusec
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn the_start_time_of_the_process(_process_id: u32) -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -651,7 +763,9 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&launch.pidfile_path)
                 .unwrap()
-                .trim(),
+                .lines()
+                .next()
+                .unwrap(),
             process_id.to_string()
         );
         assert!(wait_until(Duration::from_secs(10), || events
@@ -694,7 +808,9 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&launch.pidfile_path)
                 .unwrap()
-                .trim(),
+                .lines()
+                .next()
+                .unwrap(),
             successor_process_id.to_string()
         );
     }
@@ -833,10 +949,14 @@ mod tests {
         let launch = launch_in(directory.path(), executable.clone(), false);
         let mut left_behind = spawn_retrying_while_the_copy_is_busy(&executable);
         let left_behind_process_id = left_behind.id();
-        std::fs::write(&launch.pidfile_path, format!("{left_behind_process_id}\n")).unwrap();
         assert!(wait_until(Duration::from_secs(10), || {
             the_process_runs_the_executable(left_behind_process_id, &executable)
         }));
+        std::fs::write(
+            &launch.pidfile_path,
+            the_pidfile_text_of(left_behind_process_id),
+        )
+        .unwrap();
         // Reaped as it ends, the way the init process reaps a crashed
         // runtime's orphan, so the disappearance is seen at once.
         let reaper = std::thread::spawn(move || left_behind.wait().unwrap());
@@ -851,6 +971,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pidfile_naming_the_executable_started_at_another_time_ends_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = a_stand_in_child_executable(directory.path());
+        let launch = launch_in(directory.path(), executable.clone(), false);
+        let mut running_the_executable = spawn_retrying_while_the_copy_is_busy(&executable);
+        let process_id = running_the_executable.id();
+        assert!(wait_until(Duration::from_secs(10), || {
+            the_process_runs_the_executable(process_id, &executable)
+        }));
+        std::fs::write(&launch.pidfile_path, format!("{process_id}\n1\n")).unwrap();
+
+        end_the_child_a_previous_run_left_behind(&launch.pidfile_path, &executable);
+
+        assert!(the_process_exists(process_id));
+        assert!(!launch.pidfile_path.exists());
+        running_the_executable.kill().unwrap();
+        running_the_executable.wait().unwrap();
+    }
+
+    #[test]
     fn a_pidfile_naming_a_process_running_another_program_ends_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let executable = a_stand_in_child_executable(directory.path());
@@ -862,6 +1002,21 @@ mod tests {
         assert!(the_process_exists(another_program.id()));
         another_program.kill().unwrap();
         another_program.wait().unwrap();
+    }
+
+    #[test]
+    fn a_child_log_line_past_the_bound_is_cut_and_the_next_line_read_whole() {
+        let mut child_output = BufReader::with_capacity(
+            8,
+            std::io::Cursor::new(b"0123456789abcdef\nnext\n".to_vec()),
+        );
+        let mut line_bytes = Vec::new();
+
+        assert!(read_one_line_keeping_at_most(&mut child_output, &mut line_bytes, 10).unwrap());
+        assert_eq!(line_bytes, b"0123456789");
+        assert!(read_one_line_keeping_at_most(&mut child_output, &mut line_bytes, 10).unwrap());
+        assert_eq!(line_bytes, b"next\n");
+        assert!(!read_one_line_keeping_at_most(&mut child_output, &mut line_bytes, 10).unwrap());
     }
 
     #[test]

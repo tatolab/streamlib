@@ -101,6 +101,9 @@ struct OneSharedNativeService {
     leases_held: usize,
     state: SharedNativeServiceState,
     supervisor: Option<SupervisedChildProcess>,
+    /// Set while a supervisor taken out of the record is stopping, so a lease
+    /// waits for it before starting a successor on the same pidfile.
+    previous_supervisor_is_stopping: bool,
     /// Bumped by each start, so a stopped supervisor's last events are not
     /// taken for its successor's.
     supervisor_generation: u64,
@@ -158,6 +161,7 @@ impl SharedNativeServicesOfTheEngine {
                 leases_held: 0,
                 state: SharedNativeServiceState::Stopped,
                 supervisor: None,
+                previous_supervisor_is_stopping: false,
                 supervisor_generation: 0,
                 lease_generation: 0,
             },
@@ -177,12 +181,36 @@ impl SharedNativeServicesOfTheEngine {
     /// Lease `service_name`, starting it when no lease holds it, and wait for
     /// a service starting, for the first time or again, to accept.
     pub(crate) fn lease(self: &Arc<Self>, service_name: &str) -> Result<SharedNativeServiceLease> {
+        let readiness_deadline = Instant::now() + self.first_readiness_budget;
         let mut services_by_name = self.lock_services();
-        let service = services_by_name.get_mut(service_name).ok_or_else(|| {
-            Error::Runtime(format!(
+        loop {
+            let service = services_by_name.get(service_name).ok_or_else(|| {
+                Error::Runtime(format!(
+                    "no shared native service named {service_name} is offered by this runtime's \
+                     host"
+                ))
+            })?;
+            if !service.previous_supervisor_is_stopping {
+                break;
+            }
+            let now = Instant::now();
+            if now >= readiness_deadline {
+                return Err(Error::Runtime(format!(
+                    "the shared native service {service_name} was still stopping after {:?}",
+                    self.first_readiness_budget
+                )));
+            }
+            services_by_name = self
+                .state_changed
+                .wait_timeout(services_by_name, readiness_deadline - now)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+        let Some(service) = services_by_name.get_mut(service_name) else {
+            return Err(Error::Runtime(format!(
                 "no shared native service named {service_name} is offered by this runtime's host"
-            ))
-        })?;
+            )));
+        };
         if let SharedNativeServiceState::Failed(why) = &service.state {
             return Err(Error::Runtime(format!(
                 "the shared native service {service_name} failed and is not started again: {why}"
@@ -208,7 +236,6 @@ impl SharedNativeServicesOfTheEngine {
             service_name: service_name.to_string(),
             endpoint_socket_path: self.endpoint_socket_path_of(service_name),
         };
-        let readiness_deadline = Instant::now() + self.first_readiness_budget;
         loop {
             let state = services_by_name
                 .get(service_name)
@@ -259,10 +286,9 @@ impl SharedNativeServicesOfTheEngine {
             .lock_services()
             .iter_mut()
             .filter_map(|(service_name, service)| {
-                service
-                    .supervisor
-                    .take()
-                    .map(|supervisor| (service_name.clone(), supervisor))
+                let supervisor = service.supervisor.take()?;
+                service.previous_supervisor_is_stopping = true;
+                Some((service_name.clone(), supervisor))
             })
             .collect();
         for (service_name, supervisor) in supervisors {
@@ -276,23 +302,24 @@ impl SharedNativeServicesOfTheEngine {
         mut supervisor: SupervisedChildProcess,
     ) {
         supervisor.stop();
-        let services_by_name = self.lock_services();
-        if services_by_name
-            .get(service_name)
-            .is_some_and(|service| service.supervisor.is_some())
-        {
+        let mut services_by_name = self.lock_services();
+        let Some(service) = services_by_name.get_mut(service_name) else {
             return;
+        };
+        if service.supervisor.is_none() {
+            let endpoint_socket_path = self.endpoint_socket_path_of(service_name);
+            match std::fs::remove_file(&endpoint_socket_path) {
+                Ok(()) => {}
+                Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {}
+                Err(failure) => tracing::warn!(
+                    "the stopped shared native service {service_name}'s socket {} was not \
+                     removed: {failure}",
+                    endpoint_socket_path.display()
+                ),
+            }
         }
-        let endpoint_socket_path = self.endpoint_socket_path_of(service_name);
-        match std::fs::remove_file(&endpoint_socket_path) {
-            Ok(()) => {}
-            Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {}
-            Err(failure) => tracing::warn!(
-                "the stopped shared native service {service_name}'s socket {} was not removed: \
-                 {failure}",
-                endpoint_socket_path.display()
-            ),
-        }
+        service.previous_supervisor_is_stopping = false;
+        self.state_changed.notify_all();
     }
 
     fn start_the_service(
@@ -417,7 +444,9 @@ impl SharedNativeServicesOfTheEngine {
             if service.leases_held > 0 || service.lease_generation != lease_generation {
                 return;
             }
-            service.supervisor.take()
+            let supervisor = service.supervisor.take();
+            service.previous_supervisor_is_stopping = supervisor.is_some();
+            supervisor
         };
         if let Some(supervisor) = supervisor {
             tracing::info!(
@@ -489,18 +518,27 @@ mod tests {
     /// A shell script standing in for a service: it binds its socket through
     /// Python and serves until `SIGTERM`.
     fn a_stand_in_service_executable(directory: &Path) -> PathBuf {
+        a_stand_in_service_executable_that_exits_on_sigterm_after(directory, 0.0)
+    }
+
+    fn a_stand_in_service_executable_that_exits_on_sigterm_after(
+        directory: &Path,
+        seconds_before_exiting: f64,
+    ) -> PathBuf {
         let executable = directory.join("stand-in-service");
         std::fs::write(
             &executable,
+            format!(
             "#!/usr/bin/env python3\n\
-             import signal, socket, sys, os\n\
+             import signal, socket, sys, os, time\n\
              listen = sys.argv[sys.argv.index('--listen-socket') + 1]\n\
              try:\n    os.unlink(listen)\nexcept FileNotFoundError:\n    pass\n\
              server = socket.socket(socket.AF_UNIX)\n\
              server.bind(listen)\n\
              server.listen(8)\n\
-             signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n\
+             signal.signal(signal.SIGTERM, lambda *_: (time.sleep({seconds_before_exiting}), sys.exit(0)))\n\
              while True:\n    server.accept()[0].close()\n",
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -596,7 +634,9 @@ mod tests {
         let process_id: i32 =
             std::fs::read_to_string(directory.path().join("services/stand-in.pid"))
                 .unwrap()
-                .trim()
+                .lines()
+                .next()
+                .unwrap()
                 .parse()
                 .unwrap();
         // SAFETY: the pid names the stand-in this test's supervisor started.
@@ -612,6 +652,42 @@ mod tests {
             SharedNativeServiceState::Running
         );
         assert!(UnixStream::connect(leased_while_starting_again.endpoint_socket_path()).is_ok());
+        services.stop_every_service();
+    }
+
+    #[test]
+    fn a_lease_taken_while_the_unleased_service_stops_starts_it_once_it_has_stopped() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = SharedNativeServicesOfTheEngine::with_timings(
+            directory.path().join("services"),
+            Duration::from_millis(100),
+            SHARED_NATIVE_SERVICE_FIRST_READINESS_BUDGET,
+        );
+        services
+            .offer(SharedNativeServiceOffer {
+                service_name: "stand-in".to_string(),
+                executable: a_stand_in_service_executable_that_exits_on_sigterm_after(
+                    directory.path(),
+                    1.0,
+                ),
+                state_directory: directory.path().join("state"),
+            })
+            .unwrap();
+        drop(services.lease("stand-in").unwrap());
+        assert!(wait_until(Duration::from_secs(10), || {
+            services
+                .lock_services()
+                .get("stand-in")
+                .is_some_and(|service| service.previous_supervisor_is_stopping)
+        }));
+
+        let leased_while_stopping = services.lease("stand-in").unwrap();
+
+        assert_eq!(
+            leased_while_stopping.state(),
+            SharedNativeServiceState::Running
+        );
+        assert!(UnixStream::connect(leased_while_stopping.endpoint_socket_path()).is_ok());
         services.stop_every_service();
     }
 

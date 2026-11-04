@@ -434,6 +434,9 @@ mod tests {
     fn a_message_trickled_a_byte_at_a_time_fails_by_one_deadline() {
         let (mut node_end, host_end) = UnixStream::pair().unwrap();
         let trickling = std::thread::spawn(move || {
+            if node_end.write_all(&64u32.to_le_bytes()).is_err() {
+                return;
+            }
             for _ in 0..40 {
                 if node_end.write_all(&[0]).is_err() {
                     return;
@@ -447,7 +450,17 @@ mod tests {
         let received =
             reader.receive_within::<TabProtocolMessageFromNode>(Duration::from_millis(300));
 
-        assert!(received.is_err());
+        assert!(
+            matches!(
+                &received,
+                Err(TabProtocolSocketFailure::Io(failure))
+                    if matches!(
+                        failure.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    )
+            ),
+            "{received:?}"
+        );
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(reader);
         trickling.join().unwrap();

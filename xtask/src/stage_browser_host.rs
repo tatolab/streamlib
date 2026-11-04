@@ -111,7 +111,9 @@ pub fn directory_cargo_wrote_the_browser_host_executables_to(
 /// Build and stage the browser host into the runtime unit, or say why it is
 /// left out: `None` when `CEF_PATH` names no CEF distribution.
 pub fn stage_the_browser_host(workspace_root: &Path) -> Result<Option<PathBuf>> {
-    if std::env::var_os(CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE).is_none() {
+    if std::env::var_os(CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE)
+        .is_none_or(|cef_binary_distribution| cef_binary_distribution.is_empty())
+    {
         let staged_directory =
             runtime_unit_browser_host_directory_in_the_workspace(workspace_root)?;
         if staged_directory.exists() {

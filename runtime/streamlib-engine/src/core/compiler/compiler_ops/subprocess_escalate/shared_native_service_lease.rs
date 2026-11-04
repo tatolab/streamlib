@@ -33,6 +33,10 @@ const SHARED_NATIVE_SERVICE_STATE_STARTING_AGAIN: &str = "starting_again";
 /// The wire spelling of a service that is not started again.
 const SHARED_NATIVE_SERVICE_STATE_FAILED: &str = "failed";
 
+/// The most shared native service leases one helper process may hold at once;
+/// an acquisition past it is refused.
+const MOST_SHARED_NATIVE_SERVICE_LEASES_ONE_HELPER_MAY_HOLD: usize = 64;
+
 /// The shared native service leases one helper process holds, for the stream
 /// it belongs to.
 pub(crate) struct SharedNativeServiceLeasesOfOneHelper {
@@ -89,6 +93,17 @@ pub(super) fn handle_acquire_shared_native_service_lease(
     rid: String,
     request: EscalateRequestAcquireSharedNativeServiceLease,
 ) -> EscalateResponse {
+    let leases_held = leases.leases_by_id.lock().len();
+    if leases_held >= MOST_SHARED_NATIVE_SERVICE_LEASES_ONE_HELPER_MAY_HOLD {
+        return refused(
+            rid,
+            format!(
+                "the helper already holds {leases_held} shared native service leases, the most \
+                 one helper may hold; release one before acquiring {}",
+                request.service_name
+            ),
+        );
+    }
     let lease = match leases.shared_native_services.lease(&request.service_name) {
         Ok(lease) => lease,
         Err(refusal) => return refused(rid, refusal.to_string()),
