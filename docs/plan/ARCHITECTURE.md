@@ -66,7 +66,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   list that refuses by name before a frame flows — at load, or in `setup()`,
   naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
   `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
-  tier), `VirtualCameraSink` (refused at load), the CUDA Array Interface, and the
+  tier), `VirtualCameraSink` (the `tatolab-virtualcamera` module refuses at `setup()`), the
+  CUDA Array Interface, and the
   fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
   macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
   only the portable surface. The guarantee is mechanical, never prose: what a node is
@@ -91,12 +92,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
   pixel view explicit — and it is the sample stream and only that. `tatolab new` writes one
   `@stream`, `TestPatternSource` (the branded animation, §Media I/O) → `HalftoneLensEffect`
-  → `H264Encoder` → `expose(…, PUBLIC)`, and two nodes, each in its own module under
+  → `H264Encoder` → `expose(…, PUBLIC)`, the source and the encoder imported from the
+  `tatolab-testpattern` and `tatolab-h264` modules, and two nodes, each in its own module under
   `nodes/` — the `HalftoneLensEffect` over `GlslPixelEffect`, a drifting lens that turns what
   it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
   effect's output that reads the frame through `frame.cpu()` and logs its mean once a
-  second, paced on `ctx.time` — with dependencies `tatolab-stream` and `numpy>=2.1`,
-  nothing more, the same on both floors. `tatolab new` takes no `--camera` and no
+  second, paced on `ctx.time` — with dependencies `tatolab-stream`, `tatolab-h264`,
+  `tatolab-testpattern` and `numpy>=2.1`, nothing more, the same on both floors, each
+  resolved from PyPI by the project's own `uv sync`. `tatolab new` takes no `--camera` and no
   `--test-pattern`, and no template holds a camera: camera projects live in the docs' sample
   projects and, later, an examples folder the app installs, and the in-repo camera examples
   stay examples (owner, 2026-10-16). The files render from the template files in
@@ -461,7 +464,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ media-built-ins-become-modules, browser-and-rive-source-modules)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -486,8 +489,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Python package whose native internals expose capabilities to Python as handles —
   frames, FDs, exportable device allocations, buffers — wrapped by a Python
   processor. It never links the engine and never speaks streamlib internals; the
-  CPython ABI is the only
-  binary boundary, and no process ever holds two streamlib engines — the runtime process
+  CPython ABI is the binary boundary, beside the one narrow module host table below, and no
+  process ever holds two streamlib engines — the runtime process
   runs the one engine, and a processor interpreter imports the lent `tatolab.runtime` as
   its node's bindings, never as a second engine. Handles it exposes must be genuinely
   transferable across a process boundary (an fd, an exportable allocation) — an
@@ -512,28 +515,46 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runs in the runtime process. A package does its own setup where its nodes run, at import or
   on first use — `tatolab-webrtc` brings up its network runtime and TLS provider that way; a
   node's lifecycle methods are unchanged; an outside program watches the local API. An
-  engine-grade capability — specialised graphics processing, a transport, a device class —
-  enters as a built-in under the criterion below. Pure Python stays a complete way to write a
-  node; this is an additional pathway. It compiles at publish time with maturin, is never
-  dlopen'd by the engine, and the CPython ABI stays the only binary boundary.
+  capability a first-party module needs that the engine does not expose becomes public engine
+  API, which a third-party module uses too — never a private shortcut. Pure Python stays a
+  complete way to write a node; this is an additional pathway. It compiles at publish time
+  with maturin, is never dlopen'd by the engine, and the CPython ABI stays the binary
+  boundary beside the host table.
   Rejected: a capability-extension hook — an entry point the runtime reads and runs in its
   own process, or in an interpreter embedded in `tatolabd` for hooks alone — since a native
   `tatolabd` runs no Python and a package inside the shared runtime reaches every stream
   (owner, package-split-and-lend decision 2, 2026-10-02).
   [extension-model; package-split-and-lend — SHIPPED #2691]
-- **DECIDED** — The criterion for a built-in, stated so that the next one is
-  contestable: a first-party capability is a built-in — its native half in `tatolabd`, never
-  in a pip distribution, its generated class in `tatolab-stream` — only if (a) its per-frame
-  path has a deadline the helper hop cannot meet — a device audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
-  not export, or (c) it presents an OS-facing device to the other applications on the
-  machine — a virtual camera; a virtual microphone would be the same case — which
-  installing the runtime alone must make available, with no further package to install;
-  and in every case (d) a named consumer exists. Everything else is an
-  extension. What an extension needs and the engine does not yet expose is engine work,
-  done as engine code inside the extension's own change, rather than by the extension
-  reaching past the surface. Codec sessions are not exported to Python; an extension that
-  needs one brings that export as engine work. [extension-model; virtual-camera-sink —
-  SHIPPED #2196, #2197, #2198; package-split-and-lend — SHIPPED #2684, #2697]
+- **DECIDED** — The runtime ships no media nodes; it is a general-purpose engine. Camera,
+  microphone, speaker, the video and audio codecs, the test pattern and the virtual camera are
+  first-party modules, built exactly the way a third party builds one, and installed when a
+  stream needs one. No first-party capability is a built-in by virtue of a deadline, an
+  engine-only primitive, an OS-facing device or being first-party, and anything a first-party
+  module needs from the engine is public engine API: surface import by plane layout, colour
+  conversion, the audio device interface, the capture-prompting policy, the helper's stream
+  and node names. The one built-in left is `RelayTrackSource`, which is transport — the only
+  way a graph reads a relay, its MoQ crates pinned to `tatolabd`'s publisher — not a media
+  node. Installing the runtime alone gives other applications no camera. Owner, 2026-11-02.
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+- **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
+  `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
+  extension wheel's native half as a named capsule from a node's context. It carries opening,
+  writing, reading and waiting on a port Python handed to native code, from any thread and
+  without the GIL; the port's catalog entry; log records into the helper's log ring; the
+  monotonic clock; the node's stop flag; and host capabilities, among them the audio device
+  interface. Only data-plane verbs and plain, generation-checked handles cross it, never an
+  RHI object, and the engine never calls module code through it. A later Python write to a
+  port handed to native code is refused by name. A module built against minor N loads on any
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+- **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
+  carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
+  generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+- **DECIDED** — A module declares its nodes in a `tatolab.nodes` entry-point group, and a
+  node's type is its class's import path in its own distribution (`tatolab.camera:CameraSource`).
+  The node catalog lists every installed module's nodes, read in a stream's own interpreter and
+  never in `tatolabd`. A graph naming a former built-in's type is refused naming the module's
+  type and the distribution to install. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
@@ -543,9 +564,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `tatolab-stream` (§Distribution & versioning). Distribution names take the
   `tatolab-<name>` form and import as `tatolab.<name>`. Its gates are its own CI lane —
   stubtest over its own `.pyi`, pyright, its crate's tests — since the engine workspace's
-  gates do not walk a non-member. A Rust-side extension SDK is not owed by the first
-  extension, whose Rust handles bytes and no engine object; it lands with the first
-  extension that needs one. [extension-model; tatolab-names; package-split-and-lend —
+  gates do not walk a non-member. A pure-Python module — the compositor, the test pattern,
+  the virtual camera — is an ordinary package of the same shape with no native half. The
+  Rust-side SDK is `tatolab-module-sdk`. [extension-model; tatolab-names; package-split-and-lend —
   SHIPPED #2673, #2691, #2697]
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export on Linux and IOSurface export
@@ -745,7 +766,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
   `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
   `@node` with its `@node.input` and `@node.output`, the `StreamBuilder` and its references,
-  the built-in node classes with their config shapes, and the data types; a stream is
+  the built-in node class with its config shape, and the data types; a stream is
   written, type-checked and
   compiled with no runtime installed. `tatolab.runtime` is the engine's native part — the
   engine, the bindings a node's calls go through while it runs, the processor-interpreter
@@ -776,8 +797,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Built-in nodes reach Python as plain classes generated from the runtime: `cargo
   xtask generate-built-in-node-classes` writes `tatolab/stream/_built_in_nodes.py` from each
   built-in's descriptor and its config's JSON Schema — its `type`, its doc line, its ports and
-  a `TypedDict` of its config keys, so pyright checks `stream_builder.add(CameraSource,
-  config={"device_id": "/dev/video2"})` — and CI fails when a regeneration differs. One
+  a `TypedDict` of its config keys, so pyright checks `stream_builder.add(RelayTrackSource,
+  config={"broadcast": "desk/rig.hang", "track": "camera/video"})` — and CI fails when a
+  regeneration differs. `RelayTrackSource` is the one class it writes. One
   declaration, the Rust one; no native marker class exists. [package-split-and-lend — SHIPPED
   #2684]
 - **DECIDED** — What the runtime backs is declared once, in `tatolab.stream`: the contexts,
@@ -872,8 +894,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   now. [consumer-tree-disposition — SHIPPED #2052, #2053, #2054, #2055, #2056, #2057,
   #2058, #2059]
 - **DECIDED** — `packages/` holds first-party extension wheels — the optional
-  capabilities §Packages & extension model decides ship outside the wheel, with its
-  built-in criterion deciding which side of the line a capability lands on. Each is an
+  capabilities §Packages & extension model decides ship outside the wheel, every media node
+  among them. Each is an
   ordinary pip-installable Python package depending on `tatolab-stream`, never linking the
   engine.
   In-repo consumers (examples included) link a package locally as a Python path
@@ -1562,7 +1584,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   helper-process-placement-only — SHIPPED #1714; built-in-node-type; package-split-and-lend —
   SHIPPED #2684]
 - **DECIDED** — A built-in node's type is the import path of its class in `tatolab.stream` —
-  `tatolab.stream:CameraSource` — the same string in the runtime's registry, on the stream
+  `tatolab.stream:RelayTrackSource` — the same string in the runtime's registry, on the stream
   library's class, in every graph and over the local API, from Python and from Rust alike. The
   runtime registers each built-in under that string; no table translates it to another name,
   and a built-in's Rust module path never reaches a graph. Every node's type is thus the
@@ -1624,8 +1646,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The runtime refuses by name what a graph holds that it does not understand,
   at load and before a frame flows. Every built-in's config takes
   `#[serde(deny_unknown_fields)]`, and the refusal names the node, its `type` and the setting;
-  a `type` the runtime lacks is refused naming it; a built-in absent on this floor is refused
-  naming the floor (`VirtualCameraSink` is refused at load, not at `stream_builder.add`); and
+  a `type` the runtime lacks is refused naming it; a former built-in's type is refused naming
+  the module that replaced it and the distribution to install; and
   a graph key the loader neither reads as spec nor knows as one of `graph`'s live keys is
   refused naming it, the live keys being skipped. A golden graph holding every key and every
   built-in `type` is checked in and loads on every later build; a shape change adds a golden
@@ -1707,8 +1729,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and remembered; a control client reads the same list and never has to predict it.
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
-  in a built-in — camera, codec, audio — ends every stream on the
-  machine, and the runtime restarts and re-loads every stream neither stopped nor failed from
+  in a module's native half — camera, codec, audio — ends that node's stream only; one in the
+  engine ends every stream on the machine, and the runtime restarts and re-loads every stream neither stopped nor failed from
   its persisted graph (§Product); a hang is
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
   stay in their own process. "Restart the runtime and the streams come back" means re-loading
@@ -1872,8 +1894,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   staging of the same length and publishes with one `memcpy`; never the write-combined
   sequential-write allocation, whose cost the decode path already measured. The holder
   reads `tier()` and `fallback_reason()` and logs which branch it took, once. This is what
-  lets a built-in hand the GPU a device mapping it does not own — the virtual camera's
-  loopback buffers are the first — rather than reading pixels back to copy them in.
+  lets an engine-side holder hand the GPU a device mapping it does not own rather than reading
+  pixels back to copy them in; no module reaches it, since the virtual camera copies one
+  host-visible pixel buffer into its loopback buffers.
   [virtual-camera-sink — SHIPPED #2196]
 - **DECIDED** — `RhiColorConverter` runs both directions over one shader pair: the
   existing YUYV-buffer-to-RGBA-image pass, and its inverse writing an RGBA or BGRA image
@@ -2164,84 +2187,58 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ media-built-ins-become-modules; unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
+## Media I/O — camera, audio, codecs — SHIPPED (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
-- **DECIDED** — First-party camera and audio are native built-in processors
-  in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
-  configured from Python (`stream_builder.add(CameraSource)`) through the classes generated
-  into `tatolab.stream`, whose per-frame paths never enter an interpreter. Lag-by-design
-  ends: built-ins ship inside the runtime, current by construction. This names the shipped
-  set, not a rule: a further first-party capability is a built-in only under the criterion
-  in §Packages & extension model, and is otherwise an extension wheel.
-  [importable-python-library — SHIPPED #1709; extension-model; package-split-and-lend —
-  SHIPPED #2684, #2693]
-- **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
-  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only — with no Apple port,
-  stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
-  inside a bundled, entitled, notarised app, which the floor rules out under any
-  justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the runtime
-  refuses a graph naming it at load, naming the platform, and `tatolab enable-virtual-camera`
-  refuses by name. As
-  many instances as the graph adds. Each instance is one camera that exists only
-  while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
-  in and pulled out from every other application's point of view, whose frames are
-  whatever the graph writes. It takes video on an input `video` declared `newest`. Config:
-  `name`, the camera's name in every picker, defaulting to
+- **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
+  are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
+  `tatolab-speaker`, `tatolab-h264`, `tatolab-h265`, `tatolab-opus`, `tatolab-testpattern`,
+  `tatolab-virtualcamera`), each running in its node's helper process, a native half doing its
+  per-frame or per-sample work where it has one. A stream author writes
+  `from tatolab.camera import CameraSource`, names the distribution in the project's
+  dependencies, and adds it with the same `stream_builder.add(...)`; a stream with no camera
+  loads no camera code. A device is opened by the node that uses it, in its own process, under
+  the stream's capture-prompting policy, and a native crash in a device or codec node ends that
+  node's stream, not every stream on the machine. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+- **DECIDED** — A virtual camera is a fifth device class: `VirtualCameraSink`, the pure-Python
+  `tatolab-virtualcamera` module, Linux only — with no Apple port, stated rather than deferred:
+  a macOS virtual camera is a CoreMediaIO Camera Extension inside a bundled, entitled,
+  notarised app, which the floor rules out under any justification, and the DAL plug-in
+  stopped loading in macOS 14.1; off Linux the node refuses at `setup()` naming the platform,
+  and `tatolab enable-virtual-camera` refuses by name. As many instances as the graph adds.
+  Each instance is one camera that exists only while its node runs: created at `setup()`,
+  removed at `teardown()`, a camera plugged in and pulled out from every other application's
+  point of view, whose frames are whatever the graph writes. It takes video on an input
+  `video` declared `newest`. Config: `name`, the camera's name in every picker, defaulting to
   `StreamLib Camera` followed by a four-character id derived from the stream's project
-  directory, the stream's name and the node's name — distinct across nodes and streams, the
-  same on every run of the same stream, so unnamed cameras never collide and a device left
-  behind is still recognised; `door`, optional, `auto` by default. Two doors, one per instance,
-  chosen at `setup()` and logged once. The **v4l2loopback** door creates its own device
-  through the module's control node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to
-  `name`, capture-only capabilities announced, four buffers) and removes it with
-  `CTL_REMOVE` at teardown; it is the door every application sees — `/dev/video*`
-  readers directly and portal-based readers through the session manager's V4L2 mirror —
-  and it is taken whenever the control node is writable by the process. The **PipeWire**
-  door registers a `Video/Source` node with `media.role = Camera` and the configured name,
-  destroyed at teardown; it needs no module and no root and is what a fresh install gets
-  when the control node is absent or not writable. Never both for one instance, since the
-  mirror would list the camera twice. The permission behind the loopback door is the
-  standard udev grant a desktop hands its seat user for a device node — the module loaded
-  with no devices, and a rule tagging its control node `uaccess` — installed once by the
-  user through the CLI's `enable-virtual-camera` verb behind the desktop's own password
-  prompt (polkit), never by the engine, which runs unprivileged always. Without it, `auto`
-  takes the PipeWire door and says so; `door = "v4l2loopback"` refuses at `setup()` by
-  name, saying the sink lacks permission to create a camera and naming the verb to run —
-  the processor never reaches Running and the runtime keeps running. A device the
-  sink cannot remove at teardown because a reader still holds it is left in place and
-  reclaimed by label at the next `setup()`; a device left behind by a crash is reclaimed
-  the same way. Loopback door: memory-mapped output streaming, YUYV, the device format set
-  from the first frame's extent and re-negotiated when the extent changes, the frame's
-  monotonic timestamp passed through on every queued buffer, and `S_FMT` carrying
+  directory, the stream's id and the node's name, which the helper's context names — distinct
+  across nodes and streams, the same on every run of the same stream, so unnamed cameras
+  never collide and a device left behind is still recognised; `door`, `auto` by default. The
+  one door is **v4l2loopback**: the node creates its own device through the module's control
+  node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to `name`, capture-only capabilities
+  announced, four buffers) and removes it with `CTL_REMOVE` at teardown; it is the door every
+  application sees — `/dev/video*` readers directly and portal-based readers through the
+  session manager's V4L2 mirror. `auto` and `v4l2loopback` take it; `door = "pipewire"` is
+  refused at `setup()` by name, as no PipeWire camera door is offered. The permission behind
+  it is the standard udev grant a desktop hands its seat user for a device node — the module
+  loaded with no devices, and a rule tagging its control node `uaccess` — installed once by
+  the user through the CLI's `enable-virtual-camera` verb behind the desktop's own password
+  prompt (polkit), never by the runtime or the node, which run unprivileged always. Without
+  it the node refuses at `setup()` by name, saying it lacks permission to create a camera and
+  naming the verb to run — it never reaches Running and the runtime keeps running. A device
+  the node cannot remove at teardown because a reader still holds it is left in place and
+  reclaimed by label at the next `setup()`; a device left behind by a crash is reclaimed the
+  same way. Memory-mapped output streaming, YUYV, the device format set from the first
+  frame's extent and colour and re-negotiated when the extent changes, the frame's monotonic
+  timestamp passed through on every queued buffer, and `S_FMT` carrying
   `V4L2_PIX_FMT_PRIV_MAGIC`, without which the V4L2 core zeroes the three extended
-  colorimetry axes and every reader derives limited range for a full-range picture.
-  PipeWire door: the engine's DMA-BUF textures offered with their modifier beside a
-  shared-memory fallback, the consumer choosing, the frame's stamp on every buffer in
-  `SPA_META_Header.pts` — the only place a consumer reads a stamp from, and the only one
-  that survives this arm's PipeWire 0.3.50 floor, since `pw_buffer.time` is a trailing
-  field of a struct the *host's* libpipewire allocates and arrived in 1.0.5. The loopback
-  door's per-frame path is one GPU pass: the RGBA→YUYV conversion kernel writes straight
-  into the mapped loopback buffer through the RHI's host-pointer import, so no CPU touches
-  a pixel; where the driver refuses that import, the same kernel writes into cached host
-  staging and one copy lands it. The platform floor settled on the import: NVIDIA 595.84
-  takes the loopback's own character-device mapping, so `imported_host_pointer` is the tier
-  this platform runs and the staged tier is a proven fallback rather than the norm. The
-  loopback device is reached through V4L2 ioctls alone and PipeWire through the engine's
-  existing `dlsym` shim — one process-wide loader and one entry-point list serving the
-  audio and the video half both: no user-space library is linked and the wheel's
-  `DT_NEEDED` set does not grow. An odd frame width is refused by name, since YUYV packs
-  two pixels to a macropixel and the module recomputes `bytesperline` from the width
-  whatever a caller states. Owner rulings, 2026-09-06. Proven on the rig for the
-  loopback door — two named cameras from one graph, read back as YUYV with matching
-  colorimetry, and both gone at a shutdown no reader was holding, which is the removal's
-  good case and not a proof against the `EBUSY` path above. The PipeWire door is proven as
-  far as registration and negotiation (WirePlumber lists the node beside its V4L2 cameras;
-  the offer carries the modifier and its shared-memory sibling) and no further: no consumer
-  reachable on the rig negotiates a PipeWire camera at all — `pipewiresrc` fails identically
-  for WirePlumber's own V4L2 devices, and Chrome 152 ships the flag off — so which door a
-  consumer takes and what stamp it observes is unproven, and closing it needs a machine with
-  a working PipeWire camera consumer. [virtual-camera-sink — SHIPPED #2196, #2197, #2198;
-  macos-capability-parity; runtime-hosting — SHIPPED #2704]
+  colorimetry axes and every reader derives limited range for a full-range picture. The
+  per-frame path is the engine's `convert_surface_into` writing the RGBA frame into a
+  host-visible `yuyv` pixel buffer on the GPU, then one CPU copy of its rows into the mapped
+  loopback buffer. The device is reached through V4L2 ioctls alone, from `ctypes` and
+  `fcntl`, so nothing is linked. An odd frame width is refused by name, since YUYV packs two
+  pixels to a macropixel. Owner rulings, 2026-09-06 and 2026-11-02.
+  [virtual-camera-sink — SHIPPED #2196, #2197, #2198; macos-capability-parity;
+  runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the
@@ -2250,9 +2247,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   not wrong pixels, and the alternative costs every reader a re-plug mid-stream. And a
   device-configuration refusal — an `S_FMT` or `REQBUFS` that fails — latches for the
   processor's life, so one transient device failure ends that camera's run; whether a retry
-  is owed, and whether it belongs to this built-in or to the runtime's restart policy, is
+  is owed, and whether it belongs to this module or to the runtime's restart policy, is
   undecided.
-- **DECIDED** — Built-ins are written against the same handle-shaped hardware
+- **DECIDED** — First-party modules are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, audio clock, color resolution, and the audio device, video device and video codec
   backend seams — never against private engine guts;
   the layering wall survives the ABI's deletion as internal discipline.
@@ -2323,11 +2320,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845]
 - **DECIDED** — `TestPatternSource` is the sample stream's source: a branded looping animation
   — colour bars, the potato bouncing corner to corner, "Tatolab stream setup successfully" and
-  "sample stream" bottom-right — rendered by one GPU pass into the pooled `Rgba32` frame every
-  source lands in, the text from a glyph atlas baked into the binary, so it needs no device, no
-  permission, no font library and nothing added to `DT_NEEDED`, and runs on the software
-  device. It keeps its name and its ports; the branding is content. Owner, 2026-10-16.
-  [moq-relays — SHIPPED #2866]
+  "sample stream" bottom-right — rendered by one compute dispatch per frame
+  into a texture from the node's output pool, the potato and the captions baked into the
+  `tatolab-testpattern` module as RGBA overlays, so it needs no device, no permission and no
+  font library, and runs on the software device. It is pure Python and GLSL, built through
+  `create_compute_kernel`; its type is `tatolab.testpattern:TestPatternSource`, with its
+  config keys and ports unchanged. The branding is content. Owner, 2026-10-16.
+  [moq-relays — SHIPPED #2866; {SHIP[1:-1]}]
 - **DECIDED** — `H264Encoder` has a CPU arm (unbuilt): until it lands a
   machine without a GPU encoder shares no H.264, and the sample stream is proven on a device
   with one. Where the device's platform arm refuses H.264 encode — the software device among
@@ -2364,8 +2363,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
-  budget; device audio callbacks stay native, always —
-  a deadline the cross-process hop cannot meet, not a GIL argument.
+  budget; a device audio callback runs on a native thread in the node's helper process and
+  never enters Python — a deadline Python cannot meet, not a GIL argument.
   [importable-python-library; helper-process-placement-only — SHIPPED #1714]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, messages, audio ticks, `ctx.time` — is the machine's monotonic clock
@@ -2779,14 +2778,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (`streamlib-vulkan-video` over `streamlib-consumer-rhi`'s owned-device tier); on macOS on
   VideoToolbox; the engine's own device creates no video queue. The runtime decodes no
   JPEG anywhere. AV1 and VP9 remain ported but unexposed until a consumer demands them.
-  The four name the shipped set, not a rule: the next codec follows the built-in criterion in
-  §Packages & extension model.
+  The four name the shipped set, not a rule: the next codec is a module like them.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
-  GOP knobs are ticket-level, like every other built-in's config. The four video blocks
+  GOP knobs are ticket-level, like every other node's config. The four video blocks
   are one encode body and one decode body specialised by a codec identity, not four
   processors — the pair differs in an enumerant, its catalog entry's codec string and a name —
-  and each built-in is its own port surface, registration and identity. The layering
+  and each node is its own port surface, registration and identity. The layering
   wall holds at this fourth device class too: colour conversion into the codec's NV12
   input rides the engine's existing RHI colour converter — the `rgb_to_nv12` stage on
   Linux, an RGBA-image → NV12-buffer pass beside the RGBA → YUYV one on Apple — and no new
@@ -3024,8 +3022,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   persist across restarts and updates while its signing identity and bundle id hold, whichever
   build folder it runs from. The helper's `Info.plist` carries the camera, microphone and
   local-network usage strings; the app and `tatolabd`
-  carry the hardened-runtime device entitlements; only the runtime process opens devices,
-  never a processor interpreter. The runtime checks authorization before opening a device and
+  carry the hardened-runtime device entitlements; a device is opened by the node that uses it,
+  in its own helper process, under the stream's capture-prompting policy. The runtime checks authorization before opening a device and
   refuses by name, because a denied microphone delivers silence. A runtime started from a
   terminal credits that terminal — the
   responsible code — and only Apple's Terminal is exempt from the local-network check.

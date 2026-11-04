@@ -29,10 +29,9 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
   CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
-- **Native built-ins for the parts with deadlines**: test pattern and a virtual camera on
-  Linux — native code inside the runtime, configured from Python. The camera, microphone,
-  speaker, H.264 / H.265 and Opus codecs are modules that move their frames and samples on
-  native threads.
+- **Media nodes are modules, built the way you would build one.** The camera, microphone,
+  speaker, H.264 / H.265 and Opus codecs, the test pattern and the Linux virtual camera are
+  packages on PyPI; the ones with deadlines move their frames and samples on native threads.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
@@ -177,12 +176,8 @@ begun unloading runs to the end.
 
 ```python
 from tatolab.h264 import H264Encoder
-from tatolab.stream import (
-    Exposure,
-    StreamBuilder,
-    TestPatternSource,
-    stream,
-)
+from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.halftone_lens_effect import HalftoneLensEffect
@@ -209,8 +204,8 @@ The effect's output has two readers: the meter measures each frame, and the enco
 H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser plays, on this machine
 or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
 pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s `CameraSource`, as the comment says,
-to run your camera through the same effect. A built-in's `config` is a `TypedDict` —
-`TestPatternSourceConfig`, `OpusEncoderConfig` — so a type checker catches a misspelled key. `expose` without a level
+to run your camera through the same effect. A node's `config` class — `TestPatternSourceConfig`,
+`OpusEncoderConfig` — is typed, so a type checker catches a misspelled key. `expose` without a level
 makes an output private, readable by other streams and code on this machine.
 
 Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
@@ -578,11 +573,9 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Test pattern, the
-H.264 / H.265 codec pairs and the virtual camera ship inside the runtime because their
-per-frame paths have deadlines a separate process cannot meet, need primitives only the
-runtime has, or present a device to other applications; everything else is a package or a node you
-write.
+**It costs you** one built-in: `RelayTrackSource`, the node that reads a relay's track, ships
+inside the runtime as transport. Every media node is a package, and anything else is a package
+or a node you write.
 
 </details>
 
@@ -675,13 +668,13 @@ Other vendors are untested rather than validated.
 ## What ships today
 
 A stream on one machine — sources in, GPU work, your model, display or recording out — plus
-observation and live changes from the CLI or an agent. The built-in nodes are native code inside the
-runtime, configured from Python, and their per-frame paths never enter an interpreter:
+observation and live changes from the CLI or an agent. The runtime ships no media nodes; each is a
+package on PyPI:
 
-| Built-in | |
+| Module | |
 |---|---|
-| `TestPatternSource` | Color bars, for a machine with no camera. |
-| `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
+| `tatolab-testpattern` | `TestPatternSource`: the sample animation, for a machine with no camera. |
+| `tatolab-virtualcamera` | `VirtualCameraSink`, Linux only: a v4l2loopback camera any other application can select. |
 
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
 `from tatolab.microphone import MicrophoneSource` and `from tatolab.speaker import SpeakerSink`.
@@ -754,7 +747,7 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   directory; run `tatolab logs` there, or name it with `--dir`.
 - **A `VirtualCameraSink` cannot create its loopback camera** — run `tatolab enable-virtual-camera`
   once. It needs the `v4l2loopback` module for your kernel (`v4l2loopback-dkms` on Debian and
-  Ubuntu). Until then the sink's default door registers a PipeWire camera instead.
+  Ubuntu). Until then the sink refuses at setup, naming the command.
 
 ## License
 
