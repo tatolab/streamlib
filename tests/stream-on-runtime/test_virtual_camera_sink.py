@@ -21,7 +21,9 @@ the test speaks it directly.
 import fcntl
 import mmap
 import os
+import shutil
 import struct
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -83,6 +85,8 @@ READINESS_TIMEOUT_SECONDS = 20.0
 # process rather than run from a `*_streams.py` module, whose compile has its own.
 REFUSED_CAMERA_NAME = "Refused cam"
 PIPEWIRE_DOOR_CAMERA_NAME = f"StreamLib pipewire {os.getpid()}"
+PIPEWIRE_DOOR_CAMERA_NODE_NAME = f"streamlib-camera-streamlib-pipewire-{os.getpid()}"
+PIPEWIRE_CONSUMER_TIMEOUT_SECONDS = 30.0
 FIRST_LOOPBACK_CAMERA_NAME = f"StreamLib test {os.getpid()}"
 SECOND_LOOPBACK_CAMERA_NAME = f"{FIRST_LOOPBACK_CAMERA_NAME} B"
 FRAMES_CAMERA_NAME = f"StreamLib frames {os.getpid()}"
@@ -400,13 +404,31 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
 # ---- the PipeWire door: a camera where a daemon answers, refused by name elsewhere
 
 
+def assert_a_pipewiresrc_consumer_reads_frames_from_the_camera() -> None:
+    """A GStreamer consumer negotiates the camera's buffers and pulls frames from it."""
+    gst_launch = shutil.which("gst-launch-1.0")
+    if gst_launch is None:
+        pytest.fail("a PipeWire daemon answers but gst-launch-1.0 is not installed to read it")
+    consumer = subprocess.run(
+        [
+            gst_launch, "-q", "pipewiresrc", f"target-object={PIPEWIRE_DOOR_CAMERA_NODE_NAME}",
+            "num-buffers=10", "!", "video/x-raw,format=YUY2", "!", "fakesink",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=PIPEWIRE_CONSUMER_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
+
+
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is Linux's")
 @pytest.mark.requires_gpu
 def test_the_pipewire_door_opens_where_a_daemon_answers_and_is_refused_by_name_elsewhere(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """Where a PipeWire daemon answers the sink reaches Running with its camera
-    created; where none does — a CI container — setup refuses naming the door and why,
+    created and a GStreamer consumer reads frames from it; where none does — a CI container — setup refuses naming the door and why,
     and the source keeps running beside it."""
     tatolabd = start_tatolabd_running_stream(
         compile_stream_to_graph(a_test_pattern_into_a_camera_on_the_pipewire_door)
@@ -420,6 +442,8 @@ def test_the_pipewire_door_opens_where_a_daemon_answers_and_is_refused_by_name_e
     if node_states["virtualcamerasink"] == "Running":
         created = tatolabd.await_stderr_containing("camera created")
         assert "pipewire" in created, created
+        assert_a_pipewiresrc_consumer_reads_frames_from_the_camera()
+        tatolabd.await_stderr_containing("first frame presented")
     else:
         assert node_states["virtualcamerasink"] == "Error", node_states
         refusal = tatolabd.await_stderr_containing("the PipeWire camera door is not available")
