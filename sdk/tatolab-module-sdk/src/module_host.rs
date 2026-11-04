@@ -301,6 +301,22 @@ impl ModuleHost {
         unsafe { (self.module_host_table.stop_requested)(self.module_host_table.node_host) != 0 }
     }
 
+    /// Fail this node for good with `reason`, which the graph shows; the rest
+    /// of the stream keeps running and the node is not started again.
+    pub fn fail_the_node_unrecoverably(&self, reason: &str) -> Result<(), ModuleHostError> {
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: the node host is retained by `self`; every pointer is live
+        // for the call.
+        let status = unsafe {
+            (self.module_host_table.node_fail_unrecoverably)(
+                self.module_host_table.node_host,
+                ModuleHostTableUtf8::of(reason),
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("node_fail_unrecoverably", status, &error_message)
+    }
+
     /// The engine's monotonic clock in nanoseconds.
     pub fn monotonic_now_ns(&self) -> i64 {
         // SAFETY: the node host is retained by `self`.
@@ -599,7 +615,8 @@ pub struct ModuleHostForeignDmaBuf<'description> {
     pub allocation_byte_size: u64,
     pub plane_offsets_bytes: &'description [u64],
     pub plane_strides_bytes: &'description [u64],
-    /// `0`, `DRM_FORMAT_MOD_LINEAR`: the only layout a plane stride describes.
+    /// `0`, `DRM_FORMAT_MOD_LINEAR`, for rows at the plane strides; a tiled
+    /// modifier for one plane of `rgba32` or `bgra32`, imported as a texture.
     pub drm_format_modifier: u64,
 }
 

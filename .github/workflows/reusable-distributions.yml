@@ -469,6 +469,22 @@ jobs:
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
+  # The node side of a web page source: its wheel carries no browser, which is
+  # the shared browser host the runtime unit ships. Linux only until its macOS
+  # half lands.
+  build-tatolab-browser-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-browser
+      extension_distribution_name: tatolab-browser
+      extension_import_package_name: tatolab.browser
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      extension_builds_for_macos: false
+
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
   # uploaded.
@@ -564,6 +580,7 @@ jobs:
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
+      - build-tatolab-browser-distribution
       - build-tatolab-testpattern-distribution
       - build-tatolab-virtualcamera-distribution
       - build-tatolab-h264-distribution
@@ -630,11 +647,29 @@ jobs:
       # `--check-url` skips a file PyPI already holds byte for byte, so re-running
       # this job in the original run after a partial upload sends only the rest;
       # a rebuilt distribution differs and fails on a hash mismatch.
+      #
+      # One file at a time, carrying on past a refusal: PyPI rate-limits the
+      # creation of new project names (`429 Too many new projects created`), and
+      # a first release of a new distribution must not hold back every
+      # distribution PyPI already has. The job still fails, naming each refused
+      # file, so a re-run sends what is left.
       - name: Upload every distribution to PyPI
         if: ${{ !inputs.dry_run }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: uv publish --trusted-publishing never --check-url https://pypi.org/simple/ dist/*
+        run: |
+          refused_distribution_files=()
+          for distribution_path in dist/*; do
+            if ! uv publish --trusted-publishing never --check-url https://pypi.org/simple/ "$distribution_path"; then
+              refused_distribution_files+=("$(basename "$distribution_path")")
+            fi
+          done
+          if [ "${#refused_distribution_files[@]}" -gt 0 ]; then
+            for refused_distribution_file in "${refused_distribution_files[@]}"; do
+              echo "::error::PyPI did not take $refused_distribution_file; re-run this job to send it"
+            done
+            exit 1
+          fi
 
   # Versioned files first and `latest` last, so an install that reads `latest`
   # always finds the tarball it names.

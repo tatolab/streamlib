@@ -18,6 +18,7 @@
 //! hands on, are xtask's own.
 
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
+use crate::stage_browser_host::stage_the_browser_host;
 use crate::stage_local_relay::{LOCAL_RELAY_EXECUTABLE_FILE_NAME, stage_the_local_relay};
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
 use crate::stage_watch_page::stage_the_watch_page;
@@ -25,10 +26,15 @@ use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
 };
+pub(crate) use runtime_unit_layout::browser_host_executable_beside_the_lend;
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
     RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME, lend_directory_in_the_runtime_unit,
     watch_page_directory_beside_the_lend,
+};
+#[cfg(test)]
+pub(crate) use runtime_unit_layout::{
+    BROWSER_HOST_EXECUTABLE_FILE_NAME, BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
 };
 use std::path::{Path, PathBuf};
 
@@ -231,6 +237,7 @@ pub fn run(
     );
 
     stage_the_watch_page(workspace_root)?;
+    stage_the_browser_host(workspace_root)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(

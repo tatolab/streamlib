@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-virtualcamera"
-version = "0.68.21"
+version = "0.68.24"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
@@ -22,7 +22,7 @@ pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
 
 # The PipeWire camera door, reached through the module host table. It links no
 # engine and no libpipewire.
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.7.0", features = ["pyo3"] }
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.8.0", features = ["pyo3"] }
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
 # third party would build one, with its own root, its own lockfile and its own

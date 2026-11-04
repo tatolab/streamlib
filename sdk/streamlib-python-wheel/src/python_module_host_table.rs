@@ -14,6 +14,7 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod host_memory_pixel_rows;
 mod module_host_surface_verbs;
+mod shared_native_service_leases;
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -32,15 +33,20 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_WARN, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
-    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
-    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
-    ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
+    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK,
+    MODULE_HOST_TABLE_STATUS_REFUSED, MODULE_HOST_TABLE_STATUS_TIMED_OUT,
+    MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable, ModuleHostTableBytes,
+    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
+    ModuleHostTableHostMemoryPixels, ModuleHostTableIOSurfaceImport,
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
+    ModuleHostTableSharedNativeServiceLease, ModuleHostTableSharedNativeServiceLeaseHandle,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use self::module_host_surface_verbs::SurfacesLentToNativeCode;
+use self::shared_native_service_leases::{
+    SharedNativeServiceLeasesHeldByNativeCode, SharedNativeServiceStateTheParentAnswered,
+};
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
@@ -91,6 +97,7 @@ struct ModuleHostOfOneNode {
     audio_capture_streams: AudioCaptureStreamsOpenedForOneNode,
     surfaces_lent_to_native_code: SurfacesLentToNativeCode,
     audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode,
+    shared_native_service_leases: SharedNativeServiceLeasesHeldByNativeCode,
     virtual_camera_streams: VirtualCameraStreamsOpenedForOneNode,
 }
 
@@ -114,6 +121,9 @@ pub(crate) fn module_host_table_capsule_lending<'py>(
         SurfacesLentToNativeCode::new(
             HelperProcessNativeEscalateChannel::of_this_helper_process(),
             surface_share_client,
+        ),
+        SharedNativeServiceLeasesHeldByNativeCode::new(
+            HelperProcessNativeEscalateChannel::of_this_helper_process(),
         ),
     );
     let module_host_table =
@@ -139,6 +149,7 @@ fn module_host_of_one_node(
     escalate_request_to_parent: Option<Py<PyAny>>,
     stop_requested_by_parent: Arc<AtomicBool>,
     surfaces_lent_to_native_code: SurfacesLentToNativeCode,
+    shared_native_service_leases: SharedNativeServiceLeasesHeldByNativeCode,
 ) -> Arc<ModuleHostOfOneNode> {
     let capture_device_access_prompting = CaptureDeviceAccessPrompting::of_this_helper_process();
     let host_capabilities_json = serde_json::json!({
@@ -193,6 +204,10 @@ fn module_host_of_one_node(
                 surface_import_iosurface,
                 surface_write_from_host_memory,
                 surface_lend_by_surface_id,
+                shared_native_service_lease_acquire,
+                shared_native_service_lease_state,
+                shared_native_service_lease_release,
+                node_fail_unrecoverably,
                 virtual_camera_stream_open,
                 virtual_camera_stream_offer_extent,
                 virtual_camera_stream_write_yuyv_frame,
@@ -212,6 +227,7 @@ fn module_host_of_one_node(
             ),
             surfaces_lent_to_native_code,
             audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode::default(),
+            shared_native_service_leases,
             virtual_camera_streams: VirtualCameraStreamsOpenedForOneNode::default(),
         },
     )
@@ -812,4 +828,92 @@ unsafe extern "C" fn surface_write_from_host_memory(
         Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
+}
+
+unsafe extern "C" fn shared_native_service_lease_acquire(
+    node_host: *mut c_void,
+    service_name: ModuleHostTableUtf8,
+    granted_lease: *mut ModuleHostTableSharedNativeServiceLease,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a retained node host.
+    let node_host = unsafe { node_host_of(node_host) };
+    // SAFETY: the SDK hands a view live for the call.
+    let service_name = match unsafe { service_name.as_str() } {
+        Ok(service_name) => service_name,
+        Err(_) => return unsafe { refuse(error_message, "the service name is not UTF-8") },
+    };
+    let Some(granted_lease) = (unsafe { granted_lease.as_mut() }) else {
+        return unsafe { refuse(error_message, "no lease was handed to fill") };
+    };
+    match node_host.shared_native_service_leases.acquire(service_name) {
+        Ok(lease) => {
+            *granted_lease = lease;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn shared_native_service_lease_state(
+    node_host: *mut c_void,
+    lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a retained node host.
+    let node_host = unsafe { node_host_of(node_host) };
+    match node_host.shared_native_service_leases.state(lease) {
+        Ok(SharedNativeServiceStateTheParentAnswered::Running) => MODULE_HOST_TABLE_STATUS_OK,
+        Ok(SharedNativeServiceStateTheParentAnswered::StartingAgain) => {
+            MODULE_HOST_TABLE_STATUS_EMPTY
+        }
+        Ok(SharedNativeServiceStateTheParentAnswered::Failed(why)) => {
+            // SAFETY: `error_message` is null or the caller's live buffer.
+            if let Some(error_message) = unsafe { error_message.as_mut() } {
+                error_message.write(&why);
+            }
+            MODULE_HOST_TABLE_STATUS_ENDED
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn node_fail_unrecoverably(
+    _node_host: *mut c_void,
+    reason: ModuleHostTableUtf8,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a view live for the call.
+    let reason = match unsafe { reason.as_str() } {
+        Ok(reason) => reason,
+        Err(_) => return unsafe { refuse(error_message, "the failure's reason is not UTF-8") },
+    };
+    let Some(native_escalate_channel) =
+        HelperProcessNativeEscalateChannel::of_this_helper_process()
+    else {
+        return unsafe {
+            refuse(
+                error_message,
+                "this helper was started without a native escalate channel to its parent, so \
+                 native code cannot fail its node",
+            )
+        };
+    };
+    match native_escalate_channel.request_from_parent(serde_json::json!({
+        "op": "fail_the_node",
+        "reason": reason,
+    })) {
+        Ok(_) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn shared_native_service_lease_release(
+    node_host: *mut c_void,
+    lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+) {
+    // SAFETY: the SDK hands a retained node host.
+    unsafe { node_host_of(node_host) }
+        .shared_native_service_leases
+        .release(lease);
 }

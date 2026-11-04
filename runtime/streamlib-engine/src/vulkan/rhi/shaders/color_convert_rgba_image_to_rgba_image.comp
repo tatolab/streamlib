@@ -1,0 +1,25 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// Sampled RGBA or BGRA texture source → RGBA storage-image dest, texel for
+// texel. A sampled BGRA image reads back in RGBA order, so the swizzle is
+// the sampler's.
+//
+// Bindings:
+//   0 — `sampler2D color_input` (fetched by integer texel, never filtered).
+//   1 — `writeonly image2D rgba_output`.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D color_input;
+
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(rgba_output);
+    if (pixel.x >= extent.x || pixel.y >= extent.y) return;
+    imageStore(rgba_output, pixel, texelFetch(color_input, pixel, 0));
+}

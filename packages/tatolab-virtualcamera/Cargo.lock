@@ -126,7 +126,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "pyo3",
  "tracing",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-virtualcamera"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "pyo3",
  "tatolab-module-sdk",

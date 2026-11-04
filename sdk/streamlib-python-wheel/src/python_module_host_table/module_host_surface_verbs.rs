@@ -141,7 +141,10 @@ impl SurfacesLentToNativeCode {
         &self,
         dma_buf_import: &ModuleHostTableDmaBufImport,
     ) -> Result<ModuleHostTableSurfaceHandle, String> {
-        use crate::python_helper_process_pixel_exchange::foreign_dma_buf_plane_layout;
+        use crate::python_helper_process_pixel_exchange::{
+            DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
+            foreign_dma_buf_plane_layout,
+        };
         use streamlib::sdk::rhi::PixelFormat;
 
         let plane_count = dma_buf_import.plane_count as usize;
@@ -155,22 +158,24 @@ impl SurfacesLentToNativeCode {
         let pixel_format_name = unsafe { dma_buf_import.pixel_format.as_str() }
             .map_err(|not_utf8| format!("a pixel format name is UTF-8: {not_utf8}"))?;
         let pixel_format = PixelFormat::parse_wire_name(pixel_format_name)?;
-        let (allocation_byte_size, planes) = foreign_dma_buf_plane_layout(
-            pixel_format,
-            dma_buf_import.width,
-            dma_buf_import.height,
-            Some(dma_buf_import.allocation_byte_size),
-            Some(dma_buf_import.plane_offsets_bytes[..plane_count].to_vec()),
-            Some(dma_buf_import.plane_strides_bytes[..plane_count].to_vec()),
-            dma_buf_import.drm_format_modifier,
-        )?;
+        let plane_offsets_bytes = &dma_buf_import.plane_offsets_bytes[..plane_count];
+        let plane_strides_bytes = &dma_buf_import.plane_strides_bytes[..plane_count];
         let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
             "this helper was started without its surface-share socket, so it adopts no \
              DMA-BUF"
                 .to_string()
         })?;
-        let adopted_surface_id = surface_share_client
-            .register_foreign_dma_buf(
+        let adopted_surface_id = if dma_buf_import.drm_format_modifier == DRM_FORMAT_MOD_LINEAR {
+            let (allocation_byte_size, planes) = foreign_dma_buf_plane_layout(
+                pixel_format,
+                dma_buf_import.width,
+                dma_buf_import.height,
+                Some(dma_buf_import.allocation_byte_size),
+                Some(plane_offsets_bytes.to_vec()),
+                Some(plane_strides_bytes.to_vec()),
+                dma_buf_import.drm_format_modifier,
+            )?;
+            surface_share_client.register_foreign_dma_buf(
                 dma_buf_import.fd,
                 dma_buf_import.width,
                 dma_buf_import.height,
@@ -178,7 +183,20 @@ impl SurfacesLentToNativeCode {
                 allocation_byte_size,
                 &planes,
             )
-            .map_err(|refusal| refusal.to_string())?;
+        } else {
+            let texture = ForeignDmaBufTextureWithATiledModifier::described_by(
+                pixel_format,
+                dma_buf_import.width,
+                dma_buf_import.height,
+                dma_buf_import.allocation_byte_size,
+                plane_offsets_bytes,
+                plane_strides_bytes,
+                dma_buf_import.drm_format_modifier,
+            )?;
+            surface_share_client
+                .register_foreign_dma_buf_texture_with_a_tiled_modifier(dma_buf_import.fd, &texture)
+        }
+        .map_err(|refusal| refusal.to_string())?;
         Ok(self.lend(
             adopted_surface_id,
             SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface,

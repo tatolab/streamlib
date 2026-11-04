@@ -15,8 +15,9 @@
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
 //! channel, with no interpreter on either end, as do the IOSurface import
-//! minor 4 adds, the host-memory write minor 5 adds and the lend by surface
-//! id minor 6 adds. The virtual camera verbs minor 7 adds act in the helper
+//! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
+//! id minor 6 adds and the shared native service leases and node failure
+//! minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
 //! itself.
 
 use std::ffi::{CStr, c_void};
@@ -26,7 +27,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 7;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 8;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -115,14 +116,36 @@ pub struct ModuleHostTableSurfaceHandle {
     pub value: u64,
 }
 
+/// A lease on one of the runtime's shared native services, valid until
+/// [`ModuleHostTable::shared_native_service_lease_release`]; `0` names none.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableSharedNativeServiceLeaseHandle {
+    pub value: u64,
+}
+
+/// What a granted lease names. Its text is the host's, alive until the lease
+/// is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableSharedNativeServiceLease {
+    pub lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+    /// The Unix socket the service accepts this node's connections on.
+    pub endpoint_socket_path: ModuleHostTableUtf8,
+    /// The stream the lease was granted to, which the service keys the
+    /// node's state by.
+    pub tenant_stream_id: ModuleHostTableUtf8,
+}
+
 /// The most planes one [`ModuleHostTableDmaBufImport`] describes.
 pub const MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES: usize = 4;
 
 /// One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
 ///
 /// `fd` stays the caller's: the host dups it. Offsets and strides past
-/// `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
-/// refused.
+/// `plane_count` are ignored. A `drm_format_modifier` other than linear (`0`)
+/// is taken for one plane of `rgba32` or `bgra32` only, which the host imports
+/// as a texture laid out by that modifier.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleHostTableDmaBufImport {
@@ -328,7 +351,7 @@ pub type ModuleHostTableAudioBlockRequestedByDeviceCallback = unsafe extern "C" 
 );
 
 /// A virtual camera the host opened for the module, valid until it is closed;
-/// `0` names no camera. Minor 7.
+/// `0` names no camera. Minor 8.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleHostTableVirtualCameraStreamHandle {
@@ -566,7 +589,38 @@ pub struct ModuleHostTable {
         lent_surface: *mut ModuleHostTableSurfaceHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 7: register a PipeWire `Video/Source` camera node named
+    /// Minor 7: lease the runtime's shared native service `service_name` for
+    /// this node, the runtime starting it when no node holds a lease on it.
+    /// Refused by name when the runtime offers no such service or it failed.
+    pub shared_native_service_lease_acquire: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        service_name: ModuleHostTableUtf8,
+        granted_lease: *mut ModuleHostTableSharedNativeServiceLease,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 7: [`MODULE_HOST_TABLE_STATUS_OK`] while the leased service runs,
+    /// [`MODULE_HOST_TABLE_STATUS_EMPTY`] while the runtime starts it again,
+    /// and [`MODULE_HOST_TABLE_STATUS_ENDED`], with the reason written, once
+    /// it failed for good.
+    pub shared_native_service_lease_state: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 7: give a lease back; the service stops a grace after its last.
+    pub shared_native_service_lease_release: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+    ),
+    /// Minor 7: fail this node for good with `reason`, which the graph shows;
+    /// the rest of the stream keeps running and the node is not started
+    /// again. The first reason a node gives is the one kept.
+    pub node_fail_unrecoverably: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        reason: ModuleHostTableUtf8,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 8: register a PipeWire `Video/Source` camera node named
     /// `camera_name`, in this process, that any portal-based application can
     /// select. Refused by name where no libpipewire loads, no PipeWire daemon
     /// answers, or the platform is not Linux.
@@ -576,7 +630,7 @@ pub struct ModuleHostTable {
         opened_camera: *mut ModuleHostTableVirtualCameraStreamHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 7: offer one even-width extent as YUY2 frames at
+    /// Minor 8: offer one even-width extent as YUY2 frames at
     /// `frames_per_second`, `0` taking the camera's default; replaces any
     /// extent offered earlier, and consumers re-negotiate.
     pub virtual_camera_stream_offer_extent: unsafe extern "C" fn(
@@ -587,7 +641,7 @@ pub struct ModuleHostTable {
         frames_per_second: u32,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 7: copy one YUY2 picture of the offered extent — `height` rows
+    /// Minor 8: copy one YUY2 picture of the offered extent — `height` rows
     /// `stride_bytes` apart in `yuyv_rows` — into the camera's next free
     /// buffer, stamped `timestamp_ns`, and write what became of it as one of
     /// the `MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*` values. Never waits on a
@@ -601,7 +655,7 @@ pub struct ModuleHostTable {
         frame_presentation: *mut u32,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 7: [`MODULE_HOST_TABLE_STATUS_OK`] while the camera node lives;
+    /// Minor 8: [`MODULE_HOST_TABLE_STATUS_OK`] while the camera node lives;
     /// [`MODULE_HOST_TABLE_STATUS_ENDED`], with the failure written, once
     /// PipeWire dropped it.
     pub virtual_camera_stream_liveness: unsafe extern "C" fn(
@@ -609,7 +663,7 @@ pub struct ModuleHostTable {
         camera: ModuleHostTableVirtualCameraStreamHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// Minor 7: remove the camera node; its handle names nothing after.
+    /// Minor 8: remove the camera node; its handle names nothing after.
     pub virtual_camera_stream_close: unsafe extern "C" fn(
         node_host: *mut c_void,
         camera: ModuleHostTableVirtualCameraStreamHandle,
@@ -990,20 +1044,69 @@ mod layout_regression_tests {
         );
     }
 
-    /// Minor 7 appends its virtual camera verbs after the minor 6 lend.
+    /// Minor 7 appends its shared native service leases and node failure
+    /// after the minor 6 lend.
     #[test]
-    fn the_v1_7_table_appends_its_virtual_camera_verbs_after_every_v1_6_field() {
-        let pointer_slots_appended_at_minor_7 = [
+    fn the_v1_7_table_appends_its_service_leases_and_node_failure_after_every_v1_6_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_acquire),
+            16 + 32 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_state),
+            16 + 33 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_release),
+            16 + 34 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, node_fail_unrecoverably),
+            16 + 35 * POINTER
+        );
+    }
+
+    #[test]
+    fn a_service_lease_is_its_handle_then_its_endpoint_then_its_tenant() {
+        assert_eq!(
+            size_of::<ModuleHostTableSharedNativeServiceLeaseHandle>(),
+            8
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableSharedNativeServiceLease, lease),
+            0
+        );
+        assert_eq!(
+            offset_of!(
+                ModuleHostTableSharedNativeServiceLease,
+                endpoint_socket_path
+            ),
+            8
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableSharedNativeServiceLease, tenant_stream_id),
+            8 + 2 * POINTER
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableSharedNativeServiceLease>(),
+            8 + 4 * POINTER
+        );
+    }
+
+    /// Minor 8 appends its virtual camera verbs after the minor 7 node failure.
+    #[test]
+    fn the_v1_8_table_appends_its_virtual_camera_verbs_after_every_v1_7_field() {
+        let pointer_slots_appended_at_minor_8 = [
             offset_of!(ModuleHostTable, virtual_camera_stream_open),
             offset_of!(ModuleHostTable, virtual_camera_stream_offer_extent),
             offset_of!(ModuleHostTable, virtual_camera_stream_write_yuyv_frame),
             offset_of!(ModuleHostTable, virtual_camera_stream_liveness),
             offset_of!(ModuleHostTable, virtual_camera_stream_close),
         ];
-        for (slot, offset) in pointer_slots_appended_at_minor_7.into_iter().enumerate() {
-            assert_eq!(offset, 16 + (32 + slot) * POINTER, "minor 7 slot {slot}");
+        for (slot, offset) in pointer_slots_appended_at_minor_8.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (36 + slot) * POINTER, "minor 8 slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 37 * POINTER);
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 41 * POINTER);
     }
 
     #[test]

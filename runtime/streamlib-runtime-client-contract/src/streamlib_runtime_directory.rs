@@ -152,6 +152,11 @@ impl StreamlibRuntimeDirectory {
     pub fn relays_directory(&self) -> PathBuf {
         self.path.join("relays")
     }
+
+    /// The directory each shared native service keeps its socket and pidfile in.
+    pub fn shared_native_services_directory(&self) -> PathBuf {
+        self.path.join("services")
+    }
 }
 
 /// The real uid of this process.

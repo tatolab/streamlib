@@ -459,7 +459,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "libc",
  "objc2",
@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-h264"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "pyo3",
  "streamlib-owned-device-video-codec-nodes",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-owned-device-video-codec-nodes"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "objc2-core-foundation",
  "objc2-core-media",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "libc",
  "mach2",
@@ -515,14 +515,14 @@ dependencies = [
 
 [[package]]
 name = "streamlib-video-bitstream"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "streamlib-vulkan-video"
-version = "0.68.21"
+version = "0.68.24"
 dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-video-bitstream",
@@ -561,7 +561,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "pyo3",
  "tracing",

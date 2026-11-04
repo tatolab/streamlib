@@ -27,6 +27,16 @@ pub const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/
 /// alike.
 pub const WATCH_PAGE_DIRECTORY_NAME: &str = "watch";
 
+/// The directory the browser host and the CEF runtime it loads are staged in,
+/// beside the lend.
+pub const BROWSER_HOST_DIRECTORY_NAME: &str = "browser-host";
+
+/// The browser host's executable, in its directory.
+pub const BROWSER_HOST_EXECUTABLE_FILE_NAME: &str = "tatolab-browser-host";
+
+/// The name a node leases the browser host by, as `tatolab-browser` spells it.
+pub const BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "browser-host";
+
 /// The lent `tatolab.runtime` package, relative to the lend.
 pub const LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND: &str = "tatolab/runtime";
 
@@ -97,6 +107,17 @@ pub fn lend_directory_in_the_runtime_unit(runtime_unit_root: &Path) -> PathBuf {
     runtime_unit_root.join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
 }
 
+/// The browser host's executable beside the lend at `lend_directory`, or `None`
+/// for a lend at the filesystem root.
+pub fn browser_host_executable_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(BROWSER_HOST_DIRECTORY_NAME)
+            .join(BROWSER_HOST_EXECUTABLE_FILE_NAME),
+    )
+}
+
 /// The preview page's directory beside the lend at `lend_directory`, or `None`
 /// for a lend at the filesystem root.
 pub fn watch_page_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
@@ -162,6 +183,18 @@ mod tests {
         assert_eq!(
             BUNDLED_VULKAN_DRIVER_FILE_NAMES,
             ["libvulkan.so.1", "libvulkan_lvp.so", "lvp_icd.x86_64.json"]
+        );
+    }
+
+    #[test]
+    fn the_browser_host_sits_in_its_own_directory_beside_the_lend() {
+        assert_eq!(
+            browser_host_executable_beside_the_lend(&lend_directory_in_the_runtime_unit(
+                Path::new("/opt/tatolab")
+            )),
+            Some(PathBuf::from(
+                "/opt/tatolab/lib/tatolab/browser-host/tatolab-browser-host"
+            ))
         );
     }
 

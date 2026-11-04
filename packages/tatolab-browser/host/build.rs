@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
-//! The extension finds `libcef.so` in the CEF runtime the wheel ships beside it.
+//! The host finds `libcef.so` beside itself, in the CEF runtime it is staged into.
 
 fn main() {
-    println!("cargo::rustc-link-arg-cdylib=-Wl,-rpath,$ORIGIN/cef");
+    println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
 }

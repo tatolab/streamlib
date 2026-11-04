@@ -1,4 +1,4 @@
 /target
 /.venv
-# Staged from the CEF distribution by `stage_cef_runtime.py`.
+# CEF belongs to the browser host and never ships in this wheel.
 /python/tatolab/browser/cef/

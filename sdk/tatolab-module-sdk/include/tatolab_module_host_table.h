@@ -20,8 +20,9 @@
  * which attaches to the interpreter for its round trip to the parent. The
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
  * channel, with no interpreter on either end, as do the IOSurface import
- * minor 4 adds, the host-memory write minor 5 adds and the lend by surface
- * id minor 6 adds. The virtual camera verbs minor 7 adds act in the helper
+ * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
+ * id minor 6 adds and the shared native service leases and node failure
+ * minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
  * itself.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
@@ -43,7 +44,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(7)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(8)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -193,6 +194,31 @@ typedef struct ModuleHostTableSurfaceHandle {
 } ModuleHostTableSurfaceHandle;
 
 /**
+ * A lease on one of the runtime's shared native services, valid until
+ * `ModuleHostTable.shared_native_service_lease_release`; `0` names none.
+ */
+typedef struct ModuleHostTableSharedNativeServiceLeaseHandle {
+    uint64_t value;
+} ModuleHostTableSharedNativeServiceLeaseHandle;
+
+/**
+ * What a granted lease names. Its text is the host's, alive until the lease
+ * is released.
+ */
+typedef struct ModuleHostTableSharedNativeServiceLease {
+    ModuleHostTableSharedNativeServiceLeaseHandle lease;
+    /**
+     * The Unix socket the service accepts this node's connections on.
+     */
+    ModuleHostTableUtf8 endpoint_socket_path;
+    /**
+     * The stream the lease was granted to, which the service keys the
+     * node's state by.
+     */
+    ModuleHostTableUtf8 tenant_stream_id;
+} ModuleHostTableSharedNativeServiceLease;
+
+/**
  * The most planes one `ModuleHostTableDmaBufImport` describes.
  */
 #define MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES ((size_t)4)
@@ -201,8 +227,9 @@ typedef struct ModuleHostTableSurfaceHandle {
  * One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
  *
  * `fd` stays the caller's: the host dups it. Offsets and strides past
- * `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
- * refused.
+ * `plane_count` are ignored. A `drm_format_modifier` other than linear (`0`)
+ * is taken for one plane of `rgba32` or `bgra32` only, which the host imports
+ * as a texture laid out by that modifier.
  */
 typedef struct ModuleHostTableDmaBufImport {
     int32_t fd;
@@ -460,7 +487,7 @@ typedef void (*ModuleHostTableAudioBlockRequestedByDeviceCallback)(void *callbac
 
 /**
  * A virtual camera the host opened for the module, valid until it is closed;
- * `0` names no camera. Minor 7.
+ * `0` names no camera. Minor 8.
  */
 typedef struct ModuleHostTableVirtualCameraStreamHandle {
     uint64_t value;
@@ -652,20 +679,43 @@ typedef struct ModuleHostTable {
      */
     ModuleHostTableStatus (*surface_lend_by_surface_id)(void *node_host, ModuleHostTableUtf8 surface_id, ModuleHostTableSurfaceHandle *lent_surface, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 7: register a PipeWire `Video/Source` camera node named
+     * Minor 7: lease the runtime's shared native service `service_name` for
+     * this node, the runtime starting it when no node holds a lease on it.
+     * Refused by name when the runtime offers no such service or it failed.
+     */
+    ModuleHostTableStatus (*shared_native_service_lease_acquire)(void *node_host, ModuleHostTableUtf8 service_name, ModuleHostTableSharedNativeServiceLease *granted_lease, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 7: `MODULE_HOST_TABLE_STATUS_OK` while the leased service runs,
+     * `MODULE_HOST_TABLE_STATUS_EMPTY` while the runtime starts it again,
+     * and `MODULE_HOST_TABLE_STATUS_ENDED`, with the reason written, once
+     * it failed for good.
+     */
+    ModuleHostTableStatus (*shared_native_service_lease_state)(void *node_host, ModuleHostTableSharedNativeServiceLeaseHandle lease, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 7: give a lease back; the service stops a grace after its last.
+     */
+    void (*shared_native_service_lease_release)(void *node_host, ModuleHostTableSharedNativeServiceLeaseHandle lease);
+    /**
+     * Minor 7: fail this node for good with `reason`, which the graph shows;
+     * the rest of the stream keeps running and the node is not started
+     * again. The first reason a node gives is the one kept.
+     */
+    ModuleHostTableStatus (*node_fail_unrecoverably)(void *node_host, ModuleHostTableUtf8 reason, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: register a PipeWire `Video/Source` camera node named
      * `camera_name`, in this process, that any portal-based application can
      * select. Refused by name where no libpipewire loads, no PipeWire daemon
      * answers, or the platform is not Linux.
      */
     ModuleHostTableStatus (*virtual_camera_stream_open)(void *node_host, ModuleHostTableUtf8 camera_name, ModuleHostTableVirtualCameraStreamHandle *opened_camera, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 7: offer one even-width extent as YUY2 frames at
+     * Minor 8: offer one even-width extent as YUY2 frames at
      * `frames_per_second`, `0` taking the camera's default; replaces any
      * extent offered earlier, and consumers re-negotiate.
      */
     ModuleHostTableStatus (*virtual_camera_stream_offer_extent)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, uint32_t width, uint32_t height, uint32_t frames_per_second, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 7: copy one YUY2 picture of the offered extent — `height` rows
+     * Minor 8: copy one YUY2 picture of the offered extent — `height` rows
      * `stride_bytes` apart in `yuyv_rows` — into the camera's next free
      * buffer, stamped `timestamp_ns`, and write what became of it as one of
      * the `MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*` values. Never waits on a
@@ -673,13 +723,13 @@ typedef struct ModuleHostTable {
      */
     ModuleHostTableStatus (*virtual_camera_stream_write_yuyv_frame)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, ModuleHostTableBytes yuyv_rows, uint32_t stride_bytes, int64_t timestamp_ns, uint32_t *frame_presentation, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 7: `MODULE_HOST_TABLE_STATUS_OK` while the camera node lives;
+     * Minor 8: `MODULE_HOST_TABLE_STATUS_OK` while the camera node lives;
      * `MODULE_HOST_TABLE_STATUS_ENDED`, with the failure written, once
      * PipeWire dropped it.
      */
     ModuleHostTableStatus (*virtual_camera_stream_liveness)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, ModuleHostTableErrorMessage *error_message);
     /**
-     * Minor 7: remove the camera node; its handle names nothing after.
+     * Minor 8: remove the camera node; its handle names nothing after.
      */
     void (*virtual_camera_stream_close)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera);
 } ModuleHostTable;

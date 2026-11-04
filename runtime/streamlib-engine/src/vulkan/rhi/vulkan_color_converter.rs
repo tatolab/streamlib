@@ -17,9 +17,10 @@ use parking_lot::Mutex;
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, ComputeBindingSpec,
-    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture,
+    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture, TextureFormat,
 };
 use crate::core::{Error, Result};
+use crate::host_rhi::HostTextureExt as _;
 
 use super::{HostVulkanDevice, VulkanComputeKernel};
 
@@ -32,6 +33,11 @@ pub const COLOR_CONVERTER_WORKGROUP_SIZE: u32 = 16;
 const BUFFER_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_buffer(0), // YCbCr / RGB byte input
     ComputeBindingSpec::storage_image(1),  // RGBA output
+];
+
+const IMAGE_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
+    ComputeBindingSpec::sampled_texture(0), // RGBA or BGRA input, fetched by texel
+    ComputeBindingSpec::storage_image(1),   // RGBA output
 ];
 
 const IMAGE_TO_BYTE_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
@@ -79,6 +85,7 @@ pub struct VulkanColorConverter {
     buffer_to_image_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
     image_to_yuyv_buffer_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
     image_to_nv12_buffer_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
+    image_to_image_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
 }
 
 impl VulkanColorConverter {
@@ -97,6 +104,7 @@ impl VulkanColorConverter {
             buffer_to_image_kernel: Mutex::new(None),
             image_to_yuyv_buffer_kernel: Mutex::new(None),
             image_to_nv12_buffer_kernel: Mutex::new(None),
+            image_to_image_kernel: Mutex::new(None),
         })
     }
 
@@ -308,6 +316,70 @@ impl VulkanColorConverter {
             info, width, height, dst_layout,
         );
         kernel.set_push_constants_value(&push)?;
+        Ok(kernel)
+    }
+
+    /// Bind a sampled RGBA or BGRA texture source and an RGBA storage-image
+    /// destination of the same extent on the image→image kernel, and return
+    /// it for the caller to dispatch over `⌈width / 16⌉ × ⌈height / 16⌉`
+    /// groups.
+    pub fn prepare_image_to_image_storage(
+        &self,
+        src: &Texture,
+        dst: &Texture,
+    ) -> Result<Arc<VulkanComputeKernel>> {
+        if !matches!(self.src_format, PixelFormat::Rgba32 | PixelFormat::Bgra32)
+            || self.dst_format != PixelFormat::Rgba32
+        {
+            return Err(Error::NotSupported(format!(
+                "color converter image→image: {:?} → {:?} is not RGBA or BGRA → RGBA",
+                self.src_format, self.dst_format
+            )));
+        }
+        if (src.width(), src.height()) != (dst.width(), dst.height()) {
+            return Err(Error::Configuration(format!(
+                "color converter image→image: source is {}x{} and destination {}x{}; the \
+                 conversion scales nothing",
+                src.width(),
+                src.height(),
+                dst.width(),
+                dst.height()
+            )));
+        }
+        if dst.format() != TextureFormat::Rgba8Unorm {
+            return Err(Error::Configuration(format!(
+                "color converter image→image: destination is {:?}; the kernel writes rgba8_unorm",
+                dst.format()
+            )));
+        }
+        if src.vulkan_inner().image() == dst.vulkan_inner().image() {
+            return Err(Error::Configuration(
+                "color converter image→image: the source and destination are one image, which \
+                 cannot be sampled and written in one dispatch"
+                    .to_string(),
+            ));
+        }
+        let kernel = kernel_built_once(&self.image_to_image_kernel, || {
+            let label = format!(
+                "color_convert_rgba_image_to_rgba_image:{:?}_to_{:?}",
+                self.src_format, self.dst_format
+            );
+            VulkanComputeKernel::new(
+                &self.vulkan_device,
+                &ComputeKernelDescriptor {
+                    entry_point: "main",
+                    label: label.as_str(),
+                    spv: include_bytes!(concat!(
+                        env!("OUT_DIR"),
+                        "/color_convert_rgba_image_to_rgba_image.spv"
+                    )),
+                    bindings: IMAGE_TO_IMAGE_BINDINGS,
+                    push_constant_size: 0,
+                },
+            )
+        })?;
+        kernel.set_sampled_texture(0, src)?;
+        kernel.set_storage_image(1, dst)?;
         Ok(kernel)
     }
 
@@ -1102,6 +1174,117 @@ mod tests {
             .wait_and_read(ticket, u64::MAX)
             .expect("readback wait")
             .to_vec()
+    }
+
+    /// A sampled BGRA texture lands in an RGBA storage image texel for
+    /// texel, its channels in RGBA order, at an extent no workgroup divides.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_bgra_texture_converts_into_an_rgba_texture_in_rgba_order() {
+        let Some(device) = try_device() else { return };
+        let (width, height) = (34u32, 7u32);
+        let mut bgra = vec![0u8; (width * height * 4) as usize];
+        for (i, px) in bgra.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let x = (i as u32) % width;
+            let y = (i as u32) / width;
+            px[0] = (x * 7 + y * 3) as u8;
+            px[1] = (255 - x * 5) as u8;
+            px[2] = (y * 37 + 11) as u8;
+            px[3] = (128 + x) as u8;
+        }
+        let staging = HostVulkanBuffer::new_storage_buffer_host_visible(&device, bgra.len() as u64)
+            .expect("staging buffer");
+        unsafe {
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), staging.mapped_ptr(), bgra.len());
+        }
+        let source = HostVulkanTexture::new(
+            &device,
+            &TextureDescriptor {
+                width,
+                height,
+                format: TextureFormat::Bgra8Unorm,
+                usage: TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING,
+                label: Some("color-converter-test-bgra-source"),
+            },
+        )
+        .expect("bgra source texture");
+        let uploaded =
+            unsafe { device.upload_buffer_to_image(staging.buffer(), &source, width, height) }
+                .expect("upload");
+        assert_eq!(
+            uploaded.final_texture_layout,
+            crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        let source = <Texture as HostTextureExt>::from_vulkan(source);
+        let destination = allocate_storage_target_in_general(&device, width, height);
+
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Bgra32, PixelFormat::Rgba32)
+                .expect("BGRA→RGBA converter");
+        converter
+            .prepare_image_to_image_storage(&source, &destination)
+            .expect("prepare")
+            .dispatch(
+                width.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                1,
+            )
+            .expect("dispatch");
+        let readback = VulkanTextureReadback::new(
+            &device,
+            &TextureReadbackDescriptor {
+                label: "color-converter-image-to-image-readback",
+                format: TextureFormat::Rgba8Unorm,
+                width,
+                height,
+            },
+        )
+        .expect("readback handle");
+        let ticket = readback
+            .submit(&destination, TextureSourceLayout::General)
+            .expect("readback submit");
+        let rgba = readback
+            .wait_and_read(ticket, u64::MAX)
+            .expect("readback wait")
+            .to_vec();
+
+        let expected: Vec<u8> = bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[b, g, r, a]| [r, g, b, a])
+            .collect();
+        assert_eq!(rgba, expected);
+    }
+
+    /// The image→image kernel copies RGBA or BGRA into RGBA and nothing else.
+    #[test]
+    fn the_image_to_image_kernel_refuses_a_ycbcr_source() {
+        let Some(device) = try_device() else { return };
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Nv12FullRange, PixelFormat::Rgba32)
+                .expect("NV12→RGBA converter");
+        let texture = allocate_storage_target_in_general(&device, 4, 4);
+        let Err(refusal) = converter.prepare_image_to_image_storage(&texture, &texture) else {
+            panic!("an NV12 source has no image to sample");
+        };
+        assert!(matches!(refusal, Error::NotSupported(_)), "{refusal:?}");
+    }
+
+    #[test]
+    fn the_image_to_image_kernel_refuses_one_image_as_source_and_destination() {
+        let Some(device) = try_device() else { return };
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Rgba32, PixelFormat::Rgba32)
+                .expect("RGBA→RGBA converter");
+        let texture = allocate_storage_target_in_general(&device, 4, 4);
+        let Err(refusal) = converter.prepare_image_to_image_storage(&texture, &texture) else {
+            panic!("one image cannot be sampled and written in one dispatch");
+        };
+        assert!(refusal.to_string().contains("one image"), "{refusal:?}");
     }
 
     /// NV12 whose Y plane starts past byte 0 of the bound buffer — behind

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.68.24](https://github.com/tatolab/streamlib/compare/v0.68.23...v0.68.24) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** upload each distribution to PyPI on its own, past a refused one ([#3131](https://github.com/tatolab/streamlib/issues/3131)) ([752f7e8](https://github.com/tatolab/streamlib/commit/752f7e8c99f2ee2468db28bd956b9f05b03b6bbe))
+* **release:** upload each distribution to PyPI on its own, past a refused one ([#3131](https://github.com/tatolab/streamlib/issues/3131)) ([05fbc0b](https://github.com/tatolab/streamlib/commit/05fbc0bf3abafddfd2469a626b036f9a990b6dba))
+
+## [0.68.23](https://github.com/tatolab/streamlib/compare/v0.68.22...v0.68.23) (2026-11-04)
+
+
+### Features
+
+* **browser:** one shared browser host per machine, a tab per BrowserSource ([8867746](https://github.com/tatolab/streamlib/commit/8867746db8143224c5f1adf8fc1e87f3b46cc5f3))
+
+## [0.68.22](https://github.com/tatolab/streamlib/compare/v0.68.21...v0.68.22) (2026-11-04)
+
+
+### Features
+
+* the test pattern and virtual camera become modules; the runtime ships no media nodes ([#3123](https://github.com/tatolab/streamlib/issues/3123)) ([1ba4f7f](https://github.com/tatolab/streamlib/commit/1ba4f7f9c7f606db79a11d7c4832ace3666988ad))
+
 ## [0.68.21](https://github.com/tatolab/streamlib/compare/v0.68.20...v0.68.21) (2026-11-04)
 
 

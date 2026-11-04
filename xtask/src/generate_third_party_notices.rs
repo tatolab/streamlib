@@ -735,7 +735,10 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         notices_appended += projects_fetched;
     }
     if matches!(target, NoticesGenerationTarget::ExtensionPackage { .. })
-        && extension_lockfile_resolves(&project_root, CEF_BINDINGS_CRATE_NAME)?
+        && root_package_closure_holds(
+            &crate::run_cargo_metadata_resolve_document(&project_root)?,
+            CEF_BINDINGS_CRATE_NAME,
+        )?
     {
         let cef_binary_distribution_root =
             std::env::var_os(CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE)
@@ -1039,6 +1042,59 @@ const CEF_LICENCE_FILE_NAME: &str = "LICENSE.txt";
 /// The file at the root of every CEF binary distribution listing Chromium's
 /// own third-party licences, which the extension's wheel ships beside CEF.
 const CHROMIUM_CREDITS_FILE_NAME: &str = "CREDITS.html";
+
+/// Whether the closure of the manifest's own package, the crate its wheel
+/// builds, holds `package_name`; a workspace member beside it, such as a
+/// helper binary staged elsewhere, does not count.
+fn root_package_closure_holds(
+    cargo_metadata: &serde_json::Value,
+    package_name: &str,
+) -> Result<bool> {
+    let resolve = cargo_metadata
+        .get("resolve")
+        .context("cargo metadata answered no resolve graph")?;
+    let root_package_id = resolve
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .context("the manifest has no root package whose closure a wheel builds")?;
+    let dependency_ids_by_package_id: std::collections::HashMap<&str, Vec<&str>> = resolve
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .context("cargo metadata's resolve graph has no nodes")?
+        .iter()
+        .filter_map(|node| {
+            let package_id = node.get("id")?.as_str()?;
+            let dependency_ids = node
+                .get("dependencies")?
+                .as_array()?
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            Some((package_id, dependency_ids))
+        })
+        .collect();
+    let package_names_by_id: std::collections::HashMap<&str, &str> = cargo_metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .context("cargo metadata answered no packages")?
+        .iter()
+        .filter_map(|package| Some((package.get("id")?.as_str()?, package.get("name")?.as_str()?)))
+        .collect();
+    let mut package_ids_to_visit = vec![root_package_id];
+    let mut package_ids_visited = std::collections::HashSet::new();
+    while let Some(package_id) = package_ids_to_visit.pop() {
+        if !package_ids_visited.insert(package_id) {
+            continue;
+        }
+        if package_names_by_id.get(package_id) == Some(&package_name) {
+            return Ok(true);
+        }
+        if let Some(dependency_ids) = dependency_ids_by_package_id.get(package_id) {
+            package_ids_to_visit.extend(dependency_ids.iter().copied());
+        }
+    }
+    Ok(false)
+}
 
 /// Whether the extension's own lockfile resolves `package_name`.
 fn extension_lockfile_resolves(extension_project_root: &Path, package_name: &str) -> Result<bool> {
@@ -1415,12 +1471,49 @@ mod tests {
         );
     }
 
+    fn cargo_metadata_of_a_wheel_crate_beside_a_workspace_member(
+        wheel_crate_dependencies: &[&str],
+    ) -> serde_json::Value {
+        let package = |name: &str| serde_json::json!({"id": format!("{name}-id"), "name": name});
+        let node = |name: &str, dependencies: &[&str]| {
+            serde_json::json!({
+                "id": format!("{name}-id"),
+                "dependencies": dependencies.iter().map(|dependency| format!("{dependency}-id")).collect::<Vec<_>>(),
+            })
+        };
+        let mut packages = vec![package("wheel"), package("host"), package("cef-dll-sys")];
+        packages.extend(wheel_crate_dependencies.iter().copied().map(package));
+        let mut nodes = vec![
+            node("wheel", wheel_crate_dependencies),
+            node("host", &["cef-dll-sys"]),
+            node("cef-dll-sys", &[]),
+        ];
+        nodes.extend(wheel_crate_dependencies.iter().map(|name| node(name, &[])));
+        serde_json::json!({
+            "packages": packages,
+            "resolve": {"root": "wheel-id", "nodes": nodes},
+        })
+    }
+
     #[test]
-    fn an_extension_resolving_the_cef_bindings_is_told_apart_from_one_that_does_not() {
-        let browser_root = extension_root_whose_lockfile_resolves(&["pyo3", "cef-dll-sys"]);
-        let camera_root = extension_root_whose_lockfile_resolves(&["pyo3", "v4l"]);
-        assert!(extension_lockfile_resolves(browser_root.path(), CEF_BINDINGS_CRATE_NAME).unwrap());
-        assert!(!extension_lockfile_resolves(camera_root.path(), CEF_BINDINGS_CRATE_NAME).unwrap());
+    fn only_cef_the_wheel_crate_itself_reaches_counts() {
+        assert!(
+            !root_package_closure_holds(
+                &cargo_metadata_of_a_wheel_crate_beside_a_workspace_member(&["pyo3"]),
+                CEF_BINDINGS_CRATE_NAME
+            )
+            .unwrap()
+        );
+        assert!(
+            root_package_closure_holds(
+                &cargo_metadata_of_a_wheel_crate_beside_a_workspace_member(&[
+                    "pyo3",
+                    "cef-dll-sys"
+                ]),
+                CEF_BINDINGS_CRATE_NAME
+            )
+            .unwrap()
+        );
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
+pub mod stage_browser_host;
 pub mod stage_local_relay;
 pub mod stage_runtime_unit_uv;
 pub mod stage_watch_page;
@@ -702,6 +703,14 @@ enum Commands {
     /// See [`stage_watch_page`].
     StageWatchPage,
 
+    /// Build the browser host and its CEF subprocess from
+    /// `packages/tatolab-browser`'s own lockfile against the CEF distribution
+    /// `CEF_PATH` names, and stage them with the CEF runtime into the runtime
+    /// unit's `lib/tatolab/browser-host/`, which `build-runtime` also stages.
+    /// Without `CEF_PATH` the unit carries no browser host. See
+    /// [`stage_browser_host`].
+    StageBrowserHost,
+
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
     /// lock, with the three bug-injection modes that keep either gate
@@ -821,6 +830,9 @@ fn main() -> Result<()> {
             stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;
         }
         Commands::StageWatchPage => stage_watch_page::stage_the_watch_page(&workspace_root()?)?,
+        Commands::StageBrowserHost => {
+            stage_browser_host::stage_the_browser_host(&workspace_root()?)?;
+        }
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?

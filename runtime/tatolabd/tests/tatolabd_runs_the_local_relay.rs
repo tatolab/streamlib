@@ -65,7 +65,7 @@ fn the_child_named_by_the_pidfile_in(instance_directory: &Path) -> u32 {
         wait_until(LOCAL_RELAY_BUDGET, || {
             process_id = std::fs::read_to_string(&pidfile)
                 .ok()
-                .and_then(|text| text.trim().parse().ok());
+                .and_then(|text| text.lines().next()?.parse().ok());
             process_id.is_some()
         }),
         "no pidfile at {}",

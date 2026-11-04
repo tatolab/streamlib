@@ -607,7 +607,9 @@ impl GpuContext {
     /// `begin`, which would brick this surface's export for the life of
     /// the cache entry.
     fn submit_staging_copy_and_wait(
+        &self,
         staging: &SurfaceExportStaging,
+        surface_id: &str,
         holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
         record_copy: impl FnOnce(
             &mut RhiCommandRecorder,
@@ -643,16 +645,39 @@ impl GpuContext {
         {
             *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
         }
-        if let Some(settled) = texture_layout_settled_by_this_copy {
+        if let Some(settled) = &texture_layout_settled_by_this_copy {
             settled.registration.update_layout(settled.settled_layout);
         }
         drop(submission);
         staging
             .refill_done_timeline
             .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
+        if let Some(settled) = texture_layout_settled_by_this_copy {
+            self.publish_the_layout_a_staging_copy_settled(surface_id, &settled);
+        }
         Ok(staging
             .refill_done_timeline_crosses_processes
             .then_some(signal_value))
+    }
+
+    /// Publish the layout a copy left a registered texture in to the
+    /// surface-share service, so the next reader in another process acquires
+    /// it from that layout; a surface the service does not hold is
+    /// in-process only and is skipped.
+    fn publish_the_layout_a_staging_copy_settled(
+        &self,
+        surface_id: &str,
+        settled: &TextureLayoutSettledByThisCopy,
+    ) {
+        if let Some(surface_store) = self.surface_store()
+            && let Err(publish_failure) =
+                surface_store.update_image_layout(surface_id, settled.settled_layout)
+        {
+            tracing::debug!(
+                "the layout a staging copy left surface {surface_id} in was not published to \
+                 surface-share: {publish_failure}"
+            );
+        }
     }
 
     /// Refuse a surface whose pool slot this staging was not opened for.
@@ -751,8 +776,9 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        Self::submit_staging_copy_and_wait(
+        self.submit_staging_copy_and_wait(
             staging,
+            surface_id,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_refill(staging, &source, recorder),
         )
@@ -863,8 +889,9 @@ impl GpuContext {
             surface_id,
             StagedWriteBackCoverage::AnEditOfTheFrameReadIn,
         )?;
-        Self::submit_staging_copy_and_wait(
+        self.submit_staging_copy_and_wait(
             staging,
+            surface_id,
             FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
             |recorder| Self::record_write_back(staging, &destination, recorder),
         )
@@ -887,8 +914,9 @@ impl GpuContext {
             surface_id,
             StagedWriteBackCoverage::EveryPixelOfTheFrame,
         )?;
-        Self::submit_staging_copy_and_wait(
+        self.submit_staging_copy_and_wait(
             staging,
+            surface_id,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_write_back(staging, &destination, recorder),
         )

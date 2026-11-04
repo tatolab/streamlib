@@ -1,0 +1,21 @@
+[package]
+name = "tatolab-browser-tab-protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "The versioned protocol a BrowserSource node and the machine's browser host speak over one Unix socket per tab, and the shared frame slots a painted page reaches the node in."
+repository = "https://github.com/tatolab/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+[lib]
+name = "tatolab_browser_tab_protocol"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1.3.1"
+libc = "0.2"
+
+[dev-dependencies]
+rmpv = "1.3.1"

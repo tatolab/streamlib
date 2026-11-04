@@ -310,6 +310,18 @@ impl RhiColorConverterInner {
             .convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
 
+    /// Bind a sampled RGBA or BGRA source and an RGBA storage-image
+    /// destination on the image→image kernel and return it for
+    /// recorder-driven dispatch.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_image_storage(
+        &self,
+        src: &Texture,
+        dst: &Texture,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner.prepare_image_to_image_storage(src, dst)
+    }
+
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -504,6 +516,18 @@ impl RhiColorConverter {
     ) -> Result<()> {
         self.host_inner()
             .convert_buffer_to_image_pixel(src, src_layout, dst, info)
+    }
+
+    /// Bind a sampled RGBA or BGRA source and an RGBA storage-image
+    /// destination on the image→image kernel and return it for
+    /// recorder-driven dispatch.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_image_storage(
+        &self,
+        src: &Texture,
+        dst: &Texture,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner().prepare_image_to_image_storage(src, dst)
     }
 
     /// Bind source / destination / push-constants on the buffer→image

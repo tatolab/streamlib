@@ -88,8 +88,8 @@ stays in Python, unchanged. Recommended because the host table is reached only f
 
 ## ADDED
 
-- **Host table minor 7 — the virtual camera output stream.** Appended after
-  `surface_lend_by_surface_id`:
+- **Host table minor 8 — the virtual camera output stream.** Appended after
+  minor 7's `node_fail_unrecoverably`:
   `virtual_camera_stream_open(node_host, camera_name, opened_camera, error)`,
   `virtual_camera_stream_offer_extent(node_host, camera, width, height, frames_per_second, error)`,
   `virtual_camera_stream_write_yuyv_frame(node_host, camera, yuyv_rows, stride_bytes, timestamp_ns, frame_presentation, error)`,
@@ -98,7 +98,7 @@ stays in Python, unchanged. Recommended because the host table is reached only f
   `ModuleHostTableVirtualCameraStreamHandle`. `frame_presentation` reports published, no
   consumer watching, or every buffer held by the consumer
   (`MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*`). Layout regression tests beside the audio
-  ones; the generated C header regenerates; `tatolab-module-sdk` is 1.7.0 and every extension
+  ones; the generated C header regenerates; `tatolab-module-sdk` is 1.8.0 and every extension
   package is relocked on it. Implemented in `python_module_host_table/virtual_camera_streams.rs`.
 - **`tatolab-module-sdk`'s safe wrapper** `ModuleHostVirtualCameraStream`, beside
   `module_host_audio_playback.rs`.

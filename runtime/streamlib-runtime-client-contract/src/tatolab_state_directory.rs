@@ -117,6 +117,12 @@ impl TatolabStateDirectory {
         self.path.join("runtime-run-in-progress")
     }
 
+    /// `<state>/services/<service name>`, what a shared native service keeps
+    /// across its runs, such as every stream's browser profile.
+    pub fn shared_native_service_state_directory(&self, service_name: &str) -> PathBuf {
+        self.path.join("services").join(service_name)
+    }
+
     /// `<state>/relays.json`, every relay instance the runtime joins at its
     /// start, holding no secret.
     pub fn relay_instances_record_path(&self) -> PathBuf {
