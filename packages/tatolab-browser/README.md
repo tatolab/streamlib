@@ -21,7 +21,10 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   `f32`, stereo, at `audio_sample_rate`). A silent page publishes nothing.
 - A page's renderer that crashes is reloaded by the host. When the host
   itself ends, the runtime starts it again under its restart backoff and each
-  open page opens again in the new host.
+  open page opens again in the new host. The node fails, shown in error in
+  the graph while the rest of the stream runs on, when the renderer crashes
+  more than 5 times in a minute, when the runtime gives up on the host, or
+  when a running host refuses to open the page again for a minute.
 - `BrowserSourceOutputProbe` logs a source's frame rate, its audio's
   continuity and how long a `data` message takes to reach the page's paint.
 

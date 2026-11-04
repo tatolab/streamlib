@@ -110,6 +110,8 @@ pub enum TabProtocolMessageFromBrowserHost {
         level: BrowserHostTabLogLevel,
         message: String,
     },
+    /// The host stopped rendering the page for good, and why; the node fails.
+    PageRenderingGaveUp { reason: String },
 }
 
 impl TabProtocolMessageFromBrowserHost {
@@ -267,6 +269,9 @@ mod tests {
             TabProtocolMessageFromBrowserHost::TabLog {
                 level: BrowserHostTabLogLevel::Warn,
                 message: "renderer gone".to_string(),
+            },
+            TabProtocolMessageFromBrowserHost::PageRenderingGaveUp {
+                reason: "the renderer ended 6 times".to_string(),
             },
         ] {
             let encoded = rmp_serde::to_vec_named(&message).unwrap();

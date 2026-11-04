@@ -22,6 +22,7 @@ mod acquisition;
 mod compute;
 mod device_idle;
 mod export_staging;
+pub(crate) mod failure_the_node_reported_of_itself;
 mod graphics;
 pub(super) mod handle_lifecycle;
 mod helper_log_record;
@@ -92,12 +93,13 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::SetOutputPortCatalogEntry(p) => Some(&p.request_id),
+        EscalateRequest::FailTheNode(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
 
-/// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a catalog-entry
-/// or shared native service lease op — against what the helper's node reaches. Returns
+/// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a catalog-entry,
+/// node failure or shared native service lease op — against what the helper's node reaches. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
 /// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
@@ -151,6 +153,13 @@ pub(crate) fn handle_escalate_op(
         }
         EscalateRequest::ReadInboundLinkCatalogEntry(req) => {
             Some(port_catalog_entry::handle_read_inbound_link_catalog_entry(
+                what_the_node_reaches,
+                rid,
+                req,
+            ))
+        }
+        EscalateRequest::FailTheNode(req) => {
+            Some(failure_the_node_reported_of_itself::handle_fail_the_node(
                 what_the_node_reaches,
                 rid,
                 req,

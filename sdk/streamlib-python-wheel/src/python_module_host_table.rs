@@ -198,6 +198,7 @@ fn module_host_of_one_node(
                 shared_native_service_lease_acquire,
                 shared_native_service_lease_state,
                 shared_native_service_lease_release,
+                node_fail_unrecoverably,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -858,6 +859,36 @@ unsafe extern "C" fn shared_native_service_lease_state(
             }
             MODULE_HOST_TABLE_STATUS_ENDED
         }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn node_fail_unrecoverably(
+    _node_host: *mut c_void,
+    reason: ModuleHostTableUtf8,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a view live for the call.
+    let reason = match unsafe { reason.as_str() } {
+        Ok(reason) => reason,
+        Err(_) => return unsafe { refuse(error_message, "the failure's reason is not UTF-8") },
+    };
+    let Some(native_escalate_channel) =
+        HelperProcessNativeEscalateChannel::of_this_helper_process()
+    else {
+        return unsafe {
+            refuse(
+                error_message,
+                "this helper was started without a native escalate channel to its parent, so \
+                 native code cannot fail its node",
+            )
+        };
+    };
+    match native_escalate_channel.request_from_parent(serde_json::json!({
+        "op": "fail_the_node",
+        "reason": reason,
+    })) {
+        Ok(_) => MODULE_HOST_TABLE_STATUS_OK,
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
 }

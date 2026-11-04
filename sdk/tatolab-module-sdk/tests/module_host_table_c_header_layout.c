@@ -101,7 +101,8 @@ _Static_assert(offsetof(ModuleHostTable, surface_lend_by_surface_id) == POINTER_
 _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_acquire) == POINTER_SLOT(32), "ModuleHostTable.shared_native_service_lease_acquire");
 _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_state) == POINTER_SLOT(33), "ModuleHostTable.shared_native_service_lease_state");
 _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_release) == POINTER_SLOT(34), "ModuleHostTable.shared_native_service_lease_release");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(35), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, node_fail_unrecoverably) == POINTER_SLOT(35), "ModuleHostTable.node_fail_unrecoverably");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(36), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");

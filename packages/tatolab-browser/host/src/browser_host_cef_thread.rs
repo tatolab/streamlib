@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use cef::rc::Rc as _;
 use cef::*;
 use tatolab_browser_page_bridge::{BROWSER_PROCESS_PID_SWITCH_NAME, page_data_dispatch_script};
-use tatolab_browser_tab_protocol::BrowserHostTabLogLevel;
+use tatolab_browser_tab_protocol::{BrowserHostTabLogLevel, TabProtocolMessageFromBrowserHost};
 
 use crate::browser_host_page_handlers::browser_host_page_client;
 use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
@@ -211,14 +211,14 @@ impl OpenTab {
         }
         self.renderer_ends_in_the_window.push_back(now);
         if self.renderer_ends_in_the_window.len() > MOST_RENDERER_ENDS_RELOADED_IN_THE_WINDOW {
-            self.tab.log_to_the_node(
-                BrowserHostTabLogLevel::Error,
-                format!(
-                    "the page's renderer ended {} times in {RENDERER_END_WINDOW:?}; the page is \
-                     no longer reloaded",
-                    self.renderer_ends_in_the_window.len()
-                ),
-            );
+            self.tab
+                .send_to_the_node(&TabProtocolMessageFromBrowserHost::PageRenderingGaveUp {
+                    reason: format!(
+                        "the page's renderer ended {} times in {RENDERER_END_WINDOW:?}; the page \
+                         is no longer reloaded",
+                        self.renderer_ends_in_the_window.len()
+                    ),
+                });
             return;
         }
         self.browser.reload();

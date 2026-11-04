@@ -21,7 +21,8 @@
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
  * channel, with no interpreter on either end, as do the IOSurface import
  * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
- * id minor 6 adds and the shared native service leases minor 7 adds.
+ * id minor 6 adds and the shared native service leases and node failure
+ * minor 7 adds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -668,6 +669,12 @@ typedef struct ModuleHostTable {
      * Minor 7: give a lease back; the service stops a grace after its last.
      */
     void (*shared_native_service_lease_release)(void *node_host, ModuleHostTableSharedNativeServiceLeaseHandle lease);
+    /**
+     * Minor 7: fail this node for good with `reason`, which the graph shows;
+     * the rest of the stream keeps running and the node is not started
+     * again. The first reason a node gives is the one kept.
+     */
+    ModuleHostTableStatus (*node_fail_unrecoverably)(void *node_host, ModuleHostTableUtf8 reason, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

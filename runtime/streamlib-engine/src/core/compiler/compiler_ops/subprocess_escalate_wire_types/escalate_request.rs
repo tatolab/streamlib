@@ -40,6 +40,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "copy_surface_to_surface")]
     CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface),
 
+    #[serde(rename = "fail_the_node")]
+    FailTheNode(EscalateRequestFailTheNode),
+
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
@@ -130,6 +133,18 @@ pub(crate) struct EscalateRequestReadSharedNativeServiceLeaseState {
 pub(crate) struct EscalateRequestReleaseSharedNativeServiceLease {
     /// The `handle_id` the lease was granted under.
     pub(crate) lease_id: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// The helper's node failed in a way it cannot recover from: the graph shows
+/// it in error with `reason`, and the rest of the stream keeps running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestFailTheNode {
+    /// Why the node failed, as the graph shows it.
+    pub(crate) reason: String,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,

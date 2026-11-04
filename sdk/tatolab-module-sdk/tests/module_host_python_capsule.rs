@@ -128,6 +128,13 @@ unsafe extern "C" fn release_no_lease(
     _: tatolab_module_sdk::module_host_table_abi::ModuleHostTableSharedNativeServiceLeaseHandle,
 ) {
 }
+unsafe extern "C" fn refuse_node_failure(
+    _: *mut c_void,
+    _: ModuleHostTableUtf8,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
 unsafe extern "C" fn refuse_acquire(
     _: *mut c_void,
     _: *const tatolab_module_sdk::module_host_table_abi::ModuleHostTableNodeOutputTextureRequest,
@@ -251,6 +258,7 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         shared_native_service_lease_acquire: refuse_lease,
         shared_native_service_lease_state: refuse_lease_state,
         shared_native_service_lease_release: release_no_lease,
+        node_fail_unrecoverably: refuse_node_failure,
     }));
     NonNull::from(table).cast()
 }

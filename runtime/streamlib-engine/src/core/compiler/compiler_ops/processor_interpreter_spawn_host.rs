@@ -1406,6 +1406,12 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         restarted
     }
 
+    fn failure_the_node_reported_of_itself(&self) -> Option<String> {
+        self.what_the_node_reaches
+            .failure_the_node_reported_of_itself
+            .reason()
+    }
+
     fn has_failed_unrecoverably(&self) -> bool {
         // The bridge as well as this host's own flag: between `run` and
         // teardown the parent sends nothing, so a child that dies mid-run is
@@ -1543,6 +1549,7 @@ pub(crate) fn spawn_host_for_processor_node(
                 node.upstream_catalog_entries_by_inbound_link(),
             ),
             shared_native_service_leases: Default::default(),
+            failure_the_node_reported_of_itself: Default::default(),
         },
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
@@ -2356,6 +2363,24 @@ sys.exit(0)
         assert!(why.contains("exit status: 3"), "{why}");
         assert!(why.contains(&format!("pid={helper_process_id}")), "{why}");
         assert!(why.ends_with("RuntimeError: boom"), "{why}");
+    }
+
+    /// The failure a node reports over its bridge reaches the lifecycle loop
+    /// through its spawn host, and a later bridge for the same node keeps it.
+    #[test]
+    fn a_failure_the_node_reports_of_itself_is_read_through_its_spawn_host() {
+        let host = spawn_host_for_test();
+        assert_eq!(host.failure_the_node_reported_of_itself(), None);
+
+        let what_a_later_bridge_reaches = host.what_the_node_reaches.clone();
+        what_a_later_bridge_reaches
+            .failure_the_node_reported_of_itself
+            .record("the page stopped rendering".to_string());
+
+        assert_eq!(
+            host.failure_the_node_reported_of_itself().as_deref(),
+            Some("the page stopped rendering")
+        );
     }
 
     /// A helper the engine stopped itself, or one that is still alive, never

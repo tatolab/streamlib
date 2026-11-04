@@ -97,6 +97,11 @@ impl ProcessorInstance {
         self.0.has_failed_unrecoverably()
     }
 
+    /// Why this processor's node failed itself, once it has.
+    pub fn failure_the_node_reported_of_itself(&self) -> Option<String> {
+        self.0.failure_the_node_reported_of_itself()
+    }
+
     /// Why this processor's helper process died on its own, once noticed.
     pub fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         self.0.why_the_out_of_process_helper_died_on_its_own()

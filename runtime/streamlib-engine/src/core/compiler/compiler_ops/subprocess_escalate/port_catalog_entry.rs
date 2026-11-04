@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use super::failure_the_node_reported_of_itself::FailureTheNodeReportedOfItself;
 use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -22,13 +23,15 @@ use crate::core::output_port_catalog_entries::{
 
 /// What the node a helper-placed processor runs for reaches beside the GPU: its
 /// own output ports' catalog entries, the upstream ones its inbound links
-/// reach, and the helper's leases on the runtime's shared native services.
+/// reach, the helper's leases on the runtime's shared native services, and
+/// the failure the node reported of itself.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) catalog_entries_of_its_output_ports: Arc<CatalogEntriesOfOutputPorts>,
     pub(crate) upstream_catalog_entries_by_its_inbound_links:
         Arc<UpstreamCatalogEntriesByInboundLink>,
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
+    pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
 }
 
 /// Replace the entry the helper's output port carries.

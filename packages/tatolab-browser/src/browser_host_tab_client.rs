@@ -55,6 +55,9 @@ const BROWSER_HOST_RECONNECT_POLL_INTERVAL: Duration = Duration::from_millis(250
 
 /// How long a node waits for the host to come back before it says so again.
 const BROWSER_HOST_RECONNECT_REPORT_INTERVAL: Duration = Duration::from_secs(30);
+/// How long a running browser host may keep refusing to open the page again
+/// before the node fails.
+const LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST: Duration = Duration::from_secs(60);
 
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
 /// How many `data` messages wait for a restarting browser host before the oldest is dropped.
@@ -109,6 +112,7 @@ struct BrowserHostTabOfOneNode {
     audio_stream: Mutex<Option<PageAudioStreamTimeline>>,
     first_frame_refusal_logged: AtomicBool,
     closing: AtomicBool,
+    node_failed: AtomicBool,
 }
 
 /// One open connection to the host: its reading half and the tab's slots.
@@ -120,6 +124,18 @@ struct OpenBrowserHostTabConnection {
 impl BrowserHostTabOfOneNode {
     fn log(&self, level: ModuleHostLogLevel, message: &str) {
         self.module_host.log(level, BROWSER_LOG_TARGET, message);
+    }
+
+    /// Fail this node for good with `reason`; the page stays closed.
+    fn fail_the_node(&self, reason: &str) {
+        self.node_failed.store(true, Ordering::Release);
+        self.log(ModuleHostLogLevel::Error, reason);
+        if let Err(refusal) = self.module_host.fail_the_node_unrecoverably(reason) {
+            self.log(
+                ModuleHostLogLevel::Error,
+                &format!("the runtime was not told the node failed: {refusal}"),
+            );
+        }
     }
 
     fn writer(&self) -> MutexGuard<'_, Option<TabProtocolMessageWriter>> {
@@ -290,6 +306,10 @@ impl BrowserHostTabOfOneNode {
                 }
                 TabProtocolMessageFromBrowserHost::TabLog { level, message } => {
                     self.log(module_log_level_of(level), &message);
+                }
+                TabProtocolMessageFromBrowserHost::PageRenderingGaveUp { reason } => {
+                    self.fail_the_node(&reason);
+                    return;
                 }
                 TabProtocolMessageFromBrowserHost::TabOpened { .. }
                 | TabProtocolMessageFromBrowserHost::TabRefused { .. } => {
@@ -479,7 +499,7 @@ impl BrowserHostTabOfOneNode {
         loop {
             self.serve_the_connection(&mut connection);
             self.end_the_connection();
-            if self.closing.load(Ordering::Acquire) {
+            if self.closing.load(Ordering::Acquire) || self.node_failed.load(Ordering::Acquire) {
                 return;
             }
             self.log(
@@ -503,6 +523,7 @@ impl BrowserHostTabOfOneNode {
     ) -> Option<OpenBrowserHostTabConnection> {
         let mut next_report = Instant::now() + BROWSER_HOST_RECONNECT_REPORT_INTERVAL;
         let mut last_refusal = String::new();
+        let mut refused_by_a_running_browser_host_since: Option<Instant> = None;
         while !self.closing.load(Ordering::Acquire) && !self.module_host.stop_requested() {
             match self.lease.state() {
                 Ok(ModuleHostSharedNativeServiceState::Running) => {
@@ -510,23 +531,32 @@ impl BrowserHostTabOfOneNode {
                         Ok(connection) => return Some(connection),
                         Err(refusal) => last_refusal = refusal,
                     }
+                    let refused_since =
+                        *refused_by_a_running_browser_host_since.get_or_insert_with(Instant::now);
+                    if refused_since.elapsed() >= LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST {
+                        self.fail_the_node(&format!(
+                            "the browser host is running but kept refusing to open the page \
+                             again for {LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST:?}: \
+                             {last_refusal}"
+                        ));
+                        return None;
+                    }
                 }
-                Ok(ModuleHostSharedNativeServiceState::StartingAgain) => {}
+                Ok(ModuleHostSharedNativeServiceState::StartingAgain) => {
+                    refused_by_a_running_browser_host_since = None;
+                }
                 Ok(ModuleHostSharedNativeServiceState::Failed(why)) => {
-                    self.log(
-                        ModuleHostLogLevel::Error,
-                        &format!(
-                            "the browser host failed and the runtime does not start it again, so \
-                             the page stays closed: {why}"
-                        ),
-                    );
+                    self.fail_the_node(&format!(
+                        "the browser host failed and the runtime does not start it again, so \
+                         the page stays closed: {why}"
+                    ));
                     return None;
                 }
                 Err(refusal) => {
-                    self.log(
-                        ModuleHostLogLevel::Error,
-                        &format!("the browser host lease cannot be read, so the page stays closed: {refusal}"),
-                    );
+                    self.fail_the_node(&format!(
+                        "the browser host lease cannot be read, so the page stays closed: \
+                         {refusal}"
+                    ));
                     return None;
                 }
             }
@@ -605,6 +635,7 @@ impl BrowserPageRendering {
             writer_to_the_browser_host: Mutex::new(None),
             audio_stream: Mutex::new(None),
             first_frame_refusal_logged: AtomicBool::new(false),
+            node_failed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
         });
         let connection = tab.open_the_tab_in_the_browser_host()?;

@@ -16,7 +16,8 @@
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
 //! channel, with no interpreter on either end, as do the IOSurface import
 //! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
-//! id minor 6 adds and the shared native service leases minor 7 adds.
+//! id minor 6 adds and the shared native service leases and node failure
+//! minor 7 adds.
 
 use std::ffi::{CStr, c_void};
 
@@ -593,6 +594,14 @@ pub struct ModuleHostTable {
         node_host: *mut c_void,
         lease: ModuleHostTableSharedNativeServiceLeaseHandle,
     ),
+    /// Minor 7: fail this node for good with `reason`, which the graph shows;
+    /// the rest of the stream keeps running and the node is not started
+    /// again. The first reason a node gives is the one kept.
+    pub node_fail_unrecoverably: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        reason: ModuleHostTableUtf8,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTableUtf8 {
@@ -969,9 +978,10 @@ mod layout_regression_tests {
         );
     }
 
-    /// Minor 7 appends its shared native service leases after the minor 6 lend.
+    /// Minor 7 appends its shared native service leases and node failure
+    /// after the minor 6 lend.
     #[test]
-    fn the_v1_7_table_appends_its_service_leases_after_every_v1_6_field() {
+    fn the_v1_7_table_appends_its_service_leases_and_node_failure_after_every_v1_6_field() {
         assert_eq!(
             offset_of!(ModuleHostTable, shared_native_service_lease_acquire),
             16 + 32 * POINTER
@@ -984,7 +994,11 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, shared_native_service_lease_release),
             16 + 34 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 35 * POINTER);
+        assert_eq!(
+            offset_of!(ModuleHostTable, node_fail_unrecoverably),
+            16 + 35 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 36 * POINTER);
     }
 
     #[test]

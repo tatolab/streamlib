@@ -54,6 +54,7 @@ struct StoodUpNodeHost {
     surface_calls: Mutex<Vec<String>>,
     audio_playback: Mutex<StoodUpAudioPlaybackStream>,
     lease_calls: Mutex<Vec<String>>,
+    node_failure_reasons: Mutex<Vec<String>>,
 }
 
 /// What the stood-up host knows of the one playback stream it opens.
@@ -696,6 +697,19 @@ unsafe extern "C" fn record_a_released_lease(
         .push(format!("release {}", lease.value));
 }
 
+unsafe extern "C" fn record_a_node_failure(
+    node_host: *mut c_void,
+    reason: ModuleHostTableUtf8,
+    _error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    node_host_of(node_host)
+        .node_failure_reasons
+        .lock()
+        .unwrap()
+        .push(unsafe { reason.as_str() }.unwrap().to_string());
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
 unsafe extern "C" fn a_verb_added_at_minor_8(_node_host: *mut c_void) -> u32 {
     11
 }
@@ -751,6 +765,7 @@ fn v1_7_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
         shared_native_service_lease_acquire: acquire_lease_7_on_a_service_named_browser_host,
         shared_native_service_lease_state: lease_state_starting_again_after_one_ask,
         shared_native_service_lease_release: record_a_released_lease,
+        node_fail_unrecoverably: record_a_node_failure,
     }
 }
 
@@ -1604,5 +1619,21 @@ fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
     assert_eq!(
         *node_host.lease_calls.lock().unwrap(),
         ["acquire rive-host"]
+    );
+}
+
+#[test]
+fn a_node_fails_itself_with_the_reason_it_gives() {
+    let node_host = stood_up_node_host();
+    let table = v1_7_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    module_host
+        .fail_the_node_unrecoverably("the page's renderer ended 6 times in 60s")
+        .expect("the host records the failure");
+
+    assert_eq!(
+        *node_host.node_failure_reasons.lock().unwrap(),
+        ["the page's renderer ended 6 times in 60s"]
     );
 }
