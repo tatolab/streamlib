@@ -130,7 +130,9 @@ DECIDED and SHIPPED.
   declares it — `paced_by_real_time=True` on `@node`, `paced_by_real_time` in the
   `#[processor]` attribute — and the node catalog shows it. `RelayTrackSource` and the camera,
   microphone, audio-output and relay-publish nodes in `packages/` declare it; a display does not,
-  being a simulation view that presents what arrives. Where such a node may run is Decision B.
+  being a simulation view that presents what arrives. Such a node loads in any stream (Decision B,
+  B3): what it captures is stamped with stream time on arrival, and in a stepped stream it stands
+  outside the step barrier while each step reads the newest it delivered.
   [stream-clocks]
 - **ADDED (Python surface, `tatolab.stream`):** `RealTimeStreamClock`, `ScaledStreamClock`,
   `SteppedStreamClock`, `StreamBuilder.run_on_clock`, and a `StreamClockReading` Protocol on
@@ -228,14 +230,16 @@ says otherwise:
 - **A manual node blocks a live rescale above 1×.** `set_stream_clock_scale` above 1 is refused
   for a stream holding a manual node, naming it, as a stepped stream refuses one at load.
 
-## [NEEDS DECISION] B — a node paced by real time in a scaled or stepped stream
+## DECIDED B — a node paced by real time in a scaled or stepped stream
+
+Owner chose B3, 2026-11-04: admitted, retimed at the edge.
 
 The ADR leaves this to the change that builds it. A recorded source follows any clock; a live
 device cannot: above 1× the frames it has not captured yet do not exist, and below 1× it captures
 more frames per stream second than the stream reads. Through a live device the scene stays
 real-time while the rest of the stream warps.
 
-- **B3 (recommended) — admitted, retimed at the edge.** A node declaring `paced_by_real_time` loads
+- **B3 (chosen) — admitted, retimed at the edge.** A node declaring `paced_by_real_time` loads
   in any stream. What it captures is stamped with stream time on arrival; in a stepped stream it
   stands outside the step barrier and each step reads the newest it delivered; a sink presents
   what arrives. Nothing is refused and every node sees one epoch. A slow-motion replay of a live
@@ -256,9 +260,9 @@ Three tracer bullets, in order, each provable without a GPU:
    ticket 3 (under A1).
 2. **Continuous pacing on stream time and live time warp.** The deadline wait in both runners,
    `set_stream_clock_scale` on every control surface. Proven by a continuous Python node firing
-   at twice the rate after a live scale change, and by the REMOVED check on `sleep_duration`.
+   at half the rate after a live rescale from 0.5× to 0.25×, and by the REMOVED check on `sleep_duration`.
 3. **The step barrier.** Step board, ledger, `taken_bags`, the coordinator, both runners,
-   `pace`, `stop_after_steps`, the manual-node and `paced_by_real_time` refusals, and scaled
+   `pace`, `stop_after_steps`, the manual-node refusal, `paced_by_real_time` retiming per Decision B, and scaled
    above 1× per Decision A. Proven by a stepped stream — a Python continuous source, a slow
    native reactive middle, a Python sink — that runs exactly `n` steps faster than real time
    with every stamp `base + k × step_ns` and nothing dropped.
