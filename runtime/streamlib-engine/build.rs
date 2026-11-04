@@ -194,6 +194,11 @@ fn compile_shaders() {
             "compute",
         ),
         (
+            "src/vulkan/rhi/shaders/color_convert_rgba_image_to_rgba_image.comp",
+            "color_convert_rgba_image_to_rgba_image.spv",
+            "compute",
+        ),
+        (
             "src/vulkan/rhi/shaders/tone_curve.comp",
             "tone_curve.spv",
             "compute",

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use streamlib::sdk::rhi::{PixelFormat, PixelPlanesWithinOneAllocation};
+use streamlib::sdk::rhi::{PixelFormat, PixelPlanesWithinOneAllocation, TextureFormat};
 
 use crate::python_helper_process_pixel_exchange::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
@@ -54,7 +54,7 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
 
 /// `DRM_FORMAT_MOD_LINEAR`: rows laid out one after another at the stated
 /// pitch, the only modifier a buffer read through a plane layout can carry.
-const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+pub(crate) const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 /// The allocation size and plane layout an `import_dma_buf` call describes.
 ///
@@ -155,6 +155,90 @@ pub(crate) fn foreign_dma_buf_plane_layout(
     Ok((allocation_byte_size, planes))
 }
 
+/// `VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT`: a foreign
+/// image laid out by a tiled modifier is only ever read, and a BGRA image
+/// with a vendor's tiling need not support more.
+const FOREIGN_TILED_DMA_BUF_TEXTURE_VK_IMAGE_USAGE: u32 = 0x01 | 0x04;
+
+/// A foreign DMA-BUF holding one RGBA or BGRA image laid out by a tiled DRM
+/// format modifier, as it registers: a texture the parent imports through the
+/// modifier and samples, never a pixel buffer read row by row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForeignDmaBufTextureWithATiledModifier {
+    pub(crate) texture_format: TextureFormat,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) allocation_byte_size: u64,
+    pub(crate) plane_offset_bytes: u64,
+    pub(crate) plane_stride_bytes: u64,
+    pub(crate) drm_format_modifier: u64,
+}
+
+impl ForeignDmaBufTextureWithATiledModifier {
+    /// The texture an `import_dma_buf` call with a tiled `drm_format_modifier`
+    /// describes, refused unless it is one plane of `rgba32` or `bgra32`
+    /// inside a non-empty allocation.
+    pub(crate) fn described_by(
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        allocation_byte_size: u64,
+        plane_offsets_bytes: &[u64],
+        plane_strides_bytes: &[u64],
+        drm_format_modifier: u64,
+    ) -> Result<Self, String> {
+        if drm_format_modifier == DRM_FORMAT_MOD_LINEAR {
+            return Err(
+                "a linear DMA-BUF is read through its plane layout, not as a tiled texture"
+                    .to_string(),
+            );
+        }
+        let texture_format = match pixel_format {
+            PixelFormat::Rgba32 => TextureFormat::Rgba8Unorm,
+            PixelFormat::Bgra32 => TextureFormat::Bgra8Unorm,
+            other => {
+                return Err(format!(
+                    "import_dma_buf takes a tiled drm_format_modifier                      {drm_format_modifier:#x} for rgba32 or bgra32, not {}",
+                    other.wire_name()
+                ));
+            }
+        };
+        if width == 0 || height == 0 {
+            return Err(
+                "import_dma_buf needs a non-zero width and height; the fd carries no \
+                 geometry of its own"
+                    .to_string(),
+            );
+        }
+        let ([plane_offset_bytes], [plane_stride_bytes]) =
+            (plane_offsets_bytes, plane_strides_bytes)
+        else {
+            return Err(format!(
+                "a {} image laid out by drm_format_modifier {drm_format_modifier:#x} is one \
+                 plane, and the import states {} offsets and {} strides",
+                pixel_format.wire_name(),
+                plane_offsets_bytes.len(),
+                plane_strides_bytes.len()
+            ));
+        };
+        if allocation_byte_size == 0 || *plane_offset_bytes >= allocation_byte_size {
+            return Err(format!(
+                "a tiled image's plane at byte {plane_offset_bytes} lies outside its \
+                 {allocation_byte_size}-byte allocation"
+            ));
+        }
+        Ok(Self {
+            texture_format,
+            width,
+            height,
+            allocation_byte_size,
+            plane_offset_bytes: *plane_offset_bytes,
+            plane_stride_bytes: *plane_stride_bytes,
+            drm_format_modifier,
+        })
+    }
+}
+
 impl HelperProcessGpuExchangeClient {
     /// Adopt a foreign DMA-BUF fd as a surface this graph can resolve.
     ///
@@ -237,8 +321,47 @@ impl HelperProcessGpuExchangeClient {
             "plane_strides": [planes.plane_strides_bytes()[0]],
         });
         planes.write_surface_share_fields(&mut check_in_request);
+        self.check_in_a_foreign_dma_buf(&check_in_request, foreign_dma_buf_fd)
+    }
+}
+
+impl HelperProcessGpuExchangeClient {
+    /// Register a foreign DMA-BUF fd holding `texture` with the surface-share
+    /// service as a texture the parent imports through its DRM format
+    /// modifier, and return the surface id the service minted. The caller
+    /// owes the registration its [`Self::unregister_foreign_surface`].
+    pub(crate) fn register_foreign_dma_buf_texture_with_a_tiled_modifier(
+        &self,
+        foreign_dma_buf_fd: RawFd,
+        texture: &ForeignDmaBufTextureWithATiledModifier,
+    ) -> PyResult<String> {
+        let check_in_request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.foreign_surface_registration_runtime_id,
+            "width": texture.width,
+            "height": texture.height,
+            "format": texture.texture_format.wire_name(),
+            "resource_type": "texture",
+            "handle_type": "dma_buf",
+            "plane_sizes": [texture.allocation_byte_size],
+            "plane_offsets": [texture.plane_offset_bytes],
+            "plane_strides": [texture.plane_stride_bytes],
+            "drm_format_modifier": texture.drm_format_modifier,
+            "vk_image_usage": FOREIGN_TILED_DMA_BUF_TEXTURE_VK_IMAGE_USAGE,
+            "vk_image_allocation_size": texture.allocation_byte_size,
+        });
+        self.check_in_a_foreign_dma_buf(&check_in_request, foreign_dma_buf_fd)
+    }
+
+    /// Send `check_in_request` with `foreign_dma_buf_fd` and return the
+    /// surface id the service minted for it.
+    fn check_in_a_foreign_dma_buf(
+        &self,
+        check_in_request: &serde_json::Value,
+        foreign_dma_buf_fd: RawFd,
+    ) -> PyResult<String> {
         let (check_in_response, _no_fds_back) =
-            self.surface_share_request_with_fds(&check_in_request, &[foreign_dma_buf_fd])?;
+            self.surface_share_request_with_fds(check_in_request, &[foreign_dma_buf_fd])?;
         if let Some(check_in_error) = check_in_response
             .get("error")
             .and_then(|value| value.as_str())
