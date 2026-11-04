@@ -24,20 +24,20 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0019-every-key-every-built-in-and-the-audio-camera-opus-and-codec-modules.json",
-        "945a20498a90778ea2eb07be4a29e4e5125fb65b4937545631c2329d50c07b4d",
+        "0023-every-key-and-every-media-module.json",
+        "3c3dbaea4ddaa217f01ae01d6929e883ecfade8891e6883388c76aa7249a01fe",
     ),
     (
-        "0020-every-key-with-exposure-levels-and-the-audio-camera-opus-and-codec-modules.json",
-        "ddb949c446e9f00a283cd6b03f4072054563bccfa6ae8209bf97847a7f5151b3",
+        "0024-every-key-with-exposure-levels-and-every-media-module.json",
+        "ea8271687210c2a1bac338d35b0b004ac78183695180d18eb55e8b92e582635b",
     ),
     (
-        "0021-every-key-with-a-relay-track-source-by-broadcast-and-track-and-the-audio-camera-opus-and-codec-modules.json",
-        "15f198022e490916489c76fe6b078b7018a74ebb3e06d0baffe2ec18c30d0356",
+        "0025-every-key-with-a-relay-track-source-by-broadcast-and-track-and-every-media-module.json",
+        "0e8a327f3da21ee2561f24076ae74b504915b04dc780049fe567d456159e1043",
     ),
     (
-        "0022-every-key-with-a-relay-track-source-reading-with-a-max-age-and-the-audio-camera-opus-and-codec-modules.json",
-        "a4e477790918cfa4fd3c24f605e73b442614d9611ae243def383bea660452428",
+        "0026-every-key-with-a-relay-track-source-reading-with-a-max-age-and-every-media-module.json",
+        "23cca9c1db2f6809e0a9e3cb494f338dcdbe7512604754363bca16e8de64e6d5",
     ),
 ];
 
@@ -136,10 +136,8 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
         .collect()
 }
 
-/// A golden reads whole; with its module nodes taken out it loads on a runtime
-/// with no interpreter. A built-in this floor compiles out is refused for it,
-/// naming the floor, and the rest loads once those nodes are taken out too —
-/// which is as much of it as this floor can run.
+/// A golden reads whole, and with its module nodes taken out, any built-ins
+/// left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
@@ -152,42 +150,14 @@ fn every_golden_graph_loads_on_this_floor() {
             &recorded_graph_document,
             &module_node_names_in(&recorded_graph_document),
         );
-        let graph =
-            GraphSnapshot::from_graph_document(graph_document.clone()).unwrap_or_else(|refusal| {
-                panic!("{path:?} without its module nodes no longer reads: {refusal}")
-            });
-        let node_names_compiled_out_here: BTreeSet<String> = graph
-            .nodes
-            .iter()
-            .filter(|node| {
-                PROCESSOR_REGISTRY
-                    .refuse_a_built_in_node_type_this_runtime_lacks(&node.processor_type)
-                    .is_err()
-            })
-            .map(|node| node.name.clone())
-            .collect();
-
-        let loaded = load_on_a_fresh_engine(&graph);
-
-        if node_names_compiled_out_here.is_empty() {
-            loaded.unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
+        let graph = GraphSnapshot::from_graph_document(graph_document).unwrap_or_else(|refusal| {
+            panic!("{path:?} without its module nodes no longer reads: {refusal}")
+        });
+        if graph.nodes.is_empty() {
             continue;
         }
-        match loaded {
-            Err(Error::BuiltInNodeTypeAbsentOnThisFloor { .. }) => {}
-            other => panic!(
-                "{path:?} names {node_names_compiled_out_here:?}, which this floor compiles out, \
-                 and should be refused naming the floor: got {other:?}"
-            ),
-        }
-        let the_rest = GraphSnapshot::from_graph_document(without_the_nodes(
-            &graph_document,
-            &node_names_compiled_out_here,
-        ))
-        .expect("a golden without some of its nodes still reads");
-        load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
-            panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
-        });
+        load_on_a_fresh_engine(&graph)
+            .unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
     }
 }
 
@@ -208,6 +178,8 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
             "tatolab.h264:H264Decoder",
             "tatolab.h265:H265Encoder",
             "tatolab.h265:H265Decoder",
+            "tatolab.testpattern:TestPatternSource",
+            "tatolab.virtualcamera:VirtualCameraSink",
         ] {
             assert!(
                 node_types

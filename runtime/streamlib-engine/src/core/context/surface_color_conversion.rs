@@ -3,8 +3,9 @@
 
 //! The engine's colour converter run on surfaces named by id: a YCbCr pixel
 //! buffer — a camera's imported DMA-BUF, a decoder's output — converted into
-//! an RGBA texture a stream publishes, and on macOS an RGBA texture converted
-//! into an adopted NV12 IOSurface an encoder reads.
+//! an RGBA texture a stream publishes; on Linux an RGBA texture converted into
+//! a YUYV pixel buffer the CPU hands a V4L2 device; and on macOS an RGBA
+//! texture converted into an adopted NV12 IOSurface an encoder reads.
 
 use std::collections::HashMap;
 
@@ -56,7 +57,7 @@ struct AdoptedNv12IOSurfaceConversionDestination {
     height: u32,
 }
 
-/// One caller's conversions: the surface-share sources and NV12 destinations
+/// One caller's conversions: the surface-share sources and YCbCr destinations
 /// it has named, a converter per source or destination format, and the
 /// recorder they dispatch on.
 ///
@@ -67,6 +68,10 @@ struct AdoptedNv12IOSurfaceConversionDestination {
 pub(crate) struct SurfaceColorConversionSession {
     sources_by_surface_id: HashMap<String, SurfaceColorConversionSource>,
     color_converters_by_source_format: HashMap<PixelFormat, RhiColorConverter>,
+    #[cfg(target_os = "linux")]
+    yuyv_pixel_buffer_destinations_by_surface_id: HashMap<String, PixelBuffer>,
+    #[cfg(target_os = "linux")]
+    rgba_to_yuyv_color_converter: Option<RhiColorConverter>,
     #[cfg(target_os = "macos")]
     nv12_iosurface_destinations_by_surface_id:
         HashMap<String, AdoptedNv12IOSurfaceConversionDestination>,
@@ -81,8 +86,9 @@ impl SurfaceColorConversionSession {
     /// reader sees the result — with the texture registration whose layout
     /// the conversion settled, under the id it resolved under, for the caller
     /// to publish. `ycbcr_side_color` describes whichever side is YCbCr: a
-    /// YCbCr source converting into an RGBA texture, or on macOS an RGBA
-    /// texture converting into an adopted NV12 IOSurface.
+    /// YCbCr source converting into an RGBA texture, on Linux an RGBA texture
+    /// converting into a YUYV pixel buffer, or on macOS an RGBA texture
+    /// converting into an adopted NV12 IOSurface.
     pub(crate) fn convert_surface_into(
         &mut self,
         gpu: &GpuContext,
@@ -91,6 +97,15 @@ impl SurfaceColorConversionSession {
         ycbcr_side_color: &H273ColorVui,
     ) -> Result<(String, TextureRegistration)> {
         gpu.refuse_a_retired_frame_id(source_surface_id)?;
+        #[cfg(target_os = "linux")]
+        if self.converts_into_a_yuyv_pixel_buffer(gpu, source_surface_id, destination_surface_id)? {
+            return self.convert_an_rgba_texture_into_a_yuyv_pixel_buffer(
+                gpu,
+                source_surface_id,
+                destination_surface_id,
+                ycbcr_side_color,
+            );
+        }
         #[cfg(target_os = "macos")]
         if self.converts_into_an_adopted_nv12_iosurface(
             gpu,
@@ -342,9 +357,148 @@ impl SurfaceColorConversionSession {
             .nv12_iosurface_destinations_by_surface_id
             .remove(surface_id)
             .is_some();
-        #[cfg(not(target_os = "macos"))]
-        let forgot_a_destination = false;
+        #[cfg(target_os = "linux")]
+        let forgot_a_destination = self
+            .yuyv_pixel_buffer_destinations_by_surface_id
+            .remove(surface_id)
+            .is_some();
         forgot_a_source || forgot_a_destination
+    }
+
+    /// Whether `destination_surface_id` is a `yuyv` pixel buffer, resolved and
+    /// kept the first time a conversion names it. A source this session
+    /// already reads as YCbCr, or a pooled frame, never asks the surface
+    /// store.
+    #[cfg(target_os = "linux")]
+    fn converts_into_a_yuyv_pixel_buffer(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+        destination_surface_id: &str,
+    ) -> Result<bool> {
+        if self
+            .yuyv_pixel_buffer_destinations_by_surface_id
+            .contains_key(destination_surface_id)
+        {
+            return Ok(true);
+        }
+        if self.sources_by_surface_id.contains_key(source_surface_id)
+            || a_pooled_ycbcr_frame_held_in_this_process(gpu, source_surface_id)
+        {
+            return Ok(false);
+        }
+        let Ok(pixel_buffer) = gpu.resolve_pixel_buffer_by_surface_id(destination_surface_id)
+        else {
+            return Ok(false);
+        };
+        if pixel_buffer.format() != PixelFormat::Yuyv422 {
+            return Ok(false);
+        }
+        self.yuyv_pixel_buffer_destinations_by_surface_id
+            .insert(destination_surface_id.to_string(), pixel_buffer);
+        Ok(true)
+    }
+
+    /// Convert the RGBA texture `source_surface_id` into the `yuyv` pixel
+    /// buffer `destination_surface_id`, tightly packed, in
+    /// `ycbcr_side_color`'s matrix and range, and return once the buffer's
+    /// CPU readers see it — with the source's registration, whose layout the
+    /// conversion settled.
+    #[cfg(target_os = "linux")]
+    fn convert_an_rgba_texture_into_a_yuyv_pixel_buffer(
+        &mut self,
+        gpu: &GpuContext,
+        source_surface_id: &str,
+        destination_surface_id: &str,
+        ycbcr_side_color: &H273ColorVui,
+    ) -> Result<(String, TextureRegistration)> {
+        const LAYOUT_THE_CONVERSION_SAMPLES_IN: VulkanLayout =
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+        let destination = self
+            .yuyv_pixel_buffer_destinations_by_surface_id
+            .get(destination_surface_id)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "surface {destination_surface_id} was resolved and is gone"
+                ))
+            })?;
+        let source = gpu.resolve_texture_registration_by_surface_id(
+            source_surface_id,
+            None,
+            destination.width,
+            destination.height,
+        )?;
+        let source_texture = source.texture();
+        if (source_texture.width(), source_texture.height())
+            != (destination.width, destination.height)
+        {
+            return Err(Error::GpuError(format!(
+                "texture {source_surface_id} is {}x{} and pixel buffer {destination_surface_id} \
+                 is {}x{}; the conversion scales nothing",
+                source_texture.width(),
+                source_texture.height(),
+                destination.width,
+                destination.height
+            )));
+        }
+        let resolved_color = crate::core::color::ResolveH273ColorVuiDefaults::resolve_defaults(
+            ycbcr_side_color,
+            ColorSpaceKind::Yuv,
+        );
+        let color_converter = match self.rgba_to_yuyv_color_converter.as_ref() {
+            Some(color_converter) => color_converter,
+            None => self
+                .rgba_to_yuyv_color_converter
+                .insert(gpu.create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)?),
+        };
+        let kernel = color_converter.prepare_image_to_yuyv_pixel_buffer(
+            source_texture,
+            destination,
+            destination.width * 2,
+            &resolved_color,
+        )?;
+        let recorder = match self.conversion_recorder.as_mut() {
+            Some(recorder) => recorder,
+            None => self
+                .conversion_recorder
+                .insert(gpu.create_command_recorder("surface_color_conversion")?),
+        };
+        recorder.begin()?;
+        let recorded = (|| -> Result<()> {
+            recorder.record_image_barrier(
+                source_texture,
+                source.current_layout(),
+                LAYOUT_THE_CONVERSION_SAMPLES_IN,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::SHADER_SAMPLED_READ,
+            )?;
+            recorder.record_dispatch(
+                &kernel,
+                destination
+                    .width
+                    .div_ceil(2)
+                    .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                destination.height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                1,
+            )?;
+            recorder.record_buffer_barrier(
+                destination,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanStage::HOST,
+                VulkanAccess::SHADER_WRITE,
+                VulkanAccess::HOST_READ,
+            )
+        })();
+        if let Err(record_failure) = recorded {
+            recorder.abort_recording();
+            return Err(record_failure);
+        }
+        recorder.submit()?;
+        source.update_layout(LAYOUT_THE_CONVERSION_SAMPLES_IN);
+        recorder.wait_for_completion()?;
+        Ok((source_surface_id.to_string(), source))
     }
 
     /// Whether `destination_surface_id` is an adopted NV12 IOSurface, resolved
@@ -364,21 +518,8 @@ impl SurfaceColorConversionSession {
         {
             return Ok(true);
         }
-        let source_is_a_pooled_ycbcr_frame =
-            crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
-                && gpu
-                    .pooled_backing_held_in_this_process(source_surface_id)
-                    .is_some_and(|pixel_buffer| {
-                        matches!(
-                            pixel_buffer.format(),
-                            PixelFormat::Nv12VideoRange
-                                | PixelFormat::Nv12FullRange
-                                | PixelFormat::Yuyv422
-                                | PixelFormat::Uyvy422
-                        )
-                    });
         if self.sources_by_surface_id.contains_key(source_surface_id)
-            || source_is_a_pooled_ycbcr_frame
+            || a_pooled_ycbcr_frame_held_in_this_process(gpu, source_surface_id)
         {
             return Ok(false);
         }
@@ -528,6 +669,23 @@ impl SurfaceColorConversionSession {
         recorder.wait_for_completion()?;
         Ok((source_surface_id.to_string(), source))
     }
+}
+
+/// Whether `surface_id` names a pooled YCbCr frame in this process, which
+/// converts into an RGBA texture and never out of one.
+fn a_pooled_ycbcr_frame_held_in_this_process(gpu: &GpuContext, surface_id: &str) -> bool {
+    crate::core::rhi::PublishedPixelBufferFrameId::parse(surface_id).is_some()
+        && gpu
+            .pooled_backing_held_in_this_process(surface_id)
+            .is_some_and(|pixel_buffer| {
+                matches!(
+                    pixel_buffer.format(),
+                    PixelFormat::Nv12VideoRange
+                        | PixelFormat::Nv12FullRange
+                        | PixelFormat::Yuyv422
+                        | PixelFormat::Uyvy422
+                )
+            })
 }
 
 /// The pooled frame `surface_id` names in this process, with its format,

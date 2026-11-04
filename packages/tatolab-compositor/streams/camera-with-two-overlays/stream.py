@@ -8,11 +8,12 @@ Watch it at http://127.0.0.1:4446/watch/<machine>/main. The camera wheel's
 frame rate and its capture-to-read latency in the project's log.
 """
 
-from tatolab.stream import Exposure, StreamBuilder, TestPatternSource, stream
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from tatolab.camera import CameraSource, CaptureToDownstreamLatencyProbe
 from tatolab.compositor import AlphaOverCompositor
 from tatolab.h264 import H264Encoder
+from tatolab.testpattern import TestPatternSource
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.
 CAMERA_DEVICE_PATH: str | None = None

@@ -22,7 +22,7 @@ import numpy
 import pytest
 
 import tatolab.stream
-from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter
+from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter, RigMonitor
 from tatolab.stream import (
     NodeInputPortReference,
     NodeOutputPortReference,
@@ -42,8 +42,12 @@ STREAM_GRAPH_BUILDER_SOURCE = (
     Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
 )
 
-TEST_PATTERN_SOURCE_TYPE = "tatolab.stream:TestPatternSource"
-VIRTUAL_CAMERA_SINK_TYPE = "tatolab.stream:VirtualCameraSink"
+RELAY_TRACK_SOURCE_TYPE = "tatolab.stream:RelayTrackSource"
+RIG_RELAY_TRACK: tatolab.stream.RelayTrackSourceConfig = {
+    "broadcast": "desk/rig.hang",
+    "track": "pattern/video",
+}
+RIG_MONITOR_TYPE = "stream_graph_builder_nodes:RigMonitor"
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
 FRAME_DARKENER_TYPE = "stream_graph_builder_nodes:FrameFilters.FrameDarkener"
@@ -110,15 +114,13 @@ def every_kind_of_node(stream_builder: StreamBuilder) -> None:
 @stream
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
-    source = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 1280, "height": 720}
-    )
+    source = stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
     inverter = stream_builder.add(FrameInverter)
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
     second_inverter = stream_builder.add(FrameInverter)
-    camera = stream_builder.add(tatolab.stream.VirtualCameraSink, config={"name": "Rig Camera"})
-    stream_builder.connect(source.output("video"), inverter.input("video_from_upstream"))
+    monitor = stream_builder.add(RigMonitor, config={"name": "Rig Monitor"})
+    stream_builder.connect(source.output("track"), inverter.input("video_from_upstream"))
     stream_builder.connect(
         inverter.output("video_to_downstream"),
         first_reader.input("VIDEO_FROM_UPSTREAM"),
@@ -128,23 +130,17 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
         backup_reader.input("video_from_upstream"),
     )
     stream_builder.connect(
-        source.output("Video"),
+        source.output("Track"),
         second_inverter.input("video_from_upstream"),
     )
-    stream_builder.connect(second_inverter.output("video_to_downstream"), camera.input("Video"))
+    stream_builder.connect(second_inverter.output("video_to_downstream"), monitor.input("Video"))
     stream_builder.expose(inverter.output("video_to_downstream"))
     stream_builder.expose(second_inverter.output("VIDEO_TO_DOWNSTREAM"))
 
 
 @stream
-def two_markers(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.TestPatternSource)
-    stream_builder.add(tatolab.stream.VirtualCameraSink)
-
-
-@stream
-def a_virtual_camera(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.VirtualCameraSink)
+def a_native_marker(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
 
 
 @stream
@@ -374,9 +370,8 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 
 
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
-    assert compile_stream_to_graph(two_markers)["nodes"] == [
-        {"name": "testpatternsource", "type": TEST_PATTERN_SOURCE_TYPE, "config": {}},
-        {"name": "virtualcamerasink", "type": VIRTUAL_CAMERA_SINK_TYPE, "config": {}},
+    assert compile_stream_to_graph(a_native_marker)["nodes"] == [
+        {"name": "relaytracksource", "type": RELAY_TRACK_SOURCE_TYPE, "config": RIG_RELAY_TRACK},
     ]
 
 
@@ -462,17 +457,6 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
         TypeError, match="pass the class itself rather than an instance"
     ):
         StreamBuilder("rig").add(FrameInverter())  # pyright: ignore[reportArgumentType]
-
-
-@pytest.mark.parametrize("platform", ["linux", "darwin"])
-def test_a_virtual_camera_sink_is_recorded_whatever_floor_the_stream_compiles_on(
-    monkeypatch: pytest.MonkeyPatch, platform: str
-) -> None:
-    monkeypatch.setattr(sys, "platform", platform)
-
-    assert compile_stream_to_graph(a_virtual_camera)["nodes"] == [
-        {"name": "virtualcamerasink", "type": VIRTUAL_CAMERA_SINK_TYPE, "config": {}}
-    ]
 
 
 @pytest.mark.parametrize(
@@ -941,23 +925,23 @@ def test_a_stream_compiles_to_its_graph() -> None:
         "stream": "camera_rig",
         "nodes": [
             {
-                "name": "testpatternsource",
-                "type": TEST_PATTERN_SOURCE_TYPE,
-                "config": {"width": 1280, "height": 720},
+                "name": "relaytracksource",
+                "type": RELAY_TRACK_SOURCE_TYPE,
+                "config": RIG_RELAY_TRACK,
             },
             {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
             {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
             {"name": "backup-meter", "type": BRIGHTNESS_READER_TYPE, "config": {}},
             {"name": "frameinverter-2", "type": FRAME_INVERTER_TYPE, "config": {}},
             {
-                "name": "virtualcamerasink",
-                "type": VIRTUAL_CAMERA_SINK_TYPE,
-                "config": {"name": "Rig Camera"},
+                "name": "rigmonitor",
+                "type": RIG_MONITOR_TYPE,
+                "config": {"name": "Rig Monitor"},
             },
         ],
         "links": [
             {
-                "source": {"node": "testpatternsource", "port": "video"},
+                "source": {"node": "relaytracksource", "port": "track"},
                 "target": {"node": "frameinverter", "port": "video_from_upstream"},
             },
             {
@@ -969,12 +953,12 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "backup-meter", "port": "video_from_upstream"},
             },
             {
-                "source": {"node": "testpatternsource", "port": "video"},
+                "source": {"node": "relaytracksource", "port": "track"},
                 "target": {"node": "frameinverter-2", "port": "video_from_upstream"},
             },
             {
                 "source": {"node": "frameinverter-2", "port": "video_to_downstream"},
-                "target": {"node": "virtualcamerasink", "port": "video"},
+                "target": {"node": "rigmonitor", "port": "video"},
             },
         ],
         "exposed": [

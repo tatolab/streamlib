@@ -55,7 +55,8 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 from processors.marked_bag_sink import MarkedBagSink
 
 
@@ -280,7 +281,9 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         for stream_catalog in catalog["streams"]
         if stream_catalog["stream"] == stream_id
     ]
-    catalog_paths = [entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]]
+    catalog_paths = [
+        entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]
+    ] + [installed["node"]["type"] for installed in catalog_of_the_stream["installed"]]
     inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
 
     # The prompt's three arguments, bound by the names the listing gave them:

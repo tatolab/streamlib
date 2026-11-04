@@ -192,6 +192,9 @@ across the language boundary.
   Ported to `videotoolbox_sessions_round_trip_the_psnr_references` in the codec module crate.
 - REMOVED: runtime/streamlib-engine/tests/owned_device_h264_encode_round_trips_the_psnr_references.rs
   Ported to `owned_device_codecs_round_trip_the_psnr_references`, H.264 and H.265, in the codec module crate.
+- REMOVED: BuiltInNodeTypeAbsentOnThisFloor
+  The refusal for a built-in a floor compiles out; no built-in is compiled out on any floor.
+- REMOVED: register_built_in_node_type_absent_on_this_floor
 
 `RelayTrackSource` stays in the runtime as transport (D5). The engine's audio device arms and
 colour converter stay and are exported (D4); the Vulkan Video port has left the engine for the

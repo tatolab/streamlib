@@ -17,7 +17,7 @@ impl<'a> TraversalSourceMut<'a> {
     /// The node carries a [`StateComponent`] from here on — `Pending`, or
     /// `Error` on a registry miss.
     ///
-    /// A built-in this floor compiles out, and a config the node's type would
+    /// A built-in that moved to a module, and a config the node's type would
     /// not take, are refused with nothing added.
     ///
     /// On registry miss, the node is still added with empty ports. The caller
@@ -161,21 +161,23 @@ mod tests {
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
     #[test]
-    fn a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added() {
-        let compiled_out_here =
-            ProcessorClassImportPath::of_built_in_node("AddVTestCompiledOutHere");
-        PROCESSOR_REGISTRY
-            .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
+    fn a_built_in_that_moved_to_a_module_is_refused_and_nothing_is_added() {
+        let moved_out = ProcessorClassImportPath::of_built_in_node("AddVTestMovedOut");
+        PROCESSOR_REGISTRY.register_built_in_node_type_moved_to_a_module(
+            moved_out.clone(),
+            ProcessorClassImportPath::new("tatolab.addvtest:AddVTestMovedOut").unwrap(),
+            "tatolab-addvtest",
+        );
         let mut graph = Graph::new();
 
         let refusal = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(compiled_out_here, serde_json::json!({})))
+            .add_v(ProcessorSpec::new(moved_out, serde_json::json!({})))
             .map(|_| ())
             .unwrap_err();
 
         assert!(
-            matches!(refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { .. }),
+            matches!(refusal, Error::BuiltInNodeTypeMovedToAModule { .. }),
             "{refusal:?}"
         );
         assert!(graph.traversal().v(()).ids().is_empty());

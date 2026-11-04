@@ -166,8 +166,8 @@ topic; `CLAUDE.md` holds only what every session must load.
   manager.
 - **Check `nvidia-smi` before a GPU run.** An unattended NVIDIA upgrade without a reboot leaves
   llvmpipe as the only device.
-- **A camera stream without a camera** runs `TestPatternSource` into `VirtualCameraSink` on
-  v4l2loopback, with `STREAMLIB_CAMERA_DEVICE` pointing at it.
+- **A camera stream without a camera** runs `tatolab.testpattern`'s `TestPatternSource` into
+  `tatolab.virtualcamera`'s `VirtualCameraSink` on v4l2loopback, with `STREAMLIB_CAMERA_DEVICE` pointing at it.
 - **`pkill -f` matches the calling shell's own command line.** Stop processes by pid.
 
 ## Talking with the owner

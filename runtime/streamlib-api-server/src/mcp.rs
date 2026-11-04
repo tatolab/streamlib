@@ -2010,7 +2010,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "add_node",
-            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.stream:TestPatternSource" }),
+            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.stream:RelayTrackSource" }),
         )
         .await;
         let stated = first_text_block_json(&body);

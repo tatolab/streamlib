@@ -67,6 +67,19 @@ pub(crate) const PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str =
 /// interpreter hosts.
 pub const PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
 
+/// The environment variable carrying the name the graph gives the node a
+/// processor interpreter hosts.
+pub const PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_NODE_NAME";
+
+/// The environment variable carrying the id of the stream the hosted node
+/// belongs to.
+pub const PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_STREAM_ID";
+
+/// The environment variable carrying the project directory of the stream the
+/// hosted node belongs to.
+pub const PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
+    "STREAMLIB_STREAM_PROJECT_DIRECTORY";
+
 /// The variable the parent names its surface-share channel to a processor
 /// interpreter in: the Unix socket's path on Linux, the Mach service's name on
 /// macOS.
@@ -273,6 +286,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
     pub(crate) fn build_helper_process_command(
         &self,
         runtime_id: &str,
+        stream_id: &str,
         iceoryx2_domain_root: &Path,
         surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
         runtime_vulkan_device_uuid: Option<[u8; 16]>,
@@ -304,6 +318,18 @@ impl ProcessorInterpreterSpawnHostProcessor {
                 &self.processor_id,
             )
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
+            .env(
+                PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
+                &self.processor_display_name,
+            )
+            .env(
+                PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
+                stream_id,
+            )
+            .env(
+                PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
+                &self.stream_environment.project_directory,
+            )
             .env(
                 CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE,
                 capture_device_access_prompting.as_environment_value(),
@@ -758,6 +784,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
         let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
+            ctx.stream_id(),
             &iceoryx2_domain_root,
             surface_share_channel,
             runtime_vulkan_device_uuid,
@@ -2051,6 +2078,7 @@ sys.exit(0)
         let command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2089,9 +2117,11 @@ sys.exit(0)
     /// the type was described under.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
-        let command = spawn_host_for_test()
+        let spawn_host = spawn_host_for_test();
+        let command = spawn_host
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2111,6 +2141,15 @@ sys.exit(0)
             value_of(&environment, "STREAMLIB_RUNTIME_ID"),
             Some("Rtest")
         );
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_NODE_NAME"),
+            Some(spawn_host.processor_display_name.as_str())
+        );
+        assert_eq!(value_of(&environment, "STREAMLIB_STREAM_ID"), Some("desk"));
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_STREAM_PROJECT_DIRECTORY"),
+            spawn_host.stream_environment.project_directory.to_str()
+        );
     }
 
     /// A device the helper's node opens prompts only as the stream's load
@@ -2124,6 +2163,7 @@ sys.exit(0)
             let command = spawn_host_for_test()
                 .build_helper_process_command(
                     "Rtest",
+                    "desk",
                     Path::new("/tmp/streamlib-1000/iox2"),
                     None,
                     None,
@@ -2148,6 +2188,7 @@ sys.exit(0)
         let command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2168,6 +2209,7 @@ sys.exit(0)
         let command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2190,6 +2232,7 @@ sys.exit(0)
         let command = spawn_host
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 Some(SurfaceShareChannelNamedToTheHelperProcess {
                     environment_variable: "STREAMLIB_SURFACE_MACH_SERVICE",
@@ -2207,6 +2250,7 @@ sys.exit(0)
         let without_a_channel = spawn_host
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2234,6 +2278,7 @@ sys.exit(0)
         let command = spawn_host
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 Some(runtime_vulkan_device_uuid),
@@ -2259,6 +2304,7 @@ sys.exit(0)
         let without_a_device = spawn_host
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2497,6 +2543,7 @@ sys.exit(0)
         let command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2600,6 +2647,7 @@ sys.exit(0)
         let bootstrap_command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,
@@ -2705,6 +2753,7 @@ sys.exit(0)
         let command = spawn_host_for_test()
             .build_helper_process_command(
                 "Rtest",
+                "desk",
                 Path::new("/tmp/streamlib-1000/iox2"),
                 None,
                 None,

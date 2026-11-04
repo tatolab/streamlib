@@ -66,15 +66,13 @@ also brings a capability.
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
-**Built-in**: a first-party native processor shipped inside the runtime, never on pip (the test
-pattern, the Opus codec blocks, the virtual camera) — added and configured from
-Python through the class `tatolab.stream` carries generated for it, its type that class's import
-path (`tatolab.stream:TestPatternSource`), never where its native code lives; its per-frame path
-never enters an interpreter. Since the 2026-09-04 extension-model pivot, not the default home
-for a first-party capability: a new built-in must meet the criterion in §Packages & extension
-model — a deadline the interpreter hop cannot meet, an engine-only primitive, or an OS-facing
-device the runtime must present to other applications, and a named consumer. _Avoid_:
-"built-in" for an optional capability (that is an **extension wheel**).
+**Built-in**: a first-party native processor shipped inside the runtime, never on pip — today
+only `RelayTrackSource`, which is transport — added and configured from Python through the class
+`tatolab.stream` carries generated for it, its type that class's import path
+(`tatolab.stream:RelayTrackSource`), never where its native code lives; its per-frame path never
+enters an interpreter. The runtime ships no media nodes: camera, audio, codecs, the test pattern
+and the virtual camera are modules. _Avoid_: "built-in" for a media node or an optional
+capability (that is an **extension wheel** or a module).
 
 **Extension wheel**: a separate PyPI package — Rust inside for speed, a Python node as the
 binding — that depends on `tatolab-stream` and never on the runtime; a first-party one is

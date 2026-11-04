@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.68.22](https://github.com/tatolab/streamlib/compare/v0.68.21...v0.68.22) (2026-11-04)
+
+
+### Features
+
+* the test pattern and virtual camera become modules; the runtime ships no media nodes ([#3123](https://github.com/tatolab/streamlib/issues/3123)) ([1ba4f7f](https://github.com/tatolab/streamlib/commit/1ba4f7f9c7f606db79a11d7c4832ace3666988ad))
+
+## [0.68.21](https://github.com/tatolab/streamlib/compare/v0.68.20...v0.68.21) (2026-11-04)
+
+
+### Features
+
+* **release:** publish tatolab-camera, tatolab-compositor and tatolab-rive to PyPI ([#3121](https://github.com/tatolab/streamlib/issues/3121)) ([04dcf3e](https://github.com/tatolab/streamlib/commit/04dcf3e295a70c330265f45fba9bbdae7dc4a21a))
+
 ## [0.68.20](https://github.com/tatolab/streamlib/compare/v0.68.19...v0.68.20) (2026-11-04)
 
 

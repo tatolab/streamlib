@@ -3,13 +3,13 @@
 
 """The `@stream` functions `test_helper_placement.py` runs from the suite project."""
 
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import RelayTrackSource, StreamBuilder, stream
 
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
-    ReportsItsOwnProcessVideoSink,
+    ReportsItsOwnProcessTrackSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
@@ -75,11 +75,13 @@ def raw_message_payload_source_into_sink(stream_builder: StreamBuilder) -> None:
 
 
 @stream
-def native_test_pattern_into_python_video_sink(stream_builder: StreamBuilder) -> None:
-    """A native 64x32 test pattern into a Python sink reporting its own process."""
-    pattern = stream_builder.add(TestPatternSource, config={"width": 64, "height": 32})
-    sink = stream_builder.add(ReportsItsOwnProcessVideoSink)
-    stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))
+def native_relay_track_into_python_track_sink(stream_builder: StreamBuilder) -> None:
+    """A native relay track source into a Python sink reporting its own process."""
+    relay_track = stream_builder.add(
+        RelayTrackSource, config={"broadcast": "desk/placement.hang", "track": "pattern/video"}
+    )
+    sink = stream_builder.add(ReportsItsOwnProcessTrackSink)
+    stream_builder.connect(relay_track.output("track"), sink.input("track_from_upstream"))
 
 
 @stream

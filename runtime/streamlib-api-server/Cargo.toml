@@ -36,10 +36,10 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.20" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.22" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.20" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.22" }
 # The machine's relay instances the relay tools drive, and the relay-adapter catalog.
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk", features = ["utoipa"] }
 
@@ -79,8 +79,3 @@ toml.workspace = true
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.
 tracing-subscriber.workspace = true
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# Pins `VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH` against the path the
-# built-in itself registers under; the built-in is Linux-only.
-streamlib-media-builtins = { path = "../streamlib-media-builtins" }

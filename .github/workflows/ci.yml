@@ -559,8 +559,9 @@ jobs:
       # the engine has moved past cannot hide the engine's own result.
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine. Its tests wire the
-      # publisher to the H.264 and Opus nodes, so the venv holds `tatolab-h264`,
-      # built here once and reused by the H.264 steps below, and `tatolab-opus`.
+      # test pattern to the publisher and the publisher to the H.264 and Opus
+      # nodes, so the venv holds `tatolab-h264`, built here once and reused by
+      # the H.264 steps below, `tatolab-opus` and `tatolab-testpattern`.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
         working-directory: packages/streamlib-webrtc
         run: |
@@ -569,7 +570,7 @@ jobs:
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus"
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` and pyright do not reach a non-member.
@@ -644,6 +645,26 @@ jobs:
           .venv/bin/python -m pytest tests -v
           uvx pyright@1.1.411
 
+      # Pure Python; its pixel tests ran in the integration suite above, whose
+      # venv installs it.
+      - name: "Test pattern: GPU-free tests and types"
+        working-directory: packages/tatolab-testpattern
+        run: |
+          uv venv --python 3.10 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
+          .venv/bin/python -m pytest tests -v
+          uvx pyright@1.1.411
+
+      # Pure Python; its camera tests ran in the integration suite above, whose
+      # venv installs it.
+      - name: "Virtual camera: GPU-free tests and types"
+        working-directory: packages/tatolab-virtualcamera
+        run: |
+          uv venv --python 3.10 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
+          .venv/bin/python -m pytest tests -v
+          uvx pyright@1.1.411
+
       - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
         working-directory: packages/tatolab-microphone
         run: |
@@ -702,6 +723,7 @@ jobs:
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
 
       - name: "Extension: streamlib-h264 formatting, crate tests, clippy and types"
         working-directory: packages/streamlib-h264
@@ -719,14 +741,15 @@ jobs:
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       # A scaffolded stream compiles and type-checks with no runtime installed,
-      # in what a user's `uv sync` gives it: `tatolab-stream`, the H.264 module
-      # and numpy.
+      # in what a user's `uv sync` gives it: `tatolab-stream`, the H.264 and
+      # test-pattern modules and numpy.
       - name: Scaffolded stream compiles and type-checks (Python 3.10)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
-            "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl 'numpy>=2.1'
+            "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl \
+            "$GITHUB_WORKSPACE/packages/tatolab-testpattern" 'numpy>=2.1'
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
           import importlib.util
@@ -1129,7 +1152,8 @@ jobs:
 
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine. Its tests wire the
-      # publisher to the H.264 and Opus nodes, so the venv holds both modules too.
+      # test pattern to the publisher and the publisher to the H.264 and Opus
+      # nodes, so the venv holds those three modules too.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
         working-directory: packages/streamlib-webrtc
         run: |
@@ -1137,7 +1161,7 @@ jobs:
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus"
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: "Extension: crate tests and clippy"

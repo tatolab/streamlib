@@ -4,7 +4,7 @@
 """A Python processor lands a frame in a kernel's input texture through the
 engine's surface-to-surface copy, with no array library.
 
-Every probe runs in a processor interpreter fed by a native `TestPatternSource`,
+Every probe runs in a processor interpreter fed by the `TestPatternSource` module,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the
 scenario's stream on `tatolabd` and asserts on that line.
 """

@@ -114,10 +114,13 @@ mod tests {
 
     #[test]
     fn a_built_in_nodes_type_is_its_class_in_the_stream_package() {
-        let test_pattern = ProcessorClassImportPath::of_built_in_node("TestPatternSource");
+        let relay_track_source = ProcessorClassImportPath::of_built_in_node("RelayTrackSource");
 
-        assert_eq!(test_pattern.as_str(), "tatolab.stream:TestPatternSource");
-        assert!(test_pattern.names_a_built_in_node());
+        assert_eq!(
+            relay_track_source.as_str(),
+            "tatolab.stream:RelayTrackSource"
+        );
+        assert!(relay_track_source.names_a_built_in_node());
     }
 
     #[test]

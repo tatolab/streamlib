@@ -355,6 +355,20 @@ impl RhiColorConverterInner {
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
+    /// [`crate::core::rhi::PixelBuffer`]-shape destination variant of
+    /// [`Self::prepare_image_to_yuyv_buffer`].
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_yuyv_pixel_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::PixelBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner
+            .prepare_image_to_yuyv_pixel_buffer(src, dst, dst_stride_bytes, info)
+    }
+
     /// Bind an RGBA texture source, an NV12 storage-buffer destination laid
     /// out as `dst_layout` describes, and the encoding push-constants on the
     /// image→NV12 kernel, and return it for recorder-driven dispatch.
@@ -540,6 +554,21 @@ impl RhiColorConverter {
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner()
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
+    }
+
+    /// [`crate::core::rhi::PixelBuffer`]-shape destination variant of
+    /// [`Self::prepare_image_to_yuyv_buffer`]: a `yuyv` pixel buffer the CPU
+    /// reads the converted picture from.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_yuyv_pixel_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::PixelBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner()
+            .prepare_image_to_yuyv_pixel_buffer(src, dst, dst_stride_bytes, info)
     }
 
     /// The `(group_x, group_y)` a `width` × `height` dispatch of the kernel

@@ -18,7 +18,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 # Engine substrate — runtime context and processor traits.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.20" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.22" }
 
 
 # Serialization (config dataclass ships as serde-derived).

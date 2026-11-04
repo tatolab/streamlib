@@ -9,9 +9,9 @@ from `setup`, so its stream is the probe alone. The lagged consumer reads a
 real camera, whose capture ring and pool are what it holds a frame against.
 """
 
-import tatolab.stream
 from tatolab.camera import CameraSource
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 import device_exchange_probes
 from camera_under_test import camera_source_config
@@ -19,7 +19,7 @@ from camera_under_test import camera_source_config
 
 def _add_a_test_pattern_into(stream_builder: StreamBuilder, frame_probe_class: type) -> None:
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource,
+        TestPatternSource,
         config={
             "width": device_exchange_probes.SURFACE_WIDTH,
             "height": device_exchange_probes.SURFACE_HEIGHT,

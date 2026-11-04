@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probe that reads a native built-in's frames from a processor interpreter.
+"""Probe that reads the test pattern module's frames from a processor interpreter.
 
 Reports the first two video-frame bags it receives as one JSON marker line on
-`tatolabd`'s standard error — the boundary under test is native production in
-`tatolabd` reaching a Python processor in its own interpreter.
+`tatolabd`'s standard error — the boundary under test is one processor's
+device frames reaching a Python processor in an interpreter of its own.
 """
 
 import json
@@ -18,7 +18,7 @@ RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 @node
 class VideoFrameProbe:
-    """Reports the first two video-frame messages the native source publishes."""
+    """Reports the first two video-frame messages the test pattern publishes."""
 
     def __init__(self) -> None:
         self.messages_seen = []

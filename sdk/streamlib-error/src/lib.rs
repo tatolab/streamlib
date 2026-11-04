@@ -131,16 +131,6 @@ pub enum Error {
     },
 
     #[error(
-        "`{node_type}` is a built-in node this runtime does not have on {this_floor}: it runs \
-         on {floors_it_runs_on} only"
-    )]
-    BuiltInNodeTypeAbsentOnThisFloor {
-        node_type: ProcessorClassImportPath,
-        this_floor: String,
-        floors_it_runs_on: String,
-    },
-
-    #[error(
         "`{node_type}` is no longer a built-in node: it is `{module_node_type}`, a node \
          `pip install {module_distribution}` gives the stream"
     )]

@@ -211,6 +211,21 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
         """This node's id, the one `graph` renders on the node."""
         ...
 
+    @property
+    def node_name(self) -> str:
+        """This node's name in its stream's graph, the same on every run of the stream."""
+        ...
+
+    @property
+    def stream_id(self) -> str:
+        """The id of the stream this node runs in."""
+        ...
+
+    @property
+    def stream_project_directory(self) -> str:
+        """The project directory of the stream this node runs in."""
+        ...
+
     def is_paused(self) -> bool:
         """Whether the node is paused."""
         ...

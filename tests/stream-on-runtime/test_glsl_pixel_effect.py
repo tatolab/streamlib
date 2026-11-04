@@ -4,7 +4,7 @@
 """A pixel effect written as one GLSL function runs on the GPU from a processor
 interpreter beneath `tatolabd`, and the compiler and the engine copy refuse at the user's own line.
 
-Every probe runs in a processor interpreter fed by a native `TestPatternSource`,
+Every probe runs in a processor interpreter fed by the `TestPatternSource` module,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the
 scenario's stream on `tatolabd` and asserts on that line.
 """

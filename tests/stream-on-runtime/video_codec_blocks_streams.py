@@ -3,10 +3,10 @@
 
 """The `@stream` functions `test_video_codec_blocks.py` runs from the suite project."""
 
-import tatolab.stream
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 from video_codec_blocks_probes import (
     DecodedVideoFrameProbe,
@@ -60,7 +60,7 @@ def _add_a_codec_round_trip_with_probes(
     asserting about a single group.
     """
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, config={"width": 320, "height": 180}
     )
     encoder = stream_builder.add(
         encoder_class,

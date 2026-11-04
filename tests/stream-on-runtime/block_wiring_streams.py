@@ -5,12 +5,12 @@
 between them, each run from the suite project to prove the engine loads the
 wiring as the nodes publish their ports."""
 
-import tatolab.stream
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.microphone import MicrophoneSource
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.speaker import SpeakerSink
+from tatolab.testpattern import TestPatternSource
 from tatolab.stream import (
     StreamBuilder,
     stream,
@@ -40,7 +40,7 @@ def _add_a_codec_round_trip_exposing_the_decoded_port(
     encoder_class: "type[H264Encoder] | type[H265Encoder]",
     decoder_class: "type[H264Decoder] | type[H265Decoder]",
 ) -> None:
-    pattern = stream_builder.add(tatolab.stream.TestPatternSource)
+    pattern = stream_builder.add(TestPatternSource)
     encoder = stream_builder.add(encoder_class)
     decoder = stream_builder.add(decoder_class)
     stream_builder.connect(pattern.output("video"), encoder.input("video"))

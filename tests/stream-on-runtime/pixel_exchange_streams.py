@@ -4,12 +4,12 @@
 """The streams `test_pixel_exchange.py` starts on `tatolabd`.
 
 A standalone probe acquires its own surface and reports from `setup`, so its
-stream is the probe alone. The end-to-end scenarios put a native test pattern
+stream is the probe alone. The end-to-end scenarios put the test pattern module
 in front of one or two Python processors.
 """
 
-import tatolab.stream
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 import pixel_exchange_probes
 
@@ -56,7 +56,7 @@ def unsupported_format_probe_alone(stream_builder: StreamBuilder) -> None:
 
 def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: bool) -> None:
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, config={"width": 320, "height": 180}
     )
     effect = stream_builder.add(
         pixel_exchange_probes.ReportingInvertingEffect, config={"skip_edit": skip_edit}
@@ -70,10 +70,10 @@ def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: boo
 
 @stream
 def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> None:
-    """Native source → Python effect, the user-facing story: the frames a
-    native processor produces are edited in place by a child interpreter."""
+    """Test pattern → Python effect, the user-facing story: the frames one
+    processor produces are edited in place by another one's interpreter."""
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
+        TestPatternSource, config={"width": 320, "height": 180}
     )
     effect = stream_builder.add(pixel_exchange_probes.InvertingEffect)
     stream_builder.connect(pattern.output("video"), effect.input("video_from_upstream"))

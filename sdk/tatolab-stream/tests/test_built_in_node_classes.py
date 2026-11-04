@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 3
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 1
 
 
 @pytest.mark.parametrize(
@@ -50,22 +50,25 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(TestPatternSource, config="):
-        tatolab.stream.TestPatternSource()  # pyright: ignore[reportCallIssue]
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(RelayTrackSource, config="):
+        tatolab.stream.RelayTrackSource()  # pyright: ignore[reportCallIssue]
 
 
 @stream
-def a_test_pattern_into_a_virtual_camera(stream_builder: tatolab.stream.StreamBuilder) -> None:
-    source = stream_builder.add(_built_in_nodes.TestPatternSource, config={"width": 640})
-    camera = stream_builder.add(_built_in_nodes.VirtualCameraSink)
-    stream_builder.connect(source.output("video"), camera.input("video"))
+def a_relay_track(stream_builder: tatolab.stream.StreamBuilder) -> None:
+    stream_builder.add(
+        _built_in_nodes.RelayTrackSource,
+        config={"broadcast": "desk/pattern.hang", "track": "pattern/video"},
+    )
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = compile_stream_to_graph(a_test_pattern_into_a_virtual_camera)
+    graph = compile_stream_to_graph(a_relay_track)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
-        ("testpatternsource", "tatolab.stream:TestPatternSource"),
-        ("virtualcamerasink", "tatolab.stream:VirtualCameraSink"),
+        ("relaytracksource", "tatolab.stream:RelayTrackSource"),
     ]
-    assert graph["nodes"][0]["config"] == {"width": 640}
+    assert graph["nodes"][0]["config"] == {
+        "broadcast": "desk/pattern.hang",
+        "track": "pattern/video",
+    }

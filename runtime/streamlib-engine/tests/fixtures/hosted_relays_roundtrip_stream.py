@@ -10,9 +10,9 @@ private, so it is at the local relay's loopback listener alone.
 run --dir` and reads both tracks back off each hosted relay.
 """
 
-import tatolab.stream
 from tatolab.h264 import H264Encoder
 from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 # The colour rig's GOP, so its h264 baseline scores what is read back here.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
@@ -23,7 +23,7 @@ def the_test_pattern_encoded_with_one_port_public_and_one_private(
     stream_builder: StreamBuilder,
 ) -> None:
     test_pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, name="test_pattern"
+        TestPatternSource, name="test_pattern"
     )
     encoder_config = {"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS}
     public_encoder = stream_builder.add(H264Encoder, name="encoder", config=encoder_config)

@@ -15,7 +15,34 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 use super::gpu_context::{PythonGpuContextFullAccess, PythonGpuContextLimitedAccess};
 use super::link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
-use streamlib::sdk::processor_interpreter::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE;
+use streamlib::sdk::processor_interpreter::{
+    PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
+    PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
+    PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
+    SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+};
+
+/// The stream and node a helper's node is, as its parent named them at spawn;
+/// each is empty in a process no parent spawned.
+#[derive(Clone)]
+struct StreamAndNodeTheHelperHosts {
+    node_name: String,
+    stream_id: String,
+    stream_project_directory: String,
+}
+
+impl StreamAndNodeTheHelperHosts {
+    fn named_by_the_parent_at_spawn() -> Self {
+        let named = |variable: &str| std::env::var(variable).unwrap_or_default();
+        Self {
+            node_name: named(PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE),
+            stream_id: named(PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE),
+            stream_project_directory: named(
+                PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
+            ),
+        }
+    }
+}
 
 /// Privileged runtime context passed to `setup` / `teardown` / `start` / `stop`.
 ///
@@ -26,6 +53,7 @@ use streamlib::sdk::processor_interpreter::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VAR
 pub(crate) struct PythonRuntimeContextFullAccess {
     runtime_id: String,
     processor_id: String,
+    stream_and_node: StreamAndNodeTheHelperHosts,
     configuration: serde_json::Value,
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
@@ -90,6 +118,7 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
     Ok(PythonRuntimeContextFullAccess {
         runtime_id,
         processor_id: node_id,
+        stream_and_node: StreamAndNodeTheHelperHosts::named_by_the_parent_at_spawn(),
         configuration: python_object_to_json_value(configuration)?,
         link_input_data_reader: Py::new(
             python,
@@ -137,6 +166,7 @@ pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
     PythonRuntimeContextLimitedAccess {
         runtime_id: full_access_context.runtime_id.clone(),
         processor_id: full_access_context.processor_id.clone(),
+        stream_and_node: full_access_context.stream_and_node.clone(),
         configuration: full_access_context.configuration.clone(),
         link_input_data_reader: full_access_context.link_input_data_reader.clone_ref(python),
         link_output_data_writer: full_access_context
@@ -237,6 +267,21 @@ impl PythonRuntimeContextFullAccess {
         self.processor_id.clone()
     }
 
+    #[getter]
+    fn node_name(&self) -> String {
+        self.stream_and_node.node_name.clone()
+    }
+
+    #[getter]
+    fn stream_id(&self) -> String {
+        self.stream_and_node.stream_id.clone()
+    }
+
+    #[getter]
+    fn stream_project_directory(&self) -> String {
+        self.stream_and_node.stream_project_directory.clone()
+    }
+
     /// Whether this processor is currently paused.
     fn is_paused(&self) -> bool {
         self.pause_state_announced_by_parent.load(Ordering::Relaxed)
@@ -293,6 +338,7 @@ impl PythonRuntimeContextFullAccess {
 pub(crate) struct PythonRuntimeContextLimitedAccess {
     runtime_id: String,
     processor_id: String,
+    stream_and_node: StreamAndNodeTheHelperHosts,
     configuration: serde_json::Value,
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
@@ -338,6 +384,21 @@ impl PythonRuntimeContextLimitedAccess {
     #[getter(node_id)]
     fn processor_id(&self) -> String {
         self.processor_id.clone()
+    }
+
+    #[getter]
+    fn node_name(&self) -> String {
+        self.stream_and_node.node_name.clone()
+    }
+
+    #[getter]
+    fn stream_id(&self) -> String {
+        self.stream_and_node.stream_id.clone()
+    }
+
+    #[getter]
+    fn stream_project_directory(&self) -> String {
+        self.stream_and_node.stream_project_directory.clone()
     }
 
     /// Whether this processor is currently paused.

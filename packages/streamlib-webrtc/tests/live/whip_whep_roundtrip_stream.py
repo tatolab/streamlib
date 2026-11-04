@@ -28,13 +28,13 @@ own default device).
 
 import os
 
-import tatolab.stream
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.microphone import MicrophoneSource
 from tatolab.speaker import SpeakerSink
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 # Stated rather than left to the encoder's own default, so the baseline is
 # measured over a GOP structure this file names.
@@ -78,7 +78,7 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
         name="publisher",
     )
     test_pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, name="test_pattern"
+        TestPatternSource, name="test_pattern"
     )
     video_encoder = stream_builder.add(
         H264Encoder,

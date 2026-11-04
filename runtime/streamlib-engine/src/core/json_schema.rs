@@ -1253,8 +1253,8 @@ mod config_schema_rendering_tests {
 
     fn descriptor_carrying(config_schema: Option<serde_json::Value>) -> ProcessorDescriptor {
         let descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new("TestPatternSource").unwrap(),
-            ProcessorClassImportPath::new("streamlib_media_builtins::test_pattern_source").unwrap(),
+            ProcessorClassShortName::new("RelayTrackSource").unwrap(),
+            ProcessorClassImportPath::new("streamlib_media_builtins::relay_track_source").unwrap(),
             "a probe",
         );
         match config_schema {
