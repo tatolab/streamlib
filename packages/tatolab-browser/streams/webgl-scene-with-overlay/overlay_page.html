@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Copyright (c) 2025 Jonathan Fontanez -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lower third</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font-family: -apple-system, "Helvetica Neue", sans-serif; }
+  #band {
+    position: absolute; left: 0; bottom: 0; width: 100%; height: 200px;
+    display: flex; align-items: stretch; border-radius: 18px; overflow: hidden;
+    background: linear-gradient(90deg, rgba(10, 12, 28, 0.88), rgba(10, 12, 28, 0.55));
+    box-shadow: 0 0 40px rgba(56, 189, 248, 0.35);
+    transform: translateX(-110%); animation: enter 1.2s cubic-bezier(.2,.9,.2,1) 0.4s forwards;
+  }
+  #accent { width: 16px; background: linear-gradient(180deg, #38bdf8, #a855f7, #f43f5e); background-size: 100% 300%; animation: hue 3s linear infinite; }
+  #text { flex: 1; padding: 26px 40px; color: #f8fafc; position: relative; }
+  #title { font-size: 64px; font-weight: 800; letter-spacing: 1px; }
+  #subtitle { font-size: 34px; color: #cbd5e1; margin-top: 6px; }
+  #clock { position: absolute; right: 40px; top: 30px; font-size: 52px; font-variant-numeric: tabular-nums; color: #38bdf8; }
+  #ticker { position: absolute; left: 40px; right: 40px; bottom: 14px; height: 30px; overflow: hidden; color: #fbbf24; font-size: 26px; white-space: nowrap; }
+  #ticker span { display: inline-block; padding-left: 100%; animation: scroll 14s linear infinite; }
+  #shine { position: absolute; top: 0; bottom: 0; width: 180px; left: -200px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent); animation: shine 2.6s ease-in-out infinite; }
+  @keyframes enter { to { transform: translateX(0); } }
+  @keyframes hue { to { background-position: 0 300%; } }
+  @keyframes scroll { to { transform: translateX(-100%); } }
+  @keyframes shine { 0% { left: -200px; } 60%, 100% { left: 110%; } }
+</style>
+</head>
+<body>
+<div id="band">
+  <div id="accent"></div>
+  <div id="text">
+    <div id="shine"></div>
+    <div id="title">StreamLib on macOS</div>
+    <div id="subtitle">Two Chromium tabs, zero-copy IOSurfaces, composited live on the GPU</div>
+    <div id="clock">00:00.00</div>
+    <div id="ticker"><span>WebGL raymarched scene at 1080p60 · HTML lower third over transparency · one shared browser host · frames never touch the CPU ·</span></div>
+  </div>
+</div>
+<script>
+  const clock = document.getElementById("clock");
+  const started = performance.now();
+  function tick(now) {
+    const centiseconds = Math.floor((now - started) / 10);
+    const minutes = String(Math.floor(centiseconds / 6000)).padStart(2, "0");
+    const seconds = String(Math.floor(centiseconds / 100) % 60).padStart(2, "0");
+    clock.textContent = `${minutes}:${seconds}.${String(centiseconds % 100).padStart(2, "0")}`;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
