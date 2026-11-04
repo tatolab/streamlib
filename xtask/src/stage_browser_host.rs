@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 use crate::build_runtime::{
-    browser_host_executable_beside_the_lend, runtime_unit_lend_directory_in_the_workspace,
+    browser_host_directory_beside_the_lend, runtime_unit_lend_directory_in_the_workspace,
 };
 
 /// The browser package's workspace, relative to this one.
@@ -40,17 +40,12 @@ pub fn runtime_unit_browser_host_directory_in_the_workspace(
     workspace_root: &Path,
 ) -> Result<PathBuf> {
     let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
-    let browser_host_executable = browser_host_executable_beside_the_lend(&lend_directory)
-        .with_context(|| {
-            format!(
-                "the lend at {} has no directory beside it",
-                lend_directory.display()
-            )
-        })?;
-    browser_host_executable
-        .parent()
-        .map(Path::to_path_buf)
-        .context("the browser host's executable sits in no directory")
+    browser_host_directory_beside_the_lend(&lend_directory).with_context(|| {
+        format!(
+            "the lend at {} has no directory beside it",
+            lend_directory.display()
+        )
+    })
 }
 
 /// The `cargo build` arguments that build both executables, optimized, from

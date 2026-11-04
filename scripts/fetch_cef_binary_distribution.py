@@ -6,7 +6,8 @@
     python3 -I scripts/fetch_cef_binary_distribution.py <directory>
 
 Reads the CEF version `cef-dll-sys` pins in `packages/tatolab-browser/Cargo.lock`,
-downloads that version's minimal Linux x86_64 archive from CEF's build CDN,
+downloads that version's minimal archive for this machine (Linux x86_64 or
+macOS arm64) from CEF's build CDN,
 checks it against the SHA-1 the CDN's index gives (the check `cef-dll-sys`
 makes itself), and lays it out in `<directory>` the way `cef-dll-sys` lays out
 a download, with `archive.json` naming it, plus the distribution's
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import shutil
 import sys
 import tarfile
@@ -30,7 +32,10 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 BROWSER_PACKAGE_LOCKFILE = WORKSPACE_ROOT / "packages" / "tatolab-browser" / "Cargo.lock"
 CEF_BINDINGS_CRATE = "cef-dll-sys"
 CEF_BUILDS_CDN_URL = "https://cef-builds.spotifycdn.com"
-CEF_PLATFORM = "linux64"
+CEF_PLATFORM_OF_THIS_MACHINE = {
+    ("linux", "x86_64"): "linux64",
+    ("darwin", "arm64"): "macosarm64",
+}
 CEF_ARCHIVE_TYPE = "minimal"
 DOWNLOAD_TIMEOUT_SECONDS = 600
 ARCHIVE_ENTRIES_LAID_OUT_BESIDE_THE_LIBRARIES = (
@@ -59,17 +64,26 @@ def cef_version_the_bindings_pin() -> str:
     return cef_version
 
 
+def cef_platform_of_this_machine() -> str:
+    """CEF's name for this machine's platform, refused by name for one the runtime does not ship on."""
+    machine = (sys.platform, platform.machine())
+    if machine not in CEF_PLATFORM_OF_THIS_MACHINE:
+        raise SystemExit(f"the browser host ships on {sorted(CEF_PLATFORM_OF_THIS_MACHINE)}, not {machine}")
+    return CEF_PLATFORM_OF_THIS_MACHINE[machine]
+
+
 def minimal_archive_of(cef_version: str) -> dict[str, str]:
     """The index's entry for `cef_version`'s minimal archive: its file name and SHA-1."""
+    cef_platform = cef_platform_of_this_machine()
     with urllib.request.urlopen(f"{CEF_BUILDS_CDN_URL}/index.json", timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
         index = json.load(response)
-    for version in index[CEF_PLATFORM]["versions"]:
+    for version in index[cef_platform]["versions"]:
         if version["cef_version"].split("+", 1)[0] != cef_version:
             continue
         for archive in version["files"]:
             if archive["type"] == CEF_ARCHIVE_TYPE:
                 return {"type": archive["type"], "name": archive["name"], "sha1": archive["sha1"]}
-    raise SystemExit(f"CEF's index has no {CEF_ARCHIVE_TYPE} {CEF_PLATFORM} archive of {cef_version}")
+    raise SystemExit(f"CEF's index has no {CEF_ARCHIVE_TYPE} {cef_platform} archive of {cef_version}")
 
 
 def download_checked(archive: dict[str, str], into: Path) -> Path:
@@ -89,13 +103,17 @@ def download_checked(archive: dict[str, str], into: Path) -> Path:
 
 
 def lay_out(archive_path: Path, archive: dict[str, str], cef_directory: Path) -> None:
-    """Unpack the archive's `Release/` and `Resources/` into `cef_directory`, with the build inputs and licence."""
+    """Unpack the archive's `Release/` and any `Resources/` into `cef_directory`, with the build inputs and licence.
+
+    A macOS archive has no `Resources/`: its resources sit inside the framework in `Release/`.
+    """
     with tempfile.TemporaryDirectory(dir=archive_path.parent) as extraction_directory:
         with tarfile.open(archive_path, "r:bz2") as archive_tar:
             archive_tar.extractall(extraction_directory, filter="data")
         extracted = Path(extraction_directory) / archive["name"].removesuffix(".tar.bz2")
         shutil.move(extracted / "Release", cef_directory)
-        for resource in (extracted / "Resources").iterdir():
+        resources = extracted / "Resources"
+        for resource in resources.iterdir() if resources.is_dir() else ():
             shutil.move(resource, cef_directory / resource.name)
         for entry_name in ARCHIVE_ENTRIES_LAID_OUT_BESIDE_THE_LIBRARIES:
             shutil.move(extracted / entry_name, cef_directory / entry_name)

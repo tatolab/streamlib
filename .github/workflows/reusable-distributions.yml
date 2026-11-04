@@ -470,8 +470,7 @@ jobs:
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
   # The node side of a web page source: its wheel carries no browser, which is
-  # the shared browser host the runtime unit ships. Linux only until its macOS
-  # half lands.
+  # the shared browser host the runtime unit ships.
   build-tatolab-browser-distribution:
     needs: build-tatolab-stream-distribution
     permissions:

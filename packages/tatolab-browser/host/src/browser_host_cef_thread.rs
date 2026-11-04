@@ -24,6 +24,7 @@ use crate::page_data_scripts_awaiting_the_loaded_document::PageDataScriptsAwaiti
 use crate::tenant_profile_directory::tenant_profile_directory;
 
 /// The binary CEF re-executes for its child processes, beside the host.
+#[cfg(target_os = "linux")]
 pub const BROWSER_SUBPROCESS_EXECUTABLE_NAME: &str = "tatolab-browser-subprocess";
 
 /// The longest the CEF thread sleeps when CEF asked for no pump sooner.
@@ -87,20 +88,15 @@ pub fn cef_thread_request_channel() -> (CefThreadRequestSender, Receiver<CefThre
 }
 
 /// Initialize CEF from the runtime in `cef_runtime_directory`, caching under
-/// `root_cache_directory`. Called on the thread that then serves requests.
+/// `root_cache_directory`. Called on the thread that then serves requests. On
+/// macOS CEF finds its framework, resources and helpers in the host's app
+/// bundle instead.
 pub fn initialize_cef(
     cef_runtime_directory: &Path,
     root_cache_directory: &Path,
     cef_thread_requests: &CefThreadRequestSender,
 ) -> Result<(), String> {
-    let subprocess_path = cef_runtime_directory.join(BROWSER_SUBPROCESS_EXECUTABLE_NAME);
-    if !subprocess_path.is_file() {
-        return Err(format!(
-            "the CEF runtime at {} holds no {BROWSER_SUBPROCESS_EXECUTABLE_NAME}; the runtime \
-             unit stages it beside the host",
-            cef_runtime_directory.display()
-        ));
-    }
+    let cef_runtime_settings = cef_runtime_settings_of(cef_runtime_directory)?;
     std::fs::create_dir_all(root_cache_directory).map_err(|failure| {
         format!(
             "CEF's cache directory {} could not be created: {failure}",
@@ -108,12 +104,8 @@ pub fn initialize_cef(
         )
     })?;
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-    let path_text = |path: &Path| CefString::from(path.to_string_lossy().as_ref());
     let settings = Settings {
         no_sandbox: 1,
-        browser_subprocess_path: path_text(&subprocess_path),
-        resources_dir_path: path_text(cef_runtime_directory),
-        locales_dir_path: path_text(&cef_runtime_directory.join("locales")),
         root_cache_path: path_text(root_cache_directory),
         log_file: path_text(&root_cache_directory.join("cef.log")),
         log_severity: LogSeverity::WARNING,
@@ -121,7 +113,7 @@ pub fn initialize_cef(
         external_message_pump: 1,
         command_line_args_disabled: 1,
         persist_session_cookies: 1,
-        ..Default::default()
+        ..cef_runtime_settings
     };
     let program_name = CString::new("tatolab-browser-host").expect("no interior NUL");
     let mut argv = [program_name.as_ptr().cast_mut()];
@@ -144,6 +136,37 @@ pub fn initialize_cef(
         ));
     }
     Ok(())
+}
+
+fn path_text(path: &Path) -> CefString {
+    CefString::from(path.to_string_lossy().as_ref())
+}
+
+/// Where CEF's subprocess, resources and locales sit in the runtime
+/// `cef_runtime_directory` holds.
+#[cfg(target_os = "linux")]
+fn cef_runtime_settings_of(cef_runtime_directory: &Path) -> Result<Settings, String> {
+    let subprocess_path = cef_runtime_directory.join(BROWSER_SUBPROCESS_EXECUTABLE_NAME);
+    if !subprocess_path.is_file() {
+        return Err(format!(
+            "the CEF runtime at {} holds no {BROWSER_SUBPROCESS_EXECUTABLE_NAME}; the runtime \
+             unit stages it beside the host",
+            cef_runtime_directory.display()
+        ));
+    }
+    Ok(Settings {
+        browser_subprocess_path: path_text(&subprocess_path),
+        resources_dir_path: path_text(cef_runtime_directory),
+        locales_dir_path: path_text(&cef_runtime_directory.join("locales")),
+        ..Default::default()
+    })
+}
+
+/// CEF finds its helpers in the app bundle's `Frameworks/`, named after the
+/// host's executable, and its resources in the framework.
+#[cfg(target_os = "macos")]
+fn cef_runtime_settings_of(_cef_runtime_directory: &Path) -> Result<Settings, String> {
+    Ok(Settings::default())
 }
 
 /// A page the CEF thread renders.
@@ -462,6 +485,9 @@ wrap_app! {
             for switch in ["no-zygote", "no-sandbox", "disable-extensions"] {
                 command_line.append_switch(Some(&CefString::from(switch)));
             }
+            // A service has no one to answer the login keychain's prompt.
+            #[cfg(target_os = "macos")]
+            command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
             command_line.append_switch_with_value(
                 Some(&CefString::from("autoplay-policy")),
                 Some(&CefString::from("no-user-gesture-required")),

@@ -107,15 +107,30 @@ pub fn lend_directory_in_the_runtime_unit(runtime_unit_root: &Path) -> PathBuf {
     runtime_unit_root.join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
 }
 
-/// The browser host's executable beside the lend at `lend_directory`, or `None`
+/// The browser host's app bundle in its directory on macOS, where CEF finds
+/// its framework and helpers inside the bundle.
+pub const BROWSER_HOST_APP_BUNDLE_DIRECTORY_NAME: &str = "tatolab-browser-host.app";
+
+/// The browser host's directory beside the lend at `lend_directory`, or `None`
 /// for a lend at the filesystem root.
+pub fn browser_host_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(lend_directory.parent()?.join(BROWSER_HOST_DIRECTORY_NAME))
+}
+
+/// The browser host's executable beside the lend at `lend_directory`, or `None`
+/// for a lend at the filesystem root: in its directory on Linux, inside its
+/// app bundle there on macOS.
 pub fn browser_host_executable_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
-    Some(
-        lend_directory
-            .parent()?
-            .join(BROWSER_HOST_DIRECTORY_NAME)
-            .join(BROWSER_HOST_EXECUTABLE_FILE_NAME),
-    )
+    let browser_host_directory = browser_host_directory_beside_the_lend(lend_directory)?;
+    if cfg!(target_os = "macos") {
+        return Some(
+            browser_host_directory
+                .join(BROWSER_HOST_APP_BUNDLE_DIRECTORY_NAME)
+                .join("Contents/MacOS")
+                .join(BROWSER_HOST_EXECUTABLE_FILE_NAME),
+        );
+    }
+    Some(browser_host_directory.join(BROWSER_HOST_EXECUTABLE_FILE_NAME))
 }
 
 /// The preview page's directory beside the lend at `lend_directory`, or `None`
@@ -186,6 +201,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_browser_host_sits_in_its_own_directory_beside_the_lend() {
         assert_eq!(
@@ -194,6 +210,20 @@ mod tests {
             )),
             Some(PathBuf::from(
                 "/opt/tatolab/lib/tatolab/browser-host/tatolab-browser-host"
+            ))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_browser_host_sits_in_its_app_bundle_beside_the_lend() {
+        assert_eq!(
+            browser_host_executable_beside_the_lend(&lend_directory_in_the_runtime_unit(
+                Path::new("/opt/tatolab")
+            )),
+            Some(PathBuf::from(
+                "/opt/tatolab/lib/tatolab/browser-host/tatolab-browser-host.app/Contents/MacOS/\
+                 tatolab-browser-host"
             ))
         );
     }
