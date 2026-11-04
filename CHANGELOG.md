@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.24](https://github.com/tatolab/streamlib/compare/v0.68.23...v0.68.24) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** upload each distribution to PyPI on its own, past a refused one ([#3131](https://github.com/tatolab/streamlib/issues/3131)) ([752f7e8](https://github.com/tatolab/streamlib/commit/752f7e8c99f2ee2468db28bd956b9f05b03b6bbe))
+* **release:** upload each distribution to PyPI on its own, past a refused one ([#3131](https://github.com/tatolab/streamlib/issues/3131)) ([05fbc0b](https://github.com/tatolab/streamlib/commit/05fbc0bf3abafddfd2469a626b036f9a990b6dba))
+
 ## [0.68.23](https://github.com/tatolab/streamlib/compare/v0.68.22...v0.68.23) (2026-11-04)
 
 
