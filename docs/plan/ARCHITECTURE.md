@@ -464,7 +464,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, virtual-camera-pipewire-door)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -542,10 +542,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   writing, reading and waiting on a port Python handed to native code, from any thread and
   without the GIL; the port's catalog entry; log records into the helper's log ring; the
   monotonic clock; the node's stop flag; and host capabilities, among them the audio device
-  interface. Only data-plane verbs and plain, generation-checked handles cross it, never an
+  interface and the virtual camera output stream. Only data-plane verbs and plain, generation-checked handles cross it, never an
   RHI object, and the engine never calls module code through it. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
-  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #PRNUM]
 - **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
   carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
   generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
@@ -1883,21 +1883,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   but a second concurrent holder can observe an edit mid-flight.
   [texture-backed-cpu-reach — SHIPPED #1940, #1941, #1942; macos-capability-parity — SHIPPED
   #2402, #2403]
-- **DECIDED** — The RHI imports a caller's own host mapping as memory the GPU writes
-  into: one primitive, `GpuContextFullAccess::import_host_mapping_for_gpu_writes` over
-  `HostMappingWrittenByGpu`, with the tier inside the abstraction and never at the caller.
-  Imported tier — `VK_EXT_external_memory_host`, enabled by the optional-extension pattern
-  with `minImportedHostPointerAlignment` snapshotted at device create — binds the
-  page-aligned range as a `STORAGE_BUFFER`, so a kernel's writes land in that memory and no
-  CPU touches them; publishing is a buffer barrier to the `HOST` stage. Staged tier — the
-  extension absent, or the driver declining that particular range — allocates host-cached
-  staging of the same length and publishes with one `memcpy`; never the write-combined
-  sequential-write allocation, whose cost the decode path already measured. The holder
-  reads `tier()` and `fallback_reason()` and logs which branch it took, once. This is what
-  lets an engine-side holder hand the GPU a device mapping it does not own rather than reading
-  pixels back to copy them in; no module reaches it, since the virtual camera copies one
-  host-visible pixel buffer into its loopback buffers.
-  [virtual-camera-sink — SHIPPED #2196]
 - **DECIDED** — `RhiColorConverter` runs both directions over one shader pair: the
   existing YUYV-buffer-to-RGBA-image pass, and its inverse writing an RGBA or BGRA image
   into a YUYV buffer at a stated destination stride, with the encoding matrix the algebraic
@@ -2187,7 +2172,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ virtual-camera-pipewire-door; unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2199,8 +2184,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   loads no camera code. A device is opened by the node that uses it, in its own process, under
   the stream's capture-prompting policy, and a native crash in a device or codec node ends that
   node's stream, not every stream on the machine. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
-- **DECIDED** — A virtual camera is a fifth device class: `VirtualCameraSink`, the pure-Python
-  `tatolab-virtualcamera` module, Linux only — with no Apple port, stated rather than deferred:
+- **DECIDED** — A virtual camera is a fifth device class: `VirtualCameraSink`, the
+  `tatolab-virtualcamera` extension module, Linux only — with no Apple port, stated rather than deferred:
   a macOS virtual camera is a CoreMediaIO Camera Extension inside a bundled, entitled,
   notarised app, which the floor rules out under any justification, and the DAL plug-in
   stopped loading in macOS 14.1; off Linux the node refuses at `setup()` naming the platform,
@@ -2212,13 +2197,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `StreamLib Camera` followed by a four-character id derived from the stream's project
   directory, the stream's id and the node's name, which the helper's context names — distinct
   across nodes and streams, the same on every run of the same stream, so unnamed cameras
-  never collide and a device left behind is still recognised; `door`, `auto` by default. The
-  one door is **v4l2loopback**: the node creates its own device through the module's control
+  never collide and a device left behind is still recognised; `door`, `auto` by default. Two
+  doors carry the camera, and `auto` takes v4l2loopback where its control node is writable and
+  PipeWire otherwise, refusing naming both doors' reasons and the verb only when neither
+  opens. The first door is **v4l2loopback**: the node creates its own device through the module's control
   node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to `name`, capture-only capabilities
   announced, four buffers) and removes it with `CTL_REMOVE` at teardown; it is the door every
   application sees — `/dev/video*` readers directly and portal-based readers through the
-  session manager's V4L2 mirror. `auto` and `v4l2loopback` take it; `door = "pipewire"` is
-  refused at `setup()` by name, as no PipeWire camera door is offered. The permission behind
+  session manager's V4L2 mirror. The permission behind
   it is the standard udev grant a desktop hands its seat user for a device node — the module
   loaded with no devices, and a rule tagging its control node `uaccess` — installed once by
   the user through the CLI's `enable-virtual-camera` verb behind the desktop's own password
@@ -2235,10 +2221,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   per-frame path is the engine's `convert_surface_into` writing the RGBA frame into a
   host-visible `yuyv` pixel buffer on the GPU, then one CPU copy of its rows into the mapped
   loopback buffer. The device is reached through V4L2 ioctls alone, from `ctypes` and
-  `fcntl`, so nothing is linked. An odd frame width is refused by name, since YUYV packs two
-  pixels to a macropixel. Owner rulings, 2026-09-06 and 2026-11-02.
+  `fcntl`, so nothing is linked. The second door is **PipeWire**: a `Video/Source` node with
+  `media.role = Camera`, named for the camera, registered at `setup()` and removed at
+  `teardown()`, which portal-based readers select with no kernel module and no grant. It is
+  opened in the node's own process through the module host table's virtual camera output
+  stream, over the engine's one PipeWire loader; it offers YUY2 in four shared-memory buffers
+  at the frame's extent, re-offered when the extent changes, and the per-frame path is the
+  same `convert_surface_into` into a `yuyv` pixel buffer, then one CPU copy of its rows into
+  the buffer PipeWire hands out, stamped with the frame's monotonic timestamp. A frame with no
+  consumer watching, or with every buffer held by the consumer, is dropped rather than waited
+  on. Where no libpipewire loads or no daemon answers, the door refuses at `setup()` by name.
+  An odd frame width is refused by name on either door, since YUYV packs two pixels to a
+  macropixel. Owner rulings, 2026-09-06, 2026-11-02 and 2026-11-04.
   [virtual-camera-sink — SHIPPED #2196, #2197, #2198; macos-capability-parity;
-  runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
+  runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123;
+  virtual-camera-pipewire-door — SHIPPED #PRNUM]
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the

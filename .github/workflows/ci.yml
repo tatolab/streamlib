@@ -439,6 +439,7 @@ jobs:
             packages/streamlib-h264 -> target
             packages/streamlib-h265 -> target
             packages/tatolab-rive -> target
+            packages/tatolab-virtualcamera -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
@@ -655,13 +656,17 @@ jobs:
           .venv/bin/python -m pytest tests -v
           uvx pyright@1.1.411
 
-      # Pure Python; its camera tests ran in the integration suite above, whose
-      # venv installs it.
-      - name: "Virtual camera: GPU-free tests and types"
+      # Its camera tests ran in the integration suite above, whose venv
+      # installs it; here its door choice, its kernel ABI, lints and stub.
+      - name: "Virtual camera: formatting, crate clippy, stub, GPU-free tests and types"
         working-directory: packages/tatolab-virtualcamera
         run: |
+          cargo fmt --all --check
+          cargo clippy --locked --lib --all-targets -- -D warnings
           uv venv --python 3.10 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+          .venv/bin/python -m mypy.stubtest tatolab.virtualcamera._native
           .venv/bin/python -m pytest tests -v
           uvx pyright@1.1.411
 

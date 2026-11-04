@@ -1,0 +1,30 @@
+[package]
+name = "tatolab-virtualcamera"
+version = "0.68.21"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "A virtual camera for StreamLib, as the tatolab-virtualcamera extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `tatolab.virtualcamera` imports. cdylib only: nothing
+# links this crate as a Rust library.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.10 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+
+# The PipeWire camera door, reached through the module host table. It links no
+# engine and no libpipewire.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.7.0", features = ["pyo3"] }
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

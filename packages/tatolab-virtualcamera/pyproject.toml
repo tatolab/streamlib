@@ -1,18 +1,22 @@
 [build-system]
-requires = ["hatchling>=1.27"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "tatolab-virtualcamera"
-version = "0.68.20"
-description = "A virtual camera for Tatolab streams: video frames in, a v4l2loopback camera any Linux application can select out."
+version = "0.68.21"
+description = "A virtual camera for Tatolab streams: video frames in, a v4l2loopback or PipeWire camera any Linux application can select out."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "BUSL-1.1"
-license-files = ["LICENSE"]
+license = { text = "BUSL-1.1" }
+# PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
+# dependency's, generated over this project's own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory <this directory>`.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Operating System :: POSIX :: Linux",
     "Topic :: Multimedia :: Video",
     "Typing :: Typed",
@@ -35,17 +39,10 @@ Source = "https://github.com/tatolab/streamlib"
 [dependency-groups]
 test = ["pytest>=7.0"]
 
-[tool.hatch.build.targets.wheel]
-# `tatolab` is a PEP 420 namespace shared with `tatolab.stream`, so no
-# distribution ships `tatolab/__init__.py`.
-packages = ["python/tatolab"]
-exclude = ["**/__pycache__"]
-
-[tool.hatch.build.targets.sdist]
-only-include = ["python/tatolab", "tests", "README.md", "pyproject.toml", "hatch_build.py"]
-exclude = ["**/__pycache__"]
-
-[tool.hatch.build.targets.sdist.hooks.custom]
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.virtualcamera._native"
+features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,3 +54,5 @@ pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+# `_native` is a compiled artifact; `mypy.stubtest` checks the stub against it.
+reportMissingModuleSource = "none"

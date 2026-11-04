@@ -442,58 +442,20 @@ jobs:
           path: packages/tatolab-testpattern/dist/*.whl
           if-no-files-found: error
 
-  # Pure Python and Linux only at run time, so one wheel serves every platform.
-  # A wheel only: an sdist would archive LICENSE as the symlink it is here.
+  # Linux only at run time — both of its doors are Linux's — so a manylinux
+  # wheel only.
   build-tatolab-virtualcamera-distribution:
-    name: tatolab-virtualcamera wheel
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    needs: build-tatolab-stream-distribution
     permissions:
       contents: read
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag_name }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ env.PINNED_UV_VERSION }}
-
-      - name: Build the tatolab-virtualcamera wheel
-        run: uv build --wheel --out-dir packages/tatolab-virtualcamera/dist packages/tatolab-virtualcamera
-
-      - name: The wheel ships the sink, its kernel ABI and its licence and no tatolab/__init__.py
-        run: |
-          set -euo pipefail
-          unzip -Z1 packages/tatolab-virtualcamera/dist/*.whl > /tmp/virtualcamera-wheel-member-names.txt
-          for required_member in \
-            tatolab/virtualcamera/__init__.py \
-            tatolab/virtualcamera/v4l2_output_device_abi.py \
-            tatolab/virtualcamera/v4l2loopback_control_node.py \
-            tatolab/virtualcamera/v4l2_loopback_output_device.py; do
-            if ! grep -qx "$required_member" /tmp/virtualcamera-wheel-member-names.txt; then
-              echo "::error::the tatolab-virtualcamera wheel does not list $required_member"
-              exit 1
-            fi
-          done
-          if ! grep -q '\.dist-info/licenses/LICENSE$' /tmp/virtualcamera-wheel-member-names.txt; then
-            echo "::error::the tatolab-virtualcamera wheel carries no LICENSE in .dist-info/licenses/"
-            exit 1
-          fi
-          if grep -qx 'tatolab/__init__.py' /tmp/virtualcamera-wheel-member-names.txt; then
-            echo "::error::the tatolab-virtualcamera wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
-            exit 1
-          fi
-
-      - name: Keep the wheel for the upload
-        uses: actions/upload-artifact@v6
-        with:
-          name: pypi-distribution-tatolab-virtualcamera
-          path: packages/tatolab-virtualcamera/dist/*.whl
-          if-no-files-found: error
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-virtualcamera
+      extension_distribution_name: tatolab-virtualcamera
+      extension_import_package_name: tatolab.virtualcamera
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      extension_builds_for_macos: false
 
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution

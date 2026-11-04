@@ -90,21 +90,23 @@ stays in Python, unchanged. Recommended because the host table is reached only f
 
 - **Host table minor 7 — the virtual camera output stream.** Appended after
   `surface_lend_by_surface_id`:
-  `virtual_camera_stream_open(node_host, request, opened, error) -> handle`,
-  `virtual_camera_stream_offer_extent(node_host, handle, width, height, error)`,
-  `virtual_camera_stream_write_yuyv_frame(node_host, handle, rows, stride_bytes, timestamp_ns, presented, error)`,
-  `virtual_camera_stream_liveness(node_host, handle, error)`,
-  `virtual_camera_stream_close(node_host, handle)`.
-  `ModuleHostTableVirtualCameraStreamRequest { camera_name: ModuleHostTableUtf8, reserved }`;
-  `presented` reports published, no consumer watching, or every buffer held by the consumer.
-  Layout regression tests beside the audio ones; the generated C header regenerates.
-  `host_capabilities_json` names `virtual_camera_output` where the PipeWire camera door
-  answers. Implemented in `python_module_host_table/virtual_camera_streams.rs`.
+  `virtual_camera_stream_open(node_host, camera_name, opened_camera, error)`,
+  `virtual_camera_stream_offer_extent(node_host, camera, width, height, frames_per_second, error)`,
+  `virtual_camera_stream_write_yuyv_frame(node_host, camera, yuyv_rows, stride_bytes, timestamp_ns, frame_presentation, error)`,
+  `virtual_camera_stream_liveness(node_host, camera, error)`,
+  `virtual_camera_stream_close(node_host, camera)`, over a plain
+  `ModuleHostTableVirtualCameraStreamHandle`. `frame_presentation` reports published, no
+  consumer watching, or every buffer held by the consumer
+  (`MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*`). Layout regression tests beside the audio
+  ones; the generated C header regenerates; `tatolab-module-sdk` is 1.7.0 and every extension
+  package is relocked on it. Implemented in `python_module_host_table/virtual_camera_streams.rs`.
 - **`tatolab-module-sdk`'s safe wrapper** `ModuleHostVirtualCameraStream`, beside
   `module_host_audio_playback.rs`.
-- **The module's native half** — `tatolab.virtualcamera._native.PipeWireCameraDoor(camera_name)`
-  with `offer_extent(width, height)`, `write_yuyv_frame(rows, stride_bytes, timestamp_ns) ->
-  str` and `close()`, each a host table call, and its `.pyi`.
+- **The module's native half** — `tatolab.virtualcamera._native.PipeWireCameraDoor(module_host_table, camera_name)`
+  with `offer_extent(width, height, frames_per_second=None)`, `write_yuyv_frame(rows_address,
+  rows_byte_count, stride_bytes, timestamp_ns) -> str`, `failure_that_ended_the_camera` and
+  `close()`, each a host table call, and its `.pyi`; `pipewire_camera_presentation.py` holds
+  the per-frame path.
 - **`door = "pipewire"` and `auto`'s fallback** in `VirtualCameraSink.setup()`. A PipeWire
   door that will not open is refused naming why (no libpipewire, no daemon answering). `auto`
   with neither door refuses naming both reasons and the verb.
