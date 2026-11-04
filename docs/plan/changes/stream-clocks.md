@@ -184,12 +184,14 @@ DECIDED and SHIPPED.
   scaffold's and README's "the monotonic clock every node shares" is reworded in the engine tree;
   `examples/raytracing-showcase` keeps the phrase, being a consumer outside the migration.
 
-## [NEEDS DECISION] A — how a scaled stream runs faster than 1×
+## DECIDED A — how a scaled stream runs faster than 1×
+
+Owner chose A1, 2026-11-04: barrier above 1×, free at or below.
 
 The plan says scaled time is `base + scale × elapsed` and that faster than real time runs behind
 the step barrier. Those meet at a scale above 1, and the scale changes live.
 
-- **A1 (recommended) — barrier above 1×, free at or below.** At or below 1× a scaled stream runs
+- **A1 (chosen) — barrier above 1×, free at or below.** At or below 1× a scaled stream runs
   free, as above. Above 1× it runs as a stepped stream paced at `scale`, from the stream time it
   had, in steps of the clock's `step_ns`; crossing 1× live switches between the two at the
   current stream time. Nothing drops above 1×; the warp slows when the graph cannot keep up.
