@@ -48,7 +48,9 @@ on:
 jobs:
   build-extension-wheel:
     name: ${{ matrix.platform }} wheel (${{ inputs.extension_distribution_name }})
-    runs-on: ${{ matrix.runner }}
+    # macos-26 is pinned for the reason reusable-macos-runtime-unit.yml pins it:
+    # the image decides the SDK the wheel links against.
+    runs-on: ${{ matrix.platform == 'manylinux' && 'ubuntu-latest' || 'macos-26' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -60,13 +62,6 @@ jobs:
       fail-fast: false
       matrix:
         platform: [manylinux, aarch64-apple-darwin]
-        include:
-          - platform: manylinux
-            runner: ubuntu-latest
-          # Pinned for the reason reusable-macos-runtime-unit.yml pins it: the image decides
-          # the SDK the wheel links against.
-          - platform: aarch64-apple-darwin
-            runner: macos-26
         exclude:
           - platform: ${{ !inputs.extension_builds_for_macos && 'aarch64-apple-darwin' || 'no-platform-excluded' }}
 
