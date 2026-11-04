@@ -38,7 +38,12 @@ exclude = ["python/tatolab/browser/cef/**"]
 
 [tool.pyright]
 include = ["python", "streams"]
-extraPaths = ["python", "../streamlib-h264/python"]
+extraPaths = [
+    "python",
+    "../streamlib-h264/python",
+    "../tatolab-camera/python",
+    "../tatolab-microphone/python",
+]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."
