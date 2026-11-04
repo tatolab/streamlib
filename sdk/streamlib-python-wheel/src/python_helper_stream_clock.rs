@@ -98,11 +98,4 @@ impl PythonStreamClockReading {
     fn step_index(&self) -> Option<u64> {
         self.reading.step_index
     }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "StreamClockReading(mode={:?}, scale={}, step_ns={:?}, step_index={:?})",
-            self.reading.mode, self.reading.scale, self.reading.step_ns, self.reading.step_index
-        )
-    }
 }
