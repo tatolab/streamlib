@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use tatolab_browser_tab_protocol::PaintedIOSurfaceSenderOfTheBrowserHost;
 use tatolab_browser_tab_protocol::{
     BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest, TAB_PROTOCOL_VERSION,
     TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter, TabProtocolSocketFailure,
@@ -53,10 +55,15 @@ pub struct BrowserHostTab {
     last_painted_texture_number_the_node_copied: Mutex<u64>,
     painted_texture_copied_by_the_node: Condvar,
     painted_texture_copies_not_answered_in_time: AtomicU64,
+    /// The node's Mach port painted IOSurfaces cross on, `None` when the
+    /// request named none or it was not found.
+    #[cfg(target_os = "macos")]
+    painted_iosurface_sender: Option<PaintedIOSurfaceSenderOfTheBrowserHost>,
 }
 
 /// One texture CEF painted the page into, as `on_accelerated_paint` hands it:
 /// its descriptors are CEF's, live only for the length of that call.
+#[cfg(target_os = "linux")]
 pub struct PaintedTextureOfThePage {
     pub width: u32,
     pub height: u32,
@@ -68,6 +75,16 @@ pub struct PaintedTextureOfThePage {
     pub drm_format_modifier: u64,
 }
 
+/// One IOSurface CEF painted the page into, as `on_accelerated_paint` hands
+/// it: CEF's, live only for the length of that call.
+#[cfg(target_os = "macos")]
+pub struct PaintedTextureOfThePage {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: &'static str,
+    pub iosurface: *const std::ffi::c_void,
+}
+
 impl BrowserHostTab {
     pub fn new(
         tab_id: BrowserHostTabId,
@@ -77,7 +94,6 @@ impl BrowserHostTab {
     ) -> Self {
         Self {
             tab_id,
-            tab_request,
             writer_to_the_node: Mutex::new(writer_to_the_node),
             frame_slots,
             frame_slots_held_by_the_node: AtomicU32::new(0),
@@ -94,7 +110,19 @@ impl BrowserHostTab {
             last_painted_texture_number_the_node_copied: Mutex::new(0),
             painted_texture_copied_by_the_node: Condvar::new(),
             painted_texture_copies_not_answered_in_time: AtomicU64::new(0),
+            #[cfg(target_os = "macos")]
+            painted_iosurface_sender: painted_iosurface_sender_of(&tab_request),
+            tab_request,
         }
+    }
+
+    /// Whether CEF paints this tab into textures handed to the node.
+    pub fn paints_into_shared_textures(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        let painted_textures_can_cross = self.painted_iosurface_sender.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let painted_textures_can_cross = true;
+        self.tab_request.paint_into_shared_textures && painted_textures_can_cross
     }
 
     pub fn connection_ended(&self) -> bool {
@@ -282,20 +310,7 @@ impl BrowserHostTab {
         let painted_texture_number = self
             .next_painted_texture_number
             .fetch_add(1, Ordering::Relaxed);
-        let handed_over = self.send_to_the_node_carrying(
-            &TabProtocolMessageFromBrowserHost::TexturePainted {
-                painted_texture_number,
-                width: painted.width,
-                height: painted.height,
-                pixel_format: painted.pixel_format.to_string(),
-                allocation_byte_size: painted.allocation_byte_size,
-                plane_offsets_bytes: painted.plane_offsets_bytes,
-                plane_strides_bytes: painted.plane_strides_bytes,
-                drm_format_modifier: painted.drm_format_modifier,
-            },
-            &painted.plane_descriptors,
-        );
-        if !handed_over {
+        if !self.send_the_painted_texture_to_the_node(painted, painted_texture_number) {
             return;
         }
         if !self.wait_for_the_node_to_copy(painted_texture_number, PAINTED_TEXTURE_COPY_BUDGET) {
@@ -314,6 +329,72 @@ impl BrowserHostTab {
             }
         }
         self.count_one_painted_frame();
+    }
+
+    /// Send `painted` as `painted_texture_number`, its DMA-BUF planes riding
+    /// on the message; `false` once it was not sent.
+    #[cfg(target_os = "linux")]
+    fn send_the_painted_texture_to_the_node(
+        &self,
+        painted: PaintedTextureOfThePage,
+        painted_texture_number: u64,
+    ) -> bool {
+        self.send_to_the_node_carrying(
+            &TabProtocolMessageFromBrowserHost::TexturePainted {
+                painted_texture_number,
+                width: painted.width,
+                height: painted.height,
+                pixel_format: painted.pixel_format.to_string(),
+                allocation_byte_size: painted.allocation_byte_size,
+                plane_offsets_bytes: painted.plane_offsets_bytes,
+                plane_strides_bytes: painted.plane_strides_bytes,
+                drm_format_modifier: painted.drm_format_modifier,
+            },
+            &painted.plane_descriptors,
+        )
+    }
+
+    /// Send `painted`'s IOSurface across the node's Mach port, then the
+    /// message naming it as `painted_texture_number`; `false` once either
+    /// was not sent.
+    #[cfg(target_os = "macos")]
+    fn send_the_painted_texture_to_the_node(
+        &self,
+        painted: PaintedTextureOfThePage,
+        painted_texture_number: u64,
+    ) -> bool {
+        let Some(painted_iosurface_sender) = &self.painted_iosurface_sender else {
+            return false;
+        };
+        if self.connection_ended() {
+            return false;
+        }
+        // SAFETY: CEF's IOSurface is live for the `on_accelerated_paint` call
+        // this runs in.
+        let crossed = unsafe {
+            painted_iosurface_sender.send_painted_iosurface(
+                painted.iosurface,
+                painted_texture_number,
+                PAINTED_TEXTURE_COPY_BUDGET,
+            )
+        };
+        if let Err(failure) = crossed {
+            tracing::warn!("painted texture {painted_texture_number} did not cross: {failure}");
+            return false;
+        }
+        self.send_to_the_node_carrying(
+            &TabProtocolMessageFromBrowserHost::TexturePainted {
+                painted_texture_number,
+                width: painted.width,
+                height: painted.height,
+                pixel_format: painted.pixel_format.to_string(),
+                allocation_byte_size: 0,
+                plane_offsets_bytes: Vec::new(),
+                plane_strides_bytes: Vec::new(),
+                drm_format_modifier: 0,
+            },
+            &[],
+        )
     }
 
     /// The node copied painted texture `painted_texture_number`.
@@ -410,6 +491,22 @@ impl BrowserHostTab {
     }
 }
 
+/// The node's Mach port `tab_request` names, looked up once for the tab.
+#[cfg(target_os = "macos")]
+fn painted_iosurface_sender_of(
+    tab_request: &BrowserHostTabRequest,
+) -> Option<PaintedIOSurfaceSenderOfTheBrowserHost> {
+    let service_name = tab_request.painted_iosurface_mach_service_name.as_deref()?;
+    PaintedIOSurfaceSenderOfTheBrowserHost::look_up(service_name)
+        .inspect_err(|failure| {
+            tracing::warn!(
+                "the node's Mach port {service_name} was not found, so the page paints into \
+                 frame slots: {failure}"
+            );
+        })
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +527,7 @@ mod tests {
                 audio_sample_rate: 48_000,
                 frame_slot_count: slot_count,
                 paint_into_shared_textures: false,
+                painted_iosurface_mach_service_name: None,
             },
             TabProtocolMessageWriter::over(host_end),
             BrowserHostTabFrameSlots::create(slot_count, 2, 1).unwrap(),
@@ -464,6 +562,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "linux")]
     fn a_painted_texture_of(tab: &BrowserHostTab, plane_descriptor: RawFd) {
         tab.hand_a_painted_texture_to_the_node(PaintedTextureOfThePage {
             width: 2,
@@ -477,6 +576,7 @@ mod tests {
         });
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_painted_texture_is_handed_over_with_its_plane() {
         use std::os::fd::AsRawFd;
@@ -523,6 +623,7 @@ mod tests {
         copying_node.join().unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_painted_texture_the_node_does_not_copy_in_time_is_counted() {
         use std::os::fd::AsRawFd;
@@ -540,6 +641,33 @@ mod tests {
                 .load(Ordering::Relaxed),
             1
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_tab_whose_mach_port_is_not_found_paints_into_frame_slots() {
+        let (host_end, _node_end) = UnixStream::pair().unwrap();
+        let tab = BrowserHostTab::new(
+            1,
+            BrowserHostTabRequest {
+                tenant_stream_id: "stream".to_string(),
+                url: "about:blank".to_string(),
+                width: 2,
+                height: 1,
+                frame_rate: 30,
+                transparent_background: true,
+                audio_sample_rate: 48_000,
+                frame_slot_count: 1,
+                paint_into_shared_textures: true,
+                painted_iosurface_mach_service_name: Some(format!(
+                    "com.tatolab.browser.paint.nobody.{}",
+                    std::process::id()
+                )),
+            },
+            TabProtocolMessageWriter::over(host_end),
+            BrowserHostTabFrameSlots::create(1, 2, 1).unwrap(),
+        );
+        assert!(!tab.paints_into_shared_textures());
     }
 
     #[test]

@@ -31,10 +31,20 @@ impl PaintedTextureDmaBufIdentity {
     }
 }
 
-/// Where a painted texture's pixels sit in its DMA-BUF.
+/// The buffer a painted texture lives in, found again on every handover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintedTextureIdentity {
+    DmaBuf(PaintedTextureDmaBufIdentity),
+    /// The system-wide id `IOSurfaceGetID` names the surface by.
+    IOSurface {
+        iosurface_id: u32,
+    },
+}
+
+/// Where a painted texture's pixels sit in the buffer it lives in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaintedTextureLayout {
-    pub dma_buf_identity: PaintedTextureDmaBufIdentity,
+    pub painted_texture_identity: PaintedTextureIdentity,
     pub width: u32,
     pub height: u32,
     pub pixel_format: String,
@@ -44,22 +54,24 @@ pub struct PaintedTextureLayout {
     pub drm_format_modifier: u64,
 }
 
-/// One painted texture as the node adopted it, held with the DMA-BUF it was
-/// adopted from.
-struct PaintedTextureAdoptedByTheNode<AdoptedSurface> {
+/// One painted texture as the node adopted it, held with the DMA-BUF or
+/// IOSurface it was adopted from, which outlives the adopted surface.
+struct PaintedTextureAdoptedByTheNode<AdoptedSurface, AdoptedFrom> {
     adopted_surface: AdoptedSurface,
-    _adopted_dma_buf: File,
+    _adopted_from: AdoptedFrom,
 }
 
 /// The painted textures one tab connection adopted, oldest first.
-pub struct PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
+pub struct PaintedTexturesAdoptedByTheNode<AdoptedSurface, AdoptedFrom> {
     adopted: VecDeque<(
         PaintedTextureLayout,
-        PaintedTextureAdoptedByTheNode<AdoptedSurface>,
+        PaintedTextureAdoptedByTheNode<AdoptedSurface, AdoptedFrom>,
     )>,
 }
 
-impl<AdoptedSurface> Default for PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
+impl<AdoptedSurface, AdoptedFrom> Default
+    for PaintedTexturesAdoptedByTheNode<AdoptedSurface, AdoptedFrom>
+{
     fn default() -> Self {
         Self {
             adopted: VecDeque::new(),
@@ -67,14 +79,15 @@ impl<AdoptedSurface> Default for PaintedTexturesAdoptedByTheNode<AdoptedSurface>
     }
 }
 
-impl<AdoptedSurface> PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
-    /// The surface adopted for `layout`, adopting `dma_buf` through `adopt`
-    /// the first time the layout is seen; past the bound the oldest is let go.
+impl<AdoptedSurface, AdoptedFrom> PaintedTexturesAdoptedByTheNode<AdoptedSurface, AdoptedFrom> {
+    /// The surface adopted for `layout`, adopting `adopted_from` through
+    /// `adopt` the first time the layout is seen; past the bound the oldest
+    /// is let go.
     pub fn adopted_or_adopt<Refusal>(
         &mut self,
         layout: PaintedTextureLayout,
-        dma_buf: File,
-        adopt: impl FnOnce(&File) -> Result<AdoptedSurface, Refusal>,
+        adopted_from: AdoptedFrom,
+        adopt: impl FnOnce(&AdoptedFrom) -> Result<AdoptedSurface, Refusal>,
     ) -> Result<&AdoptedSurface, Refusal> {
         let index = match self
             .adopted
@@ -83,7 +96,7 @@ impl<AdoptedSurface> PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
         {
             Some(index) => index,
             None => {
-                let adopted_surface = adopt(&dma_buf)?;
+                let adopted_surface = adopt(&adopted_from)?;
                 if self.adopted.len() == MOST_PAINTED_TEXTURES_ADOPTED_BY_ONE_TAB {
                     self.adopted.pop_front();
                 }
@@ -91,7 +104,7 @@ impl<AdoptedSurface> PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
                     layout,
                     PaintedTextureAdoptedByTheNode {
                         adopted_surface,
-                        _adopted_dma_buf: dma_buf,
+                        _adopted_from: adopted_from,
                     },
                 ));
                 self.adopted.len() - 1
@@ -112,7 +125,9 @@ mod tests {
 
     fn layout_of(inode: u64) -> PaintedTextureLayout {
         PaintedTextureLayout {
-            dma_buf_identity: PaintedTextureDmaBufIdentity { device: 1, inode },
+            painted_texture_identity: PaintedTextureIdentity::DmaBuf(
+                PaintedTextureDmaBufIdentity { device: 1, inode },
+            ),
             width: 2,
             height: 1,
             pixel_format: "bgra32".to_string(),
@@ -183,12 +198,29 @@ mod tests {
 
     #[test]
     fn a_refused_adoption_is_not_kept() {
-        let mut adopted = PaintedTexturesAdoptedByTheNode::<u32>::default();
+        let mut adopted = PaintedTexturesAdoptedByTheNode::<u32, File>::default();
         let refused = adopted.adopted_or_adopt(layout_of(7), a_descriptor(), |_| {
             Err("only the linear modifier".to_string())
         });
         assert_eq!(refused.err().as_deref(), Some("only the linear modifier"));
         assert_eq!(adopted.adopted_count(), 0);
+    }
+
+    #[test]
+    fn an_iosurface_and_a_dma_buf_are_never_the_same_texture() {
+        let mut adopted = PaintedTexturesAdoptedByTheNode::default();
+        adopted
+            .adopted_or_adopt(layout_of(7), a_descriptor(), |_| Ok::<_, String>(1))
+            .unwrap();
+        let iosurface_layout = PaintedTextureLayout {
+            painted_texture_identity: PaintedTextureIdentity::IOSurface { iosurface_id: 7 },
+            ..layout_of(7)
+        };
+        let surface = adopted
+            .adopted_or_adopt(iosurface_layout, a_descriptor(), |_| Ok::<_, String>(2))
+            .unwrap();
+        assert_eq!(*surface, 2);
+        assert_eq!(adopted.adopted_count(), 2);
     }
 
     #[test]

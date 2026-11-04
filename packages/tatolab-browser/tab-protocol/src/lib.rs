@@ -11,10 +11,17 @@
 //! another [`TAB_PROTOCOL_VERSION`] refuses it by name.
 
 mod browser_host_tab_frame_slots;
+#[cfg(target_os = "macos")]
+mod painted_iosurface_mach_channel;
 mod tab_protocol_socket;
 
 pub use browser_host_tab_frame_slots::{
     BrowserHostTabFrameSlots, FRAME_SLOT_BYTES_PER_PIXEL, frame_slot_byte_size,
+};
+#[cfg(target_os = "macos")]
+pub use painted_iosurface_mach_channel::{
+    PaintedIOSurfaceReceiverOfTheNode, PaintedIOSurfaceSenderOfTheBrowserHost,
+    RetainedPaintedIOSurface,
 };
 pub use tab_protocol_socket::{
     MOST_TAB_PROTOCOL_MESSAGE_BYTES, TabProtocolMessageReader, TabProtocolMessageWriter,
@@ -24,7 +31,7 @@ pub use tab_protocol_socket::{
 use serde::{Deserialize, Serialize};
 
 /// The protocol version this build speaks; a peer speaking another is refused.
-pub const TAB_PROTOCOL_VERSION: u32 = 2;
+pub const TAB_PROTOCOL_VERSION: u32 = 3;
 
 /// The shared service name a node leases the browser host by.
 pub const BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "browser-host";
@@ -43,10 +50,14 @@ pub struct BrowserHostTabRequest {
     /// How many painted frames the host may hand the node before it is
     /// given one back.
     pub frame_slot_count: u32,
-    /// Paint into GPU textures handed over as DMA-BUFs, each answered with
+    /// Paint into GPU textures handed over as DMA-BUFs on Linux or IOSurfaces
+    /// on macOS, each answered with
     /// [`TabProtocolMessageFromNode::PaintedTextureCopied`], rather than into
     /// the frame slots.
     pub paint_into_shared_textures: bool,
+    /// The bootstrap name of the Mach port the node receives painted
+    /// IOSurfaces on, macOS only.
+    pub painted_iosurface_mach_service_name: Option<String>,
 }
 
 /// One message a node sends the host.
@@ -100,10 +111,12 @@ pub enum TabProtocolMessageFromBrowserHost {
         height: u32,
         row_stride_bytes: u32,
     },
-    /// The page painted into a GPU texture, one DMA-BUF descriptor per plane
-    /// riding on the message; the page paints into it again only once the
-    /// node answers [`TabProtocolMessageFromNode::PaintedTextureCopied`] or
-    /// the host stops waiting.
+    /// The page painted into a GPU texture: on Linux one DMA-BUF descriptor
+    /// per plane rides on the message, and on macOS the IOSurface crossed
+    /// first on the request's Mach port with no plane listed here. The page
+    /// paints into it again only once the node answers
+    /// [`TabProtocolMessageFromNode::PaintedTextureCopied`] or the host stops
+    /// waiting.
     TexturePainted {
         painted_texture_number: u64,
         width: u32,
@@ -241,6 +254,7 @@ mod tests {
             audio_sample_rate: 48_000,
             frame_slot_count: 3,
             paint_into_shared_textures: true,
+            painted_iosurface_mach_service_name: Some("com.tatolab.browser.paint.1.1".into()),
         }
     }
 

@@ -8,10 +8,8 @@
 //! host, whose paints, audio and published objects this module's threads
 //! publish through the table with no Python attached.
 
-#[cfg(not(target_os = "linux"))]
-compile_error!(
-    "tatolab-browser paints through host table 1.5's Linux upload; its macOS half follows"
-);
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!("tatolab-browser runs on Linux and macOS");
 
 pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
