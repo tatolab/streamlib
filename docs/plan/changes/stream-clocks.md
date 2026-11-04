@@ -178,10 +178,11 @@ DECIDED and SHIPPED.
 - REMOVED: TimeContext
 - REMOVED: time_context.rs
 - REMOVED: sleep_duration
-- REMOVED: the monotonic clock every node shares
 
   `TimeContext` is replaced by `StreamClock`, not kept beside it. `sleep_duration` is the native
-  continuous runner's sleep (`thread_runner.rs:121-154`), replaced by the deadline wait.
+  continuous runner's sleep (`thread_runner.rs:121-154`), replaced by the deadline wait. The
+  scaffold's and README's "the monotonic clock every node shares" is reworded in the engine tree;
+  `examples/raytracing-showcase` keeps the phrase, being a consumer outside the migration.
 
 ## [NEEDS DECISION] A — how a scaled stream runs faster than 1×
 
