@@ -68,6 +68,15 @@ const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1
 const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
 
+/// How one send to the host went.
+enum SendToTheBrowserHostOutcome {
+    Sent,
+    /// The message cannot be sent at all, and why; nothing was written.
+    RefusedBeforeWriting(String),
+    /// No connection, or the one there was has ended.
+    BrowserHostAway,
+}
+
 /// What a page is opened with.
 #[derive(Debug, Clone)]
 pub struct BrowserPageConfig {
@@ -148,20 +157,29 @@ impl BrowserHostTabOfOneNode {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Send `message`; a send that fails or runs past its budget leaves the
-    /// stream partly written, so it ends the connection.
-    fn send_to_the_browser_host(&self, message: &TabProtocolMessageFromNode) -> bool {
+    /// Send `message`. One refused before a byte was written leaves the
+    /// connection as it was; a send that failed or ran past its budget leaves
+    /// the stream partly written, so it ends the connection.
+    fn send_to_the_browser_host(
+        &self,
+        message: &TabProtocolMessageFromNode,
+    ) -> SendToTheBrowserHostOutcome {
         let mut writer = self.writer();
         let Some(open_writer) = writer.as_mut() else {
-            return false;
+            return SendToTheBrowserHostOutcome::BrowserHostAway;
         };
-        if open_writer.send(message, &[]).is_ok() {
-            return true;
+        match open_writer.send(message, &[]) {
+            Ok(()) => SendToTheBrowserHostOutcome::Sent,
+            Err(TabProtocolSocketFailure::Encoding(refusal)) => {
+                SendToTheBrowserHostOutcome::RefusedBeforeWriting(refusal)
+            }
+            Err(_) => {
+                if let Some(failed_writer) = writer.take() {
+                    failed_writer.shut_down();
+                }
+                SendToTheBrowserHostOutcome::BrowserHostAway
+            }
         }
-        if let Some(failed_writer) = writer.take() {
-            failed_writer.shut_down();
-        }
-        false
     }
 
     /// Connect to the host, open the tab, and map its frame slots.
@@ -283,8 +301,11 @@ impl BrowserHostTabOfOneNode {
                         height,
                         row_stride_bytes,
                     );
-                    if !self.send_to_the_browser_host(
-                        &TabProtocolMessageFromNode::ReleaseFrameSlot { slot },
+                    if !matches!(
+                        self.send_to_the_browser_host(
+                            &TabProtocolMessageFromNode::ReleaseFrameSlot { slot },
+                        ),
+                        SendToTheBrowserHostOutcome::Sent
                     ) {
                         return;
                     }
@@ -835,11 +856,18 @@ fn send_the_data_messages_held_for_the_browser_host(
 ) {
     while let Some(detail_json) = held_while_the_browser_host_is_away.take_oldest() {
         let message = TabProtocolMessageFromNode::DeliverPageData { detail_json };
-        if !tab.send_to_the_browser_host(&message) {
-            if let TabProtocolMessageFromNode::DeliverPageData { detail_json } = message {
-                held_while_the_browser_host_is_away.put_back_as_oldest(detail_json);
+        match tab.send_to_the_browser_host(&message) {
+            SendToTheBrowserHostOutcome::Sent => {}
+            SendToTheBrowserHostOutcome::RefusedBeforeWriting(refusal) => {
+                count_a_data_message_that_did_not_reach_the_page(tab, &refusal);
+                continue;
             }
-            return;
+            SendToTheBrowserHostOutcome::BrowserHostAway => {
+                if let TabProtocolMessageFromNode::DeliverPageData { detail_json } = message {
+                    held_while_the_browser_host_is_away.put_back_as_oldest(detail_json);
+                }
+                return;
+            }
         }
         tab.counters
             .data_messages_delivered
