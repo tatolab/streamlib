@@ -237,7 +237,7 @@ def start_the_pattern_stream(
     project_files: "dict[str, str]",
 ) -> PatternStreamRunning:
     """`tatolab run` on a project holding the one-source stream and `project_files`,
-    once its engine has started."""
+    once its engine has started and its source is running."""
     app_directory = make_tatolab_project(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}
     )
@@ -245,11 +245,13 @@ def start_the_pattern_stream(
     tatolab_run = tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory))
     stream_id = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_id"]
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    local_api = tatolabd.local_api_client()
+    local_api.await_every_node_running(stream=stream_id)
     return PatternStreamRunning(
         app_directory=app_directory,
         tatolabd=tatolabd,
         tatolab_run=tatolab_run,
-        local_api=tatolabd.local_api_client(),
+        local_api=local_api,
         stream_id=stream_id,
     )
 

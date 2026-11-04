@@ -382,7 +382,8 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
         stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
-    refusal = tatolabd.await_stderr_containing("Setup failed:")
+    tatolabd.await_stderr_containing("Setup failed:")
+    refusal = tatolabd.stderr_text
     assert node_states["virtualcamerasink"] == "Error", node_states
     assert node_states["testpatternsource"] == "Running", (
         f"the source keeps running beside the refused sink: {node_states}"

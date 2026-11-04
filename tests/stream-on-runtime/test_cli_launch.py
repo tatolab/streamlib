@@ -510,9 +510,10 @@ def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The stream carries a Python processor, so a frame reaching it proves
-    `tatolabd` and the processor interpreter opened their nodes in one iceoryx2
-    domain: the runtime directory's, where the surface socket sits too."""
+    """The stream carries two Python processors, the test pattern and the reporter,
+    so a frame reaching the reporter proves `tatolabd` and both processor
+    interpreters opened their nodes in one iceoryx2 domain: the runtime
+    directory's, where the surface socket sits too."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
     tatolabd = start_tatolabd()
     runtime_directory = tatolabd.machine_directories.runtime_directory
@@ -525,8 +526,8 @@ def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_
     )
 
     assert {details.name for details in new_node_details} == {f"sl{os.getuid()}_node.details"}
-    assert len(new_node_details) == 1, (
-        f"the processor interpreter must open its node in the runtime directory's domain, "
+    assert len(new_node_details) == 2, (
+        f"each processor interpreter must open its node in the runtime directory's domain, "
         f"beside tatolabd's; found {sorted(map(str, new_node_details))}"
     )
     assert len(iceoryx2_node_details_before) == 1, sorted(map(str, iceoryx2_node_details_before))

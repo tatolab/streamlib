@@ -13,7 +13,7 @@ from collections.abc import Callable
 import pytest
 
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
-from test_pattern_module_streams import (
+from testpattern_module_streams import (
     a_test_pattern_into_a_video_frame_probe,
     a_test_pattern_source_alone,
 )

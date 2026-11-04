@@ -281,7 +281,9 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         for stream_catalog in catalog["streams"]
         if stream_catalog["stream"] == stream_id
     ]
-    catalog_paths = [entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]]
+    catalog_paths = [
+        entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]
+    ] + [installed["node"]["type"] for installed in catalog_of_the_stream["installed"]]
     inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
 
     # The prompt's three arguments, bound by the names the listing gave them:
