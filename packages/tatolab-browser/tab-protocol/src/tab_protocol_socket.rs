@@ -139,6 +139,7 @@ pub struct TabProtocolMessageReader {
     socket: UnixStream,
     received_bytes: Vec<u8>,
     received_descriptors: VecDeque<OwnedFd>,
+    receive_deadline: Option<Instant>,
 }
 
 impl TabProtocolMessageReader {
@@ -147,11 +148,36 @@ impl TabProtocolMessageReader {
             socket,
             received_bytes: Vec::new(),
             received_descriptors: VecDeque::new(),
+            receive_deadline: None,
         }
     }
 
     /// The next message, waiting for it.
     pub fn receive<Message: DeserializeOwned>(
+        &mut self,
+    ) -> Result<Message, TabProtocolSocketFailure> {
+        self.receive_deadline = None;
+        self.receive_framed()
+    }
+
+    /// The next message, failing with a timeout unless all of it arrives
+    /// within `longest_wait`, however the peer paces its bytes.
+    pub fn receive_within<Message: DeserializeOwned>(
+        &mut self,
+        longest_wait: Duration,
+    ) -> Result<Message, TabProtocolSocketFailure> {
+        self.receive_deadline = Some(Instant::now() + longest_wait);
+        let received = self.receive_framed();
+        self.receive_deadline = None;
+        received
+    }
+
+    /// Close every descriptor that arrived and no message took.
+    pub fn discard_attached_descriptors(&mut self) {
+        self.received_descriptors.clear();
+    }
+
+    fn receive_framed<Message: DeserializeOwned>(
         &mut self,
     ) -> Result<Message, TabProtocolSocketFailure> {
         self.fill_to(LENGTH_PREFIX_BYTES)?;
@@ -184,6 +210,13 @@ impl TabProtocolMessageReader {
     fn fill_to(&mut self, wanted_bytes: usize) -> Result<(), TabProtocolSocketFailure> {
         let mut chunk = [0u8; 64 * 1024];
         while self.received_bytes.len() < wanted_bytes {
+            if let Some(receive_deadline) = self.receive_deadline {
+                let remaining = receive_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+                }
+                self.socket.set_read_timeout(Some(remaining))?;
+            }
             let read = receive_with_descriptors(
                 self.socket.as_raw_fd(),
                 &mut chunk,
@@ -395,6 +428,48 @@ mod tests {
             reader.receive::<TabProtocolMessageFromNode>(),
             Err(TabProtocolSocketFailure::Encoding(_))
         ));
+    }
+
+    #[test]
+    fn a_message_trickled_a_byte_at_a_time_fails_by_one_deadline() {
+        let (mut node_end, host_end) = UnixStream::pair().unwrap();
+        let trickling = std::thread::spawn(move || {
+            for _ in 0..40 {
+                if node_end.write_all(&[0]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let mut reader = TabProtocolMessageReader::over(host_end);
+
+        let started = Instant::now();
+        let received =
+            reader.receive_within::<TabProtocolMessageFromNode>(Duration::from_millis(300));
+
+        assert!(received.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(reader);
+        trickling.join().unwrap();
+    }
+
+    #[test]
+    fn descriptors_no_message_takes_are_discarded() {
+        let (host_end, node_end) = UnixStream::pair().unwrap();
+        let mut writer = TabProtocolMessageWriter::over(node_end);
+        let mut reader = TabProtocolMessageReader::over(host_end);
+        let unrequested_file = tempfile_with(b"unrequested");
+        writer
+            .send(
+                &TabProtocolMessageFromNode::ReleaseFrameSlot { slot: 0 },
+                &[unrequested_file.as_raw_fd()],
+            )
+            .unwrap();
+        reader.receive::<TabProtocolMessageFromNode>().unwrap();
+
+        reader.discard_attached_descriptors();
+
+        assert!(reader.take_attached_descriptor().is_err());
     }
 
     fn tempfile_with(contents: &[u8]) -> std::fs::File {

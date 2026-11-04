@@ -114,7 +114,11 @@ def main() -> int:
     cef_directory.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=cef_directory.parent) as download_directory:
         archive_path = download_checked(archive, Path(download_directory))
-        lay_out(archive_path, archive, cef_directory)
+        try:
+            lay_out(archive_path, archive, cef_directory)
+        except BaseException:
+            shutil.rmtree(cef_directory, ignore_errors=True)
+            raise
     print(f"CEF {cef_version} ({archive['name']}) is in {cef_directory}")
     return 0
 

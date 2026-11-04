@@ -9,7 +9,9 @@
 //! descriptor beyond its standard streams — and an empty environment but for
 //! the variables its launch names. Its process id is written to a pidfile, and
 //! a child a crashed runtime left behind is found by that file and ended
-//! before a new one starts. A child that exits is started again under the one
+//! before a new one starts. A supervisor holds an exclusive lock beside the
+//! pidfile while it runs, so a second supervisor of the same child is refused
+//! rather than ending a child a live one keeps. A child that exits is started again under the one
 //! [`ChildProcessRestartBackoff`]; one running user code is given up on at its
 //! crash-loop limit. A child is signalled only while it is unreaped, so its
 //! pid cannot have been handed to another process. Each line it writes is
@@ -100,6 +102,7 @@ pub struct SupervisedChildProcess {
     running_child_process_id: Arc<Mutex<Option<u32>>>,
     wake_the_supervisor: Option<mpsc::Sender<()>>,
     supervisor_thread: Option<JoinHandle<()>>,
+    _supervisor_lock_held_until_dropped: std::fs::File,
 }
 
 impl SupervisedChildProcess {
@@ -110,6 +113,7 @@ impl SupervisedChildProcess {
         readiness_probe: SupervisedChildProcessReadinessProbe,
         report: SupervisedChildProcessEventSink,
     ) -> std::io::Result<Self> {
+        let supervisor_lock = take_the_supervisor_lock_of(&launch)?;
         end_the_child_a_previous_run_left_behind(&launch.pidfile_path, &launch.executable);
         let stopping = Arc::new(AtomicBool::new(false));
         let running_child_process_id = Arc::new(Mutex::new(None));
@@ -145,6 +149,7 @@ impl SupervisedChildProcess {
             running_child_process_id,
             wake_the_supervisor: Some(wake_the_supervisor),
             supervisor_thread: Some(supervisor_thread),
+            _supervisor_lock_held_until_dropped: supervisor_lock,
         })
     }
 
@@ -426,6 +431,36 @@ fn write_the_pidfile(launch: &SupervisedChildProcessLaunch, process_id: u32) {
     }
 }
 
+/// The lock file beside the launch's pidfile, locked exclusively; refused
+/// while another live supervisor holds it.
+fn take_the_supervisor_lock_of(
+    launch: &SupervisedChildProcessLaunch,
+) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let lock_path = launch.pidfile_path.with_extension("lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    // SAFETY: flock on a descriptor this function owns.
+    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let failure = std::io::Error::last_os_error();
+        if failure.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "another live supervisor holds {}, so {} is already kept running",
+                    lock_path.display(),
+                    launch.child_name_for_the_log
+                ),
+            ));
+        }
+        return Err(failure);
+    }
+    Ok(lock_file)
+}
+
 /// Remove `pidfile_path` only while it still holds `process_id`, so a
 /// successor supervisor's pidfile for the same service is kept.
 fn remove_the_pidfile_while_it_names(pidfile_path: &Path, process_id: u32) {
@@ -662,6 +697,39 @@ mod tests {
                 .trim(),
             successor_process_id.to_string()
         );
+    }
+
+    #[test]
+    fn a_second_supervisor_of_the_same_child_is_refused_and_the_first_child_keeps_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let launch = launch_in(
+            directory.path(),
+            a_stand_in_child_executable(directory.path()),
+            false,
+        );
+        let mut first =
+            SupervisedChildProcess::start(launch.clone(), Box::new(|| true), Box::new(|_| {}))
+                .unwrap();
+        assert!(wait_until(Duration::from_secs(10), || first
+            .running_child_process_id()
+            .is_some()));
+        let first_child_process_id = first.running_child_process_id().unwrap();
+
+        let second =
+            SupervisedChildProcess::start(launch.clone(), Box::new(|| true), Box::new(|_| {}));
+
+        let refusal = second.err().unwrap();
+        assert_eq!(refusal.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            first.running_child_process_id(),
+            Some(first_child_process_id)
+        );
+        assert!(the_process_exists(first_child_process_id));
+        first.stop();
+        drop(first);
+        let mut after_the_first =
+            SupervisedChildProcess::start(launch, Box::new(|| true), Box::new(|_| {})).unwrap();
+        after_the_first.stop();
     }
 
     #[test]

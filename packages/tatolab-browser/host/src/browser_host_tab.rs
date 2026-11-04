@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use tatolab_browser_tab_protocol::{
     BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest, TAB_PROTOCOL_VERSION,
-    TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter,
+    TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter, TabProtocolSocketFailure,
 };
 
 /// How many painted frames go by between two reports of what a tab painted.
@@ -84,8 +84,19 @@ impl BrowserHostTab {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .send(message, &[]);
-        if sent.is_err() {
-            self.end_the_connection();
+        match sent {
+            Ok(()) => {}
+            Err(TabProtocolSocketFailure::Encoding(refusal)) => {
+                tracing::warn!("a message to the node was refused before sending: {refusal}");
+                if matches!(message, TabProtocolMessageFromBrowserHost::TabLog { .. }) {
+                    return;
+                }
+                self.log_to_the_node(
+                    BrowserHostTabLogLevel::Warn,
+                    format!("a message from the page was dropped: {refusal}"),
+                );
+            }
+            Err(_) => self.end_the_connection(),
         }
     }
 

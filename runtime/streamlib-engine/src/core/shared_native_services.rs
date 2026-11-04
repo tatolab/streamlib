@@ -175,7 +175,7 @@ impl SharedNativeServicesOfTheEngine {
     }
 
     /// Lease `service_name`, starting it when no lease holds it, and wait for
-    /// a service starting for the first time to accept.
+    /// a service starting, for the first time or again, to accept.
     pub(crate) fn lease(self: &Arc<Self>, service_name: &str) -> Result<SharedNativeServiceLease> {
         let mut services_by_name = self.lock_services();
         let service = services_by_name.get_mut(service_name).ok_or_else(|| {
@@ -214,7 +214,9 @@ impl SharedNativeServicesOfTheEngine {
                 .get(service_name)
                 .map(|service| service.state.clone());
             match state {
-                Some(SharedNativeServiceState::Starting) => {}
+                Some(
+                    SharedNativeServiceState::Starting | SharedNativeServiceState::StartingAgain,
+                ) => {}
                 Some(SharedNativeServiceState::Failed(why)) => {
                     drop(services_by_name);
                     drop(lease);
@@ -584,6 +586,33 @@ mod tests {
         }));
         assert!(!pidfile.exists());
         assert!(wait_until(Duration::from_secs(5), || !endpoint_socket.exists()));
+    }
+
+    #[test]
+    fn a_lease_taken_while_the_service_starts_again_returns_once_it_accepts() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = services_offering_the_stand_in(directory.path(), Duration::from_secs(60));
+        let first = services.lease("stand-in").unwrap();
+        let process_id: i32 =
+            std::fs::read_to_string(directory.path().join("services/stand-in.pid"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+        // SAFETY: the pid names the stand-in this test's supervisor started.
+        unsafe { libc::kill(process_id, libc::SIGKILL) };
+        assert!(wait_until(Duration::from_secs(10), || {
+            first.state() == SharedNativeServiceState::StartingAgain
+        }));
+
+        let leased_while_starting_again = services.lease("stand-in").unwrap();
+
+        assert_eq!(
+            leased_while_starting_again.state(),
+            SharedNativeServiceState::Running
+        );
+        assert!(UnixStream::connect(leased_while_starting_again.endpoint_socket_path()).is_ok());
+        services.stop_every_service();
     }
 
     #[test]

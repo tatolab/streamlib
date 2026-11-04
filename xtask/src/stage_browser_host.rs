@@ -11,7 +11,6 @@
 //! libraries stripped of their debug sections. A unit built without
 //! `CEF_PATH` carries no browser host, and `tatolabd` offers none.
 
-use crate::extension_build_script_fetched_notices::cargo_target_directory_of;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -31,6 +30,10 @@ const CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE: &str = "CEF_PATH";
 /// The cargo packages building the host and the subprocess CEF starts.
 const BROWSER_HOST_CARGO_PACKAGES: [&str; 2] =
     ["tatolab-browser-host", "tatolab-browser-page-bridge"];
+
+/// The executables those packages build, which the staging script copies.
+const BROWSER_HOST_EXECUTABLE_FILE_NAMES: [&str; 2] =
+    ["tatolab-browser-host", "tatolab-browser-subprocess"];
 
 /// The browser host's directory in the runtime unit in `workspace_root`.
 pub fn runtime_unit_browser_host_directory_in_the_workspace(
@@ -65,7 +68,44 @@ pub fn browser_host_cargo_build_arguments(browser_package_manifest: &Path) -> Ve
         arguments.push(package.to_string());
     }
     arguments.push("--bins".to_string());
+    arguments.push("--message-format=json-render-diagnostics".to_string());
     arguments
+}
+
+/// The one directory cargo wrote both executables to, read from the
+/// `compiler-artifact` messages of a `--message-format=json` build, so a
+/// `CARGO_TARGET_DIR` or a `--target` triple is followed wherever it points.
+pub fn directory_cargo_wrote_the_browser_host_executables_to(
+    cargo_build_messages: &str,
+) -> Result<PathBuf> {
+    let mut executable_directories = Vec::new();
+    for message_line in cargo_build_messages.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(message_line) else {
+            continue;
+        };
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        if let Some(executable) = message["executable"].as_str() {
+            let executable = Path::new(executable);
+            let is_a_browser_host_executable = executable
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .is_some_and(|file_name| BROWSER_HOST_EXECUTABLE_FILE_NAMES.contains(&file_name));
+            if is_a_browser_host_executable && let Some(directory) = executable.parent() {
+                executable_directories.push(directory.to_path_buf());
+            }
+        }
+    }
+    executable_directories.dedup();
+    match executable_directories.as_slice() {
+        [directory] => Ok(directory.clone()),
+        [] => bail!("cargo reported building none of {BROWSER_HOST_EXECUTABLE_FILE_NAMES:?}"),
+        directories => bail!(
+            "cargo wrote {BROWSER_HOST_EXECUTABLE_FILE_NAMES:?} to more than one directory: \
+             {directories:?}"
+        ),
+    }
 }
 
 /// Build and stage the browser host into the runtime unit, or say why it is
@@ -92,21 +132,25 @@ pub fn stage_the_browser_host(workspace_root: &Path) -> Result<Option<PathBuf>> 
     let browser_package = workspace_root.join(BROWSER_PACKAGE_RELATIVE_TO_WORKSPACE);
     let browser_package_manifest = browser_package.join("Cargo.toml");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = std::process::Command::new(&cargo)
+    let built = std::process::Command::new(&cargo)
         .args(browser_host_cargo_build_arguments(
             &browser_package_manifest,
         ))
         .current_dir(&browser_package)
-        .status()
+        .stderr(std::process::Stdio::inherit())
+        .output()
         .context("running `cargo build` for the browser host")?;
-    if !status.success() {
-        bail!("building the browser host failed with {status}");
+    if !built.status.success() {
+        bail!("building the browser host failed with {}", built.status);
     }
+    let executable_directory = directory_cargo_wrote_the_browser_host_executables_to(
+        &String::from_utf8_lossy(&built.stdout),
+    )?;
     let staged_directory = runtime_unit_browser_host_directory_in_the_workspace(workspace_root)?;
     let status = std::process::Command::new("python3")
         .arg(browser_package.join(BROWSER_HOST_STAGING_SCRIPT_FILE_NAME))
         .arg("--executable-directory")
-        .arg(cargo_target_directory_of(&browser_package).join("release"))
+        .arg(&executable_directory)
         .arg("--into")
         .arg(&staged_directory)
         .current_dir(&browser_package)
@@ -146,7 +190,33 @@ mod tests {
                 "--package",
                 "tatolab-browser-page-bridge",
                 "--bins",
+                "--message-format=json-render-diagnostics",
             ]
+        );
+    }
+
+    #[test]
+    fn the_executables_are_staged_from_where_cargo_wrote_them() {
+        let cargo_build_messages = [
+            r#"{"reason":"compiler-artifact","target":{"name":"tatolab_browser_tab_protocol"},"executable":null}"#,
+            r#"{"reason":"compiler-artifact","executable":"/elsewhere/x86_64-unknown-linux-gnu/release/tatolab-browser-host"}"#,
+            r#"{"reason":"compiler-artifact","executable":"/elsewhere/x86_64-unknown-linux-gnu/release/tatolab-browser-subprocess"}"#,
+            r#"{"reason":"build-finished","success":true}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            directory_cargo_wrote_the_browser_host_executables_to(&cargo_build_messages).unwrap(),
+            Path::new("/elsewhere/x86_64-unknown-linux-gnu/release")
+        );
+    }
+
+    #[test]
+    fn a_build_that_reports_no_executable_is_refused() {
+        assert!(
+            directory_cargo_wrote_the_browser_host_executables_to(
+                r#"{"reason":"build-finished","success":true}"#
+            )
+            .is_err()
         );
     }
 

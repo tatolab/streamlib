@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PACKAGE_DIRECTORY = Path(__file__).resolve().parent
@@ -27,6 +28,7 @@ HOST_EXECUTABLE_NAME = "tatolab-browser-host"
 SUBPROCESS_EXECUTABLE_NAME = "tatolab-browser-subprocess"
 RUNTIME_FILE_SUFFIXES = (".so", ".pak", ".dat", ".bin", ".json")
 RUNTIME_FILE_NAMES = ("LICENSE.txt", "CREDITS.html")
+REQUIRED_LOCALE_PACK_NAME = "en-US.pak"
 
 
 def cef_distribution_directory(cef_path: Path) -> Path:
@@ -68,11 +70,19 @@ def stage(cef_directory: Path, executables: list[Path], staged_directory: Path) 
                 f"no {required_name} in {cef_directory}; the runtime unit ships CEF only with "
                 "it (export-cef-dir leaves LICENSE.txt out: copy it from the official archive)"
             )
-    staging_directory = staged_directory.with_name(staged_directory.name + ".staging")
-    if staging_directory.exists():
-        shutil.rmtree(staging_directory)
+    locale_packs = sorted((cef_directory / "locales").glob("*.pak"))
+    if not any(locale.name == REQUIRED_LOCALE_PACK_NAME for locale in locale_packs):
+        raise SystemExit(
+            f"no locales/{REQUIRED_LOCALE_PACK_NAME} in {cef_directory}; CEF falls back to it "
+            "for every locale"
+        )
+    staged_directory.parent.mkdir(parents=True, exist_ok=True)
+    staging_directory = Path(
+        tempfile.mkdtemp(dir=staged_directory.parent, prefix=staged_directory.name + ".staging-")
+    )
+    staging_directory.chmod(0o755)
     try:
-        (staging_directory / "locales").mkdir(parents=True)
+        (staging_directory / "locales").mkdir()
         for entry in sorted(cef_directory.iterdir()):
             if entry.is_file() and (
                 entry.name.endswith(RUNTIME_FILE_SUFFIXES)
@@ -83,7 +93,7 @@ def stage(cef_directory: Path, executables: list[Path], staged_directory: Path) 
                 shutil.copy2(entry, staged_entry)
                 if is_a_shared_library(staged_entry):
                     strip_debug_sections(strip_executable, staged_entry)
-        for locale in sorted((cef_directory / "locales").glob("*.pak")):
+        for locale in locale_packs:
             shutil.copy2(locale, staging_directory / "locales" / locale.name)
         for executable in executables:
             staged_executable = staging_directory / executable.name

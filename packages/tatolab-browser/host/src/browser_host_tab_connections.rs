@@ -6,7 +6,7 @@
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tatolab_browser_tab_protocol::{
@@ -20,6 +20,10 @@ use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
 
 /// How long a new connection has to send its `OpenTab`.
 const OPEN_TAB_REQUEST_BUDGET: Duration = Duration::from_secs(10);
+/// The most connections waiting to open a tab at once; one past it is
+/// closed unserved, so connections that never send `OpenTab` cannot hold
+/// every thread and descriptor the host has.
+const MOST_CONNECTIONS_OPENING_A_TAB: usize = 64;
 /// How long a send to a node may block before its connection is ended, so a
 /// node that stops reading never stalls the CEF thread every tab shares.
 const SEND_TO_THE_NODE_BUDGET: Duration = Duration::from_secs(1);
@@ -28,6 +32,7 @@ const SEND_TO_THE_NODE_BUDGET: Duration = Duration::from_secs(1);
 /// on a thread of its own.
 pub fn accept_tab_connections(listener: UnixListener, cef_thread_requests: CefThreadRequestSender) {
     static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
+    let connections_opening_a_tab = Arc::new(AtomicUsize::new(0));
     for connection in listener.incoming() {
         let connection = match connection {
             Ok(connection) => connection,
@@ -36,26 +41,68 @@ pub fn accept_tab_connections(listener: UnixListener, cef_thread_requests: CefTh
                 continue;
             }
         };
+        let Some(opening_a_tab) = ConnectionOpeningATab::counted_in(&connections_opening_a_tab)
+        else {
+            tracing::warn!(
+                "a tab connection was closed unserved: {MOST_CONNECTIONS_OPENING_A_TAB} \
+                 connections are already opening a tab"
+            );
+            continue;
+        };
         let tab_id = NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed);
         let cef_thread_requests = cef_thread_requests.clone();
         let served = std::thread::Builder::new()
             .name(format!("tab-{tab_id}"))
-            .spawn(move || serve_one_tab_connection(tab_id, connection, &cef_thread_requests));
+            .spawn(move || {
+                serve_one_tab_connection(tab_id, connection, opening_a_tab, &cef_thread_requests)
+            });
         if let Err(failure) = served {
             tracing::warn!("tab {tab_id}'s connection could not be served: {failure}");
         }
     }
 }
 
+/// One connection counted among those opening a tab until it is dropped.
+struct ConnectionOpeningATab {
+    connections_opening_a_tab: Arc<AtomicUsize>,
+}
+
+impl ConnectionOpeningATab {
+    fn counted_in(connections_opening_a_tab: &Arc<AtomicUsize>) -> Option<Self> {
+        let mut opening = connections_opening_a_tab.load(Ordering::Acquire);
+        loop {
+            if opening >= MOST_CONNECTIONS_OPENING_A_TAB {
+                return None;
+            }
+            match connections_opening_a_tab.compare_exchange_weak(
+                opening,
+                opening + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => opening = current,
+            }
+        }
+        Some(Self {
+            connections_opening_a_tab: Arc::clone(connections_opening_a_tab),
+        })
+    }
+}
+
+impl Drop for ConnectionOpeningATab {
+    fn drop(&mut self) {
+        self.connections_opening_a_tab
+            .fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn serve_one_tab_connection(
     tab_id: BrowserHostTabId,
     connection: UnixStream,
+    opening_a_tab: ConnectionOpeningATab,
     cef_thread_requests: &CefThreadRequestSender,
 ) {
-    if let Err(failure) = connection.set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET)) {
-        tracing::warn!("tab {tab_id}'s connection takes no read timeout: {failure}");
-        return;
-    }
     let split = connection
         .try_clone()
         .and_then(|reading_half| Ok((reading_half, connection.try_clone()?)));
@@ -69,8 +116,9 @@ fn serve_one_tab_connection(
             return;
         }
     };
-    let Some((tab, reader)) = open_the_requested_tab(tab_id, reader, writer, cef_thread_requests)
-    else {
+    let opened = open_the_requested_tab(tab_id, reader, writer, cef_thread_requests);
+    drop(opening_a_tab);
+    let Some((tab, reader)) = opened else {
         return;
     };
     if let Err(failure) = connection.set_read_timeout(None) {
@@ -102,7 +150,10 @@ fn open_the_requested_tab(
             &[],
         );
     };
-    let tab_request = match reader.receive::<TabProtocolMessageFromNode>() {
+    let open_tab_request =
+        reader.receive_within::<TabProtocolMessageFromNode>(OPEN_TAB_REQUEST_BUDGET);
+    reader.discard_attached_descriptors();
+    let tab_request = match open_tab_request {
         Ok(TabProtocolMessageFromNode::OpenTab {
             tab_protocol_version,
             tab_request,
@@ -201,7 +252,9 @@ fn serve_the_open_tab(
     cef_thread_requests: &CefThreadRequestSender,
 ) {
     loop {
-        match reader.receive::<TabProtocolMessageFromNode>() {
+        let received = reader.receive::<TabProtocolMessageFromNode>();
+        reader.discard_attached_descriptors();
+        match received {
             Ok(TabProtocolMessageFromNode::DeliverPageData { detail_json }) => {
                 if !tab.page_data_request_queued(detail_json.len()) {
                     continue;

@@ -102,7 +102,7 @@ export CEF_PATH=/tmp/cef-binary-distribution
 cargo xtask build-runtime --release
 
 runtime_unit_root="$PWD/target/tatolab-runtime"
-for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.so LICENSE.txt; do
+for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.so LICENSE.txt locales/en-US.pak; do
 	[ -f "$runtime_unit_root/lib/tatolab/browser-host/$browser_host_file" ] || {
 		echo "the runtime unit has no lib/tatolab/browser-host/$browser_host_file: a release ships the browser host" >&2
 		exit 1
