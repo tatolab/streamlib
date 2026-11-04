@@ -169,6 +169,22 @@ fn cef_runtime_settings_of(_cef_runtime_directory: &Path) -> Result<Settings, St
     Ok(Settings::default())
 }
 
+/// How long a new stream profile has to finish initializing before its first
+/// tab is refused; a browser opened in a profile still initializing fails.
+const TENANT_PROFILE_INITIALIZATION_BUDGET: Duration = Duration::from_secs(10);
+
+wrap_request_context_handler! {
+    struct TenantProfileInitializedHandler {
+        profile_initialized: Arc<AtomicBool>,
+    }
+
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _request_context: Option<&mut RequestContext>) {
+            self.profile_initialized.store(true, Ordering::Release);
+        }
+    }
+}
+
 /// A page the CEF thread renders.
 struct OpenTab {
     browser: Browser,
@@ -435,12 +451,28 @@ fn tenant_profile_request_context(
         persist_session_cookies: 1,
         ..Default::default()
     };
-    let profile = request_context_create_context(Some(&settings), None).ok_or_else(|| {
-        format!(
-            "CEF refused the profile of stream {tenant_stream_id} at {}",
-            profile_directory.display()
-        )
-    })?;
+    let profile_initialized = Arc::new(AtomicBool::new(false));
+    let mut profile_initialized_handler =
+        TenantProfileInitializedHandler::new(Arc::clone(&profile_initialized));
+    let profile =
+        request_context_create_context(Some(&settings), Some(&mut profile_initialized_handler))
+            .ok_or_else(|| {
+                format!(
+                    "CEF refused the profile of stream {tenant_stream_id} at {}",
+                    profile_directory.display()
+                )
+            })?;
+    let initialization_deadline = Instant::now() + TENANT_PROFILE_INITIALIZATION_BUDGET;
+    while !profile_initialized.load(Ordering::Acquire) {
+        if Instant::now() >= initialization_deadline {
+            return Err(format!(
+                "the profile of stream {tenant_stream_id} at {} was not ready within \
+                 {TENANT_PROFILE_INITIALIZATION_BUDGET:?}",
+                profile_directory.display()
+            ));
+        }
+        do_message_loop_work();
+    }
     tenant_profiles.insert(tenant_stream_id.to_string(), profile.clone());
     Ok(profile)
 }
