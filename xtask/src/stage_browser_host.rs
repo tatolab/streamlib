@@ -11,6 +11,7 @@
 //! libraries stripped of their debug sections. A unit built without
 //! `CEF_PATH` carries no browser host, and `tatolabd` offers none.
 
+use crate::extension_build_script_fetched_notices::cargo_target_directory_of;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -105,7 +106,7 @@ pub fn stage_the_browser_host(workspace_root: &Path) -> Result<Option<PathBuf>> 
     let status = std::process::Command::new("python3")
         .arg(browser_package.join(BROWSER_HOST_STAGING_SCRIPT_FILE_NAME))
         .arg("--executable-directory")
-        .arg(browser_package.join("target").join("release"))
+        .arg(cargo_target_directory_of(&browser_package).join("release"))
         .arg("--into")
         .arg(&staged_directory)
         .current_dir(&browser_package)

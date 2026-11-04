@@ -203,7 +203,7 @@ fn serve_the_open_tab(
     loop {
         match reader.receive::<TabProtocolMessageFromNode>() {
             Ok(TabProtocolMessageFromNode::DeliverPageData { detail_json }) => {
-                if !tab.page_data_request_queued() {
+                if !tab.page_data_request_queued(detail_json.len()) {
                     continue;
                 }
                 if !cef_thread_requests.send(CefThreadRequest::DeliverPageData {

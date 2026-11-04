@@ -221,6 +221,13 @@ impl OpenTab {
                 });
             return;
         }
+        self.tab.log_to_the_node(
+            BrowserHostTabLogLevel::Info,
+            format!(
+                "the page reloads after its renderer ended ({} in {RENDERER_END_WINDOW:?})",
+                self.renderer_ends_in_the_window.len()
+            ),
+        );
         self.browser.reload();
     }
 }
@@ -279,7 +286,7 @@ pub fn serve_the_cef_thread_until_stopped(
                 detail_json,
             }) => {
                 if let Some(open_tab) = open_tabs.get_mut(&tab_id) {
-                    open_tab.tab.page_data_request_dequeued();
+                    open_tab.tab.page_data_request_dequeued(detail_json.len());
                     open_tab.dispatch_or_hold_data_script(page_data_dispatch_script(&detail_json));
                 }
             }

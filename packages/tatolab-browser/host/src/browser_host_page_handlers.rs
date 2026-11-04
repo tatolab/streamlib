@@ -221,8 +221,7 @@ wrap_request_handler! {
             self.tab.log_to_the_node(
                 BrowserHostTabLogLevel::Warn,
                 format!(
-                    "the renderer of {} ended ({status:?}, code {error_code}: {}); the page \
-                     reloads",
+                    "the renderer of {} ended ({status:?}, code {error_code}: {})",
                     self.tab.tab_request.url,
                     error_string.map(ToString::to_string).unwrap_or_default()
                 ),

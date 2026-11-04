@@ -92,9 +92,18 @@ def stage(cef_directory: Path, executables: list[Path], staged_directory: Path) 
     except BaseException:
         shutil.rmtree(staging_directory, ignore_errors=True)
         raise
+    replaced_directory = staged_directory.with_name(staged_directory.name + ".replaced")
+    shutil.rmtree(replaced_directory, ignore_errors=True)
     if staged_directory.exists():
-        shutil.rmtree(staged_directory)
-    staging_directory.rename(staged_directory)
+        staged_directory.rename(replaced_directory)
+    try:
+        staging_directory.rename(staged_directory)
+    except BaseException:
+        if replaced_directory.exists():
+            replaced_directory.rename(staged_directory)
+        shutil.rmtree(staging_directory, ignore_errors=True)
+        raise
+    shutil.rmtree(replaced_directory, ignore_errors=True)
 
 
 def main() -> int:

@@ -188,7 +188,7 @@ fn extension_whose_build_script_fetches_sources(
 
 /// The extension's Cargo target directory: `CARGO_TARGET_DIR` when set,
 /// otherwise its own `target/`.
-fn cargo_target_directory_of(extension_project_root: &Path) -> PathBuf {
+pub(crate) fn cargo_target_directory_of(extension_project_root: &Path) -> PathBuf {
     match std::env::var_os("CARGO_TARGET_DIR") {
         Some(configured) => extension_project_root.join(configured),
         None => extension_project_root.join("target"),

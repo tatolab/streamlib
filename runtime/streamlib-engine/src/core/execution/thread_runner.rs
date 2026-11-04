@@ -861,14 +861,26 @@ fn run_manual_mode(
                         break;
                     }
                     Err(restart_refusal) => {
-                        next_helper_process_restart_at = after_a_helper_process_death(
-                            id,
-                            state,
-                            &mut restart_backoff,
-                            restart_refusal.to_string(),
-                            Duration::ZERO,
-                        );
-                        already_reported_failure = next_helper_process_restart_at.is_none();
+                        if let Some(reason_the_node_gave) =
+                            processor.lock().failure_the_node_reported_of_itself()
+                        {
+                            tracing::error!(
+                                "[{}] the node failed itself: {}",
+                                id,
+                                reason_the_node_gave
+                            );
+                            state.fail_with(reason_the_node_gave);
+                            already_reported_failure = true;
+                        } else {
+                            next_helper_process_restart_at = after_a_helper_process_death(
+                                id,
+                                state,
+                                &mut restart_backoff,
+                                restart_refusal.to_string(),
+                                Duration::ZERO,
+                            );
+                            already_reported_failure = next_helper_process_restart_at.is_none();
+                        }
                     }
                 }
             }

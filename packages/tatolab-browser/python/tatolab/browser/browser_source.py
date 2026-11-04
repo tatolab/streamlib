@@ -11,8 +11,9 @@ and published as a `VideoFrame`; the page's audio is published on `audio`;
 every `data` message reaches the page as a `tatolab:data` DOM event, and every
 `window.tatolab.publish(object)` call is written to `events`. When the host
 ends, the runtime starts it again and the page opens again in it, receiving the
-latest 256 `data` messages that arrived meanwhile. Python runs
-at start and stop, never per frame.
+latest `data` messages that arrived meanwhile, up to 256 of them and 64 MiB.
+A page the host can no longer render, or a host the runtime gives up on, fails
+the node. Python runs at start and stop, never per frame.
 """
 
 from __future__ import annotations

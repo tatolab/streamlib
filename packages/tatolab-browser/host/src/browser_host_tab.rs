@@ -18,6 +18,8 @@ const PAINTS_BETWEEN_REPORTS: u64 = 600;
 /// The most `data` messages a tab queues for the CEF thread; past it, a
 /// message is dropped and the node told.
 const MOST_PAGE_DATA_REQUESTS_QUEUED: u32 = 256;
+/// How many bytes of `data` one tab may queue for the CEF thread.
+const MOST_PAGE_DATA_BYTES_QUEUED: u64 = 64 * 1024 * 1024;
 
 /// A tab id, unique for the life of the host.
 pub type BrowserHostTabId = u64;
@@ -38,6 +40,7 @@ pub struct BrowserHostTab {
     frames_dropped_with_every_slot_held: AtomicU64,
     audio_channels: AtomicU32,
     page_data_requests_queued: AtomicU32,
+    page_data_bytes_queued: AtomicU64,
     page_data_requests_dropped: AtomicU64,
 }
 
@@ -61,6 +64,7 @@ impl BrowserHostTab {
             frames_dropped_with_every_slot_held: AtomicU64::new(0),
             audio_channels: AtomicU32::new(0),
             page_data_requests_queued: AtomicU32::new(0),
+            page_data_bytes_queued: AtomicU64::new(0),
             page_data_requests_dropped: AtomicU64::new(0),
         }
     }
@@ -114,17 +118,23 @@ impl BrowserHostTab {
         }
     }
 
-    /// Count one more `data` message queued for the CEF thread; `false`, and
-    /// the message dropped, when the queue is already full.
-    pub fn page_data_request_queued(&self) -> bool {
+    /// Count one more `data` message of `byte_count` bytes queued for the
+    /// CEF thread; `false`, and the message dropped, when the queue is
+    /// already full by count or by bytes.
+    pub fn page_data_request_queued(&self, byte_count: usize) -> bool {
+        let byte_count = byte_count as u64;
         let queued = self
             .page_data_requests_queued
             .fetch_add(1, Ordering::AcqRel);
-        if queued < MOST_PAGE_DATA_REQUESTS_QUEUED {
+        let bytes_queued = self
+            .page_data_bytes_queued
+            .fetch_add(byte_count, Ordering::AcqRel);
+        if queued < MOST_PAGE_DATA_REQUESTS_QUEUED
+            && (bytes_queued == 0 || bytes_queued + byte_count <= MOST_PAGE_DATA_BYTES_QUEUED)
+        {
             return true;
         }
-        self.page_data_requests_queued
-            .fetch_sub(1, Ordering::AcqRel);
+        self.page_data_request_dequeued(byte_count as usize);
         let dropped = self
             .page_data_requests_dropped
             .fetch_add(1, Ordering::Relaxed)
@@ -134,17 +144,19 @@ impl BrowserHostTab {
                 BrowserHostTabLogLevel::Warn,
                 format!(
                     "{dropped} data messages dropped with {MOST_PAGE_DATA_REQUESTS_QUEUED} \
-                     already waiting for the page"
+                     messages or {MOST_PAGE_DATA_BYTES_QUEUED} bytes already waiting for the page"
                 ),
             );
         }
         false
     }
 
-    /// The CEF thread took one queued `data` message.
-    pub fn page_data_request_dequeued(&self) {
+    /// The CEF thread took one queued `data` message of `byte_count` bytes.
+    pub fn page_data_request_dequeued(&self, byte_count: usize) {
         self.page_data_requests_queued
             .fetch_sub(1, Ordering::AcqRel);
+        self.page_data_bytes_queued
+            .fetch_sub(byte_count as u64, Ordering::AcqRel);
     }
 
     /// Log `message` under this tab in the node's log.
@@ -346,9 +358,9 @@ mod tests {
     fn data_past_the_queue_bound_is_dropped_and_the_node_told_once() {
         let (tab, mut node) = tab_with_slots(1);
         for _ in 0..MOST_PAGE_DATA_REQUESTS_QUEUED {
-            assert!(tab.page_data_request_queued());
+            assert!(tab.page_data_request_queued(10));
         }
-        assert!(!tab.page_data_request_queued());
+        assert!(!tab.page_data_request_queued(10));
         assert!(matches!(
             node.receive().unwrap(),
             TabProtocolMessageFromBrowserHost::TabLog {
@@ -356,8 +368,20 @@ mod tests {
                 ..
             }
         ));
-        tab.page_data_request_dequeued();
-        assert!(tab.page_data_request_queued());
+        tab.page_data_request_dequeued(10);
+        assert!(tab.page_data_request_queued(10));
+    }
+
+    #[test]
+    fn data_past_the_byte_bound_is_dropped_but_one_large_message_alone_is_queued() {
+        let (tab, _node) = tab_with_slots(1);
+        let most_bytes = MOST_PAGE_DATA_BYTES_QUEUED as usize;
+        assert!(tab.page_data_request_queued(most_bytes + 1));
+        assert!(!tab.page_data_request_queued(1));
+        tab.page_data_request_dequeued(most_bytes + 1);
+        assert!(tab.page_data_request_queued(most_bytes / 2));
+        assert!(tab.page_data_request_queued(most_bytes / 2));
+        assert!(!tab.page_data_request_queued(1));
     }
 
     #[test]

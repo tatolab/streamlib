@@ -62,6 +62,10 @@ const LONGEST_REOPEN_REFUSAL_BY_A_RUNNING_BROWSER_HOST: Duration = Duration::fro
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
 /// How many `data` messages wait for a restarting browser host before the oldest is dropped.
 const MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 256;
+/// How many bytes of `data` JSON a node holds while the host is away.
+const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1024;
+/// How long one send to the host may take before the connection ends.
+const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
 
 /// What a page is opened with.
@@ -144,11 +148,20 @@ impl BrowserHostTabOfOneNode {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Send `message`; a send that fails or runs past its budget leaves the
+    /// stream partly written, so it ends the connection.
     fn send_to_the_browser_host(&self, message: &TabProtocolMessageFromNode) -> bool {
-        match self.writer().as_mut() {
-            Some(writer) => writer.send(message, &[]).is_ok(),
-            None => false,
+        let mut writer = self.writer();
+        let Some(open_writer) = writer.as_mut() else {
+            return false;
+        };
+        if open_writer.send(message, &[]).is_ok() {
+            return true;
         }
+        if let Some(failed_writer) = writer.take() {
+            failed_writer.shut_down();
+        }
+        false
     }
 
     /// Connect to the host, open the tab, and map its frame slots.
@@ -167,7 +180,8 @@ impl BrowserHostTabOfOneNode {
             socket.try_clone().map_err(|failure| failure.to_string())?;
         let writing_half = socket.try_clone().map_err(|failure| failure.to_string())?;
         let mut reader = TabProtocolMessageReader::over(socket);
-        let mut writer = TabProtocolMessageWriter::over(writing_half);
+        let mut writer = TabProtocolMessageWriter::over(writing_half)
+            .sending_within(SEND_TO_THE_BROWSER_HOST_BUDGET);
         writer
             .send(
                 &TabProtocolMessageFromNode::OpenTab {
@@ -732,7 +746,7 @@ fn deliver_data_messages_to_the_page(
 ) {
     let module_host = &tab.module_host;
     let delivery_stopped = || tab.closing.load(Ordering::Acquire) || module_host.stop_requested();
-    let mut held_while_the_browser_host_is_away = VecDeque::new();
+    let mut held_while_the_browser_host_is_away = DataMessagesHeldForTheBrowserHost::default();
     while !delivery_stopped() {
         send_the_data_messages_held_for_the_browser_host(
             tab,
@@ -742,10 +756,7 @@ fn deliver_data_messages_to_the_page(
             Ok(false) => continue,
             Ok(true) => {}
             Err(refusal) => {
-                tab.log(
-                    ModuleHostLogLevel::Error,
-                    &format!("data stopped reaching the page: {refusal}"),
-                );
+                tab.fail_the_node(&format!("data stopped reaching the page: {refusal}"));
                 return;
             }
         }
@@ -754,20 +765,13 @@ fn deliver_data_messages_to_the_page(
                 Ok(Some(message)) => message,
                 Ok(None) => break,
                 Err(refusal) => {
-                    tab.log(
-                        ModuleHostLogLevel::Error,
-                        &format!("data stopped reaching the page: {refusal}"),
-                    );
+                    tab.fail_the_node(&format!("data stopped reaching the page: {refusal}"));
                     return;
                 }
             };
             match page_data_detail_json_of_msgpack_map(message.payload()) {
                 Ok(detail_json) => {
-                    held_while_the_browser_host_is_away.push_back(detail_json);
-                    if held_while_the_browser_host_is_away.len()
-                        > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
-                    {
-                        held_while_the_browser_host_is_away.pop_front();
+                    for _ in 0..held_while_the_browser_host_is_away.hold_newest(detail_json) {
                         count_a_data_message_that_did_not_reach_the_page(
                             tab,
                             "the browser host is away, and the oldest data message held for it was dropped",
@@ -784,17 +788,56 @@ fn deliver_data_messages_to_the_page(
     }
 }
 
+/// The newest `data` messages, as page JSON, waiting for the host: at most
+/// [`MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] of them and
+/// [`MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY`] bytes, the newest
+/// one always kept.
+#[derive(Default)]
+struct DataMessagesHeldForTheBrowserHost {
+    detail_jsons: VecDeque<String>,
+    bytes_held: usize,
+}
+
+impl DataMessagesHeldForTheBrowserHost {
+    /// Hold `detail_json`, dropping the oldest past either bound; returns how
+    /// many were dropped.
+    fn hold_newest(&mut self, detail_json: String) -> usize {
+        self.bytes_held += detail_json.len();
+        self.detail_jsons.push_back(detail_json);
+        let mut dropped = 0;
+        while self.detail_jsons.len() > 1
+            && (self.detail_jsons.len() > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
+                || self.bytes_held > MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY)
+        {
+            self.take_oldest();
+            dropped += 1;
+        }
+        dropped
+    }
+
+    fn take_oldest(&mut self) -> Option<String> {
+        let oldest = self.detail_jsons.pop_front()?;
+        self.bytes_held -= oldest.len();
+        Some(oldest)
+    }
+
+    fn put_back_as_oldest(&mut self, detail_json: String) {
+        self.bytes_held += detail_json.len();
+        self.detail_jsons.push_front(detail_json);
+    }
+}
+
 /// Send the held `data` messages oldest first, keeping the rest held once a
 /// send fails because the browser host is away.
 fn send_the_data_messages_held_for_the_browser_host(
     tab: &BrowserHostTabOfOneNode,
-    held_while_the_browser_host_is_away: &mut VecDeque<String>,
+    held_while_the_browser_host_is_away: &mut DataMessagesHeldForTheBrowserHost,
 ) {
-    while let Some(detail_json) = held_while_the_browser_host_is_away.pop_front() {
+    while let Some(detail_json) = held_while_the_browser_host_is_away.take_oldest() {
         let message = TabProtocolMessageFromNode::DeliverPageData { detail_json };
         if !tab.send_to_the_browser_host(&message) {
             if let TabProtocolMessageFromNode::DeliverPageData { detail_json } = message {
-                held_while_the_browser_host_is_away.push_front(detail_json);
+                held_while_the_browser_host_is_away.put_back_as_oldest(detail_json);
             }
             return;
         }
@@ -832,6 +875,27 @@ mod tests {
             audio_sample_rate: 48_000,
             output_pool_rotation_depth: 4,
         }
+    }
+
+    #[test]
+    fn held_data_drops_the_oldest_past_either_bound_and_keeps_the_newest() {
+        let mut held = DataMessagesHeldForTheBrowserHost::default();
+        for index in 0..MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY {
+            assert_eq!(held.hold_newest(index.to_string()), 0);
+        }
+        assert_eq!(held.hold_newest("newest".to_string()), 1);
+        assert_eq!(held.take_oldest().as_deref(), Some("1"));
+
+        let mut held = DataMessagesHeldForTheBrowserHost::default();
+        let half_the_bytes = "x".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY / 2);
+        assert_eq!(held.hold_newest(half_the_bytes.clone()), 0);
+        assert_eq!(held.hold_newest(half_the_bytes), 0);
+        assert_eq!(held.hold_newest("past the bound".to_string()), 1);
+        let larger_than_the_bound =
+            "y".repeat(MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY + 1);
+        assert_eq!(held.hold_newest(larger_than_the_bound.clone()), 2);
+        assert_eq!(held.take_oldest(), Some(larger_than_the_bound));
+        assert_eq!(held.bytes_held, 0);
     }
 
     #[test]
