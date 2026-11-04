@@ -117,8 +117,8 @@ pub struct HostVulkanDevice {
     has_acquire_unmodified: bool,
     /// Whether `VK_EXT_external_memory_host` was enabled at device
     /// creation. Gates the host-pointer import tier of
-    /// [`super::HostMappingWrittenByGpu`]: a caller-owned mapping — a
-    /// V4L2 output buffer — becomes a `VkBuffer` the GPU writes directly.
+    /// [`super::HostMappingReadByGpu`]: a caller-owned mapping becomes a
+    /// `VkBuffer` the GPU reads in place.
     has_external_memory_host: bool,
     /// `VkPhysicalDeviceExternalMemoryHostPropertiesEXT::minImportedHostPointerAlignment`
     /// snapshotted at construction when [`Self::has_external_memory_host`]
@@ -3300,7 +3300,7 @@ impl HostVulkanDevice {
 
     /// Whether `VK_EXT_external_memory_host` was enabled at device
     /// construction — the imported tier of
-    /// [`super::HostMappingWrittenByGpu`] is reachable only then.
+    /// [`super::HostMappingReadByGpu`] is reachable only then.
     pub fn supports_host_pointer_import(&self) -> bool {
         self.has_external_memory_host
     }

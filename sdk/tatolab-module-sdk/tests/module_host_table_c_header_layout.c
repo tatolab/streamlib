@@ -102,7 +102,12 @@ _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_acquire) ==
 _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_state) == POINTER_SLOT(33), "ModuleHostTable.shared_native_service_lease_state");
 _Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_release) == POINTER_SLOT(34), "ModuleHostTable.shared_native_service_lease_release");
 _Static_assert(offsetof(ModuleHostTable, node_fail_unrecoverably) == POINTER_SLOT(35), "ModuleHostTable.node_fail_unrecoverably");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(36), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_open) == POINTER_SLOT(36), "ModuleHostTable.virtual_camera_stream_open");
+_Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_offer_extent) == POINTER_SLOT(37), "ModuleHostTable.virtual_camera_stream_offer_extent");
+_Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_write_yuyv_frame) == POINTER_SLOT(38), "ModuleHostTable.virtual_camera_stream_write_yuyv_frame");
+_Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_liveness) == POINTER_SLOT(39), "ModuleHostTable.virtual_camera_stream_liveness");
+_Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_close) == POINTER_SLOT(40), "ModuleHostTable.virtual_camera_stream_close");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(41), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -111,6 +116,7 @@ _Static_assert(sizeof(ModuleHostTableAudioStreamHandle) == 8, "ModuleHostTableAu
 _Static_assert(sizeof(ModuleHostTableCapturedAudioBlock) == 2 * POINTER + 16, "ModuleHostTableCapturedAudioBlock size");
 
 _Static_assert(sizeof(ModuleHostTableSurfaceHandle) == 8, "ModuleHostTableSurfaceHandle size");
+_Static_assert(sizeof(ModuleHostTableVirtualCameraStreamHandle) == 8, "ModuleHostTableVirtualCameraStreamHandle size");
 _Static_assert(offsetof(ModuleHostTableDmaBufImport, allocation_byte_size) == 16 + 2 * POINTER, "ModuleHostTableDmaBufImport.allocation_byte_size");
 _Static_assert(offsetof(ModuleHostTableDmaBufImport, plane_strides_bytes) == 64 + 2 * POINTER, "ModuleHostTableDmaBufImport.plane_strides_bytes");
 _Static_assert(sizeof(ModuleHostTableDmaBufImport) == 96 + 2 * POINTER, "ModuleHostTableDmaBufImport size");
@@ -129,6 +135,6 @@ _Static_assert(offsetof(ModuleHostTableSharedNativeServiceLease, tenant_stream_i
 _Static_assert(sizeof(ModuleHostTableSharedNativeServiceLease) == 8 + 4 * POINTER, "ModuleHostTableSharedNativeServiceLease size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 7, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 8, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");

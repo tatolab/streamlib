@@ -140,11 +140,6 @@ mod vulkan_imported_iosurface_storage_buffer;
 pub use vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
 
 #[cfg(target_os = "linux")]
-mod vulkan_host_mapping_imported_as_buffer;
-#[cfg(target_os = "linux")]
-pub use vulkan_host_mapping_imported_as_buffer::{HostMappingTier, HostMappingWrittenByGpu};
-
-#[cfg(target_os = "linux")]
 mod vulkan_host_mapping_read_by_gpu;
 #[cfg(target_os = "linux")]
 pub use vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;

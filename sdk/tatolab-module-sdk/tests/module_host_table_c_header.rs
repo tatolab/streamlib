@@ -70,7 +70,7 @@ fn the_c_header_compiles_as_cpp() {
     std::fs::write(
         &source_path,
         "#include \"tatolab_module_host_table.h\"\n\
-         static_assert(sizeof(ModuleHostTable) == 16 + 36 * sizeof(void *), \"ModuleHostTable size\");\n",
+         static_assert(sizeof(ModuleHostTable) == 16 + 41 * sizeof(void *), \"ModuleHostTable size\");\n",
     )
     .expect("the C++ source is written");
     let object_path = output_directory.join("module_host_table_c_header_as_cpp.o");

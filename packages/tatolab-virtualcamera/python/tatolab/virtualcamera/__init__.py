@@ -3,15 +3,19 @@
 
 """`VirtualCameraSink`: video frames in, a camera any Linux application can select out.
 
-Each instance is one v4l2loopback camera that exists only while its node runs,
-created at `setup()` and removed at `teardown()`: a USB camera plugged in and
-pulled out from every other application's point of view. The engine converts
-each RGBA frame into a YUYV pixel buffer on the GPU, and the sink copies it into
-the device's next free buffer.
+Each instance is one camera that exists only while its node runs, created at
+`setup()` and removed at `teardown()`: a USB camera plugged in and pulled out
+from every other application's point of view. The engine converts each RGBA
+frame into a YUYV pixel buffer on the GPU, and the sink copies it once into the
+camera's next free buffer.
 
-The sink never loads the module, writes a udev rule or asks for elevation:
-without write access to the module's control node it refuses at `setup()`,
-naming `tatolab enable-virtual-camera`, the one-time command that grants it.
+Two doors carry the camera. v4l2loopback is a `/dev/video*` device every
+application sees; the sink never loads the module, writes a udev rule or asks
+for elevation, so without write access to the module's control node that door
+refuses, naming `tatolab enable-virtual-camera`, the one-time command that
+grants it. PipeWire is a `Video/Source` node portal-based applications select,
+needing no kernel module and no grant. `auto` takes v4l2loopback where it is
+permitted and PipeWire otherwise.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from __future__ import annotations
 import ctypes
 import dataclasses
 import sys
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal, NoReturn, get_args
 
 from tatolab.stream import (
     GpuSurfaceHandle,
@@ -30,6 +34,8 @@ from tatolab.stream import (
     node,
 )
 
+from ._native import PipeWireCameraDoor
+from .pipewire_camera_presentation import PipeWireCameraPresentation
 from .v4l2_color_fields import yuyv_picture_color_of
 from .v4l2_loopback_output_device import (
     UDEV_GRANT_DEADLINE_SECONDS,
@@ -63,6 +69,8 @@ DROPPED_FRAMES_BETWEEN_REPORTS = 300
 
 VirtualCameraDoorName = Literal["auto", "v4l2loopback", "pipewire"]
 
+VirtualCameraDoorTaken = Literal["v4l2loopback", "pipewire"]
+
 
 @dataclasses.dataclass
 class VirtualCameraSinkConfig:
@@ -75,8 +83,9 @@ class VirtualCameraSinkConfig:
     ] = None
     door: Annotated[
         VirtualCameraDoorName,
-        "Which door to take: `auto` and `v4l2loopback` take the loopback door; `pipewire` is "
-        "refused, as this sink offers no PipeWire camera.",
+        "Which door to take: `v4l2loopback` a `/dev/video*` camera every application sees, "
+        "`pipewire` a PipeWire camera portal-based applications select, `auto` the loopback "
+        "door where it is permitted and PipeWire otherwise.",
     ] = "auto"
 
     def __post_init__(self) -> None:
@@ -91,22 +100,35 @@ class VirtualCameraSinkConfig:
             )
 
 
+def virtual_camera_door_taken(
+    door: VirtualCameraDoorName, access: ControlNodeAccess
+) -> VirtualCameraDoorTaken:
+    """The door one instance takes: the one named, or for `auto` the loopback door where it is permitted."""
+    if door == "auto":
+        return "v4l2loopback" if access is ControlNodeAccess.WRITABLE else "pipewire"
+    return door
+
+
 def loopback_door_refusal_or_none(
-    door: VirtualCameraDoorName, camera_name: str, access: ControlNodeAccess
+    camera_name: str, access: ControlNodeAccess
 ) -> "str | None":
-    """Why one instance takes no door, or `None` where it takes the loopback door."""
-    if door == "pipewire":
-        return (
-            f'{VIRTUAL_CAMERA_SINK_NODE_NAME} "{camera_name}": this sink offers no PipeWire '
-            'camera door. Set door="auto" or door="v4l2loopback" for the v4l2loopback camera '
-            "every application sees."
-        )
+    """Why the loopback door will not open for one instance, or `None` where it opens."""
     if access is ControlNodeAccess.WRITABLE:
         return None
     return (
         f'{VIRTUAL_CAMERA_SINK_NODE_NAME} "{camera_name}": no permission to create a '
         f"v4l2loopback camera: {V4L2LOOPBACK_CONTROL_NODE_PATH} is {access.value}. Run "
         f"`{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run."
+    )
+
+
+def neither_door_opens_refusal(
+    camera_name: str, loopback_refusal: str, pipewire_refusal: str
+) -> str:
+    """Why `auto` takes no door: both refusals, in their own words."""
+    return (
+        f'{VIRTUAL_CAMERA_SINK_NODE_NAME} "{camera_name}": neither camera door opens. '
+        f"{loopback_refusal} The PipeWire door was refused too: {pipewire_refusal}"
     )
 
 
@@ -118,17 +140,17 @@ class _LatchedRefusal(Exception):
     scheduling="high",
     description=(
         "Presents video frames as a virtual camera any Linux application can select: one "
-        "v4l2loopback camera per instance, created at setup and removed at teardown"
+        "v4l2loopback or PipeWire camera per instance, created at setup and removed at teardown"
     ),
 )
 class VirtualCameraSink:
-    """Each frame's picture, converted to YUYV, as a v4l2loopback camera's next picture.
+    """Each frame's picture, converted to YUYV, as the camera's next picture.
 
-    The device's format follows the first frame's extent and colour, and an
+    The camera's format follows the first frame's extent and colour, and an
     extent change re-negotiates it, which readers see as the camera re-plugged.
-    A frame of odd width, or one the device refuses to be configured for,
-    drops every later frame. A device a reader still holds at teardown is left
-    in place and reclaimed by its name at the next setup.
+    A frame of odd width, or one the camera refuses to be configured for,
+    drops every later frame. A loopback device a reader still holds at teardown
+    is left in place and reclaimed by its name at the next setup.
     """
 
     def __init__(self, config: VirtualCameraSinkConfig) -> None:
@@ -136,11 +158,13 @@ class VirtualCameraSink:
         self._control_node: V4l2LoopbackControlNode = V4l2LoopbackControlNodeOnDisk()
         self._camera_name = ""
         self._device: "V4l2LoopbackOutputDevice | None" = None
+        self._pipewire_camera: "PipeWireCameraPresentation | None" = None
         self._streaming: "StreamingOutputFormat | None" = None
         self._yuyv_pixel_buffer: "GpuSurfaceHandle | None" = None
         self._latched_refusal: "str | None" = None
         self._frames_written = 0
         self._frames_dropped_every_buffer_queued = 0
+        self._frames_dropped_no_consumer_is_watching = 0
         self._frames_dropped_under_refusal = 0
         self._frames_that_failed_to_write = 0
 
@@ -161,24 +185,52 @@ class VirtualCameraSink:
         )
         if not sys.platform.startswith("linux"):
             raise RuntimeError(
-                f'{VIRTUAL_CAMERA_SINK_NODE_NAME} "{self._camera_name}": a v4l2loopback camera '
+                f'{VIRTUAL_CAMERA_SINK_NODE_NAME} "{self._camera_name}": a virtual camera '
                 f"is Linux's; this machine runs {sys.platform}"
             )
         access = self._control_node.access()
-        refusal = loopback_door_refusal_or_none(
-            self._config.door, self._camera_name, access
-        )
-        if refusal is not None:
-            log.error(
-                refusal,
-                camera=self._camera_name,
-                door=self._config.door,
-                control_node=access.value,
+        loopback_refusal = loopback_door_refusal_or_none(self._camera_name, access)
+        door_taken = virtual_camera_door_taken(self._config.door, access)
+        if door_taken == "v4l2loopback":
+            if loopback_refusal is not None:
+                self._refuse_at_setup(loopback_refusal, access)
+            self._device = create_or_reclaim_device_then(
+                self._control_node, self._camera_name, self._open_the_created_device
             )
-            raise RuntimeError(refusal)
-        self._device = create_or_reclaim_device_then(
-            self._control_node, self._camera_name, self._open_the_created_device
+            return
+        try:
+            pipewire_camera_door = PipeWireCameraDoor(
+                ctx.open_module_host_table(), self._camera_name
+            )
+        except RuntimeError as pipewire_refusal:
+            if self._config.door == "auto" and loopback_refusal is not None:
+                self._refuse_at_setup(
+                    neither_door_opens_refusal(
+                        self._camera_name, loopback_refusal, str(pipewire_refusal)
+                    ),
+                    access,
+                )
+            self._refuse_at_setup(str(pipewire_refusal), access)
+        self._pipewire_camera = PipeWireCameraPresentation(pipewire_camera_door)
+        log.info(
+            f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: camera created",
+            camera=self._camera_name,
+            door="pipewire",
+            reason=(
+                "door is pipewire"
+                if self._config.door == "pipewire"
+                else f"{V4L2LOOPBACK_CONTROL_NODE_PATH} is {access.value}, so auto took PipeWire"
+            ),
         )
+
+    def _refuse_at_setup(self, refusal: str, access: ControlNodeAccess) -> NoReturn:
+        log.error(
+            refusal,
+            camera=self._camera_name,
+            door=self._config.door,
+            control_node=access.value,
+        )
+        raise RuntimeError(refusal)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read(VIDEO_INPUT_PORT_NAME, into=VideoFrame)
@@ -188,7 +240,10 @@ class VirtualCameraSink:
             self._frames_dropped_under_refusal += 1
             return
         try:
-            self._present_one_frame(ctx, frame)
+            if self._pipewire_camera is not None:
+                self._present_one_frame_to_pipewire(ctx, self._pipewire_camera, frame)
+            else:
+                self._present_one_frame(ctx, frame)
         except _LatchedRefusal as refusal:
             self._latched_refusal = str(refusal)
             log.error(
@@ -198,6 +253,21 @@ class VirtualCameraSink:
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
+        pipewire_camera = self._pipewire_camera
+        self._pipewire_camera = None
+        if pipewire_camera is not None:
+            pipewire_camera.close()
+            log.info(
+                f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: teardown — camera removed",
+                camera=self._camera_name,
+                door="pipewire",
+                frames_written=self._frames_written,
+                frames_dropped_no_consumer_is_watching=self._frames_dropped_no_consumer_is_watching,
+                frames_dropped_every_buffer_queued=self._frames_dropped_every_buffer_queued,
+                frames_dropped_under_refusal=self._frames_dropped_under_refusal,
+                frames_that_failed_to_write=self._frames_that_failed_to_write,
+            )
+            return
         device = self._device
         self._device = None
         if device is None:
@@ -284,32 +354,81 @@ class VirtualCameraSink:
         device.reclaim_dequeued_buffers(streaming)
         buffer = streaming.next_free_buffer()
         if buffer is None:
-            self._frames_dropped_every_buffer_queued += 1
-            if (
-                self._frames_dropped_every_buffer_queued - 1
-            ) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
-                log.warn(
-                    f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: a frame arrived with every buffer queued",
-                    camera=self._camera_name,
-                    frames_dropped_every_buffer_queued=self._frames_dropped_every_buffer_queued,
-                )
+            self._count_a_frame_dropped_with_every_buffer_queued()
             return
         try:
             self._write_the_frame_into(ctx, streaming, buffer.address, frame)
             device.queue_buffer(streaming, buffer, frame.timestamp_ns)
         except RuntimeError as failure:
-            self._frames_that_failed_to_write += 1
-            if (
-                self._frames_that_failed_to_write - 1
-            ) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
-                log.warn(
-                    f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: a frame could not be written to the camera",
-                    camera=self._camera_name,
-                    frames_that_failed_to_write=self._frames_that_failed_to_write,
-                    error=str(failure),
-                )
+            self._count_a_frame_that_failed_to_write(failure)
             return
         self._count_a_written_frame(frame)
+
+    def _count_a_frame_dropped_with_every_buffer_queued(self) -> None:
+        self._frames_dropped_every_buffer_queued += 1
+        if (
+            self._frames_dropped_every_buffer_queued - 1
+        ) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
+            log.warn(
+                f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: a frame arrived with every buffer queued",
+                camera=self._camera_name,
+                frames_dropped_every_buffer_queued=self._frames_dropped_every_buffer_queued,
+            )
+
+    def _count_a_frame_that_failed_to_write(self, failure: RuntimeError) -> None:
+        self._frames_that_failed_to_write += 1
+        if (
+            self._frames_that_failed_to_write - 1
+        ) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
+            log.warn(
+                f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: a frame could not be written to the camera",
+                camera=self._camera_name,
+                frames_that_failed_to_write=self._frames_that_failed_to_write,
+                error=str(failure),
+            )
+
+    def _present_one_frame_to_pipewire(
+        self,
+        ctx: RuntimeContextLimitedAccess,
+        pipewire_camera: PipeWireCameraPresentation,
+        frame: VideoFrame,
+    ) -> None:
+        if yuyv_picture_byte_count_or_none(frame.width, frame.height) is None:
+            raise _LatchedRefusal(
+                f"a {frame.width}x{frame.height} frame cannot be a YUYV camera picture — the "
+                "width must be even and both dimensions non-zero"
+            )
+        failure = pipewire_camera.failure_that_ended_the_camera()
+        if failure is not None:
+            raise _LatchedRefusal(f"PipeWire dropped the camera: {failure}")
+        previous_extent = pipewire_camera.offered_extent
+        try:
+            if (
+                pipewire_camera.offer_the_extent_of(ctx, frame)
+                and previous_extent is not None
+            ):
+                log.info(
+                    f"{VIRTUAL_CAMERA_SINK_NODE_NAME}: upstream extent changed — the camera "
+                    "offers the new one; readers re-negotiate",
+                    camera=self._camera_name,
+                    from_extent=f"{previous_extent[0]}x{previous_extent[1]}",
+                    to_extent=f"{frame.width}x{frame.height}",
+                )
+        except RuntimeError as refusal:
+            raise _LatchedRefusal(
+                f"the camera could not be configured for the frame: {refusal}"
+            ) from refusal
+        try:
+            presentation = pipewire_camera.present(ctx, frame)
+        except RuntimeError as failure_to_write:
+            self._count_a_frame_that_failed_to_write(failure_to_write)
+            return
+        if presentation == "published":
+            self._count_a_written_frame(frame)
+        elif presentation == "no_consumer_is_watching":
+            self._frames_dropped_no_consumer_is_watching += 1
+        else:
+            self._count_a_frame_dropped_with_every_buffer_queued()
 
     def _streaming_format_for(
         self,

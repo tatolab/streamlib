@@ -9,6 +9,7 @@ use std::time::Duration;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use streamlib::sdk::iceoryx2::Iceoryx2Node;
 use tatolab_module_sdk::ModuleHost;
+use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStreamHandle;
 
 use super::*;
 use crate::python_processor_context::{
@@ -358,7 +359,7 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 7})
+        serde_json::json!({"major": 1, "minor": 8})
     );
     assert_eq!(capabilities["node_id"], "source-node");
     assert_eq!(
@@ -652,4 +653,52 @@ fn a_closed_playback_streams_handle_names_nothing_and_is_never_reused() {
         .open("speaker", None, Default::default())
         .unwrap();
     assert_ne!(next_handle, handle, "a handle is never reused");
+}
+
+/// With a PipeWire daemon the camera node registers and offers an extent;
+/// without one — the CI container — the open is refused naming the door and
+/// why, never a bare failure.
+#[test]
+fn a_virtual_camera_opens_where_pipewire_answers_and_is_refused_by_name_elsewhere() {
+    let module_host = module_host_lending_no_port("virtual_camera");
+
+    match module_host.open_virtual_camera_stream("tatolab test camera") {
+        Ok(camera) => {
+            camera
+                .offer_extent(64, 48, None)
+                .expect("a PipeWire camera takes an even extent");
+            let presentation = camera
+                .write_yuyv_frame(&[0x80; 64 * 2 * 48], 64 * 2, 1)
+                .expect("a frame of the offered extent is taken");
+            assert_ne!(
+                presentation,
+                tatolab_module_sdk::ModuleHostVirtualCameraFramePresentation::EveryBufferIsHeldByTheConsumer,
+                "with nothing watching, no buffer is held"
+            );
+        }
+        Err(refusal) => {
+            let refusal = refusal.to_string();
+            assert!(
+                refusal.starts_with("virtual_camera_stream_open: "),
+                "{refusal}"
+            );
+            assert!(refusal.contains("PipeWire camera door"), "{refusal}");
+        }
+    }
+}
+
+#[test]
+fn a_virtual_camera_handle_no_open_returned_is_refused() {
+    let virtual_camera_streams =
+        virtual_camera_streams::VirtualCameraStreamsOpenedForOneNode::default();
+
+    let refusal = virtual_camera_streams
+        .opened_camera(ModuleHostTableVirtualCameraStreamHandle { value: 3 })
+        .err()
+        .expect("a handle no open returned is refused");
+
+    assert!(
+        refusal.contains("names no camera this table has open"),
+        "{refusal}"
+    );
 }

@@ -13,10 +13,11 @@ use pyo3::types::PyCapsule;
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_REFUSED, ModuleHostTableAudioBlockRequestedByDeviceCallback,
     ModuleHostTableAudioCaptureStreamRequest, ModuleHostTableAudioPlaybackStreamRequest,
-    ModuleHostTableAudioStreamFormat, ModuleHostTableAudioStreamHandle,
+    ModuleHostTableAudioStreamFormat, ModuleHostTableAudioStreamHandle, ModuleHostTableBytes,
     ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableErrorMessage,
     ModuleHostTableIOSurfaceImport, ModuleHostTableOpenedAudioPlaybackStream,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTableVirtualCameraStreamHandle,
 };
 use tatolab_module_sdk::{MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHost, ModuleHostTable};
 
@@ -218,6 +219,48 @@ unsafe extern "C" fn refuse_audio_playback_start(
     MODULE_HOST_TABLE_STATUS_REFUSED
 }
 
+unsafe extern "C" fn refuse_virtual_camera_open(
+    _: *mut c_void,
+    _: ModuleHostTableUtf8,
+    _: *mut ModuleHostTableVirtualCameraStreamHandle,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_virtual_camera_offer_extent(
+    _: *mut c_void,
+    _: ModuleHostTableVirtualCameraStreamHandle,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_virtual_camera_write(
+    _: *mut c_void,
+    _: ModuleHostTableVirtualCameraStreamHandle,
+    _: ModuleHostTableBytes,
+    _: u32,
+    _: i64,
+    _: *mut u32,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_virtual_camera_liveness(
+    _: *mut c_void,
+    _: ModuleHostTableVirtualCameraStreamHandle,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn close_no_virtual_camera(
+    _: *mut c_void,
+    _: ModuleHostTableVirtualCameraStreamHandle,
+) {
+}
+
 fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
     let table = Box::leak(Box::new(ModuleHostTable {
         abi_major: 1,
@@ -259,6 +302,11 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         shared_native_service_lease_state: refuse_lease_state,
         shared_native_service_lease_release: release_no_lease,
         node_fail_unrecoverably: refuse_node_failure,
+        virtual_camera_stream_open: refuse_virtual_camera_open,
+        virtual_camera_stream_offer_extent: refuse_virtual_camera_offer_extent,
+        virtual_camera_stream_write_yuyv_frame: refuse_virtual_camera_write,
+        virtual_camera_stream_liveness: refuse_virtual_camera_liveness,
+        virtual_camera_stream_close: close_no_virtual_camera,
     }));
     NonNull::from(table).cast()
 }
@@ -269,14 +317,14 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(7),
+                leaked_table_of_minor(8),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 7));
+        assert_eq!(module_host.module_host_table_version(), (1, 8));
     });
 }
 
@@ -284,7 +332,7 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(7), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(python, leaked_table_of_minor(8), c"numpy.core._ARRAY_API")
         }
         .unwrap();
         let refusal =

@@ -17,7 +17,8 @@
 //! channel, with no interpreter on either end, as do the IOSurface import
 //! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
 //! id minor 6 adds and the shared native service leases and node failure
-//! minor 7 adds.
+//! minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
+//! itself.
 
 use std::ffi::{CStr, c_void};
 
@@ -26,7 +27,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 7;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 8;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -66,6 +67,14 @@ pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY: u32 = 0;
 pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32: u32 = 1;
 /// 16-bit little-endian signed integer scalars.
 pub const MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16: u32 = 2;
+
+/// A [`ModuleHostTable::virtual_camera_stream_write_yuyv_frame`] that put the
+/// frame on its way to a consumer.
+pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_PUBLISHED: u32 = 0;
+/// A frame dropped because no application has the camera open.
+pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_NO_CONSUMER_IS_WATCHING: u32 = 1;
+/// A frame dropped because every buffer is still with the consumer.
+pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER: u32 = 2;
 
 /// How many bytes of a refusal's message the caller's buffer holds; a longer
 /// message is cut at a UTF-8 boundary.
@@ -341,6 +350,14 @@ pub type ModuleHostTableAudioBlockRequestedByDeviceCallback = unsafe extern "C" 
     requested_block: *const ModuleHostTableAudioBlockRequestedByDevice,
 );
 
+/// A virtual camera the host opened for the module, valid until it is closed;
+/// `0` names no camera. Minor 8.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableVirtualCameraStreamHandle {
+    pub value: u64,
+}
+
 /// The verbs a node's native code reaches its node through, and the node host
 /// they act on. Every verb's first argument is [`ModuleHostTable::node_host`].
 #[repr(C)]
@@ -603,6 +620,54 @@ pub struct ModuleHostTable {
         reason: ModuleHostTableUtf8,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
+    /// Minor 8: register a PipeWire `Video/Source` camera node named
+    /// `camera_name`, in this process, that any portal-based application can
+    /// select. Refused by name where no libpipewire loads, no PipeWire daemon
+    /// answers, or the platform is not Linux.
+    pub virtual_camera_stream_open: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        camera_name: ModuleHostTableUtf8,
+        opened_camera: *mut ModuleHostTableVirtualCameraStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 8: offer one even-width extent as YUY2 frames at
+    /// `frames_per_second`, `0` taking the camera's default; replaces any
+    /// extent offered earlier, and consumers re-negotiate.
+    pub virtual_camera_stream_offer_extent: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        camera: ModuleHostTableVirtualCameraStreamHandle,
+        width: u32,
+        height: u32,
+        frames_per_second: u32,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 8: copy one YUY2 picture of the offered extent — `height` rows
+    /// `stride_bytes` apart in `yuyv_rows` — into the camera's next free
+    /// buffer, stamped `timestamp_ns`, and write what became of it as one of
+    /// the `MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*` values. Never waits on a
+    /// consumer.
+    pub virtual_camera_stream_write_yuyv_frame: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        camera: ModuleHostTableVirtualCameraStreamHandle,
+        yuyv_rows: ModuleHostTableBytes,
+        stride_bytes: u32,
+        timestamp_ns: i64,
+        frame_presentation: *mut u32,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 8: [`MODULE_HOST_TABLE_STATUS_OK`] while the camera node lives;
+    /// [`MODULE_HOST_TABLE_STATUS_ENDED`], with the failure written, once
+    /// PipeWire dropped it.
+    pub virtual_camera_stream_liveness: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        camera: ModuleHostTableVirtualCameraStreamHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 8: remove the camera node; its handle names nothing after.
+    pub virtual_camera_stream_close: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        camera: ModuleHostTableVirtualCameraStreamHandle,
+    ),
 }
 
 impl ModuleHostTableUtf8 {
@@ -999,7 +1064,6 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, node_fail_unrecoverably),
             16 + 35 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 36 * POINTER);
     }
 
     #[test]
@@ -1027,6 +1091,28 @@ mod layout_regression_tests {
             size_of::<ModuleHostTableSharedNativeServiceLease>(),
             8 + 4 * POINTER
         );
+    }
+
+    /// Minor 8 appends its virtual camera verbs after the minor 7 node failure.
+    #[test]
+    fn the_v1_8_table_appends_its_virtual_camera_verbs_after_every_v1_7_field() {
+        let pointer_slots_appended_at_minor_8 = [
+            offset_of!(ModuleHostTable, virtual_camera_stream_open),
+            offset_of!(ModuleHostTable, virtual_camera_stream_offer_extent),
+            offset_of!(ModuleHostTable, virtual_camera_stream_write_yuyv_frame),
+            offset_of!(ModuleHostTable, virtual_camera_stream_liveness),
+            offset_of!(ModuleHostTable, virtual_camera_stream_close),
+        ];
+        for (slot, offset) in pointer_slots_appended_at_minor_8.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (36 + slot) * POINTER, "minor 8 slot {slot}");
+        }
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 41 * POINTER);
+    }
+
+    #[test]
+    fn a_virtual_camera_handle_is_one_u64() {
+        assert_eq!(size_of::<ModuleHostTableVirtualCameraStreamHandle>(), 8);
+        assert_eq!(align_of::<ModuleHostTableVirtualCameraStreamHandle>(), 8);
     }
 
     #[test]

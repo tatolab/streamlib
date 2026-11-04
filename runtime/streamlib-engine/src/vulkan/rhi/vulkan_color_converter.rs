@@ -1396,14 +1396,12 @@ mod tests {
     }
 }
 
-// The whole module drives the host-mapping import, which is Linux-bound.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod image_to_yuyv_buffer_tests {
     use super::*;
     use crate::core::color::{MatrixId, PrimariesId, RangeId, rgb_to_yuv_matrix};
     use crate::core::context::GpuContext;
     use crate::core::rhi::VulkanLayout;
-    use crate::vulkan::rhi::vulkan_host_mapping_imported_as_buffer::PageAlignedHostRange;
     use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
 
     /// The CPU reference: the same matrix table the kernel is pushed, one
@@ -1444,9 +1442,8 @@ mod image_to_yuyv_buffer_tests {
     }
 
     /// Synthetic RGBA against the CPU conversion: every macropixel of the
-    /// target range is written, to within one step of rounding, on
-    /// whichever tier the driver takes — and the tier is reported.
-    #[cfg(target_os = "linux")]
+    /// target range is written, to within one step of rounding, and the row
+    /// pad and the guard band past the frame stay untouched.
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
@@ -1502,25 +1499,19 @@ mod image_to_yuyv_buffer_tests {
             .color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
             .expect("RGBA→YUYV converter");
 
-        // Page-rounded like a V4L2 mapping; the pass writes only the frame.
-        let range =
-            PageAlignedHostRange::new(((stride_bytes * height) as usize).next_multiple_of(4096));
-        let mut mapping =
-            unsafe { gpu.import_host_mapping_for_gpu_writes(range.ptr, range.byte_len) }
-                .expect("host mapping");
-        tracing::info!(
-            tier = mapping.tier().as_str(),
-            reason = ?mapping.fallback_reason(),
-            "host mapping tier"
-        );
+        // A guard band past the frame: the pass writes only the frame.
+        let destination_byte_len = ((stride_bytes * height) as usize).next_multiple_of(4096);
+        let destination = gpu
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(destination_byte_len as u64)
+                    .expect("a non-zero destination"),
+            )
+            .expect("a host-visible destination");
+        // SAFETY: the buffer is host-mapped and `destination_byte_len` long.
+        unsafe { std::ptr::write_bytes(destination.mapped_ptr(), 0, destination_byte_len) };
 
         let kernel = converter
-            .prepare_image_to_yuyv_buffer(
-                registration.texture(),
-                mapping.storage_buffer(),
-                stride_bytes,
-                &info,
-            )
+            .prepare_image_to_yuyv_buffer(registration.texture(), &destination, stride_bytes, &info)
             .expect("prepare");
         let mut recorder = gpu
             .create_command_recorder("yuyv_pass_test")
@@ -1545,14 +1536,23 @@ mod image_to_yuyv_buffer_tests {
                 1,
             )
             .expect("dispatch");
-        mapping
-            .record_release_to_host(&mut recorder)
-            .expect("release");
+        recorder
+            .record_buffer_barrier(
+                &destination,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanStage::HOST,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::HOST_READ,
+            )
+            .expect("release to host");
         recorder.submit_and_wait().expect("submit");
-        mapping.publish_to_host();
 
+        // SAFETY: the submission was waited for; the mapping is
+        // `destination_byte_len` long.
+        let whole_destination =
+            unsafe { std::slice::from_raw_parts(destination.mapped_ptr(), destination_byte_len) };
         let expected = yuyv_reference(&rgba, width, height, stride_bytes, &info);
-        let written = &range.as_slice()[..expected.len()];
+        let written = &whole_destination[..expected.len()];
         let mut worst = 0u8;
         for (i, (&got, &want)) in written.iter().zip(&expected).enumerate() {
             let in_row_pad = (i as u32 % stride_bytes) >= width * 2;
@@ -1565,7 +1565,7 @@ mod image_to_yuyv_buffer_tests {
             worst = worst.max(diff);
         }
         assert!(
-            range.as_slice()[expected.len()..].iter().all(|&b| b == 0),
+            whole_destination[expected.len()..].iter().all(|&b| b == 0),
             "nothing past the frame is written"
         );
         tracing::info!(

@@ -65,6 +65,7 @@ Cargo.lock
 !/packages/tatolab-opus/Cargo.lock
 !/packages/tatolab-speaker/Cargo.lock
 !/packages/tatolab-rive/Cargo.lock
+!/packages/tatolab-virtualcamera/Cargo.lock
 
 # Node/Nx
 node_modules/

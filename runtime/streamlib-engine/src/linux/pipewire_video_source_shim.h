@@ -22,17 +22,6 @@
 extern "C" {
 #endif
 
-/// How a consumer settled on carrying this source's pixels.
-enum StreamLibPipeWireVideoBufferKind {
-    /// No consumer has negotiated a format yet.
-    STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_NONE = 0,
-    /// The consumer imports the engine's textures by file descriptor.
-    STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_DMA_BUF = 1,
-    /// The consumer took the shared-memory sibling; the shim allocates the
-    /// memory and the caller copies read-back pixels into it.
-    STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_SHARED_MEMORY = 2,
-};
-
 /// How many properties [`streamlib_pipewire_video_source_properties`] declares.
 /// Shared so the array and the function that fills it cannot disagree about
 /// its size.
@@ -41,60 +30,37 @@ enum StreamLibPipeWireVideoBufferKind {
 /// The longest `node.name` derived from a camera name, with its NUL.
 #define STREAMLIB_PIPEWIRE_VIDEO_NODE_NAME_CAPACITY 128
 
-/// How many buffers one source may offer. PipeWire is told this exact count
-/// rather than a range, because the engine allocates and exports every one of
-/// them before the stream can negotiate — a count the daemon raised would name
-/// a texture that does not exist.
+/// How many buffers one source may offer.
 #define STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS 8
 
-/// One engine-owned DMA-BUF the source hands to one PipeWire buffer.
-///
-/// The descriptor stays owned by the caller: the shim writes it into
-/// `spa_data` and never closes it, so its lifetime is the caller's texture's.
-struct StreamLibPipeWireVideoDmaBufPlane {
-    int32_t file_descriptor;
-    uint32_t stride_bytes;
-    uint32_t offset_bytes;
-    uint32_t byte_size;
-};
-
-/// The picture one camera offers, and the tiled DMA-BUF modifier its buffers
-/// carry.
+/// The picture one camera offers.
 struct StreamLibPipeWireVideoOfferedFormat {
     uint32_t width;
     uint32_t height;
     uint32_t framerate_numerator;
     uint32_t framerate_denominator;
-    uint64_t drm_modifier;
 };
 
-/// What a camera's pair of `EnumFormat` pods actually says, read back out of
-/// the built pods rather than restated.
-///
-/// Exposed so the offer can be held by a test on a machine with no session:
-/// getting the modifier property's flags wrong is the difference between a
-/// consumer importing the engine's tiled textures and one importing them as
-/// linear memory they were never in — a picture that is silently wrong rather
-/// than a negotiation that fails.
+/// What a camera's `EnumFormat` pod actually says, read back out of the built
+/// pod rather than restated, so a test holds the offer with no session.
 struct StreamLibPipeWireVideoOfferReport {
-    /// The extent both formats carry, as parsed back.
     uint32_t width;
     uint32_t height;
-    /// How many modifiers a consumer may pick from, not counting the
-    /// choice's leading default.
-    uint32_t dma_buf_modifier_count;
-    int64_t dma_buf_modifier;
-    bool dma_buf_modifier_is_mandatory;
-    bool dma_buf_modifier_may_not_be_fixated;
-    /// Whether the sibling carries a modifier property at all; it must not.
-    bool shared_memory_format_carries_a_modifier;
-    /// Zero when either pod would not build or parse.
-    bool both_formats_were_built;
+    /// The `spa_video_format` offered.
+    uint32_t video_format;
+    /// Whether the pod carries a modifier property; a shared-memory offer must
+    /// not, or a consumer reads it as a DMA-BUF offer.
+    bool carries_a_modifier;
+    /// False when the pod would not build or parse.
+    bool was_built;
 };
 
-/// Build the pair of formats a camera offers and read them back.
+/// Build the format a camera offers and read it back.
 struct StreamLibPipeWireVideoOfferReport streamlib_pipewire_video_source_describe_offer(
-    const struct StreamLibPipeWireVideoOfferedFormat *offered_format, bool fixated);
+    const struct StreamLibPipeWireVideoOfferedFormat *offered_format);
+
+/// The `spa_video_format` a camera offers: packed 4:2:2, `YUY2`.
+uint32_t streamlib_pipewire_video_source_offered_video_format(void);
 
 /// One registered `Video/Source` node, owned by the shim.
 struct StreamLibPipeWireVideoSource;
@@ -126,57 +92,35 @@ uint32_t streamlib_pipewire_video_source_properties(struct StreamLibPipeWireStre
 ///
 /// The node exists from here until close, whether or not anything ever watches
 /// it — a camera in the picker with nobody looking. It offers no format until
-/// [`streamlib_pipewire_video_source_set_extent`] states one, which is what
-/// makes "the engine's buffers are exported before a consumer can negotiate"
-/// true rather than merely likely. Returns NULL with `failure_text` filled.
+/// [`streamlib_pipewire_video_source_set_extent`] states one. Returns NULL with
+/// `failure_text` filled.
 struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
     const void *const *entry_points, const char *camera_name, char *failure_text,
     size_t failure_text_capacity);
 
-/// Offer one extent: `plane_count` engine-exported DMA-BUFs carrying
-/// `drm_modifier`, beside a shared-memory sibling the consumer may take
-/// instead. Activates the stream, and replaces any extent offered earlier.
-///
-/// The shim duplicates each descriptor, so the caller's textures may close
-/// theirs whenever they like.
-///
-/// This frees the previous extent's shared-memory sibling, so a caller holding
-/// an RHI import of it must drop that import *before* calling — the shim's
-/// mappings live exactly as long as the extent that allocated them, which is
-/// what makes such an import safe to hold across frames at all.
+/// Offer one extent as `buffer_count` shared-memory YUY2 buffers, activate the
+/// stream, and replace any extent offered earlier.
 int streamlib_pipewire_video_source_set_extent(
     struct StreamLibPipeWireVideoSource *video_source, uint32_t width, uint32_t height,
-    uint32_t framerate_numerator, uint32_t framerate_denominator, uint64_t drm_modifier,
-    const struct StreamLibPipeWireVideoDmaBufPlane *planes, uint32_t plane_count,
+    uint32_t framerate_numerator, uint32_t framerate_denominator, uint32_t buffer_count,
     char *failure_text, size_t failure_text_capacity);
 
-/// Which kind of buffer a consumer settled on, one of
-/// [`enum StreamLibPipeWireVideoBufferKind`].
-uint32_t streamlib_pipewire_video_source_negotiated_buffer_kind(
+/// Whether a consumer has settled a format, so frames have somewhere to go.
+bool streamlib_pipewire_video_source_consumer_negotiated(
     struct StreamLibPipeWireVideoSource *video_source);
 
 /// The buffer slot the next frame is written into, or -1 when nothing is
 /// streaming or every buffer is still with the consumer.
 ///
-/// A slot names the caller's own plane at the same index, so a dequeued slot
-/// tells the caller which texture to write without a second table.
-///
 /// A slot an earlier frame took and never published is handed out again rather
 /// than a fresh one being taken: there is no way to return an output buffer
 /// unpublished — `pw_stream_queue_buffer` submits it — so a caller that fails
 /// mid-frame simply tries the same slot next time.
-///
-/// `buffer_kind_out` reports what a consumer settled on, read under the same
-/// lock as the dequeue so that a renegotiation cannot leave the caller filling
-/// a slot the wrong way.
 int32_t streamlib_pipewire_video_source_dequeue_slot(
-    struct StreamLibPipeWireVideoSource *video_source, uint32_t *buffer_kind_out);
+    struct StreamLibPipeWireVideoSource *video_source);
 
-/// Where slot `slot` maps on the shared-memory sibling, or NULL on the DMA-BUF
-/// path where the consumer imports the caller's texture instead.
-///
-/// Stable for the offered extent's whole life: a consumer disconnecting and
-/// reconnecting retires PipeWire's buffers but not this mapping.
+/// Where slot `slot` maps, its row stride and its size; NULL for a slot that
+/// holds no memory.
 uint8_t *streamlib_pipewire_video_source_slot_shared_memory(
     struct StreamLibPipeWireVideoSource *video_source, int32_t slot, uint32_t *stride_bytes_out,
     uint32_t *byte_size_out);

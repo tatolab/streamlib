@@ -8,7 +8,8 @@
 //! Every verb but the catalog entry's runs with no Python attached, from any
 //! thread. The engine never calls into a module; a module calls in here, and
 //! the audio capture and playback streams it opens call its callbacks from
-//! their device threads.
+//! their device threads. A virtual camera it opens is a PipeWire node in this
+//! helper.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod host_memory_pixel_rows;
@@ -64,8 +65,15 @@ use audio_playback_streams::{
     audio_playback_stream_stop,
 };
 
+use virtual_camera_streams::{
+    VirtualCameraStreamsOpenedForOneNode, virtual_camera_stream_close,
+    virtual_camera_stream_liveness, virtual_camera_stream_offer_extent, virtual_camera_stream_open,
+    virtual_camera_stream_write_yuyv_frame,
+};
+
 mod audio_capture_streams;
 mod audio_playback_streams;
+mod virtual_camera_streams;
 
 /// The `tracing` target a module's records are emitted under in this helper;
 /// the module's own target rides as the `module_target` field.
@@ -90,6 +98,7 @@ struct ModuleHostOfOneNode {
     surfaces_lent_to_native_code: SurfacesLentToNativeCode,
     audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode,
     shared_native_service_leases: SharedNativeServiceLeasesHeldByNativeCode,
+    virtual_camera_streams: VirtualCameraStreamsOpenedForOneNode,
 }
 
 /// The capsule `ctx.open_module_host_table(...)` returns: a table over the
@@ -199,6 +208,11 @@ fn module_host_of_one_node(
                 shared_native_service_lease_state,
                 shared_native_service_lease_release,
                 node_fail_unrecoverably,
+                virtual_camera_stream_open,
+                virtual_camera_stream_offer_extent,
+                virtual_camera_stream_write_yuyv_frame,
+                virtual_camera_stream_liveness,
+                virtual_camera_stream_close,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -214,6 +228,7 @@ fn module_host_of_one_node(
             surfaces_lent_to_native_code,
             audio_playback_streams: AudioPlaybackStreamsOpenedForOneNode::default(),
             shared_native_service_leases,
+            virtual_camera_streams: VirtualCameraStreamsOpenedForOneNode::default(),
         },
     )
 }

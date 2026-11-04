@@ -22,7 +22,8 @@
  * channel, with no interpreter on either end, as do the IOSurface import
  * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
  * id minor 6 adds and the shared native service leases and node failure
- * minor 7 adds.
+ * minor 7 adds. The virtual camera verbs minor 8 adds act in the helper
+ * itself.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -43,7 +44,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(7)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(8)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -125,6 +126,22 @@ typedef int32_t ModuleHostTableStatus;
  * 16-bit little-endian signed integer scalars.
  */
 #define MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16 UINT32_C(2)
+
+/**
+ * A `ModuleHostTable.virtual_camera_stream_write_yuyv_frame` that put the
+ * frame on its way to a consumer.
+ */
+#define MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_PUBLISHED UINT32_C(0)
+
+/**
+ * A frame dropped because no application has the camera open.
+ */
+#define MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_NO_CONSUMER_IS_WATCHING UINT32_C(1)
+
+/**
+ * A frame dropped because every buffer is still with the consumer.
+ */
+#define MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER UINT32_C(2)
 
 /**
  * How many bytes of a refusal's message the caller's buffer holds; a longer
@@ -210,8 +227,9 @@ typedef struct ModuleHostTableSharedNativeServiceLease {
  * One foreign DMA-BUF and where the pixels of `pixel_format` sit inside it.
  *
  * `fd` stays the caller's: the host dups it. Offsets and strides past
- * `plane_count` are ignored; `drm_format_modifier` other than linear (`0`) is
- * refused.
+ * `plane_count` are ignored. A `drm_format_modifier` other than linear (`0`)
+ * is taken for one plane of `rgba32` or `bgra32` only, which the host imports
+ * as a texture laid out by that modifier.
  */
 typedef struct ModuleHostTableDmaBufImport {
     int32_t fd;
@@ -468,6 +486,14 @@ typedef struct ModuleHostTableAudioBlockRequestedByDevice {
 typedef void (*ModuleHostTableAudioBlockRequestedByDeviceCallback)(void *callback_context, const ModuleHostTableAudioBlockRequestedByDevice *requested_block);
 
 /**
+ * A virtual camera the host opened for the module, valid until it is closed;
+ * `0` names no camera. Minor 8.
+ */
+typedef struct ModuleHostTableVirtualCameraStreamHandle {
+    uint64_t value;
+} ModuleHostTableVirtualCameraStreamHandle;
+
+/**
  * The verbs a node's native code reaches its node through, and the node host
  * they act on. Every verb's first argument is `ModuleHostTable.node_host`.
  */
@@ -675,6 +701,37 @@ typedef struct ModuleHostTable {
      * again. The first reason a node gives is the one kept.
      */
     ModuleHostTableStatus (*node_fail_unrecoverably)(void *node_host, ModuleHostTableUtf8 reason, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: register a PipeWire `Video/Source` camera node named
+     * `camera_name`, in this process, that any portal-based application can
+     * select. Refused by name where no libpipewire loads, no PipeWire daemon
+     * answers, or the platform is not Linux.
+     */
+    ModuleHostTableStatus (*virtual_camera_stream_open)(void *node_host, ModuleHostTableUtf8 camera_name, ModuleHostTableVirtualCameraStreamHandle *opened_camera, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: offer one even-width extent as YUY2 frames at
+     * `frames_per_second`, `0` taking the camera's default; replaces any
+     * extent offered earlier, and consumers re-negotiate.
+     */
+    ModuleHostTableStatus (*virtual_camera_stream_offer_extent)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, uint32_t width, uint32_t height, uint32_t frames_per_second, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: copy one YUY2 picture of the offered extent — `height` rows
+     * `stride_bytes` apart in `yuyv_rows` — into the camera's next free
+     * buffer, stamped `timestamp_ns`, and write what became of it as one of
+     * the `MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_*` values. Never waits on a
+     * consumer.
+     */
+    ModuleHostTableStatus (*virtual_camera_stream_write_yuyv_frame)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, ModuleHostTableBytes yuyv_rows, uint32_t stride_bytes, int64_t timestamp_ns, uint32_t *frame_presentation, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: `MODULE_HOST_TABLE_STATUS_OK` while the camera node lives;
+     * `MODULE_HOST_TABLE_STATUS_ENDED`, with the failure written, once
+     * PipeWire dropped it.
+     */
+    ModuleHostTableStatus (*virtual_camera_stream_liveness)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 8: remove the camera node; its handle names nothing after.
+     */
+    void (*virtual_camera_stream_close)(void *node_host, ModuleHostTableVirtualCameraStreamHandle camera);
 } ModuleHostTable;
 
 #ifdef __cplusplus

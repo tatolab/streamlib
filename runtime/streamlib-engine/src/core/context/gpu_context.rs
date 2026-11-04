@@ -2848,37 +2848,6 @@ impl GpuContext {
         crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer::import(&self.device.inner, iosurface)
     }
 
-    /// Import a caller-owned host range for GPU writes — the loopback
-    /// device's mapped output buffer — taking the imported tier when the
-    /// driver allows it and host-cached staging otherwise. See
-    /// [`HostMappingWrittenByGpu`](crate::vulkan::rhi::HostMappingWrittenByGpu)
-    /// for the per-frame protocol.
-    ///
-    /// # Safety
-    ///
-    /// The range must stay mapped, writable and unaliased until the returned
-    /// value drops.
-    #[cfg(target_os = "linux")]
-    pub unsafe fn import_host_mapping_for_gpu_writes(
-        &self,
-        host_range_ptr: *mut u8,
-        host_range_byte_len: usize,
-    ) -> Result<crate::vulkan::rhi::HostMappingWrittenByGpu> {
-        tracing::debug!(
-            rhi_op = "import_host_mapping_for_gpu_writes",
-            host_range_byte_len,
-            "GpuContext::import_host_mapping_for_gpu_writes"
-        );
-        // SAFETY: the caller upholds this method's own contract.
-        unsafe {
-            crate::vulkan::rhi::HostMappingWrittenByGpu::import_for_gpu_writes(
-                &self.device.inner,
-                host_range_ptr,
-                host_range_byte_len,
-            )
-        }
-    }
-
     /// Import the first `readable_byte_len` bytes of a caller-owned mapped
     /// range for GPU reads, taking the imported tier when the driver allows
     /// it and host-visible staging otherwise. See
@@ -5012,25 +4981,6 @@ impl GpuContextFullAccess {
         )
     }
 
-    /// Register a PipeWire `Video/Source` node with `media.role = Camera`, so
-    /// a portal-based application can select this graph as a camera.
-    ///
-    /// The door built-ins reach the PipeWire arm through: a virtual camera
-    /// needs the engine's DMA-BUF textures to offer, so the node is minted
-    /// where those are, and no built-in holds raw PipeWire.
-    #[cfg(target_os = "linux")]
-    pub fn open_pipewire_camera_node(
-        &self,
-        camera_name: &str,
-    ) -> Result<crate::linux::pipewire_video_source::PipeWireCameraNode> {
-        tracing::debug!(
-            rhi_op = "open_pipewire_camera_node",
-            camera_name,
-            "GpuContextFullAccess::open_pipewire_camera_node"
-        );
-        crate::linux::pipewire_video_source::PipeWireCameraNode::open(self, camera_name)
-    }
-
     /// Get a pixel buffer by its published surface id.
     pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.host_inner().get_pixel_buffer(surface_id)
@@ -5369,29 +5319,6 @@ impl GpuContextFullAccess {
     ) -> Result<crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer> {
         self.host_inner()
             .import_iosurface_as_storage_buffer(iosurface)
-    }
-
-    /// Import a caller-owned host range for GPU writes. See
-    /// [`GpuContext::import_host_mapping_for_gpu_writes`](crate::core::context::GpuContext::import_host_mapping_for_gpu_writes).
-    ///
-    /// FullAccess-only: it allocates device memory (an import or a staging
-    /// buffer), which is setup-time work under the escalate gate.
-    ///
-    /// # Safety
-    ///
-    /// The range must stay mapped, writable and unaliased until the returned
-    /// value drops.
-    #[cfg(target_os = "linux")]
-    pub unsafe fn import_host_mapping_for_gpu_writes(
-        &self,
-        host_range_ptr: *mut u8,
-        host_range_byte_len: usize,
-    ) -> Result<crate::vulkan::rhi::HostMappingWrittenByGpu> {
-        // SAFETY: the caller upholds this method's own contract.
-        unsafe {
-            self.host_inner()
-                .import_host_mapping_for_gpu_writes(host_range_ptr, host_range_byte_len)
-        }
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding

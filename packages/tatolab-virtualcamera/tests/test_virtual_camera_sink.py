@@ -24,6 +24,8 @@ from tatolab.virtualcamera import (
     VirtualCameraSinkConfig,
     copy_rows_between,
     loopback_door_refusal_or_none,
+    neither_door_opens_refusal,
+    virtual_camera_door_taken,
 )
 from tatolab.virtualcamera import v4l2_output_device_abi as abi
 from tatolab.virtualcamera.v4l2_color_fields import (
@@ -94,20 +96,15 @@ def test_the_config_names_the_camera_and_the_door_and_nothing_else():
         VirtualCameraSinkConfig(fps=60)  # type: ignore[call-arg]
 
 
-@pytest.mark.parametrize("door", ["auto", "v4l2loopback"])
-def test_a_writable_control_node_takes_the_loopback_door(door):
-    assert (
-        loopback_door_refusal_or_none(door, "Desk cam", ControlNodeAccess.WRITABLE)
-        is None
-    )
+def test_a_writable_control_node_opens_the_loopback_door():
+    assert loopback_door_refusal_or_none("Desk cam", ControlNodeAccess.WRITABLE) is None
 
 
-@pytest.mark.parametrize("door", ["auto", "v4l2loopback"])
 @pytest.mark.parametrize(
     "access", [ControlNodeAccess.ABSENT, ControlNodeAccess.NOT_WRITABLE]
 )
-def test_no_permission_refuses_naming_the_camera_the_node_and_the_verb(door, access):
-    refusal = loopback_door_refusal_or_none(door, "Desk cam", access)
+def test_no_permission_refuses_naming_the_camera_the_node_and_the_verb(access):
+    refusal = loopback_door_refusal_or_none("Desk cam", access)
 
     assert refusal is not None
     assert '"Desk cam"' in refusal
@@ -116,12 +113,37 @@ def test_no_permission_refuses_naming_the_camera_the_node_and_the_verb(door, acc
 
 
 @pytest.mark.parametrize("access", list(ControlNodeAccess))
-def test_the_pipewire_door_is_refused_whatever_the_control_node_says(access):
-    refusal = loopback_door_refusal_or_none("pipewire", "Desk cam", access)
+@pytest.mark.parametrize("door", ["v4l2loopback", "pipewire"])
+def test_a_named_door_is_taken_whatever_the_control_node_says(door, access):
+    assert virtual_camera_door_taken(door, access) == door
 
-    assert refusal is not None
-    assert "no PipeWire camera door" in refusal
-    assert 'door="auto"' in refusal
+
+def test_auto_takes_the_loopback_door_where_it_is_permitted():
+    assert (
+        virtual_camera_door_taken("auto", ControlNodeAccess.WRITABLE) == "v4l2loopback"
+    )
+
+
+@pytest.mark.parametrize(
+    "access", [ControlNodeAccess.ABSENT, ControlNodeAccess.NOT_WRITABLE]
+)
+def test_auto_takes_the_pipewire_door_where_the_loopback_door_is_not_permitted(access):
+    assert virtual_camera_door_taken("auto", access) == "pipewire"
+
+
+def test_auto_with_neither_door_names_both_refusals_and_the_verb():
+    loopback_refusal = loopback_door_refusal_or_none(
+        "Desk cam", ControlNodeAccess.ABSENT
+    )
+    assert loopback_refusal is not None
+
+    refusal = neither_door_opens_refusal(
+        "Desk cam", loopback_refusal, "no PipeWire daemon answers"
+    )
+
+    assert '"Desk cam": neither camera door opens' in refusal
+    assert "`tatolab enable-virtual-camera`" in refusal
+    assert "no PipeWire daemon answers" in refusal
 
 
 def the_node_named(node_name: str) -> TheNodeAVirtualCameraIsNamedFor:
