@@ -30,7 +30,7 @@ class BrightnessMeter:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
-        # `ctx.time` is the monotonic clock every node shares, in ns.
+        # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if frame is None or ctx.time < self.next_brightness_report_at_ns:
             return
         # `frame.cpu()` is the slow door, named so: the frame lives on the GPU

@@ -75,7 +75,7 @@ class HalftoneLensEffect:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         if frame is None:
             return
-        # `ctx.time` is the monotonic clock every node shares, in ns.
+        # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
         halftone_frame_record = self.halftone_lens_pixel_effect.apply_to_frame(

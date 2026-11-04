@@ -1364,6 +1364,13 @@ class HelperProcessLifecycle:
                 self._link_data_access.open_loss_count_board(
                     loss_count_board["service_name"], loss_count_board["output_ports"]
                 )
+            stream_clock_board_service_name = (command.get("stream_clock") or {}).get(
+                "board_service_name"
+            )
+            if stream_clock_board_service_name is not None:
+                self._link_data_access.adopt_the_stream_clock_board(
+                    stream_clock_board_service_name
+                )
             wire_link_data_access(self._link_data_access, command.get("ports") or {})
             self._hosted = construct_hosted_processor(
                 self._processor_class,

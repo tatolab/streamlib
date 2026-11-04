@@ -24,7 +24,7 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::Loade
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{
     CaptureDeviceAccessPrompting, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
-    TimeContext, platform_audio_clock_for_one_stream,
+    StreamClock, platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
@@ -401,6 +401,29 @@ impl LoadedStreamInThisRuntime {
         &self.engine_resources_shared_by_every_stream
     }
 
+    /// The clock this stream's graph names, started now — published on a board
+    /// its helpers read when it is not the machine's own clock.
+    fn this_streams_clock_starting_now(
+        &self,
+        engine: &EngineResourcesSharedByEveryStream,
+    ) -> Result<StreamClock> {
+        let stream_clock_spec = self.compiler.scope(|graph, _tx| graph.stream_clock_spec());
+        stream_clock_spec.refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        let stream_clock = StreamClock::starting_now(stream_clock_spec);
+        if stream_clock_spec.is_real() {
+            return Ok(stream_clock);
+        }
+        let board_service_name = format!(
+            "streamlib/{}/stream-clock/{}",
+            self.stream_id(),
+            crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix()
+        );
+        let board = engine
+            .iceoryx2_node
+            .create_stream_clock_board(&board_service_name, stream_clock.published())?;
+        Ok(stream_clock.published_on(board))
+    }
+
     /// The runtime context made at this stream's start, `None` before it and
     /// after its stop.
     #[cfg(test)]
@@ -444,7 +467,7 @@ impl LoadedStreamInThisRuntime {
                 Error::EngineResourceRefusedAtAStreamsStart(engine_refusal.to_string())
             })?;
 
-        let time = Arc::new(TimeContext::new());
+        let stream_clock = Arc::new(self.this_streams_clock_starting_now(engine)?);
         let audio_clock = platform_audio_clock_for_one_stream();
 
         // The context holds this stream as its runtime operations; the cycle
@@ -453,7 +476,7 @@ impl LoadedStreamInThisRuntime {
             Arc::clone(self) as Arc<dyn RuntimeOperations>;
         let this_streams_runtime_context = Arc::new(RuntimeContext::new(
             gpu,
-            time,
+            stream_clock,
             Arc::clone(&engine.runtime_id),
             this_stream_as_its_runtime_operations,
             engine.tokio_runtime_variant.handle(),
@@ -1169,6 +1192,11 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         graph.validate(&self.node_types_this_stream_resolves)?;
+        graph
+            .clock
+            .refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        self.compiler
+            .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {

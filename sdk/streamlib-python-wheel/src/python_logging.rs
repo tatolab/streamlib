@@ -120,8 +120,8 @@ pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
 }
 
-/// [`MediaClock::now`] in nanoseconds, shared by the clock binding, the
-/// default output stamp, `ctx.time`, and `MonotonicTimer`'s deadlines.
+/// [`MediaClock::now`] in nanoseconds, shared by the clock binding,
+/// `MonotonicTimer`'s deadlines, and the stream clock a helper reads.
 pub(crate) fn monotonic_clock_now_ns() -> u64 {
     MediaClock::now().as_nanos() as u64
 }

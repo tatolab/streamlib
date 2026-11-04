@@ -38,7 +38,6 @@ use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_EN
 use crate::python_bag_conversion::{
     cast_payload_bytes_into_read_target, python_type_name_for_error_message,
 };
-use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
@@ -537,6 +536,19 @@ pub(crate) fn open_node_link_data_access_for_helper_process(
 
 #[pymethods]
 impl PythonProcessorLinkDataAccess {
+    /// Read the clock of this helper's stream off the board its parent named,
+    /// so `ctx.time` and every write with no stamp follow the stream's clock.
+    fn adopt_the_stream_clock_board(&self, python: Python<'_>, service_name: &str) -> PyResult<()> {
+        let Some(node) = self.iceoryx2_node.get() else {
+            return Err(not_a_helper_process_data_plane_error());
+        };
+        let board_reader = python
+            .detach(|| node.open_stream_clock_board_reader(service_name))
+            .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
+        crate::python_helper_stream_clock::adopt_the_stream_clock_board(board_reader)
+            .map_err(PyRuntimeError::new_err)
+    }
+
     /// Open the loss-count board the parent created for this spawn, so every
     /// link wired from here on mirrors its counts onto it.
     ///
@@ -948,7 +960,8 @@ impl PythonProcessorLinkDataAccess {
         let Some(output_writer) = self.output_writer_reaching(port_name)? else {
             return Ok(());
         };
-        let timestamp_ns = timestamp_ns.unwrap_or_else(|| monotonic_clock_now_ns() as i64);
+        let timestamp_ns = timestamp_ns
+            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
         let group_boundary = if starts_group {
             MessageGroupBoundary::StartsGroup
         } else {

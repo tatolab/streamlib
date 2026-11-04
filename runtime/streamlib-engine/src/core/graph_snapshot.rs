@@ -4,7 +4,7 @@
 //! The graph as data: the spec a runtime loads, in the one shape `graph`
 //! renders.
 //!
-//! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`,
+//! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`, `clock`,
 //! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
 //! `exposed` — and nothing else, so `graph`'s own output reads into one with
 //! its live keys skipped, and any other key is refused by name. Loading one is
@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
@@ -36,6 +37,10 @@ pub struct GraphSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
 
+    /// The clock the stream runs on. Absent reads as real time.
+    #[serde(skip_serializing_if = "StreamClockSpec::is_real")]
+    pub clock: StreamClockSpec,
+
     /// Every node, each under the name links and exposures name it by.
     pub nodes: Vec<GraphSnapshotNode>,
 
@@ -51,6 +56,8 @@ pub struct GraphSnapshot {
 struct GraphSnapshotAsWritten {
     #[serde(default)]
     stream: Option<String>,
+    #[serde(default)]
+    clock: StreamClockSpec,
     nodes: Vec<GraphSnapshotNode>,
     #[serde(default)]
     links: Vec<GraphSnapshotLink>,
@@ -75,7 +82,7 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["stream", "nodes", "links", "exposed"],
+    spec_keys: &["stream", "clock", "nodes", "links", "exposed"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "runtime_name"],
 };
@@ -161,6 +168,7 @@ impl GraphSnapshot {
         refuse_a_key_this_runtime_does_not_read(&graph_document)?;
         let GraphSnapshotAsWritten {
             stream,
+            clock,
             nodes,
             links,
             exposed,
@@ -168,6 +176,7 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         Ok(Self {
             stream,
+            clock,
             nodes,
             links,
             exposed,
@@ -572,6 +581,7 @@ mod tests {
     fn a_graph_serializes_exactly_the_spec_keys() {
         let graph = GraphSnapshot {
             stream: None,
+            clock: StreamClockSpec::Real,
             nodes: vec![GraphSnapshotNode {
                 name: "camera".into(),
                 processor_type: ProcessorClassImportPath::new(A_CAMERA_CLASS).unwrap(),
@@ -875,7 +885,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`stream`, `nodes`, `links` and `exposed`",
+                    "`stream`, `clock`, `nodes`, `links` and `exposed`",
                 ],
             ),
             (

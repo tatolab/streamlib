@@ -165,6 +165,13 @@ fn spawn_dedicated_thread(
         )
     };
 
+    if let Some(output_writer_inner) = processor_to_attach
+        .processor_instance
+        .lock()
+        .iceoryx2_output_writer_inner()
+    {
+        output_writer_inner.reach_the_stream_clock(Arc::clone(&runtime_ctx.stream_clock));
+    }
     let processor_arc_clone = Arc::clone(&processor_to_attach.processor_instance);
     let thread_kind = match runtime {
         ProcessorRuntime::Rust => ProcessorThreadKind::NativeProcessor,
