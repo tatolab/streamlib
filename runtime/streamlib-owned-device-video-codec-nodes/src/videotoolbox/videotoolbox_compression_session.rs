@@ -292,7 +292,11 @@ impl VideoToolboxCompressionSession {
             .saturating_mul(request.keyframe_interval_seconds);
         // SAFETY: each key and profile is a VideoToolbox-exported constant.
         unsafe {
-            self.set_property(kVTCompressionPropertyKey_RealTime, CFBoolean::new(true))?;
+            // A real-time session paces each synchronous encode-and-complete to
+            // just over one frame period (about 17.5 ms at 1080p60 on Apple
+            // silicon), so a 60 fps input falls behind; unpaced, it takes about
+            // 6 ms.
+            self.set_property(kVTCompressionPropertyKey_RealTime, CFBoolean::new(false))?;
             self.set_property(
                 kVTCompressionPropertyKey_AllowFrameReordering,
                 CFBoolean::new(false),
