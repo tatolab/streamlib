@@ -31,7 +31,7 @@ EOF
 
 shaderc_sys_download_directory="$(mktemp -d)"
 shaderc_sys_crate="$shaderc_sys_download_directory/shaderc-sys-$shaderc_sys_version.crate"
-curl --proto '=https' --tlsv1.2 -sSfL --retry 5 --retry-all-errors \
+curl --proto '=https' --tlsv1.2 -sSfL --retry 5 \
 	"https://static.crates.io/crates/shaderc-sys/shaderc-sys-$shaderc_sys_version.crate" \
 	-o "$shaderc_sys_crate"
 echo "$shaderc_sys_checksum  $shaderc_sys_crate" | sha256sum --check --quiet
