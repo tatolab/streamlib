@@ -40,8 +40,6 @@ use std::sync::Arc;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use parking_lot::Mutex;
-#[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
@@ -68,14 +66,14 @@ pub(crate) use gpu_kernels::{
 };
 
 #[cfg(target_os = "linux")]
-use linux::HelperPixelBufferMemoryFlavour;
-#[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
     HelperAcquiredTexture, HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
     HelperCpuReadbackExport, HelperDeviceExport, HelperForeignSurfaceUnregisterDebt,
     OpaqueFdAllocationExportDescription, foreign_dma_buf_plane_layout,
 };
+#[cfg(target_os = "linux")]
+use linux::{HelperPixelBufferPoolSlotImport, HelperPoolSlotImportsByPoolSlot};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
@@ -321,8 +319,10 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// The id this surface travels under — what a downstream processor
     /// resolves, and what keys the parent's registry entry.
     pub(crate) surface_id: String,
+    /// The pool slot's import, shared with this helper's per-slot cache and
+    /// every other frame checked out over the slot.
     #[cfg(target_os = "linux")]
-    pub(crate) consumer_buffer: ConsumerVulkanBuffer,
+    pub(crate) pixel_buffer_pool_slot_import: Arc<HelperPixelBufferPoolSlotImport>,
     /// The pool slot's IOSurface and its import, shared with this helper's
     /// per-slot cache and every other frame checked out over the slot.
     #[cfg(target_os = "macos")]
@@ -355,10 +355,6 @@ pub(crate) struct HelperCheckedOutPixelSurface {
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
     pub(crate) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
-    /// Which handle type the memory crossed as, and for a DMA-BUF the plane
-    /// fds `export_dma_buf` answers from.
-    #[cfg(target_os = "linux")]
-    memory_flavour: HelperPixelBufferMemoryFlavour,
     /// The client this surface was checked out through, and the one its
     /// device export goes back to.
     #[cfg(target_os = "linux")]
@@ -385,7 +381,10 @@ impl HelperCheckedOutPixelSurface {
     /// null when its import has no host mapping.
     pub(crate) fn host_mapped_base_address(&self) -> *mut u8 {
         #[cfg(target_os = "linux")]
-        return self.consumer_buffer.mapped_ptr();
+        return self
+            .pixel_buffer_pool_slot_import
+            .consumer_buffer
+            .mapped_ptr();
         #[cfg(target_os = "macos")]
         return self.iosurface_pool_slot_import.consumer_buffer.mapped_ptr();
     }
@@ -602,6 +601,12 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// were claimed on them.
     #[cfg(target_os = "linux")]
     surface_share_connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
+    /// Each pool slot's import, made on the first frame over the slot and
+    /// reused by every later one. Holding one does not pin a slot — only a
+    /// frame's checkout lease does — and the service names each slot the
+    /// engine retires on this helper's connection, which drops it here.
+    #[cfg(target_os = "linux")]
+    pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot,
     /// The `deviceUUID` the runtime named at spawn, or why this child has
     /// none — what its import device is built on, and the refusal of every
     /// import when it is absent.
@@ -698,6 +703,8 @@ impl HelperProcessGpuExchangeClient {
             surface_share_connection: Mutex::new(None),
             #[cfg(target_os = "linux")]
             surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
+            #[cfg(target_os = "linux")]
+            pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot::default(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             vulkan_device_uuid_the_runtime_named_at_spawn,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -798,7 +805,7 @@ impl HelperProcessGpuExchangeClient {
 
     /// `check_out` over the surface-share socket, then the import of
     /// whichever backing the registration names.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn check_out_and_import(
         self: &Arc<Self>,
         surface_id: &str,

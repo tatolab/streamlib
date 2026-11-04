@@ -196,7 +196,7 @@ impl GpuSurfaceOwnedMemory {
     pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
         match &self.checked_out_surface {
             HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
-                pixel_surface.consumer_buffer.mapped_ptr().is_null()
+                pixel_surface.host_mapped_base_address().is_null()
             }
             HelperCheckedOutSurface::Texture(_)
             | HelperCheckedOutSurface::AcquiredDeviceTexture(_)

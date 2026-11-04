@@ -64,6 +64,25 @@ fn import_timeline_edge_for_texture_check_out(
     }
 }
 
+/// The layout the producer left a texture in, as a checkout reports it.
+fn current_image_layout_of_a_texture_check_out(
+    surface_id: &str,
+    response: &serde_json::Value,
+) -> PyResult<VulkanLayout> {
+    let current_image_layout_raw = response
+        .get("current_image_layout")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    i32::try_from(current_image_layout_raw)
+        .map(VulkanLayout)
+        .map_err(|_| {
+            PyRuntimeError::new_err(format!(
+                "texture {surface_id:?} reports image layout {current_image_layout_raw}, \
+                 which is not a VkImageLayout"
+            ))
+        })
+}
+
 /// The registration metadata a texture checkout must carry, parsed and
 /// validated before any fd changes hands — a refusal here leaves no
 /// duplicated fd behind.
@@ -73,7 +92,6 @@ struct TextureCheckOutRegistrationMetadata {
     format: TextureFormat,
     handle_is_opaque_fd: bool,
     allocation_byte_size: u64,
-    current_image_layout: VulkanLayout,
     drm_format_modifier: u64,
     plane_offsets: Vec<u64>,
     plane_strides: Vec<u64>,
@@ -123,18 +141,6 @@ impl TextureCheckOutRegistrationMetadata {
                      instead of failing here"
                 ))
             })?;
-        let current_image_layout_raw = response
-            .get("current_image_layout")
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0);
-        let current_image_layout = i32::try_from(current_image_layout_raw)
-            .map(VulkanLayout)
-            .map_err(|_| {
-                PyRuntimeError::new_err(format!(
-                    "texture {surface_id:?} reports image layout {current_image_layout_raw}, \
-                     which is not a VkImageLayout"
-                ))
-            })?;
         let drm_format_modifier = response
             .get("drm_format_modifier")
             .and_then(|value| value.as_u64())
@@ -162,7 +168,6 @@ impl TextureCheckOutRegistrationMetadata {
             format,
             handle_is_opaque_fd,
             allocation_byte_size,
-            current_image_layout,
             drm_format_modifier,
             plane_offsets: plane_u64_array_check_out_metadata_field(response, "plane_offsets"),
             plane_strides: plane_u64_array_check_out_metadata_field(response, "plane_strides"),
@@ -195,40 +200,57 @@ pub(crate) struct HelperAcquiredTexture {
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
-/// A texture-backed surface this helper imported: the engine's tiled image
+/// One texture pool slot as this helper imported it: the engine's tiled image
 /// reconstructed as a `VkImage` on this process's own device, plus the
-/// timeline edges and the layout cell that keep the crossing coordinated.
+/// timeline edges that keep the crossing coordinated.
 ///
-/// The memory is tiled DEVICE_LOCAL, so this arm maps nothing: what it
-/// offers is the image itself for this process's Vulkan work, and the fds it
-/// was checked out with for native code that imports memory. The CPU reaches
+/// The memory is tiled DEVICE_LOCAL, so this maps nothing: what it offers is
+/// the image itself for this process's Vulkan work, and the fds it was
+/// checked out with for native code that imports memory. The CPU reaches
 /// these pixels through the surface's host-visible export staging, which is
 /// a different allocation and a different checkout.
-pub(crate) struct HelperCheckedOutTextureSurface {
-    pub(crate) surface_id: String,
-    pub(crate) consumer_texture: ConsumerVulkanTexture,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) format: TextureFormat,
+pub(crate) struct HelperTexturePoolSlotImport {
+    consumer_texture: ConsumerVulkanTexture,
+    width: u32,
+    height: u32,
+    format: TextureFormat,
     /// True when the registration's handle type is OPAQUE_FD — the fds then
     /// import through Vulkan/CUDA external memory, never as DMA-BUFs.
-    pub(crate) handle_is_opaque_fd: bool,
+    handle_is_opaque_fd: bool,
     /// The host allocation's byte size, from the registration — what a
     /// native import must pass to its own allocator.
-    pub(crate) allocation_byte_size: u64,
+    allocation_byte_size: u64,
     /// The producer's edge of the single-writer-per-edge pair, when the
-    /// registration carried one. Nothing signals it today — the escalate
-    /// dispatch retires its GPU work before any consumer can learn the id —
-    /// so there is no wire value to wait on; the import holds the edge so a
-    /// producer that starts signalling finds its consumers already on the
-    /// pair.
+    /// registration carried one. Nothing signals it — the escalate dispatch
+    /// retires its GPU work before any consumer can learn the id — so there
+    /// is no wire value to wait on; the import holds the edge so a producer
+    /// that starts signalling finds its consumers already on the pair.
     #[expect(
         dead_code,
         reason = "no wire value exists to wait on yet; held for the pair's producer side"
     )]
     produce_done_timeline: Option<ConsumerVulkanTimelineSemaphore>,
-    /// This side's edge, signalled once at release.
+    /// This side's edge, signalled once at each frame's release.
     consume_done_timeline: Option<ConsumerVulkanTimelineSemaphore>,
+    /// The plane fds the slot was delivered, kept so `export_dma_buf` and
+    /// `export_opaque_fd` can hand the texture itself to native code.
+    exported_plane_fds: Vec<OwnedFd>,
+    /// The VkImageCreateInfo recipe off the registration — what
+    /// `export_opaque_fd` states so a foreign re-import reproduces the
+    /// exporter's image byte-for-byte.
+    vk_image_creation_recipe: ExportedVkImageCreationRecipe,
+    /// `Some` on every OPAQUE_FD checkout (the parse refused otherwise),
+    /// `None` for DMA-BUF flavours, which never carry it.
+    opaque_fd_export_contract: Option<OpaqueFdExportContract>,
+}
+
+/// One frame checked out over a texture pool slot's import.
+pub(crate) struct HelperCheckedOutTextureSurface {
+    pub(crate) surface_id: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: TextureFormat,
+    texture_pool_slot_import: Arc<HelperTexturePoolSlotImport>,
     /// The layout this side's image sits in — seeded from the checkout's
     /// published cell, republished at release so the next consumer's acquire
     /// barrier names the right source.
@@ -239,16 +261,6 @@ pub(crate) struct HelperCheckedOutTextureSurface {
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
     release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
-    /// The plane fds this checkout was delivered, kept so `export_dma_buf`
-    /// and `export_opaque_fd` can hand the texture itself to native code.
-    exported_plane_fds: Vec<OwnedFd>,
-    /// The VkImageCreateInfo recipe off the registration — what
-    /// `export_opaque_fd` states so a foreign re-import reproduces the
-    /// exporter's image byte-for-byte.
-    vk_image_creation_recipe: ExportedVkImageCreationRecipe,
-    /// `Some` on every OPAQUE_FD checkout (the parse refused otherwise),
-    /// `None` for DMA-BUF flavours, which never carry it.
-    opaque_fd_export_contract: Option<OpaqueFdExportContract>,
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -261,7 +273,8 @@ impl HelperCheckedOutTextureSurface {
     /// under this name would fail at the receiver's EGL or V4L2 import
     /// with a driver error instead of here.
     pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
-        if self.handle_is_opaque_fd {
+        let imported = &self.texture_pool_slot_import;
+        if imported.handle_is_opaque_fd {
             return Err(PyRuntimeError::new_err(
                 "this texture's memory is OPAQUE_FD-flavoured: it imports through Vulkan or \
                  CUDA external memory, not as a DMA-BUF, and `export_opaque_fd` hands its \
@@ -269,8 +282,9 @@ impl HelperCheckedOutTextureSurface {
                  texture exports under this one",
             ));
         }
-        let exported = duplicate_first_plane_fd_for_export(&self.exported_plane_fds, "texture")?;
-        Ok((exported.into_raw_fd(), self.allocation_byte_size))
+        let exported =
+            duplicate_first_plane_fd_for_export(&imported.exported_plane_fds, "texture")?;
+        Ok((exported.into_raw_fd(), imported.allocation_byte_size))
     }
 
     /// The OPAQUE_FD memory fd plus the allocation-stable shape a foreign
@@ -279,28 +293,29 @@ impl HelperCheckedOutTextureSurface {
     /// The mirror of the refusal above: a DMA-BUF-flavoured texture is
     /// refused by name, pointing at `export_dma_buf`.
     pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdAllocationExportDescription> {
-        if !self.handle_is_opaque_fd {
+        let imported = &self.texture_pool_slot_import;
+        if !imported.handle_is_opaque_fd {
             return Err(PyRuntimeError::new_err(
                 "this texture's memory is DMA-BUF-flavoured: `export_dma_buf` hands its fd \
                  out under that name. Only an OPAQUE_FD texture — the flavour storage-usage \
                  kernel outputs take — exports under this one",
             ));
         }
-        let export_contract = self.opaque_fd_export_contract.ok_or_else(|| {
+        let export_contract = imported.opaque_fd_export_contract.ok_or_else(|| {
             PyRuntimeError::new_err(
                 "this OPAQUE_FD checkout carries no export contract fields; its \
                  registration predates the raw-handle export contract",
             )
         })?;
         let exported_memory_fd =
-            duplicate_first_plane_fd_for_export(&self.exported_plane_fds, "texture")?;
+            duplicate_first_plane_fd_for_export(&imported.exported_plane_fds, "texture")?;
         Ok(OpaqueFdAllocationExportDescription {
             exported_memory_fd,
-            allocation_byte_size: self.allocation_byte_size,
+            allocation_byte_size: imported.allocation_byte_size,
             width: self.width,
             height: self.height,
             format_wire_name: self.format.wire_name(),
-            vk_image_creation_recipe: Some(self.vk_image_creation_recipe),
+            vk_image_creation_recipe: Some(imported.vk_image_creation_recipe),
             // DEDICATED_MEMORY by construction for the flavour
             // (`HostVulkanTexture::new_opaque_fd_export`); a Vulkan importer
             // chains `VkMemoryDedicatedAllocateInfo`, a CUDA importer sets
@@ -324,7 +339,8 @@ impl Drop for HelperCheckedOutTextureSurface {
         Python::attach(|python| {
             let release_failures = python.detach(|| {
                 let mut release_failures: Vec<String> = Vec::new();
-                if let Some(consume_done) = &self.consume_done_timeline {
+                let imported = &self.texture_pool_slot_import;
+                if let Some(consume_done) = &imported.consume_done_timeline {
                     let signalled = consume_done
                         .current_value()
                         .and_then(|value| consume_done.signal_host(value + 1));
@@ -334,10 +350,12 @@ impl Drop for HelperCheckedOutTextureSurface {
                     }
                 }
                 if self.current_image_layout != VulkanLayout::UNDEFINED {
-                    if let Err(barrier_failure) = self.consumer_texture.release_to_foreign_layout(
-                        self.current_image_layout,
-                        self.current_image_layout,
-                    ) {
+                    if let Err(barrier_failure) =
+                        imported.consumer_texture.release_to_foreign_layout(
+                            self.current_image_layout,
+                            self.current_image_layout,
+                        )
+                    {
                         release_failures.push(format!("QFOT release failed: {barrier_failure}"));
                     }
                     if let Err(publish_failure) =
@@ -415,8 +433,7 @@ impl HelperProcessGpuExchangeClient {
 
     /// The texture arm of a checkout: parse and validate the registration,
     /// rebuild the engine's tiled image on this process's device from the
-    /// flavour it carries, join the timeline pair, and take the published
-    /// layout as this side's starting point.
+    /// flavour it carries, and join the timeline pair.
     pub(super) fn import_checked_out_texture(
         self: &Arc<Self>,
         surface_id: &str,
@@ -424,7 +441,7 @@ impl HelperProcessGpuExchangeClient {
         plane_fds: Vec<OwnedFd>,
         produce_done_fd: Option<OwnedFd>,
         consume_done_fd: Option<OwnedFd>,
-    ) -> PyResult<HelperCheckedOutTextureSurface> {
+    ) -> PyResult<HelperTexturePoolSlotImport> {
         let metadata =
             TextureCheckOutRegistrationMetadata::from_check_out_response(surface_id, response)?;
         // Both flavours travel as exactly one memory fd — OPAQUE_FD is the
@@ -502,12 +519,39 @@ impl HelperProcessGpuExchangeClient {
             consume_done_fd,
         )?;
 
+        Ok(HelperTexturePoolSlotImport {
+            consumer_texture,
+            width: metadata.width,
+            height: metadata.height,
+            format: metadata.format,
+            handle_is_opaque_fd: metadata.handle_is_opaque_fd,
+            allocation_byte_size: metadata.allocation_byte_size,
+            produce_done_timeline,
+            consume_done_timeline,
+            exported_plane_fds: plane_fds,
+            vk_image_creation_recipe: metadata.vk_image_creation_recipe,
+            opaque_fd_export_contract: metadata.opaque_fd_export_contract,
+        })
+    }
+
+    /// One frame over a texture pool slot's import: take the layout the
+    /// checkout published as this side's starting point.
+    pub(super) fn texture_checked_out_over_a_pool_slot_import(
+        self: &Arc<Self>,
+        surface_id: &str,
+        response: &serde_json::Value,
+        texture_pool_slot_import: Arc<HelperTexturePoolSlotImport>,
+        release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    ) -> PyResult<HelperCheckedOutTextureSurface> {
+        let current_image_layout =
+            current_image_layout_of_a_texture_check_out(surface_id, response)?;
         // The consumer-side acquire barrier per the layout protocol: start
         // this side's layout tracking from the layout the producer
-        // published. A no-op when the published layout is UNDEFINED — which
-        // it is until a producer publishes one; see the field's doc.
-        consumer_texture
-            .acquire_from_foreign_layout(metadata.current_image_layout)
+        // published. A no-op while the published layout is UNDEFINED, which
+        // it is until a producer publishes one.
+        texture_pool_slot_import
+            .consumer_texture
+            .acquire_from_foreign_layout(current_image_layout)
             .map_err(|acquire_failure| {
                 PyRuntimeError::new_err(format!(
                     "the QFOT acquire barrier for texture {surface_id:?} failed \
@@ -518,22 +562,12 @@ impl HelperProcessGpuExchangeClient {
 
         Ok(HelperCheckedOutTextureSurface {
             surface_id: surface_id.to_string(),
-            consumer_texture,
-            width: metadata.width,
-            height: metadata.height,
-            format: metadata.format,
-            handle_is_opaque_fd: metadata.handle_is_opaque_fd,
-            allocation_byte_size: metadata.allocation_byte_size,
-            produce_done_timeline,
-            consume_done_timeline,
-            current_image_layout: metadata.current_image_layout,
-            release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
-                exchange_client: Arc::clone(self),
-                surface_id: surface_id.to_string(),
-            },
-            exported_plane_fds: plane_fds,
-            vk_image_creation_recipe: metadata.vk_image_creation_recipe,
-            opaque_fd_export_contract: metadata.opaque_fd_export_contract,
+            width: texture_pool_slot_import.width,
+            height: texture_pool_slot_import.height,
+            format: texture_pool_slot_import.format,
+            texture_pool_slot_import,
+            current_image_layout,
+            release_check_out_to_surface_share,
             exchange_client: Arc::clone(self),
         })
     }

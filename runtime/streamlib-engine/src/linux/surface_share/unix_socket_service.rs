@@ -871,9 +871,6 @@ fn surface_share_check_out_metadata(
     response
 }
 
-/// Handle the `update_layout` op (#633): a producer that just issued a
-/// QFOT release barrier publishes the post-release `VkImageLayout` so
-/// the next consumer's lookup picks it up. Returns `{"success": bool}`.
 /// Publish the layout a peer left a texture in. A peer that holds the slot
 /// checked out has released it to the external queue family in that layout,
 /// and that release is recorded for the slot's owner to acquire.
@@ -1528,7 +1525,7 @@ mod tests {
     }
 
     /// `handle_type` rides along through the register/lookup wire path.
-    /// Subprocess consumers (#589 Python / #590 Deno CUDA cdylibs) read
+    /// Subprocess consumers read
     /// it to dispatch on the import API: `"dma_buf"` →
     /// `ConsumerVulkanBuffer::from_dma_buf_fds`, `"opaque_fd"` →
     /// `ConsumerVulkanBuffer::from_opaque_fd`. The default-when-absent
@@ -1741,7 +1738,7 @@ mod tests {
     /// was created with `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at
     /// all" otherwise. The consumer can only tell the two apart if the tiling
     /// crosses the wire beside the modifier, so both must survive the
-    /// round trip (#1915).
+    /// round trip.
     #[test]
     fn a_linear_modifier_stays_distinguishable_from_no_modifier_across_the_wire() {
         let state = SurfaceShareState::new();
@@ -1989,7 +1986,7 @@ mod tests {
     /// runs in the wire helper before the handler, so this exercises the
     /// shared back-pressure path every caller relies on.
     ///
-    /// Cap shape (#588 / #559):
+    /// Cap shape:
     /// - `MAX_DMA_BUF_PLANES = 4` — the data-plane cap that adapters
     ///   enforce; "this many plane fds, no more."
     /// - `MAX_SCM_RIGHTS_FDS = MAX_DMA_BUF_PLANES + 1 = 5` — the wire-level
@@ -2355,7 +2352,7 @@ mod tests {
         service.stop();
     }
 
-    /// Full `VkImageCreateInfo` round-trip through the wire (#800): a
+    /// Full `VkImageCreateInfo` round-trip through the wire: a
     /// producer ships every `vk_image_*` field on register; the consumer
     /// reads them off lookup. Locks the OPAQUE_FD VkImage consumer's
     /// ability to rebuild a matching `VkImage` whose
@@ -2496,7 +2493,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// #1872 over the wire: the slot registers once, its frames publish
+    /// Over the wire, the slot registers once, its frames publish
     /// generations, and only the current generation's id checks out. The
     /// retired id fails with an error naming the recycling — never with the
     /// recycled slot's planes.
@@ -2894,8 +2891,7 @@ mod tests {
     }
 
     /// Round-trip `current_image_layout` through register → lookup, and
-    /// flip it through `update_layout` (#633). Locks the per-surface
-    /// half of the issue: producers seed the layout at registration and
+    /// flip it through `update_layout`. Producers seed the layout at registration and
     /// re-publish it after their QFOT release barrier records, so the
     /// next consumer's lookup sees the post-release layout instead of
     /// the synthesized UNDEFINED.
