@@ -23,6 +23,10 @@ python-source = "python"
 module-name = "tatolab.camera._native"
 features = ["pyo3/extension-module"]
 
+# The engine wheel's macOS floor, so this wheel installs wherever that one does.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "15.0"
+
 [tool.pyright]
 include = ["python", "streams"]
 extraPaths = ["python", "../streamlib-h264/python"]
