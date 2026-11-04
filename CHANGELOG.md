@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.23](https://github.com/tatolab/streamlib/compare/v0.68.22...v0.68.23) (2026-11-04)
+
+
+### Features
+
+* **browser:** one shared browser host per machine, a tab per BrowserSource ([8867746](https://github.com/tatolab/streamlib/commit/8867746db8143224c5f1adf8fc1e87f3b46cc5f3))
+
 ## [0.68.22](https://github.com/tatolab/streamlib/compare/v0.68.21...v0.68.22) (2026-11-04)
 
 
