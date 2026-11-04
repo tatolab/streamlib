@@ -90,9 +90,9 @@ Three more things it teaches:
 
 `ReverbEffect` runs in its own child interpreter with its own GIL, which imports
 it as `nodes.reverb_effect:ReverbEffect` — that is why it lives under `nodes/`
-and never in `stream.py`. `MicrophoneSource` and `SpeakerSink` are native
-built-ins that ship inside the runtime, and their per-sample paths never enter an
-interpreter at all.
+and never in `stream.py`. `MicrophoneSource` and `SpeakerSink` come from the
+`tatolab-microphone` and `tatolab-speaker` modules, and their per-sample paths are
+the modules' Rust, never Python.
 
 ## Run it
 
@@ -107,7 +107,9 @@ Speak into your microphone and you should hear yourself, wet. Ctrl-C unloads the
 stream.
 
 `uv sync` installs `tatolab-stream` and `numpy` from PyPI — `tatolab-stream` is
-the authoring surface, and the only Tatolab package a stream's venv holds. The
+the authoring surface — and builds `tatolab-microphone` and `tatolab-speaker` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The
 runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit,
@@ -168,7 +170,7 @@ makes the port internal again; the microphone's `audio` port is read the same wa
 
 A null sink gives you a microphone with no microphone: play a signal into it and
 capture it back off its monitor, which is what `<sink>.monitor` device ids are
-for on PipeWire. Both built-ins take a `device_id`, so the whole loop can be
+for on PipeWire. Both nodes take a `device_id`, so the whole loop can be
 closed on a machine with no audio hardware attached. Set the two constants at
 the top of `stream.py`:
 

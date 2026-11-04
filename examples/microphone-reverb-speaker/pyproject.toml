@@ -2,4 +2,8 @@
 name = "microphone-reverb-speaker"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.3", "numpy>=2.1"]
+dependencies = ["tatolab-stream>=0.54.3", "tatolab-microphone", "tatolab-speaker", "numpy>=2.1"]
+
+[tool.uv.sources]
+tatolab-microphone = { path = "../../packages/tatolab-microphone", editable = true }
+tatolab-speaker = { path = "../../packages/tatolab-speaker", editable = true }

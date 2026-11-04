@@ -4,8 +4,8 @@
 """A Tatolab stream: camera → a fisheye lens → rectify → detect, both views shared.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. `CameraSource` and the two `H264Encoder`s are native built-ins; the
-lens and the detector are this project's own nodes, each running in its own
+manifest. `CameraSource` and the two `H264Encoder`s come from the
+`tatolab-camera` and `tatolab-h264` modules; the lens and the detector are this project's own nodes, each running in its own
 child interpreter. While it runs, http://127.0.0.1:4446/watch/<machine>/main
 plays the stream in a browser, with both encoded tracks to pick from.
 
@@ -13,14 +13,9 @@ Nodes live in their own modules under `nodes/`, never in this file: each one
 runs in its own child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from nodes.radial_distortion_model import (
     DEFAULT_RADIAL_DISTORTION_K1,
@@ -42,7 +37,7 @@ DETECTION_CONFIDENCE_THRESHOLD = 0.35
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera through a synthetic fisheye lens, rectified and detected; both views encoded and exposed."""
-    camera_config: CameraSourceConfig = {
+    camera_config: dict[str, object] = {
         "max_width": FRAME_WIDTH,
         "max_height": FRAME_HEIGHT,
     }

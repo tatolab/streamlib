@@ -160,9 +160,11 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds — beside `numpy`. The runtime itself
-is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
+`numpy`, and builds `tatolab-camera` from this checkout, as an editable path
+dependency (`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin
+project, so the build needs a Rust toolchain. `CameraSource` comes from it. The
+runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command

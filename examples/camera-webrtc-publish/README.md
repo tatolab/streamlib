@@ -60,11 +60,9 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI and builds `tatolab-webrtc` from
-this checkout, as an editable path dependency (`[tool.uv.sources]` in
-`pyproject.toml`). The package is a maturin project, so the build needs a Rust
-toolchain. Outside this checkout, drop the `[tool.uv.sources]` entry and the
-dependency resolves from PyPI like any other.
+`uv sync` installs `tatolab-stream` from PyPI and builds `tatolab-camera`, `tatolab-h264`, `tatolab-microphone`, `tatolab-opus` and `tatolab-webrtc` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command
@@ -167,11 +165,13 @@ save while `tatolab dev` runs.
 | `STREAMLIB_WHIP_URL` | `tatolabd`'s environment | **Required.** The WHIP endpoint. A credential — never in a file in this directory. |
 | `STREAMLIB_WHIP_BEARER_TOKEN` | `tatolabd`'s environment | Bearer token, for an endpoint that wants one. Cloudflare Stream does not. |
 | `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `device_id` | `MicrophoneSourceConfig` | Capture device. Absent: the audio backend's default device. |
-| `bitrate_bps` | `H264EncoderConfig`, `OpusEncoderConfig` | Target bitrate. Absent: the encoder's own default. |
+| `device_id` | `MicrophoneSourceConfig` in `tatolab.microphone` | Capture device. Absent: the audio backend's default device. |
+| `bitrate_bps` | `H264EncoderConfig` in `tatolab.h264`, `OpusEncoderConfig` in `tatolab.opus` | Target bitrate. Absent: the encoder's own default. |
 
-Every built-in's keys are written down in `tatolab.stream`; `WhipPublisher`'s
-are `WhipPublisherConfig` in `tatolab.webrtc`.
+Each node's keys are its module's config dataclass: `CameraSourceConfig` in
+`tatolab.camera`, `H264EncoderConfig` in `tatolab.h264`, `MicrophoneSourceConfig`
+in `tatolab.microphone`, `OpusEncoderConfig` in `tatolab.opus` and
+`WhipPublisherConfig` in `tatolab.webrtc`.
 
 ## One known offset
 

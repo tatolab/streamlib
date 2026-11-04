@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.68.20](https://github.com/tatolab/streamlib/compare/v0.68.19...v0.68.20) (2026-11-04)
+
+
+### Bug Fixes
+
+* **examples:** import the camera, codec, Opus, microphone and speaker nodes from their modules ([#3118](https://github.com/tatolab/streamlib/issues/3118)) ([e7536f3](https://github.com/tatolab/streamlib/commit/e7536f36067555b5168434cb5f795c7a5a06674d))
+
+## [0.68.19](https://github.com/tatolab/streamlib/compare/v0.68.18...v0.68.19) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** build glslc for the codec wheels and give the tarball check tatolab-h264 ([#3117](https://github.com/tatolab/streamlib/issues/3117)) ([278e3cf](https://github.com/tatolab/streamlib/commit/278e3cf2289753789aefbf1c34cf0f8f37b5c1c3))
+
 ## [0.68.18](https://github.com/tatolab/streamlib/compare/v0.68.17...v0.68.18) (2026-11-04)
 
 

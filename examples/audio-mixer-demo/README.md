@@ -65,7 +65,7 @@ Further things it teaches:
 The nodes live in `nodes/`, one module each, never in `stream.py`: each of the
 four Python nodes — three `ToneSource`s and the `ChordMixer` — runs in its own
 child interpreter with its own GIL, which imports the class by name.
-`SpeakerSink` is a native built-in that ships inside the runtime.
+`SpeakerSink` comes from the `tatolab-speaker` module.
 
 ## Run it
 
@@ -78,9 +78,11 @@ tatolab dev
 
 You should hear a steady C major chord. Ctrl-C unloads the stream.
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds — and `numpy`, which the nodes use.
-The runtime itself is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+`numpy`, which the nodes use, and builds `tatolab-speaker` from this checkout,
+as an editable path dependency (`[tool.uv.sources]` in `pyproject.toml`); the
+module is a maturin project, so the build needs a Rust toolchain. The runtime
+itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command

@@ -4,7 +4,8 @@
 """A Tatolab stream: camera → six Python nodes → H.264, shared on this machine.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. `CameraSource` and `H264Encoder` are native built-ins; everything
+manifest. `CameraSource` and `H264Encoder` come from the `tatolab-camera` and
+`tatolab-h264` modules; everything
 between them is this project's own Python, in the `camera_python_effects`
 package, and each of those nodes runs in its own child process with its own
 interpreter.
@@ -16,14 +17,9 @@ interpreter.
                                           NeonOverlaySource ────────────────┘
 """
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from camera_python_effects.nodes.breaking_news_compositor import (
     BreakingNewsCompositor,
@@ -50,7 +46,7 @@ FRAME_HEIGHT = 1080
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera through the cyberpunk effects and the avatar, composited, encoded and exposed."""
-    camera_config: CameraSourceConfig = {
+    camera_config: dict[str, object] = {
         "max_width": FRAME_WIDTH,
         "max_height": FRAME_HEIGHT,
     }

@@ -2,7 +2,18 @@
 name = "camera-webrtc-publish"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.3", "tatolab-webrtc"]
+dependencies = [
+    "tatolab-stream>=0.54.3",
+    "tatolab-camera",
+    "tatolab-h264",
+    "tatolab-microphone",
+    "tatolab-opus",
+    "tatolab-webrtc",
+]
 
 [tool.uv.sources]
+tatolab-camera = { path = "../../packages/tatolab-camera", editable = true }
+tatolab-h264 = { path = "../../packages/streamlib-h264", editable = true }
+tatolab-microphone = { path = "../../packages/tatolab-microphone", editable = true }
+tatolab-opus = { path = "../../packages/tatolab-opus", editable = true }
 tatolab-webrtc = { path = "../../packages/streamlib-webrtc", editable = true }

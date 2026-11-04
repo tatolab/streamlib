@@ -52,8 +52,10 @@ def main(stream_builder: StreamBuilder) -> None:
 
 - `tatolab dev` reads `stream.py` from the current directory and loads its one
   `@stream` function into this machine's runtime, `tatolabd`.
-- `CameraSource` and `H264Encoder` are **native built-ins**: they ship inside
-  the runtime, and their per-frame paths never enter a Python interpreter.
+- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
+  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
+  its own child process, and its per-frame path is the module's Rust, never
+  Python.
 - `HalftoneCompute` is this project's own node, in `nodes/halftone_compute.py`
   — never in `stream.py`, because every Python node runs in its own child
   interpreter with its own GIL, which imports the class by name. Its config is
@@ -191,8 +193,10 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command
