@@ -9,9 +9,10 @@
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
-# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus the systemd user units in lib/systemd/user/, where
-# install.sh takes them from, and streamlib-commit, the commit it was built
-# from, which names the build install.sh installs it as.
+# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus the systemd user units
+# in lib/systemd/user/, where install.sh takes them from, and
+# streamlib-commit, the commit it was built from, which names the build
+# install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
 # every binary the tarball carries runs on glibc 2.28 and later, and the
@@ -87,8 +88,8 @@ cargo fetch --locked
 
 # The engine's build script compiles its shaders with glslc, which AlmaLinux 8
 # does not package.
-bash "$workspace_root/scripts/install_glslc_from_the_locked_shaderc_sources.sh" /opt/glslc
-export PATH="/opt/glslc/bin:$PATH"
+bash "$workspace_root/scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh" /opt/shader-compilers
+export PATH="/opt/shader-compilers/bin:$PATH"
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv

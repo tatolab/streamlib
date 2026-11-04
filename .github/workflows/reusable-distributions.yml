@@ -223,7 +223,7 @@ jobs:
       extension_import_package_name: tatolab.h264
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
-      extension_build_compiles_glsl_with_glslc: true
+      extension_build_needs_the_shader_compilers: true
 
   build-tatolab-h265-distribution:
     needs: build-tatolab-stream-distribution
@@ -236,7 +236,7 @@ jobs:
       extension_import_package_name: tatolab.h265
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
-      extension_build_compiles_glsl_with_glslc: true
+      extension_build_needs_the_shader_compilers: true
 
   # A user's `uv sync` resolves `tatolab-stream` and `tatolab-h264` from PyPI,
   # where every earlier release is a candidate. This run's distributions are not
@@ -295,6 +295,95 @@ jobs:
             fi
           done
 
+  # Linux and macOS: V4L2 and AVFoundation.
+  build-tatolab-camera-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-camera
+      extension_distribution_name: tatolab-camera
+      extension_import_package_name: tatolab.camera
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
+  # Linux only. build.rs fetches rive-runtime with git and builds it with
+  # clang; premake needs libuuid's headers.
+  build-tatolab-rive-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-rive
+      extension_distribution_name: tatolab-rive
+      extension_import_package_name: tatolab.rive
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      extension_build_needs_the_shader_compilers: true
+      extension_build_extra_dnf_packages: clang git libuuid-devel
+      extension_builds_for_macos: false
+
+  # Pure Python, so one wheel serves every platform. A wheel only, as for every
+  # extension: an sdist would archive LICENSE as the symlink it is here.
+  build-tatolab-compositor-distribution:
+    name: tatolab-compositor wheel
+    needs: build-tatolab-stream-distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-compositor wheel
+        run: uv build --wheel --out-dir packages/tatolab-compositor/dist packages/tatolab-compositor
+
+      - name: Collect the tatolab-stream this release publishes
+        uses: actions/download-artifact@v7
+        with:
+          name: pypi-distribution-tatolab-stream
+          path: /tmp/tatolab-stream-distribution
+
+      # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
+      # hold until the upload, so the declared floor has to admit it.
+      - name: The wheel installs beside this release's tatolab-stream, imports, and carries its licence
+        run: |
+          python3 -m venv /tmp/compositor-wheel-check
+          /tmp/compositor-wheel-check/bin/pip install 'msgpack>=1.0'
+          /tmp/compositor-wheel-check/bin/pip install \
+            --no-index --find-links /tmp/tatolab-stream-distribution \
+            packages/tatolab-compositor/dist/*.whl
+          /tmp/compositor-wheel-check/bin/python -c "
+          from importlib.metadata import distribution, entry_points
+          license_text = distribution('tatolab-compositor').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          node_entry_points = [
+              node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
+              if node_entry_point.dist.name == 'tatolab-compositor'
+          ]
+          assert node_entry_points, 'tatolab-compositor registers no node'
+          for node_entry_point in node_entry_points:
+              print('tatolab-compositor exports', node_entry_point.name, node_entry_point.load())
+          "
+
+      - name: Keep the wheel for the upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: pypi-distribution-tatolab-compositor
+          path: packages/tatolab-compositor/dist/*.whl
+          if-no-files-found: error
+
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution
     permissions:
@@ -321,7 +410,7 @@ jobs:
       extension_import_package_name: tatolab.browser
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
-      extension_builds_an_apple_silicon_wheel: false
+      extension_builds_for_macos: false
 
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
@@ -413,6 +502,9 @@ jobs:
       - build-tatolab-browser-distribution
       - build-tatolab-h264-distribution
       - build-tatolab-h265-distribution
+      - build-tatolab-camera-distribution
+      - build-tatolab-rive-distribution
+      - build-tatolab-compositor-distribution
       - lock-the-scaffold-against-this-runs-distributions
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball

@@ -86,6 +86,31 @@
           "type": "toml",
           "path": "packages/streamlib-h265/pyproject.toml",
           "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-camera/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-camera/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-rive/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-rive/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-compositor/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }
