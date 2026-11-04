@@ -7,6 +7,7 @@
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tatolab_browser_tab_protocol::{
     BrowserHostTabFrameSlots, TAB_PROTOCOL_VERSION, TabProtocolMessageFromBrowserHost,
@@ -16,6 +17,9 @@ use tatolab_browser_tab_protocol::{
 
 use crate::browser_host_cef_thread::{CefThreadRequest, CefThreadRequestSender};
 use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
+
+/// How long a new connection has to send its `OpenTab`.
+const OPEN_TAB_REQUEST_BUDGET: Duration = Duration::from_secs(10);
 
 /// Accept tab connections on `listener` for the life of the host, each served
 /// on a thread of its own.
@@ -45,9 +49,16 @@ fn serve_one_tab_connection(
     connection: UnixStream,
     cef_thread_requests: &CefThreadRequestSender,
 ) {
-    let (reader, writer) = match connection.try_clone() {
-        Ok(writing_half) => (
-            TabProtocolMessageReader::over(connection),
+    if let Err(failure) = connection.set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET)) {
+        tracing::warn!("tab {tab_id}'s connection takes no read timeout: {failure}");
+        return;
+    }
+    let split = connection
+        .try_clone()
+        .and_then(|reading_half| Ok((reading_half, connection.try_clone()?)));
+    let (reader, writer) = match split {
+        Ok((reading_half, writing_half)) => (
+            TabProtocolMessageReader::over(reading_half),
             TabProtocolMessageWriter::over(writing_half),
         ),
         Err(failure) => {
@@ -59,6 +70,15 @@ fn serve_one_tab_connection(
     else {
         return;
     };
+    if let Err(failure) = connection.set_read_timeout(None) {
+        tab.log_to_the_node(
+            tatolab_browser_tab_protocol::BrowserHostTabLogLevel::Error,
+            format!("the tab's connection keeps its open timeout: {failure}"),
+        );
+        tab.end_the_connection();
+        cef_thread_requests.send(CefThreadRequest::CloseTab { tab_id });
+        return;
+    }
     serve_the_open_tab(&tab, reader, cef_thread_requests);
     tab.end_the_connection();
     cef_thread_requests.send(CefThreadRequest::CloseTab { tab_id });
@@ -190,6 +210,9 @@ fn serve_the_open_tab(
     loop {
         match reader.receive::<TabProtocolMessageFromNode>() {
             Ok(TabProtocolMessageFromNode::DeliverPageData { detail_json }) => {
+                if !tab.page_data_request_queued() {
+                    continue;
+                }
                 if !cef_thread_requests.send(CefThreadRequest::DeliverPageData {
                     tab_id: tab.tab_id,
                     detail_json,

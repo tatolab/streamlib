@@ -274,6 +274,13 @@ impl SharedNativeServicesOfTheEngine {
         mut supervisor: SupervisedChildProcess,
     ) {
         supervisor.stop();
+        let services_by_name = self.lock_services();
+        if services_by_name
+            .get(service_name)
+            .is_some_and(|service| service.supervisor.is_some())
+        {
+            return;
+        }
         let endpoint_socket_path = self.endpoint_socket_path_of(service_name);
         match std::fs::remove_file(&endpoint_socket_path) {
             Ok(()) => {}
@@ -312,7 +319,7 @@ impl SharedNativeServicesOfTheEngine {
             ],
             environment: the_environment_a_shared_native_service_inherits(),
             pidfile_path: self.pidfile_path_of(&offer.service_name),
-            runs_user_code: false,
+            gives_up_at_the_crash_loop_limit: true,
             grace_after_sigterm: SHARED_NATIVE_SERVICE_GRACE_AFTER_SIGTERM,
         };
         let services = Arc::downgrade(self);

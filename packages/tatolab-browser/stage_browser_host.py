@@ -59,32 +59,42 @@ def is_a_shared_library(path: Path) -> bool:
 
 
 def stage(cef_directory: Path, executables: list[Path], staged_directory: Path) -> None:
+    """Build the staged directory beside `staged_directory`, then put it in its
+    place, so a failed copy or strip never leaves a partial browser host."""
     strip_executable = strip_executable_on_path()
     for required_name in RUNTIME_FILE_NAMES:
         if not (cef_directory / required_name).is_file():
             raise SystemExit(
-                f"no {required_name} in {cef_directory}; the wheel ships CEF only with it "
-                "(export-cef-dir leaves LICENSE.txt out: copy it from the official archive)"
+                f"no {required_name} in {cef_directory}; the runtime unit ships CEF only with "
+                "it (export-cef-dir leaves LICENSE.txt out: copy it from the official archive)"
             )
+    staging_directory = staged_directory.with_name(staged_directory.name + ".staging")
+    if staging_directory.exists():
+        shutil.rmtree(staging_directory)
+    try:
+        (staging_directory / "locales").mkdir(parents=True)
+        for entry in sorted(cef_directory.iterdir()):
+            if entry.is_file() and (
+                entry.name.endswith(RUNTIME_FILE_SUFFIXES)
+                or ".so." in entry.name
+                or entry.name in RUNTIME_FILE_NAMES
+            ):
+                staged_entry = staging_directory / entry.name
+                shutil.copy2(entry, staged_entry)
+                if is_a_shared_library(staged_entry):
+                    strip_debug_sections(strip_executable, staged_entry)
+        for locale in sorted((cef_directory / "locales").glob("*.pak")):
+            shutil.copy2(locale, staging_directory / "locales" / locale.name)
+        for executable in executables:
+            staged_executable = staging_directory / executable.name
+            shutil.copy2(executable, staged_executable)
+            staged_executable.chmod(0o755)
+    except BaseException:
+        shutil.rmtree(staging_directory, ignore_errors=True)
+        raise
     if staged_directory.exists():
         shutil.rmtree(staged_directory)
-    (staged_directory / "locales").mkdir(parents=True)
-    for entry in sorted(cef_directory.iterdir()):
-        if entry.is_file() and (
-            entry.name.endswith(RUNTIME_FILE_SUFFIXES)
-            or ".so." in entry.name
-            or entry.name in RUNTIME_FILE_NAMES
-        ):
-            staged_entry = staged_directory / entry.name
-            shutil.copy2(entry, staged_entry)
-            if is_a_shared_library(staged_entry):
-                strip_debug_sections(strip_executable, staged_entry)
-    for locale in sorted((cef_directory / "locales").glob("*.pak")):
-        shutil.copy2(locale, staged_directory / "locales" / locale.name)
-    for executable in executables:
-        staged_executable = staged_directory / executable.name
-        shutil.copy2(executable, staged_executable)
-        staged_executable.chmod(0o755)
+    staging_directory.rename(staged_directory)
 
 
 def main() -> int:

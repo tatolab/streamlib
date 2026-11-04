@@ -234,6 +234,7 @@ pub fn serve_the_cef_thread_until_stopped(
     stop_requested: &AtomicBool,
 ) {
     let mut open_tabs: HashMap<BrowserHostTabId, OpenTab> = HashMap::new();
+    let mut tabs_closing: Vec<Arc<BrowserHostTab>> = Vec::new();
     let mut tenant_profiles: HashMap<String, RequestContext> = HashMap::new();
     let mut next_pump_at = Instant::now();
     while !stop_requested.load(Ordering::Acquire) {
@@ -243,7 +244,6 @@ pub fn serve_the_cef_thread_until_stopped(
         match requests.recv_timeout(wait) {
             Ok(CefThreadRequest::PumpWithin { delay }) => {
                 next_pump_at = next_pump_at.min(Instant::now() + delay);
-                continue;
             }
             Ok(CefThreadRequest::OpenTab { tab, opened }) => {
                 let outcome = open_a_tab(
@@ -269,13 +269,16 @@ pub fn serve_the_cef_thread_until_stopped(
             Ok(CefThreadRequest::CloseTab { tab_id }) => {
                 if let Some(open_tab) = open_tabs.remove(&tab_id) {
                     open_tab.close();
+                    tabs_closing.push(Arc::clone(&open_tab.tab));
                 }
+                tabs_closing.retain(|tab| !tab.page_closed.load(Ordering::Acquire));
             }
             Ok(CefThreadRequest::DeliverPageData {
                 tab_id,
                 detail_json,
             }) => {
                 if let Some(open_tab) = open_tabs.get_mut(&tab_id) {
+                    open_tab.tab.page_data_request_dequeued();
                     open_tab.dispatch_or_hold_data_script(page_data_dispatch_script(&detail_json));
                 }
             }
@@ -295,25 +298,35 @@ pub fn serve_the_cef_thread_until_stopped(
             open_tab.dispatch_data_scripts_held_for_the_loaded_document();
         }
     }
-    close_every_tab_then_shut_cef_down(open_tabs);
+    close_every_tab_then_shut_cef_down(open_tabs, tabs_closing);
 }
 
-fn close_every_tab_then_shut_cef_down(open_tabs: HashMap<BrowserHostTabId, OpenTab>) {
+/// Close every open page, wait for CEF to let each one go, the ones already
+/// closing included, then shut CEF down.
+fn close_every_tab_then_shut_cef_down(
+    open_tabs: HashMap<BrowserHostTabId, OpenTab>,
+    tabs_closing: Vec<Arc<BrowserHostTab>>,
+) {
     for open_tab in open_tabs.values() {
         open_tab.close();
     }
+    let every_closing_tab: Vec<Arc<BrowserHostTab>> = open_tabs
+        .values()
+        .map(|open_tab| Arc::clone(&open_tab.tab))
+        .chain(tabs_closing)
+        .collect();
     let closing_ends = Instant::now() + PAGES_CLOSE_BUDGET_AT_STOP;
     while Instant::now() < closing_ends
-        && !open_tabs
-            .values()
-            .all(|open_tab| open_tab.tab.page_closed.load(Ordering::Acquire))
+        && !every_closing_tab
+            .iter()
+            .all(|tab| tab.page_closed.load(Ordering::Acquire))
     {
         do_message_loop_work();
         std::thread::sleep(LONGEST_PUMP_INTERVAL);
     }
-    let pages_still_open = open_tabs
-        .values()
-        .filter(|open_tab| !open_tab.tab.page_closed.load(Ordering::Acquire))
+    let pages_still_open = every_closing_tab
+        .iter()
+        .filter(|tab| !tab.page_closed.load(Ordering::Acquire))
         .count();
     if pages_still_open > 0 {
         tracing::warn!(

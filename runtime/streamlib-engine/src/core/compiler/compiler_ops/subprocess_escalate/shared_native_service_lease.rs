@@ -93,12 +93,23 @@ pub(super) fn handle_acquire_shared_native_service_lease(
         Ok(lease) => lease,
         Err(refusal) => return refused(rid, refusal.to_string()),
     };
+    let Some(endpoint_socket_path) = lease.endpoint_socket_path().to_str().map(str::to_string)
+    else {
+        return refused(
+            rid,
+            format!(
+                "the shared native service {}'s socket {} is not UTF-8, so the escalate wire \
+                 cannot name it",
+                request.service_name,
+                lease.endpoint_socket_path().display()
+            ),
+        );
+    };
     let lease_id = format!(
         "{}-{}",
         request.service_name,
         leases.next_lease_number.fetch_add(1, Ordering::Relaxed)
     );
-    let endpoint_socket_path = lease.endpoint_socket_path().to_string_lossy().into_owned();
     let state = lease.state();
     leases.leases_by_id.lock().insert(lease_id.clone(), lease);
     let mut answer = EscalateResponseOk {

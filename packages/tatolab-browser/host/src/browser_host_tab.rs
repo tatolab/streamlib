@@ -15,6 +15,10 @@ use tatolab_browser_tab_protocol::{
 /// How many painted frames go by between two reports of what a tab painted.
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
 
+/// The most `data` messages a tab queues for the CEF thread; past it, a
+/// message is dropped and the node told.
+const MOST_PAGE_DATA_REQUESTS_QUEUED: u32 = 256;
+
 /// A tab id, unique for the life of the host.
 pub type BrowserHostTabId = u64;
 
@@ -33,6 +37,8 @@ pub struct BrowserHostTab {
     frames_painted: AtomicU64,
     frames_dropped_with_every_slot_held: AtomicU64,
     audio_channels: AtomicU32,
+    page_data_requests_queued: AtomicU32,
+    page_data_requests_dropped: AtomicU64,
 }
 
 impl BrowserHostTab {
@@ -54,6 +60,8 @@ impl BrowserHostTab {
             frames_painted: AtomicU64::new(0),
             frames_dropped_with_every_slot_held: AtomicU64::new(0),
             audio_channels: AtomicU32::new(0),
+            page_data_requests_queued: AtomicU32::new(0),
+            page_data_requests_dropped: AtomicU64::new(0),
         }
     }
 
@@ -84,6 +92,39 @@ impl BrowserHostTab {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .shut_down();
         }
+    }
+
+    /// Count one more `data` message queued for the CEF thread; `false`, and
+    /// the message dropped, when the queue is already full.
+    pub fn page_data_request_queued(&self) -> bool {
+        let queued = self
+            .page_data_requests_queued
+            .fetch_add(1, Ordering::AcqRel);
+        if queued < MOST_PAGE_DATA_REQUESTS_QUEUED {
+            return true;
+        }
+        self.page_data_requests_queued
+            .fetch_sub(1, Ordering::AcqRel);
+        let dropped = self
+            .page_data_requests_dropped
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if dropped == 1 || dropped.is_multiple_of(PAINTS_BETWEEN_REPORTS) {
+            self.log_to_the_node(
+                BrowserHostTabLogLevel::Warn,
+                format!(
+                    "{dropped} data messages dropped with {MOST_PAGE_DATA_REQUESTS_QUEUED} \
+                     already waiting for the page"
+                ),
+            );
+        }
+        false
+    }
+
+    /// The CEF thread took one queued `data` message.
+    pub fn page_data_request_dequeued(&self) {
+        self.page_data_requests_queued
+            .fetch_sub(1, Ordering::AcqRel);
     }
 
     /// Log `message` under this tab in the node's log.
@@ -279,6 +320,24 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn data_past_the_queue_bound_is_dropped_and_the_node_told_once() {
+        let (tab, mut node) = tab_with_slots(1);
+        for _ in 0..MOST_PAGE_DATA_REQUESTS_QUEUED {
+            assert!(tab.page_data_request_queued());
+        }
+        assert!(!tab.page_data_request_queued());
+        assert!(matches!(
+            node.receive().unwrap(),
+            TabProtocolMessageFromBrowserHost::TabLog {
+                level: BrowserHostTabLogLevel::Warn,
+                ..
+            }
+        ));
+        tab.page_data_request_dequeued();
+        assert!(tab.page_data_request_queued());
     }
 
     #[test]

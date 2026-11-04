@@ -71,6 +71,16 @@ pub fn browser_host_cargo_build_arguments(browser_package_manifest: &Path) -> Ve
 /// left out: `None` when `CEF_PATH` names no CEF distribution.
 pub fn stage_the_browser_host(workspace_root: &Path) -> Result<Option<PathBuf>> {
     if std::env::var_os(CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE).is_none() {
+        let staged_directory =
+            runtime_unit_browser_host_directory_in_the_workspace(workspace_root)?;
+        if staged_directory.exists() {
+            std::fs::remove_dir_all(&staged_directory).with_context(|| {
+                format!(
+                    "removing the browser host an earlier build staged at {}",
+                    staged_directory.display()
+                )
+            })?;
+        }
         tracing::warn!(
             "stage-browser-host: {CEF_BINARY_DISTRIBUTION_ENVIRONMENT_VARIABLE} names no CEF \
              binary distribution, so the runtime unit carries no browser host and no \

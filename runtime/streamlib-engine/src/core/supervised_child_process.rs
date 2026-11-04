@@ -58,9 +58,10 @@ pub struct SupervisedChildProcessLaunch {
     pub environment: Vec<(OsString, OsString)>,
     /// Where the running child's process id is written.
     pub pidfile_path: PathBuf,
-    /// Whether the child runs code the runtime does not ship, and so is given
-    /// up on at the crash-loop limit rather than started again forever.
-    pub runs_user_code: bool,
+    /// Whether the child is given up on at the crash-loop limit, as one
+    /// running code the runtime does not ship is, rather than started again
+    /// forever.
+    pub gives_up_at_the_crash_loop_limit: bool,
     /// How long a stopped child has to end on `SIGTERM` before it is killed.
     pub grace_after_sigterm: Duration,
 }
@@ -271,7 +272,7 @@ fn keep_the_child_running(
         };
         let starting_again_after = restart_backoff
             .wait_before_starting_again_after_a_death_ending_a_run_of(run_before_the_death);
-        if launch.runs_user_code
+        if launch.gives_up_at_the_crash_loop_limit
             && restart_backoff.has_reached_the_crash_loop_limit_of_a_child_running_user_code()
         {
             let why = format!(
@@ -548,7 +549,7 @@ mod tests {
     fn launch_in(
         directory: &Path,
         executable: PathBuf,
-        runs_user_code: bool,
+        gives_up_at_the_crash_loop_limit: bool,
     ) -> SupervisedChildProcessLaunch {
         SupervisedChildProcessLaunch {
             child_name_for_the_log: "the stand-in service".to_string(),
@@ -556,7 +557,7 @@ mod tests {
             arguments: vec!["600".into()],
             environment: Vec::new(),
             pidfile_path: directory.join("stand-in-service.pid"),
-            runs_user_code,
+            gives_up_at_the_crash_loop_limit,
             grace_after_sigterm: Duration::from_secs(3),
         }
     }

@@ -60,7 +60,7 @@ impl LocalRelayChildSupervisor {
                 arguments: vec![launch.configuration_path.into()],
                 environment: vec![("NO_COLOR".into(), "1".into())],
                 pidfile_path: launch.pidfile_path,
-                runs_user_code: false,
+                gives_up_at_the_crash_loop_limit: false,
                 grace_after_sigterm: STOPPED_CHILD_GRACE,
             },
             Box::new(move || {
