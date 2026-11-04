@@ -87,8 +87,8 @@ cargo fetch --locked
 
 # The engine's build script compiles its shaders with glslc, which AlmaLinux 8
 # does not package.
-bash "$workspace_root/scripts/install_glslc_from_the_locked_shaderc_sources.sh" /opt/glslc
-export PATH="/opt/glslc/bin:$PATH"
+bash "$workspace_root/scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh" /opt/shader-compilers
+export PATH="/opt/shader-compilers/bin:$PATH"
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv

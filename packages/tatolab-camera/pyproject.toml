@@ -4,12 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-camera"
-version = "0.1.0"
+version = "0.68.18"
 description = "A camera node as an extension wheel: V4L2 or AVFoundation capture handed to the engine as DMA-BUFs or IOSurfaces and converted on the GPU, with no CPU copy."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 # A minimum, never an exact pin, as a third party's package depends on it.
 dependencies = ["tatolab-stream>=0.68.7"]
