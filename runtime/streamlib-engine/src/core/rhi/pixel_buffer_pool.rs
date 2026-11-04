@@ -101,34 +101,10 @@ impl std::fmt::Display for PublishedPixelBufferFrameId {
     }
 }
 
-/// The building half of the grammar: the surface id `frame_generation`
-/// publishes over `pool_slot`.
-pub fn published_frame_id_of_pool_slot(pool_slot: &str, frame_generation: u64) -> String {
-    format!("{pool_slot}#{frame_generation}")
-}
-
-/// The borrowing half of the grammar: the slot and generation of a published
-/// frame id, or `None` for an id that carries no `#<generation>` suffix.
-pub fn split_pool_slot_and_frame_generation(surface_id: &str) -> Option<(&str, u64)> {
-    let (pool_slot, generation_digits) = surface_id.rsplit_once('#')?;
-    if pool_slot.is_empty()
-        || generation_digits.is_empty()
-        || !generation_digits.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    Some((pool_slot, generation_digits.parse().ok()?))
-}
-
-/// The pool-slot portion of any surface id: strips a published frame id's
-/// `#<generation>` suffix and returns every other id whole. What per-slot
-/// caches normalize their keys through.
-pub fn pool_slot_key_of_surface_id(surface_id: &str) -> &str {
-    match split_pool_slot_and_frame_generation(surface_id) {
-        Some((pool_slot, _)) => pool_slot,
-        None => surface_id,
-    }
-}
+pub use streamlib_surface_client::{
+    pool_slot_key_of_surface_id, published_frame_id_of_pool_slot,
+    split_pool_slot_and_frame_generation,
+};
 
 /// Descriptor for creating pixel buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

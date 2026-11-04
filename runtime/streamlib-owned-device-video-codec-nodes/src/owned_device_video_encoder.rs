@@ -21,7 +21,8 @@ use streamlib_consumer_rhi::{
 use streamlib_surface_client::{
     CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, CheckedOutSurface, CheckedOutTexture,
     CheckedOutTextureMemory, check_out_surface_on_surface_share, connect_to_surface_share_socket,
-    publish_image_layout_on_surface_share, release_check_out_on_surface_share,
+    pool_slot_key_of_surface_id, publish_image_layout_on_surface_share,
+    release_check_out_on_surface_share,
 };
 use streamlib_vulkan_video::{
     Preset, RgbaPixelBufferVideoEncoder, SimpleEncoder, SimpleEncoderConfig, VulkanVideoCodecDevice,
@@ -37,7 +38,7 @@ use crate::video_frame_message::VideoFrameMessage;
 /// The variable a processor interpreter is handed the surface-share socket in.
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
-/// Imports kept per surface id; a producer's pool is far smaller.
+/// Imports kept, one per producer pool slot; a producer's pool is far smaller.
 const MOST_SURFACE_IMPORTS_KEPT: usize = 32;
 
 const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
@@ -244,7 +245,7 @@ impl OwnedDeviceVideoEncoder {
         }
         let pixel_buffer = self
             .imported_pixel_buffers
-            .get(&frame.surface_id)
+            .get(pool_slot_key_of_surface_id(&frame.surface_id))
             .ok_or_else(|| {
                 format!(
                     "{node_type_name}: surface {:?} was not imported",
@@ -296,7 +297,7 @@ impl OwnedDeviceVideoEncoder {
         }
         let texture = self
             .imported_textures
-            .get(surface_id)
+            .get(pool_slot_key_of_surface_id(surface_id))
             .ok_or_else(|| format!("{node_type_name}: surface {surface_id:?} was not imported"))?;
         texture
             .acquire_from_foreign_layout(published_layout)
@@ -354,7 +355,10 @@ impl OwnedDeviceVideoEncoder {
         checked_out: CheckedOutTexture,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
-        if self.imported_textures.contains_key(surface_id) {
+        if self
+            .imported_textures
+            .contains_key(pool_slot_key_of_surface_id(surface_id))
+        {
             return Ok(());
         }
         let format = TextureFormat::from_wire_name(&checked_out.format_wire_name)
@@ -427,7 +431,7 @@ impl OwnedDeviceVideoEncoder {
             self.imported_textures.clear();
         }
         self.imported_textures
-            .insert(surface_id.to_owned(), imported);
+            .insert(pool_slot_key_of_surface_id(surface_id).to_owned(), imported);
         Ok(())
     }
 
@@ -437,7 +441,10 @@ impl OwnedDeviceVideoEncoder {
         checked_out: CheckedOutPixelBuffer,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
-        if self.imported_pixel_buffers.contains_key(surface_id) {
+        if self
+            .imported_pixel_buffers
+            .contains_key(pool_slot_key_of_surface_id(surface_id))
+        {
             return Ok(());
         }
         let consumer_vulkan_device = self.owned_device.consumer_vulkan_device();
@@ -487,7 +494,7 @@ impl OwnedDeviceVideoEncoder {
             self.imported_pixel_buffers.clear();
         }
         self.imported_pixel_buffers
-            .insert(surface_id.to_owned(), imported);
+            .insert(pool_slot_key_of_surface_id(surface_id).to_owned(), imported);
         Ok(())
     }
 

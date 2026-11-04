@@ -27,6 +27,13 @@
 //! bootstrap name, and validates each sender by the audit token the kernel
 //! appends.
 
+mod published_frame_id_grammar;
+
+pub use published_frame_id_grammar::{
+    pool_slot_key_of_surface_id, published_frame_id_of_pool_slot,
+    split_pool_slot_and_frame_generation,
+};
+
 #[cfg(target_os = "linux")]
 mod linux;
 
