@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.25](https://github.com/tatolab/streamlib/compare/v0.68.24...v0.68.25) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** publish the Linux runtime when PyPI refuses only new project names ([#3139](https://github.com/tatolab/streamlib/issues/3139)) ([2f0f831](https://github.com/tatolab/streamlib/commit/2f0f831203e7d12275ef8714038571145107a47b))
+
 ## [0.68.24](https://github.com/tatolab/streamlib/compare/v0.68.23...v0.68.24) (2026-11-04)
 
 
