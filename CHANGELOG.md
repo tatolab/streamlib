@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.19](https://github.com/tatolab/streamlib/compare/v0.68.18...v0.68.19) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release:** build glslc for the codec wheels and give the tarball check tatolab-h264 ([#3117](https://github.com/tatolab/streamlib/issues/3117)) ([278e3cf](https://github.com/tatolab/streamlib/commit/278e3cf2289753789aefbf1c34cf0f8f37b5c1c3))
+
 ## [0.68.18](https://github.com/tatolab/streamlib/compare/v0.68.17...v0.68.18) (2026-11-04)
 
 
