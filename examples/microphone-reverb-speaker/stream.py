@@ -14,14 +14,9 @@ Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import (
-    MicrophoneSource,
-    MicrophoneSourceConfig,
-    SpeakerSink,
-    SpeakerSinkConfig,
-    StreamBuilder,
-    stream,
-)
+from tatolab.microphone import MicrophoneSource
+from tatolab.speaker import SpeakerSink
+from tatolab.stream import StreamBuilder, stream
 
 from nodes.reverb_effect import ReverbEffect
 
@@ -35,10 +30,10 @@ SPEAKER_DEVICE_ID: str | None = None
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The microphone through a reverb, played on the speaker."""
-    microphone_config: MicrophoneSourceConfig = {}
+    microphone_config: dict[str, object] = {}
     if MICROPHONE_DEVICE_ID is not None:
         microphone_config["device_id"] = MICROPHONE_DEVICE_ID
-    speaker_config: SpeakerSinkConfig = {}
+    speaker_config: dict[str, object] = {}
     if SPEAKER_DEVICE_ID is not None:
         speaker_config["device_id"] = SPEAKER_DEVICE_ID
 

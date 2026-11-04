@@ -2,4 +2,7 @@
 name = "raytracing-showcase"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.3"]
+dependencies = ["tatolab-stream>=0.54.3", "tatolab-h264"]
+
+[tool.uv.sources]
+tatolab-h264 = { path = "../../packages/streamlib-h264", editable = true }

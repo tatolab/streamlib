@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "tatolab-stream>=0.54.3",
+    "tatolab-camera",
+    "tatolab-h264",
     "numpy>=2.1",
     # The overlay generator's 2D canvas, an ordinary PyPI dependency of this
     # stream like any other.
@@ -40,3 +42,7 @@ testpaths = ["tests"]
 [tool.ruff]
 # The stream's own package, so its imports sort as first-party.
 src = ["src"]
+
+[tool.uv.sources]
+tatolab-camera = { path = "../../packages/tatolab-camera", editable = true }
+tatolab-h264 = { path = "../../packages/streamlib-h264", editable = true }

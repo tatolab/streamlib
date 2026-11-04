@@ -33,8 +33,10 @@ def main(stream_builder: StreamBuilder) -> None:
     stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
 ```
 
-- `CameraSource` and `H264Encoder` are **native built-ins**: they ship inside
-  the runtime, and their per-frame paths never enter a Python interpreter.
+- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
+  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
+  its own child process, and its per-frame path is the module's Rust, never
+  Python.
 - The six between them are this project's own `@node` classes, one module each
   under `camera_python_effects/nodes/`. **Every one runs in its own child
   process with its own interpreter**, so pose tracking at whatever rate the CPU
@@ -59,10 +61,11 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds — beside numpy, skia-python,
-MediaPipe, ModernGL and this project's own package. The runtime itself is not
-on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
+numpy, skia-python, MediaPipe, ModernGL and this project's own package, and
+builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The runtime itself is not on pip.
 
 Then open the stream in a browser:
 

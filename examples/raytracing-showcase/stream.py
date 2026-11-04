@@ -6,7 +6,7 @@
 `tatolab dev` loads the one `@stream` below by convention — there is no
 manifest. Two renderers fan into a compositor; each of the three is a node of
 this project, in its own child interpreter, driving a different kernel kind —
-graphics, ray tracing, compute. The cut goes through an `H264Encoder`, exposed,
+graphics, ray tracing, compute. The cut goes through an `H264Encoder` from the `tatolab-h264` module, exposed,
 so a browser plays it. Nothing here needs a camera: the picture is synthetic all
 the way down.
 
@@ -14,12 +14,8 @@ Nodes live in their own modules, never in this file: each one runs in its own
 child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import (
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from nodes.rasterized_scene_renderer import RasterizedSceneRenderer
 from nodes.ray_traced_scene_renderer import RayTracedSceneRenderer
