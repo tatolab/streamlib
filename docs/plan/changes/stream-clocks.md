@@ -121,7 +121,7 @@ DECIDED and SHIPPED.
   `taken_bags + dropped_bags` equal to its producer's `written_bags`. It then opens *k+1*
   immediately (`pace = null`, as fast as the graph allows) or no earlier than `anchor + (k+1) ×
   step_ns / pace` on `MediaClock`, waiting on an absolute deadline. A stream with
-  `stop_after_steps = n` stops itself after closing step *n*, which is how a CI graph test
+  `stop_after_steps = n` stops itself after closing step *n−1*, which is how a CI graph test
   gets a deterministic end. A helper that dies mid-step leaves its node not idle; the step stays
   open until the restart's `setup` re-registers the node, and a node given up on fails the
   stream with the step it held. A manual node, which paces itself, is refused at load in a
