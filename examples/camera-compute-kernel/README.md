@@ -93,8 +93,9 @@ raises: this node drops its own frame and never waits on a consumer.
 ### And the ordinary parts
 
 `GrayscaleCompute` runs in its own child interpreter with its own GIL, like
-every Python node. `CameraSource` and `H264Encoder` are native built-ins inside
-the runtime whose per-frame paths never enter an interpreter at all. The input
+every Python node. `CameraSource` and `H264Encoder` come from the `tatolab-camera`
+and `tatolab-h264` modules, and their per-frame paths are the modules' Rust,
+never Python. The input
 port declares `newest`, the profile for a stream where a stale frame has no
 value once a fresher one exists. The runtime opens no windows: the stream ends
 in an encoder whose `encoded_video` it exposes, so a browser plays it.
@@ -108,8 +109,10 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command
@@ -189,5 +192,5 @@ Everything is literal config in `stream.py` — edit it and save while
 | --- | --- | --- |
 | `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
 | `strength` | `stream_builder.add(GrayscaleCompute, config=…)` | 0.0 leaves the picture alone, 1.0 is full luma. |
-| `max_width` / `max_height` | `CameraSourceConfig` | Resolution cap; the negotiated format is clamped to fit. |
+| `max_width` / `max_height` | `camera_config` in `stream.py` (`CameraSourceConfig` in `tatolab.camera`) | Resolution cap; the negotiated format is clamped to fit. |
 | `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |

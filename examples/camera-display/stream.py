@@ -4,18 +4,14 @@
 """A Tatolab stream: camera → H.264, shared on this machine.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. Both nodes are native built-ins, so this stream declares no node of
-its own: the pipeline is two `add` calls, one `connect` and one `expose`.
+manifest. Both nodes come from modules, `tatolab-camera` and `tatolab-h264`,
+so this stream declares no node of its own: the pipeline is two `add` calls,
+one `connect` and one `expose`.
 """
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 # The capture device: a V4L2 path (`/dev/video2`) on Linux, an AVFoundation
 # unique ID on macOS. `None` opens the first capture device found.
@@ -25,7 +21,7 @@ CAMERA_DEVICE_ID: str | None = None
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera, encoded and exposed on this machine."""
-    camera_config: CameraSourceConfig = {}
+    camera_config: dict[str, object] = {}
     if CAMERA_DEVICE_ID is not None:
         camera_config["device_id"] = CAMERA_DEVICE_ID
     camera = stream_builder.add(CameraSource, config=camera_config)

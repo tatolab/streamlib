@@ -29,8 +29,8 @@ real thing.
 
 **A Tatolab stream is a normal Python project.** `stream.py` holds one `@stream`
 function that adds, links and exposes nodes; `tatolab dev` loads it into this
-machine's runtime, `tatolabd`. `CameraSource` and `H264Encoder` are native
-built-ins that ship inside the runtime. `SyntheticFisheyeLens` and
+machine's runtime, `tatolabd`. `CameraSource` and `H264Encoder` come
+from the `tatolab-camera` and `tatolab-h264` modules. `SyntheticFisheyeLens` and
 `UndistortingObjectDetector` are this project's own nodes, in `nodes/`, and each
 runs in its own child interpreter, which imports the class by name — so the
 detector's torch and its network load in a process of their own, and nothing
@@ -232,9 +232,10 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package the venv needs for the stream itself — beside `torch` and
-`ultralytics`. The runtime is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
+`torch` and `ultralytics`, and builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The runtime is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command

@@ -14,9 +14,8 @@ child interpreter, which imports the class by name.
 
 from typing import Literal
 
+from tatolab.camera import CameraSource
 from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
     StreamBuilder,
     VirtualCameraSink,
     VirtualCameraSinkConfig,
@@ -42,7 +41,7 @@ VIRTUAL_CAMERA_DOOR: Literal["auto", "v4l2loopback", "pipewire"] = "auto"
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera fanned to a passthrough virtual camera and, through the effect, to an inverted one."""
-    camera_config: CameraSourceConfig = {}
+    camera_config: dict[str, object] = {}
     if CAMERA_DEVICE_ID is not None:
         camera_config["device_id"] = CAMERA_DEVICE_ID
     camera = stream_builder.add(CameraSource, config=camera_config)

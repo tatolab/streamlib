@@ -12,7 +12,8 @@ Nodes live in their own modules, never in this file: each one runs in its own
 child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import SpeakerSink, SpeakerSinkConfig, StreamBuilder, stream
+from tatolab.speaker import SpeakerSink
+from tatolab.stream import StreamBuilder, stream
 
 from nodes.chord_mixer import ChordMixer
 from nodes.tone_source import ToneSource
@@ -70,7 +71,7 @@ def main(stream_builder: StreamBuilder) -> None:
         },
     )
 
-    speaker_config: SpeakerSinkConfig = {}
+    speaker_config: dict[str, object] = {}
     if SPEAKER_DEVICE_ID is not None:
         speaker_config["device_id"] = SPEAKER_DEVICE_ID
     mixer = stream_builder.add(ChordMixer)

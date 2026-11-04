@@ -4,9 +4,10 @@
 """A Tatolab stream: camera + microphone → H.264 and Opus → one WHIP session.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. Everything upstream of the publisher is a native built-in, so no frame
-and no sample enters a Python interpreter; `WhipPublisher` comes from the
-`tatolab-webrtc` package and runs in its own child interpreter.
+manifest. Every node comes from a module, each running in its own child
+interpreter: `CameraSource` from `tatolab-camera`, `H264Encoder` from
+`tatolab-h264`, `MicrophoneSource` from `tatolab-microphone`, `OpusEncoder` from
+`tatolab-opus` and `WhipPublisher` from `tatolab-webrtc`.
 
 The WHIP URL is a credential, so it is read from the environment and never
 written here. The runtime compiles this file, so the environment is
@@ -15,15 +16,11 @@ written here. The runtime compiles this file, so the environment is
 
 import os
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    H264Encoder,
-    MicrophoneSource,
-    OpusEncoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.microphone import MicrophoneSource
+from tatolab.opus import OpusEncoder
+from tatolab.stream import StreamBuilder, stream
 from tatolab.webrtc import WhipPublisher
 
 # The capture device: a V4L2 path (`/dev/video2`) on Linux, an AVFoundation
@@ -56,7 +53,7 @@ def whip_publisher_config_from_the_runtime_environment() -> dict[str, str]:
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera and the microphone, encoded and published as one WHIP session."""
-    camera_config: CameraSourceConfig = {}
+    camera_config: dict[str, object] = {}
     if CAMERA_DEVICE_ID is not None:
         camera_config["device_id"] = CAMERA_DEVICE_ID
     camera = stream_builder.add(CameraSource, config=camera_config)
