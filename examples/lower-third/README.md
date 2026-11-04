@@ -43,5 +43,5 @@ it styles together, and send your own `LowerThirdTemplate` records.
 uv run --group dev pytest
 ```
 
-`templates/station_bug.riv` is rive-runtime's `coin.riv` test asset, under
+`templates/station_bug.riv` is rive-runtime's `popsicle_loader.riv` test asset, under
 rive-runtime's MIT licence; see `THIRD-PARTY-NOTICES.md`.

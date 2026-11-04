@@ -1,6 +1,6 @@
 # Third-party notices
 
-`templates/station_bug.riv` is `tests/unit_tests/assets/coin.riv` from
+`templates/station_bug.riv` is `tests/unit_tests/assets/parity/popsicle_loader.riv` from
 [rive-runtime](https://github.com/rive-app/rive-runtime) at
 `788f82c2a11d16fa7a4af865ff383a87e976c4ab`, under this licence:
 
