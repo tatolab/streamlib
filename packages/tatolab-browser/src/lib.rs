@@ -16,6 +16,7 @@ compile_error!(
 pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
 pub mod page_data_messages;
+pub mod painted_textures_adopted_by_the_node;
 pub mod video_frame_record;
 
 use std::sync::atomic::Ordering;
@@ -107,6 +108,14 @@ impl PythonBrowserPageRendering {
         self.rendering
             .counters()
             .frames_published
+            .load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn frames_published_from_painted_textures(&self) -> u64 {
+        self.rendering
+            .counters()
+            .frames_published_from_painted_textures
             .load(Ordering::Relaxed)
     }
 

@@ -161,7 +161,8 @@ impl TabProtocolMessageReader {
     }
 
     /// The next message, failing with a timeout unless all of it arrives
-    /// within `longest_wait`, however the peer paces its bytes.
+    /// within `longest_wait`, however the peer paces its bytes; the socket
+    /// waits without bound again afterwards.
     pub fn receive_within<Message: DeserializeOwned>(
         &mut self,
         longest_wait: Duration,
@@ -169,7 +170,10 @@ impl TabProtocolMessageReader {
         self.receive_deadline = Some(Instant::now() + longest_wait);
         let received = self.receive_framed();
         self.receive_deadline = None;
-        received
+        let unbounded_again = self.socket.set_read_timeout(None);
+        let received = received?;
+        unbounded_again?;
+        Ok(received)
     }
 
     /// Close every descriptor that arrived and no message took.
@@ -464,6 +468,33 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(reader);
         trickling.join().unwrap();
+    }
+
+    #[test]
+    fn after_a_bounded_receive_the_next_receive_waits_without_bound() {
+        let (host_end, node_end) = UnixStream::pair().unwrap();
+        let mut reader = TabProtocolMessageReader::over(host_end);
+        let mut writer = TabProtocolMessageWriter::over(node_end);
+        writer
+            .send(&TabProtocolMessageFromNode::CloseTab, &[])
+            .unwrap();
+        reader
+            .receive_within::<TabProtocolMessageFromNode>(Duration::from_millis(50))
+            .unwrap();
+        let late_sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            writer
+                .send(&TabProtocolMessageFromNode::CloseTab, &[])
+                .unwrap();
+        });
+
+        let received = reader.receive::<TabProtocolMessageFromNode>();
+
+        assert!(
+            matches!(received, Ok(TabProtocolMessageFromNode::CloseTab)),
+            "{received:?}"
+        );
+        late_sender.join().unwrap();
     }
 
     #[test]

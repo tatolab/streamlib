@@ -269,6 +269,11 @@ fn serve_the_open_tab(
             Ok(TabProtocolMessageFromNode::ReleaseFrameSlot { slot }) => {
                 tab.frame_slot_released_by_the_node(slot);
             }
+            Ok(TabProtocolMessageFromNode::PaintedTextureCopied {
+                painted_texture_number,
+            }) => {
+                tab.painted_texture_copied_by_the_node(painted_texture_number);
+            }
             Ok(TabProtocolMessageFromNode::CloseTab) | Err(TabProtocolSocketFailure::Ended) => {
                 return;
             }

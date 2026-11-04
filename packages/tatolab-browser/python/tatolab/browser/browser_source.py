@@ -120,6 +120,8 @@ class BrowserSource:
         rendering.close()
         log.info(
             f"BrowserSource: page closed. frames_published={rendering.frames_published} "
+            f"frames_published_from_painted_textures="
+            f"{rendering.frames_published_from_painted_textures} "
             f"frames_dropped={rendering.frames_dropped} "
             f"audio_blocks_published={rendering.audio_blocks_published} "
             f"events_published={rendering.events_published} "

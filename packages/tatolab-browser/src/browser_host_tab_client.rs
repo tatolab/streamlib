@@ -10,6 +10,8 @@
 //! opened again in the new one.
 
 use std::collections::VecDeque;
+use std::fs::File;
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -23,14 +25,18 @@ use tatolab_browser_tab_protocol::{
     TabProtocolSocketFailure,
 };
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostHostMemoryPixels, ModuleHostInputPort, ModuleHostLogLevel,
-    ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort, ModuleHostSharedNativeServiceLease,
-    ModuleHostSharedNativeServiceState,
+    ModuleHost, ModuleHostColorInfo, ModuleHostForeignDmaBuf, ModuleHostHostMemoryPixels,
+    ModuleHostInputPort, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
+    ModuleHostOutputPort, ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,
+    ModuleHostSurface,
 };
 
 use crate::page_audio_blocks::PageAudioStreamTimeline;
 use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
+};
+use crate::painted_textures_adopted_by_the_node::{
+    PaintedTextureDmaBufIdentity, PaintedTextureLayout, PaintedTexturesAdoptedByTheNode,
 };
 use crate::video_frame_record::PaintedPageVideoFrame;
 
@@ -67,6 +73,32 @@ const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1
 /// How long one send to the host may take before the connection ends.
 const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
+/// How many painted textures in a row may fail to copy, once one has copied,
+/// before the tab opens again painting into frame slots.
+const MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW: u32 = 30;
+/// How long a tab asked to paint into textures has to hand the first one
+/// over before it opens again painting into frame slots.
+const FIRST_PAINTED_TEXTURE_BUDGET: Duration = Duration::from_secs(10);
+
+/// Why a connection to the host stopped being served.
+enum BrowserHostConnectionEnd {
+    /// The host or the node ended it.
+    Ended,
+    /// A texture the page painted into could not be adopted, and why; the tab
+    /// opens again painting into frame slots.
+    PaintedTextureRefused(String),
+}
+
+/// One texture the host handed over with `TexturePainted`.
+struct PaintedTextureHandedOver {
+    width: u32,
+    height: u32,
+    pixel_format: String,
+    allocation_byte_size: u64,
+    plane_offsets_bytes: Vec<u64>,
+    plane_strides_bytes: Vec<u64>,
+    drm_format_modifier: u64,
+}
 
 /// How one send to the host went.
 enum SendToTheBrowserHostOutcome {
@@ -102,6 +134,9 @@ pub struct BrowserPagePorts {
 #[derive(Debug, Default)]
 pub struct BrowserPageCounters {
     pub frames_published: AtomicU64,
+    /// Of `frames_published`, those copied from a texture the page painted
+    /// into rather than uploaded from a frame slot.
+    pub frames_published_from_painted_textures: AtomicU64,
     pub frames_dropped: AtomicU64,
     pub audio_blocks_published: AtomicU64,
     pub events_published: AtomicU64,
@@ -124,14 +159,23 @@ struct BrowserHostTabOfOneNode {
     writer_to_the_browser_host: Mutex<Option<TabProtocolMessageWriter>>,
     audio_stream: Mutex<Option<PageAudioStreamTimeline>>,
     first_frame_refusal_logged: AtomicBool,
+    /// Whether the tab is asked to paint into textures it hands over; cleared
+    /// for good once one cannot be adopted.
+    paints_into_painted_textures: AtomicBool,
     closing: AtomicBool,
     node_failed: AtomicBool,
 }
 
-/// One open connection to the host: its reading half and the tab's slots.
+/// One open connection to the host: its reading half, the tab's slots, and
+/// the painted textures adopted over it.
 struct OpenBrowserHostTabConnection {
     reader: TabProtocolMessageReader,
     frame_slots: BrowserHostTabFrameSlots,
+    painted_textures_adopted: PaintedTexturesAdoptedByTheNode<ModuleHostSurface>,
+    painted_texture_copies_failed_in_a_row: u32,
+    /// When the first painted texture is due, until one arrives; `None` for a
+    /// tab painting into frame slots.
+    first_painted_texture_deadline: Option<Instant>,
 }
 
 impl BrowserHostTabOfOneNode {
@@ -200,11 +244,16 @@ impl BrowserHostTabOfOneNode {
         let mut reader = TabProtocolMessageReader::over(socket);
         let mut writer = TabProtocolMessageWriter::over(writing_half)
             .sending_within(SEND_TO_THE_BROWSER_HOST_BUDGET);
+        let tab_request = BrowserHostTabRequest {
+            paint_into_shared_textures: self.paints_into_painted_textures.load(Ordering::Acquire),
+            ..self.tab_request.clone()
+        };
+        let paints_into_painted_textures = tab_request.paint_into_shared_textures;
         writer
             .send(
                 &TabProtocolMessageFromNode::OpenTab {
                     tab_protocol_version: TAB_PROTOCOL_VERSION,
-                    tab_request: self.tab_request.clone(),
+                    tab_request,
                 },
                 &[],
             )
@@ -255,6 +304,10 @@ impl BrowserHostTabOfOneNode {
         Ok(OpenBrowserHostTabConnection {
             reader,
             frame_slots,
+            painted_textures_adopted: PaintedTexturesAdoptedByTheNode::default(),
+            painted_texture_copies_failed_in_a_row: 0,
+            first_painted_texture_deadline: paints_into_painted_textures
+                .then(|| Instant::now() + FIRST_PAINTED_TEXTURE_BUDGET),
         })
     }
 
@@ -269,14 +322,36 @@ impl BrowserHostTabOfOneNode {
     }
 
     /// Serve what the host sends until the connection ends.
-    fn serve_the_connection(&self, connection: &mut OpenBrowserHostTabConnection) {
+    fn serve_the_connection(
+        &self,
+        connection: &mut OpenBrowserHostTabConnection,
+    ) -> BrowserHostConnectionEnd {
         loop {
-            let message = match connection
-                .reader
-                .receive::<TabProtocolMessageFromBrowserHost>()
-            {
+            let received = match connection.first_painted_texture_deadline {
+                Some(deadline) => connection
+                    .reader
+                    .receive_within::<TabProtocolMessageFromBrowserHost>(
+                        deadline.saturating_duration_since(Instant::now()),
+                    ),
+                None => connection
+                    .reader
+                    .receive::<TabProtocolMessageFromBrowserHost>(),
+            };
+            let message = match received {
                 Ok(message) => message,
-                Err(TabProtocolSocketFailure::Ended) => return,
+                Err(TabProtocolSocketFailure::Io(failure))
+                    if connection.first_painted_texture_deadline.is_some()
+                        && matches!(
+                            failure.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    return BrowserHostConnectionEnd::PaintedTextureRefused(format!(
+                        "the page painted no texture within {FIRST_PAINTED_TEXTURE_BUDGET:?} of \
+                         opening, so the GPU cannot share what it paints here"
+                    ));
+                }
+                Err(TabProtocolSocketFailure::Ended) => return BrowserHostConnectionEnd::Ended,
                 Err(failure) => {
                     if !self.closing.load(Ordering::Acquire) {
                         self.log(
@@ -284,10 +359,46 @@ impl BrowserHostTabOfOneNode {
                             &format!("the browser host connection failed: {failure}"),
                         );
                     }
-                    return;
+                    return BrowserHostConnectionEnd::Ended;
                 }
             };
             match message {
+                TabProtocolMessageFromBrowserHost::TexturePainted {
+                    painted_texture_number,
+                    width,
+                    height,
+                    pixel_format,
+                    allocation_byte_size,
+                    plane_offsets_bytes,
+                    plane_strides_bytes,
+                    drm_format_modifier,
+                } => {
+                    connection.first_painted_texture_deadline = None;
+                    let published = self.publish_the_painted_texture(
+                        connection,
+                        PaintedTextureHandedOver {
+                            width,
+                            height,
+                            pixel_format,
+                            allocation_byte_size,
+                            plane_offsets_bytes,
+                            plane_strides_bytes,
+                            drm_format_modifier,
+                        },
+                    );
+                    connection.reader.discard_attached_descriptors();
+                    let answered = self.send_to_the_browser_host(
+                        &TabProtocolMessageFromNode::PaintedTextureCopied {
+                            painted_texture_number,
+                        },
+                    );
+                    if let Err(refusal) = published {
+                        return BrowserHostConnectionEnd::PaintedTextureRefused(refusal);
+                    }
+                    if !matches!(answered, SendToTheBrowserHostOutcome::Sent) {
+                        return BrowserHostConnectionEnd::Ended;
+                    }
+                }
                 TabProtocolMessageFromBrowserHost::FramePainted {
                     slot,
                     width,
@@ -307,7 +418,7 @@ impl BrowserHostTabOfOneNode {
                         ),
                         SendToTheBrowserHostOutcome::Sent
                     ) {
-                        return;
+                        return BrowserHostConnectionEnd::Ended;
                     }
                 }
                 TabProtocolMessageFromBrowserHost::AudioStreamStarted {
@@ -344,7 +455,7 @@ impl BrowserHostTabOfOneNode {
                 }
                 TabProtocolMessageFromBrowserHost::PageRenderingGaveUp { reason } => {
                     self.fail_the_node(&reason);
-                    return;
+                    return BrowserHostConnectionEnd::Ended;
                 }
                 TabProtocolMessageFromBrowserHost::TabOpened { .. }
                 | TabProtocolMessageFromBrowserHost::TabRefused { .. } => {
@@ -352,10 +463,113 @@ impl BrowserHostTabOfOneNode {
                         ModuleHostLogLevel::Warn,
                         "the browser host answered an open a second time; the tab is reopened",
                     );
-                    return;
+                    return BrowserHostConnectionEnd::Ended;
                 }
             }
         }
+    }
+
+    /// Publish the texture the page painted into, adopting it the first time
+    /// it is handed over; `Err` when it cannot be adopted, or when the first
+    /// copy or [`MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW`] copies in a row
+    /// fail, since the frame slots still work then.
+    fn publish_the_painted_texture(
+        &self,
+        connection: &mut OpenBrowserHostTabConnection,
+        painted: PaintedTextureHandedOver,
+    ) -> Result<(), String> {
+        let mut plane_dma_bufs = Vec::with_capacity(painted.plane_offsets_bytes.len());
+        for _ in 0..painted.plane_offsets_bytes.len() {
+            let plane_dma_buf =
+                connection
+                    .reader
+                    .take_attached_descriptor()
+                    .map_err(|failure| {
+                        format!("a painted texture's plane did not arrive: {failure}")
+                    })?;
+            plane_dma_bufs.push(File::from(plane_dma_buf));
+        }
+        if self.closing.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let dma_buf_identity = the_one_dma_buf_every_plane_lives_in(&plane_dma_bufs)?;
+        let Some(dma_buf) = plane_dma_bufs.into_iter().next() else {
+            return Err("a painted texture was handed over with no plane".to_string());
+        };
+        let layout = PaintedTextureLayout {
+            dma_buf_identity,
+            width: painted.width,
+            height: painted.height,
+            pixel_format: painted.pixel_format,
+            allocation_byte_size: painted.allocation_byte_size,
+            plane_offsets_bytes: painted.plane_offsets_bytes,
+            plane_strides_bytes: painted.plane_strides_bytes,
+            drm_format_modifier: painted.drm_format_modifier,
+        };
+        let (width, height) = (layout.width, layout.height);
+        let adopted_layout = layout.clone();
+        let adopted_surface =
+            connection
+                .painted_textures_adopted
+                .adopted_or_adopt(layout, dma_buf, |dma_buf| {
+                    self.module_host
+                        .import_dma_buf(&ModuleHostForeignDmaBuf {
+                            fd: dma_buf.as_raw_fd(),
+                            width: adopted_layout.width,
+                            height: adopted_layout.height,
+                            pixel_format: &adopted_layout.pixel_format,
+                            allocation_byte_size: adopted_layout.allocation_byte_size,
+                            plane_offsets_bytes: &adopted_layout.plane_offsets_bytes,
+                            plane_strides_bytes: &adopted_layout.plane_strides_bytes,
+                            drm_format_modifier: adopted_layout.drm_format_modifier,
+                        })
+                        .map_err(|refusal| {
+                            format!(
+                                "the runtime did not adopt the {} texture the page painted into \
+                             (DRM format modifier {:#x}): {refusal}",
+                                adopted_layout.pixel_format, adopted_layout.drm_format_modifier
+                            )
+                        })
+                })?;
+        let painted_frame_texture = match self.acquire_a_painted_frame_texture(width, height) {
+            Ok(painted_frame_texture) => painted_frame_texture,
+            Err(refusal) => {
+                self.drop_a_frame(&refusal);
+                return Ok(());
+            }
+        };
+        if let Err(refusal) = self.module_host.convert_surface_into(
+            adopted_surface,
+            &painted_frame_texture,
+            &ModuleHostColorInfo::default(),
+        ) {
+            let refusal = format!("the texture the page painted into was not copied: {refusal}");
+            connection.painted_texture_copies_failed_in_a_row += 1;
+            let a_painted_texture_was_ever_copied = self
+                .counters
+                .frames_published_from_painted_textures
+                .load(Ordering::Relaxed)
+                > 0;
+            if !a_painted_texture_was_ever_copied
+                || connection.painted_texture_copies_failed_in_a_row
+                    >= MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW
+            {
+                return Err(refusal);
+            }
+            self.drop_a_frame(&refusal);
+            return Ok(());
+        }
+        connection.painted_texture_copies_failed_in_a_row = 0;
+        match self.publish_the_painted_frame_texture(&painted_frame_texture, width, height) {
+            Ok(()) => {
+                self.counters
+                    .frames_published_from_painted_textures
+                    .fetch_add(1, Ordering::Relaxed);
+                self.count_one_published_frame();
+            }
+            Err(refusal) => self.drop_a_frame(&refusal),
+        }
+        Ok(())
     }
 
     fn publish_the_frame_in_slot(
@@ -379,26 +593,31 @@ impl BrowserHostTabOfOneNode {
             return;
         };
         match self.write_painted_frame(painted_bgra_rows, width, height, row_stride_bytes) {
-            Ok(()) => {
-                let published = self
-                    .counters
-                    .frames_published
-                    .fetch_add(1, Ordering::Relaxed)
-                    + 1;
-                if published == 1 {
-                    self.log(ModuleHostLogLevel::Info, "first frame published");
-                }
-                if published.is_multiple_of(PAINTS_BETWEEN_REPORTS) {
-                    self.log(
-                        ModuleHostLogLevel::Info,
-                        &format!(
-                            "{published} frames published, {} dropped",
-                            self.counters.frames_dropped.load(Ordering::Relaxed)
-                        ),
-                    );
-                }
-            }
+            Ok(()) => self.count_one_published_frame(),
             Err(refusal) => self.drop_a_frame(&refusal),
+        }
+    }
+
+    fn count_one_published_frame(&self) {
+        let published = self
+            .counters
+            .frames_published
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if published == 1 {
+            self.log(ModuleHostLogLevel::Info, "first frame published");
+        }
+        if published.is_multiple_of(PAINTS_BETWEEN_REPORTS) {
+            self.log(
+                ModuleHostLogLevel::Info,
+                &format!(
+                    "{published} frames published, {} of them from painted textures, {} dropped",
+                    self.counters
+                        .frames_published_from_painted_textures
+                        .load(Ordering::Relaxed),
+                    self.counters.frames_dropped.load(Ordering::Relaxed)
+                ),
+            );
         }
     }
 
@@ -422,17 +641,7 @@ impl BrowserHostTabOfOneNode {
         height: u32,
         row_stride_bytes: u32,
     ) -> Result<(), String> {
-        let painted_frame_texture = self
-            .module_host
-            .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
-                pool_key: PAINTED_FRAME_POOL_KEY,
-                rotation_depth: self.config.output_pool_rotation_depth,
-                width,
-                height,
-                texture_format: PAINTED_FRAME_TEXTURE_FORMAT,
-                usage: &PAINTED_FRAME_TEXTURE_USAGE,
-            })
-            .map_err(|refusal| refusal.to_string())?;
+        let painted_frame_texture = self.acquire_a_painted_frame_texture(width, height)?;
         self.module_host
             .write_surface_from_host_memory(
                 &painted_frame_texture,
@@ -445,6 +654,32 @@ impl BrowserHostTabOfOneNode {
                 },
             )
             .map_err(|refusal| refusal.to_string())?;
+        self.publish_the_painted_frame_texture(&painted_frame_texture, width, height)
+    }
+
+    fn acquire_a_painted_frame_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<ModuleHostSurface, String> {
+        self.module_host
+            .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
+                pool_key: PAINTED_FRAME_POOL_KEY,
+                rotation_depth: self.config.output_pool_rotation_depth,
+                width,
+                height,
+                texture_format: PAINTED_FRAME_TEXTURE_FORMAT,
+                usage: &PAINTED_FRAME_TEXTURE_USAGE,
+            })
+            .map_err(|refusal| refusal.to_string())
+    }
+
+    fn publish_the_painted_frame_texture(
+        &self,
+        painted_frame_texture: &ModuleHostSurface,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
         let timestamp_ns = self.module_host.monotonic_now_ns();
         let record = PaintedPageVideoFrame {
             surface_id: painted_frame_texture.surface_id(),
@@ -532,20 +767,40 @@ impl BrowserHostTabOfOneNode {
     /// again in each host the runtime starts after one ends.
     fn keep_the_tab_open(&self, mut connection: OpenBrowserHostTabConnection) {
         loop {
-            self.serve_the_connection(&mut connection);
+            let connection_end = self.serve_the_connection(&mut connection);
             self.end_the_connection();
             if self.closing.load(Ordering::Acquire) || self.node_failed.load(Ordering::Acquire) {
                 return;
             }
-            self.log(
-                ModuleHostLogLevel::Warn,
-                "the browser host ended; the page opens again once the runtime has started it again",
-            );
+            let browser_host_ended = match connection_end {
+                BrowserHostConnectionEnd::Ended => {
+                    self.log(
+                        ModuleHostLogLevel::Warn,
+                        "the browser host ended; the page opens again once the runtime has \
+                         started it again",
+                    );
+                    true
+                }
+                BrowserHostConnectionEnd::PaintedTextureRefused(refusal) => {
+                    self.paints_into_painted_textures
+                        .store(false, Ordering::Release);
+                    self.log(
+                        ModuleHostLogLevel::Info,
+                        &format!(
+                            "{refusal}; the page opens again painting into frame slots, each \
+                             frame uploaded from host memory"
+                        ),
+                    );
+                    false
+                }
+            };
             match self.wait_for_the_browser_host_and_open_the_tab_again() {
                 Some(reopened) => {
-                    self.counters
-                        .browser_host_reconnects
-                        .fetch_add(1, Ordering::Relaxed);
+                    if browser_host_ended {
+                        self.counters
+                            .browser_host_reconnects
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     connection = reopened;
                 }
                 None => return,
@@ -615,6 +870,28 @@ impl BrowserHostTabOfOneNode {
     }
 }
 
+/// The one DMA-BUF every plane of a painted texture lives in; the runtime
+/// adopts a texture from one descriptor.
+fn the_one_dma_buf_every_plane_lives_in(
+    plane_dma_bufs: &[File],
+) -> Result<PaintedTextureDmaBufIdentity, String> {
+    let mut identities = plane_dma_bufs.iter().map(|plane_dma_buf| {
+        PaintedTextureDmaBufIdentity::of(plane_dma_buf)
+            .map_err(|failure| format!("a painted texture's plane cannot be read: {failure}"))
+    });
+    let Some(first_identity) = identities.next().transpose()? else {
+        return Err("a painted texture was handed over with no plane".to_string());
+    };
+    for identity in identities {
+        if identity? != first_identity {
+            return Err(
+                "the page painted a texture whose planes live in separate DMA-BUFs".to_string(),
+            );
+        }
+    }
+    Ok(first_identity)
+}
+
 fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
     match level {
         BrowserHostTabLogLevel::Error => ModuleHostLogLevel::Error,
@@ -656,6 +933,7 @@ impl BrowserPageRendering {
             transparent_background: config.transparent_background,
             audio_sample_rate: config.audio_sample_rate,
             frame_slot_count: BROWSER_HOST_TAB_FRAME_SLOT_COUNT,
+            paint_into_shared_textures: true,
         };
         tab_request.refuse_what_cef_cannot_render()?;
         let tab = Arc::new(BrowserHostTabOfOneNode {
@@ -670,6 +948,7 @@ impl BrowserPageRendering {
             writer_to_the_browser_host: Mutex::new(None),
             audio_stream: Mutex::new(None),
             first_frame_refusal_logged: AtomicBool::new(false),
+            paints_into_painted_textures: AtomicBool::new(true),
             node_failed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
         });

@@ -24,7 +24,7 @@ pub use tab_protocol_socket::{
 use serde::{Deserialize, Serialize};
 
 /// The protocol version this build speaks; a peer speaking another is refused.
-pub const TAB_PROTOCOL_VERSION: u32 = 1;
+pub const TAB_PROTOCOL_VERSION: u32 = 2;
 
 /// The shared service name a node leases the browser host by.
 pub const BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME: &str = "browser-host";
@@ -43,6 +43,10 @@ pub struct BrowserHostTabRequest {
     /// How many painted frames the host may hand the node before it is
     /// given one back.
     pub frame_slot_count: u32,
+    /// Paint into GPU textures handed over as DMA-BUFs, each answered with
+    /// [`TabProtocolMessageFromNode::PaintedTextureCopied`], rather than into
+    /// the frame slots.
+    pub paint_into_shared_textures: bool,
 }
 
 /// One message a node sends the host.
@@ -59,6 +63,10 @@ pub enum TabProtocolMessageFromNode {
     DeliverPageData { detail_json: String },
     /// The node has published the frame in `slot` and may be handed it again.
     ReleaseFrameSlot { slot: u32 },
+    /// The node is done reading the texture of
+    /// [`TabProtocolMessageFromBrowserHost::TexturePainted`]
+    /// `painted_texture_number`, so the page may paint into it again.
+    PaintedTextureCopied { painted_texture_number: u64 },
     /// Close the page; the host closes it as well when the connection ends.
     CloseTab,
 }
@@ -92,6 +100,21 @@ pub enum TabProtocolMessageFromBrowserHost {
         height: u32,
         row_stride_bytes: u32,
     },
+    /// The page painted into a GPU texture, one DMA-BUF descriptor per plane
+    /// riding on the message; the page paints into it again only once the
+    /// node answers [`TabProtocolMessageFromNode::PaintedTextureCopied`] or
+    /// the host stops waiting.
+    TexturePainted {
+        painted_texture_number: u64,
+        width: u32,
+        height: u32,
+        /// A pixel format wire name: `bgra32` or `rgba32`.
+        pixel_format: String,
+        allocation_byte_size: u64,
+        plane_offsets_bytes: Vec<u64>,
+        plane_strides_bytes: Vec<u64>,
+        drm_format_modifier: u64,
+    },
     /// The page opened an audio stream.
     AudioStreamStarted { sample_rate: u32, channels: u32 },
     /// One packet of the open stream: `sample_count` frames of interleaved
@@ -119,6 +142,10 @@ impl TabProtocolMessageFromBrowserHost {
     pub fn attached_descriptor_count(&self) -> usize {
         match self {
             Self::TabOpened { .. } => 1,
+            Self::TexturePainted {
+                plane_offsets_bytes,
+                ..
+            } => plane_offsets_bytes.len(),
             _ => 0,
         }
     }
@@ -213,6 +240,7 @@ mod tests {
             transparent_background: true,
             audio_sample_rate: 48_000,
             frame_slot_count: 3,
+            paint_into_shared_textures: true,
         }
     }
 
@@ -227,6 +255,9 @@ mod tests {
                 detail_json: "{\"title\":\"Ada\"}".to_string(),
             },
             TabProtocolMessageFromNode::ReleaseFrameSlot { slot: 2 },
+            TabProtocolMessageFromNode::PaintedTextureCopied {
+                painted_texture_number: 7,
+            },
             TabProtocolMessageFromNode::CloseTab,
         ] {
             let encoded = rmp_serde::to_vec_named(&message).unwrap();
@@ -250,6 +281,16 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 row_stride_bytes: 7680,
+            },
+            TabProtocolMessageFromBrowserHost::TexturePainted {
+                painted_texture_number: 7,
+                width: 1920,
+                height: 1080,
+                pixel_format: "bgra32".to_string(),
+                allocation_byte_size: 8_294_400,
+                plane_offsets_bytes: vec![0],
+                plane_strides_bytes: vec![7680],
+                drm_format_modifier: 0,
             },
             TabProtocolMessageFromBrowserHost::AudioStreamStarted {
                 sample_rate: 48_000,
@@ -305,7 +346,22 @@ mod tests {
     }
 
     #[test]
-    fn only_tab_opened_carries_a_descriptor() {
+    fn a_painted_texture_carries_one_descriptor_per_plane() {
+        let painted_two_plane_texture = TabProtocolMessageFromBrowserHost::TexturePainted {
+            painted_texture_number: 1,
+            width: 2,
+            height: 2,
+            pixel_format: "bgra32".to_string(),
+            allocation_byte_size: 32,
+            plane_offsets_bytes: vec![0, 16],
+            plane_strides_bytes: vec![8, 8],
+            drm_format_modifier: 0,
+        };
+        assert_eq!(painted_two_plane_texture.attached_descriptor_count(), 2);
+    }
+
+    #[test]
+    fn of_the_other_messages_only_tab_opened_carries_a_descriptor() {
         assert_eq!(
             TabProtocolMessageFromBrowserHost::TabOpened {
                 tab_protocol_version: 1,
