@@ -471,13 +471,15 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
-  # The stream `tatolab new` scaffolds imports `tatolab.h264`, so the machines
-  # are given the manylinux wheel this run built, as a user's `uv sync` would.
+  # The stream `tatolab new` scaffolds imports `tatolab.h264` and
+  # `tatolab.testpattern`, so the machines are given the distributions this run
+  # built, as a user's `uv sync` would.
   check-the-linux-runtime-tarball-on-machines-with-no-vulkan-driver:
     name: The Linux runtime tarball starts a stream on machines with no Vulkan driver
     needs:
       - build-linux-runtime-tarball
       - build-tatolab-h264-distribution
+      - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -499,13 +501,19 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: pypi-distribution-tatolab-h264-manylinux
-          path: ${{ runner.temp }}/tatolab-h264-distribution
+          path: ${{ runner.temp }}/first-party-module-distributions
+
+      - name: Collect the tatolab-testpattern distribution this run built
+        uses: actions/download-artifact@v7
+        with:
+          name: pypi-distribution-tatolab-testpattern
+          path: ${{ runner.temp }}/first-party-module-distributions
 
       - name: The tarball starts a stream on machines with no Vulkan driver
         run: >-
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
-          "$RUNNER_TEMP/tatolab-h264-distribution"
+          "$RUNNER_TEMP/first-party-module-distributions"
 
   # Before PyPI takes anything: an upload whose Linux runtime could not then be
   # published would leave the release half out.

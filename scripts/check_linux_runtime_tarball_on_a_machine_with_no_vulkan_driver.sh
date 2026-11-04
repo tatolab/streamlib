@@ -6,14 +6,14 @@
 # starts a stream on each:
 #
 #   scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh \
-#     <tarball> <tatolab-h264-wheel-directory>
+#     <tarball> <first-party-module-distribution-directory>
 #
 # one with no Vulkan loader either, and an Ubuntu 22.04 whose system loader
 # (1.3.204) predates the `VK_ADD_DRIVER_FILES` that names the bundled driver.
 # Passes when on both `tatolabd` opened the Vulkan loader the lend carries and
 # the first stream start built its device on the lavapipe beside it. The
-# scaffolded stream imports `tatolab.h264`, which comes from the wheel
-# directory because no index holds this build yet. What the stream does after
+# scaffolded stream imports `tatolab.h264` and `tatolab.testpattern`, which come
+# from the distribution directory because no index holds this build yet. What the stream does after
 # the device is built is not checked here. Needs docker.
 
 set -euo pipefail
@@ -33,10 +33,10 @@ case "${1:-}" in
 	machine="$1"
 	;;
 *)
-	usage="usage: $script_name <linux-runtime-tarball> <tatolab-h264-wheel-directory>"
+	usage="usage: $script_name <linux-runtime-tarball> <first-party-module-distribution-directory>"
 	runtime_tarball="${1:?$usage}"
 	runtime_tarball="$(cd "$(dirname "$runtime_tarball")" && pwd)/$(basename "$runtime_tarball")"
-	tatolab_h264_wheel_directory="$(cd "${2:?$usage}" && pwd)"
+	first_party_module_distribution_directory="$(cd "${2:?$usage}" && pwd)"
 	for machine_and_image in \
 		"--inside-the-machine-with-no-vulkan-loader $MACHINE_WITH_NO_VULKAN_DRIVER_IMAGE" \
 		"--inside-the-machine-with-an-old-system-vulkan-loader $MACHINE_WITH_AN_OLD_SYSTEM_VULKAN_LOADER_IMAGE"; do
@@ -44,7 +44,7 @@ case "${1:-}" in
 		echo "=== $machine"
 		docker run --rm \
 			--volume "$runtime_tarball:/linux-runtime-tarball.tar.gz:ro" \
-			--volume "$tatolab_h264_wheel_directory:/tatolab-h264-wheels:ro" \
+			--volume "$first_party_module_distribution_directory:/first-party-module-distributions:ro" \
 			--volume "$workspace_root:/workspace:ro" \
 			"$image" \
 			bash "/workspace/scripts/$script_name" "$machine"
@@ -105,7 +105,7 @@ mkdir -p /tmp/stream-on-the-software-device
 python3 -m venv /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet \
-	--no-index --find-links /tatolab-h264-wheels tatolab-h264
+	--no-index --find-links /first-party-module-distributions tatolab-h264 tatolab-testpattern
 
 if ! "$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-new.log 2>&1; then
 	cat /tmp/tatolab-new.log /tmp/tatolabd.log
