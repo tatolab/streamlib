@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.18](https://github.com/tatolab/streamlib/compare/v0.68.17...v0.68.18) (2026-11-04)
+
+
+### Features
+
+* **engine:** restart a helper process that dies on its own, with backoff and a crash-loop limit ([#3111](https://github.com/tatolab/streamlib/issues/3111)) ([62b18fd](https://github.com/tatolab/streamlib/commit/62b18fd99c9f1aa36dbdfa16efd30671701d7d86))
+
 ## [0.68.17](https://github.com/tatolab/streamlib/compare/v0.68.16...v0.68.17) (2026-11-03)
 
 

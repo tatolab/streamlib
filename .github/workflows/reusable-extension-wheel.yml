@@ -29,6 +29,11 @@ on:
         description: "This run's artifact holding the tatolab-stream the release publishes beside the extension"
         type: string
         required: true
+      extension_build_compiles_glsl_with_glslc:
+        description: "Whether a build script in the extension's closure runs glslc, which the manylinux image lacks"
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   build-extension-wheel:
@@ -106,6 +111,10 @@ jobs:
             }
             install_build_dependencies_with_bounded_retry \
               pkgconfig clang-devel cmake ninja-build
+            if [ "${{ inputs.extension_build_compiles_glsl_with_glslc }}" = true ]; then
+              bash "$GITHUB_WORKSPACE/scripts/install_glslc_from_the_locked_shaderc_sources.sh" /opt/glslc
+              export PATH="/opt/glslc/bin:$PATH"
+            fi
 
       # The image ships both, which is all `aws-lc-sys` needs here.
       - name: The build tools the extension's native dependencies assume
