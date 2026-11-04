@@ -112,14 +112,13 @@ fn painted_texture_of_the_page(
     {
         return None;
     }
-    let allocation_byte_size = planes
-        .iter()
-        .map(|plane| {
-            plane
-                .size
-                .max(plane.offset + u64::from(plane.stride) * coded_height)
-        })
-        .max()?;
+    let mut allocation_byte_size = 0;
+    for plane in planes {
+        let plane_end = u64::from(plane.stride)
+            .checked_mul(coded_height)?
+            .checked_add(plane.offset)?;
+        allocation_byte_size = allocation_byte_size.max(plane.size).max(plane_end);
+    }
     Some(PaintedTextureOfThePage {
         width,
         height,

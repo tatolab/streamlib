@@ -73,6 +73,9 @@ const MOST_DATA_BYTES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 64 * 1024 * 1
 /// How long one send to the host may take before the connection ends.
 const SEND_TO_THE_BROWSER_HOST_BUDGET: Duration = Duration::from_secs(5);
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
+/// How many painted textures in a row may fail to copy, once one has copied,
+/// before the tab opens again painting into frame slots.
+const MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW: u32 = 30;
 
 /// Why a connection to the host stopped being served.
 enum BrowserHostConnectionEnd {
@@ -166,6 +169,7 @@ struct OpenBrowserHostTabConnection {
     reader: TabProtocolMessageReader,
     frame_slots: BrowserHostTabFrameSlots,
     painted_textures_adopted: PaintedTexturesAdoptedByTheNode<ModuleHostSurface>,
+    painted_texture_copies_failed_in_a_row: u32,
 }
 
 impl BrowserHostTabOfOneNode {
@@ -294,6 +298,7 @@ impl BrowserHostTabOfOneNode {
             reader,
             frame_slots,
             painted_textures_adopted: PaintedTexturesAdoptedByTheNode::default(),
+            painted_texture_copies_failed_in_a_row: 0,
         })
     }
 
@@ -437,7 +442,8 @@ impl BrowserHostTabOfOneNode {
 
     /// Publish the texture the page painted into, adopting it the first time
     /// it is handed over; `Err` when it cannot be adopted, or when the first
-    /// copy of one fails, since the frame slots still work then.
+    /// copy or [`MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW`] copies in a row
+    /// fail, since the frame slots still work then.
     fn publish_the_painted_texture(
         &self,
         connection: &mut OpenBrowserHostTabConnection,
@@ -509,17 +515,22 @@ impl BrowserHostTabOfOneNode {
             &ModuleHostColorInfo::default(),
         ) {
             let refusal = format!("the texture the page painted into was not copied: {refusal}");
+            connection.painted_texture_copies_failed_in_a_row += 1;
             let a_painted_texture_was_ever_copied = self
                 .counters
                 .frames_published_from_painted_textures
                 .load(Ordering::Relaxed)
                 > 0;
-            if !a_painted_texture_was_ever_copied {
+            if !a_painted_texture_was_ever_copied
+                || connection.painted_texture_copies_failed_in_a_row
+                    >= MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW
+            {
                 return Err(refusal);
             }
             self.drop_a_frame(&refusal);
             return Ok(());
         }
+        connection.painted_texture_copies_failed_in_a_row = 0;
         match self.publish_the_painted_frame_texture(&painted_frame_texture, width, height) {
             Ok(()) => {
                 self.counters

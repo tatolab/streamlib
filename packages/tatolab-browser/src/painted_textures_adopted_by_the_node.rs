@@ -21,6 +21,7 @@ pub struct PaintedTextureDmaBufIdentity {
 }
 
 impl PaintedTextureDmaBufIdentity {
+    /// The buffer behind `dma_buf`, by its device and inode.
     pub fn of(dma_buf: &File) -> std::io::Result<Self> {
         let metadata = dma_buf.metadata()?;
         Ok(Self {
@@ -45,8 +46,8 @@ pub struct PaintedTextureLayout {
 
 /// One painted texture as the node adopted it, held with the DMA-BUF it was
 /// adopted from.
-pub struct PaintedTextureAdoptedByTheNode<AdoptedSurface> {
-    pub adopted_surface: AdoptedSurface,
+struct PaintedTextureAdoptedByTheNode<AdoptedSurface> {
+    adopted_surface: AdoptedSurface,
     _adopted_dma_buf: File,
 }
 
@@ -99,6 +100,7 @@ impl<AdoptedSurface> PaintedTexturesAdoptedByTheNode<AdoptedSurface> {
         Ok(&self.adopted[index].1.adopted_surface)
     }
 
+    /// How many painted textures are adopted now.
     pub fn adopted_count(&self) -> usize {
         self.adopted.len()
     }

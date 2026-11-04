@@ -478,38 +478,48 @@ mod tests {
     }
 
     #[test]
-    fn a_painted_texture_is_handed_over_with_its_plane_and_waits_for_the_copy() {
+    fn a_painted_texture_is_handed_over_with_its_plane() {
         use std::os::fd::AsRawFd;
         let (tab, mut node) = tab_with_slots(1);
-        let tab = std::sync::Arc::new(tab);
         let plane = std::fs::File::open("/dev/null").unwrap();
-        let copying_node = std::thread::spawn({
-            let tab = std::sync::Arc::clone(&tab);
-            move || {
-                let painted = node.receive::<TabProtocolMessageFromBrowserHost>().unwrap();
-                let TabProtocolMessageFromBrowserHost::TexturePainted {
-                    painted_texture_number,
-                    ..
-                } = painted
-                else {
-                    panic!("{painted:?}");
-                };
-                let _plane_the_node_holds = node.take_attached_descriptor().unwrap();
-                std::thread::sleep(Duration::from_millis(30));
-                tab.painted_texture_copied_by_the_node(painted_texture_number);
-            }
-        });
+        tab.painted_texture_copied_by_the_node(1);
 
-        let started = Instant::now();
         a_painted_texture_of(&tab, plane.as_raw_fd());
 
-        assert!(started.elapsed() >= Duration::from_millis(30));
-        assert!(started.elapsed() < PAINTED_TEXTURE_COPY_BUDGET);
+        let painted = node.receive::<TabProtocolMessageFromBrowserHost>().unwrap();
+        assert!(
+            matches!(
+                painted,
+                TabProtocolMessageFromBrowserHost::TexturePainted {
+                    painted_texture_number: 1,
+                    ..
+                }
+            ),
+            "{painted:?}"
+        );
+        node.take_attached_descriptor().unwrap();
         assert_eq!(
             tab.painted_texture_copies_not_answered_in_time
                 .load(Ordering::Relaxed),
             0
         );
+    }
+
+    #[test]
+    fn the_wait_for_a_copy_ends_once_the_node_copied_it() {
+        let tab = std::sync::Arc::new(tab_with_slots(1).0);
+        let copying_node = std::thread::spawn({
+            let tab = std::sync::Arc::clone(&tab);
+            move || {
+                std::thread::sleep(Duration::from_millis(30));
+                tab.painted_texture_copied_by_the_node(1);
+            }
+        });
+
+        let started = Instant::now();
+        assert!(tab.wait_for_the_node_to_copy(1, Duration::from_secs(30)));
+
+        assert!(started.elapsed() >= Duration::from_millis(30));
         copying_node.join().unwrap();
     }
 
