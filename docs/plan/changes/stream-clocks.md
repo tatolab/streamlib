@@ -29,7 +29,9 @@ stream can neither run slower or faster than real time nor wait for its slowest 
 - **Time warp is live.** A scaled stream's scale is changed while it runs, from the control
   plane.
 - **What a stream author sees:** one new builder call, three clock classes and one context
-  property. A real-time stream behaves byte-for-byte as today.
+  property. A real-time stream keeps its stamps and `ctx.time` on `MediaClock`; its continuous
+  nodes now fire on the `first + k·interval` grid instead of sleeping an interval after each
+  callback, so a slow callback no longer pushes every later call back.
 
 **Scale gate — this skill plus an ADR.** It changes the processor model's scheduling, the helper
 lifecycle protocol, the shared-memory wire (a new `#[repr(C)]` blackboard entry) and the Python
@@ -76,7 +78,7 @@ DECIDED and SHIPPED.
 
 - **ADDED (§Processor model & scheduling, DECIDED):** A stream names its clock in its spec. The
   graph document gains a spec key `clock`, absent meaning real time:
-  `{"mode": "real"}`, `{"mode": "scaled", "scale": <f64 > 0>, "step_ns": <u64>}` or
+  `{"mode": "real"}`, `{"mode": "scaled", "scale": <f64 > 0>, "step_ns": <u64 > 0>}` or
   `{"mode": "stepped", "step_ns": <u64 > 0>, "pace": <f64 > 0 | null>, "stop_after_steps":
   <u64 | null>}`. Python spells it `stream_builder.run_on_clock(RealTimeStreamClock() |
   ScaledStreamClock(scale, step_ns=16_666_667) | SteppedStreamClock(step_ns, pace=None,
@@ -92,8 +94,8 @@ DECIDED and SHIPPED.
   and step counts — never a wall clock, never a sleep:
   - **real:** `now = MediaClock::now()`;
   - **scaled, free-running:** `now = base + scale × (MediaClock::now() − anchor)`, where a scale
-    change re-anchors (`base ← now`, `anchor ← MediaClock::now()`) so time never jumps or goes
-    backwards;
+    change reads `MediaClock::now()` once as `m` and re-anchors (`base ← base + scale ×
+    (m − anchor)`, `anchor ← m`) so time never jumps or goes backwards;
   - **stepped:** `now = base + k × step_ns` for the open step *k*, where `base` is the
     `MediaClock` reading at the stream's start.
   [stream-clocks]
@@ -102,7 +104,8 @@ DECIDED and SHIPPED.
   helpers opens read-only by the service name its `setup` command carries, beside the loss-count
   board. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode, step_index, step_ns,
   base_ns, anchor_ns, scale_f64_bits, pace_f64_bits }` in `streamlib-ipc-types`, with a layout
-  regression test, so a reader always copies a consistent clock. A real-time stream creates no
+  regression test. A reader copies that one entry whole, which iceoryx2's blackboard keeps
+  consistent against a concurrent write, so it always reads one published clock. A real-time stream creates no
   board and its helpers read `MediaClock` directly, so the default path gains nothing. A step
   opening is announced on one iceoryx2 event service per stream, whose listener fd a helper and
   a native runner wait on. [stream-clocks]
@@ -149,8 +152,10 @@ DECIDED and SHIPPED.
   node fires at `first + k·interval` on **stream time**. The native runner waits on that
   absolute deadline — converted to a `MediaClock` deadline in a real or scaled stream, the step
   event in a stepped one — instead of sleeping. A helper's continuous loop does the same through
-  `MonotonicTimer`, re-armed when the scale changes, or the step event's fd. `MonotonicTimer`
-  itself stays on the machine clock.
+  `MonotonicTimer`, re-armed when the scale changes, or the step event's fd. A live rescale
+  reaches a wait already under way because each runner re-reads the stream clock at least every
+  100 ms of machine time; no separate signal is sent. `MonotonicTimer` itself stays on the
+  machine clock.
 - **MODIFIED (§Media I/O, the one-clock entry, `:2366-2393`):** "every timestamp a processor
   stamps, reads, or compares — frames, messages, audio ticks, `ctx.time` — is the machine's
   monotonic clock" reads "is in the machine's monotonic epoch: a device stamp is the machine
@@ -201,6 +206,28 @@ the step barrier. Those meet at a scale above 1, and the scale changes live.
 - **A3 — free at every scale.** Scaled never waits and may drop above 1×; lockstep faster than real
   time is a `SteppedStreamClock` with a `pace`. Simplest, but amends the plan line.
 
+## Barrier details — stated assumptions for ticket 3
+
+Review raised gaps in the step barrier above. Ticket 3 builds these answers unless the owner
+says otherwise:
+
+- **A continuous node with no deadline in step *k* still finishes *k*.** Its runner writes
+  `last_step_finished = k` on every step it sees open, whether or not `process()` ran.
+- **Ledger write points.** `callbacks_in_flight` rises before a callback starts and falls after
+  it returns; a bag counts as taken when the callback reads it. A callback that read a bag is
+  therefore still in flight until it returns, and the step cannot close under it.
+- **After a producer's restart** the coordinator compares against `written_bags` as the parent
+  renders it, cumulative across the producer's helpers, the count `graph` already shows.
+- **Steps are counted from 0.** `stop_after_steps = n` runs steps `0 … n−1`; `n` is at least 1,
+  and 0 is refused at load.
+- **An explicit `timestamp_ns` is kept as written** in a stepped stream; only an unstamped write
+  takes the step's time.
+- **Latency is measured on the machine clock.** A stamp is stream time, so `monotonic_now_ns() −
+  timestamp_ns` measures latency only in a real-time stream; a node measuring latency in a
+  scaled or stepped stream compares two `monotonic_now_ns()` readings.
+- **A manual node blocks a live rescale above 1×.** `set_stream_clock_scale` above 1 is refused
+  for a stream holding a manual node, naming it, as a stepped stream refuses one at load.
+
 ## [NEEDS DECISION] B — a node paced by real time in a scaled or stepped stream
 
 The ADR leaves this to the change that builds it. A recorded source follows any clock; a live
@@ -224,9 +251,9 @@ real-time while the rest of the stream warps.
 Three tracer bullets, in order, each provable without a GPU:
 1. **Stream clock declared and read, real and scaled.** Spec key, builder call, `StreamClock`,
    the clock board, `ctx.time` and `ctx.stream_clock` in both processes, implicit stamps, the
-   `graph` render. Proven by an engine test whose Python helper writes under a 2× clock and whose
-   native sink sees stamps advancing twice as fast as `MediaClock`; scaled above 1× is refused
-   until ticket 3 (under A1).
+   `graph` render. Proven by an engine test whose Python helper writes under a 0.5× clock and whose
+   sink sees stamps advancing half as fast as `MediaClock`; scaled above 1× is refused until
+   ticket 3 (under A1).
 2. **Continuous pacing on stream time and live time warp.** The deadline wait in both runners,
    `set_stream_clock_scale` on every control surface. Proven by a continuous Python node firing
    at twice the rate after a live scale change, and by the REMOVED check on `sleep_duration`.
