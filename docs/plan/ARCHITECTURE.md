@@ -535,7 +535,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and node names. The one built-in left is `RelayTrackSource`, which is transport — the only
   way a graph reads a relay, its MoQ crates pinned to `tatolabd`'s publisher — not a media
   node. Installing the runtime alone gives other applications no camera. Owner, 2026-11-02.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
@@ -545,16 +545,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   interface. Only data-plane verbs and plain, generation-checked handles cross it, never an
   RHI object, and the engine never calls module code through it. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
-  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
   carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
   generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **DECIDED** — A module declares its nodes in a `tatolab.nodes` entry-point group, and a
   node's type is its class's import path in its own distribution (`tatolab.camera:CameraSource`).
   The node catalog lists every installed module's nodes, read in a stream's own interpreter and
   never in `tatolabd`. A graph naming a former built-in's type is refused naming the module's
-  type and the distribution to install. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  type and the distribution to install. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
@@ -2198,7 +2198,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   dependencies, and adds it with the same `stream_builder.add(...)`; a stream with no camera
   loads no camera code. A device is opened by the node that uses it, in its own process, under
   the stream's capture-prompting policy, and a native crash in a device or codec node ends that
-  node's stream, not every stream on the machine. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  node's stream, not every stream on the machine. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **DECIDED** — A virtual camera is a fifth device class: `VirtualCameraSink`, the pure-Python
   `tatolab-virtualcamera` module, Linux only — with no Apple port, stated rather than deferred:
   a macOS virtual camera is a CoreMediaIO Camera Extension inside a bundled, entitled,
@@ -2238,7 +2238,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `fcntl`, so nothing is linked. An odd frame width is refused by name, since YUYV packs two
   pixels to a macropixel. Owner rulings, 2026-09-06 and 2026-11-02.
   [virtual-camera-sink — SHIPPED #2196, #2197, #2198; macos-capability-parity;
-  runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #THIS_PR]
+  runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the
