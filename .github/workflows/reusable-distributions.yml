@@ -12,11 +12,13 @@ name: Distributions
 # Every distribution carries the repository's one version and releases on its
 # one tag, and the PyPI upload waits for every one of them, for the macOS proof
 # of the runtime unit, for the Linux runtime tarball and for the credentials
-# that publish it, so PyPI takes all of them or none. The Linux runtime
+# that publish it, so nothing uploads unless everything built. The Linux runtime
 # publishes after PyPI, because a stream it scaffolds locks the
-# `tatolab-stream` PyPI holds; a failed Linux publish is recovered by re-running
-# the original run's failed publish-linux-runtime job, which uploads the
-# tarball that run built again and overwrites a partial upload.
+# `tatolab-stream` PyPI holds. It still publishes when PyPI refused only a
+# first upload of a new project name, which no scaffold locks; a failed Linux
+# publish is recovered by re-running the original run's failed
+# publish-linux-runtime job, which uploads the tarball that run built again and
+# overwrites a partial upload.
 #
 # Called from release.yml rather than triggered by `on: release`:
 # release-please runs on the default GITHUB_TOKEN, and GitHub does not start
@@ -573,6 +575,8 @@ jobs:
     name: Publish to PyPI
     # A dry run skips the credentials check, and runs this regardless.
     if: ${{ !cancelled() && !failure() }}
+    outputs:
+      pypi_refused_only_new_project_names: ${{ steps.upload.outputs.pypi_refused_only_new_project_names }}
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
@@ -653,16 +657,24 @@ jobs:
       # distribution PyPI already has. The job still fails, naming each refused
       # file, so a re-run sends what is left.
       - name: Upload every distribution to PyPI
+        id: upload
         if: ${{ !inputs.dry_run }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
+          set -o pipefail
           refused_distribution_files=()
+          pypi_refused_only_new_project_names=true
+          upload_output_path="$RUNNER_TEMP/uv-publish-output"
           for distribution_path in dist/*; do
-            if ! uv publish --trusted-publishing never --check-url https://pypi.org/simple/ "$distribution_path"; then
+            if ! uv publish --trusted-publishing never --check-url https://pypi.org/simple/ "$distribution_path" 2>&1 | tee "$upload_output_path"; then
               refused_distribution_files+=("$(basename "$distribution_path")")
+              if ! grep -q "Too many new projects created" "$upload_output_path"; then
+                pypi_refused_only_new_project_names=false
+              fi
             fi
           done
+          echo "pypi_refused_only_new_project_names=$pypi_refused_only_new_project_names" >> "$GITHUB_OUTPUT"
           if [ "${#refused_distribution_files[@]}" -gt 0 ]; then
             for refused_distribution_file in "${refused_distribution_files[@]}"; do
               echo "::error::PyPI did not take $refused_distribution_file; re-run this job to send it"
@@ -677,6 +689,12 @@ jobs:
     needs:
       - publish-to-pypi
       - build-linux-runtime-tarball
+    if: >-
+      ${{ !cancelled()
+      && needs.build-linux-runtime-tarball.result == 'success'
+      && (needs.publish-to-pypi.result == 'success'
+      || (needs.publish-to-pypi.result == 'failure'
+      && needs.publish-to-pypi.outputs.pypi_refused_only_new_project_names == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
