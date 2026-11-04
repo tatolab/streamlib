@@ -86,22 +86,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
 cargo fetch --locked
 
 # The engine's build script compiles its shaders with glslc, which AlmaLinux 8
-# does not package. Built from the shaderc sources Cargo.lock already pins for
-# the engine's own compiler.
-shaderc_sys_manifest_path="$(cargo metadata --locked --format-version 1 |
-	python3.12 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "shaderc-sys"))')"
-shaderc_source_directory="$(dirname "$shaderc_sys_manifest_path")/build"
-glslc_build_directory="$(mktemp -d)"
-cmake -S "$shaderc_source_directory" -B "$glslc_build_directory" -G Ninja \
-	-DCMAKE_BUILD_TYPE=Release \
-	-DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
-	-DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON \
-	-DENABLE_GLSLANG_BINARIES=OFF -DSKIP_GLSLANG_INSTALL=ON >/dev/null
-ninja -C "$glslc_build_directory" glslc_exe >/dev/null
-mkdir -p /opt/glslc/bin
-cp "$glslc_build_directory/shaderc/glslc/glslc" /opt/glslc/bin/glslc
+# does not package.
+bash "$workspace_root/scripts/install_glslc_from_the_locked_shaderc_sources.sh" /opt/glslc
 export PATH="/opt/glslc/bin:$PATH"
-glslc --version
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv
