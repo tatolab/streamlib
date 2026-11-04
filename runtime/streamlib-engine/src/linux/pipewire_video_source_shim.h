@@ -98,7 +98,8 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
     const void *const *entry_points, const char *camera_name, char *failure_text,
     size_t failure_text_capacity);
 
-/// Offer one extent as `buffer_count` shared-memory YUY2 buffers, activate the
+/// Offer one extent as shared-memory YUY2 buffers, `buffer_count` by default and
+/// as many as `STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS` where the consumer asks, activate the
 /// stream, and replace any extent offered earlier.
 int streamlib_pipewire_video_source_set_extent(
     struct StreamLibPipeWireVideoSource *video_source, uint32_t width, uint32_t height,

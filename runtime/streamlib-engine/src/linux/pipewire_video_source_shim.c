@@ -277,7 +277,9 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
     const struct spa_pod *params[2];
     params[0] = spa_pod_builder_add_object(
         &pod_builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_buffers,
-        SPA_POD_Int((int32_t)video_source->buffer_count), SPA_PARAM_BUFFERS_blocks,
+        SPA_POD_CHOICE_RANGE_Int((int32_t)video_source->buffer_count, 1,
+                                 STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS),
+        SPA_PARAM_BUFFERS_blocks,
         SPA_POD_Int(1), SPA_PARAM_BUFFERS_size,
         SPA_POD_Int((int32_t)offered_byte_size(video_source)), SPA_PARAM_BUFFERS_stride,
         SPA_POD_Int((int32_t)offered_stride_bytes(video_source)), SPA_PARAM_BUFFERS_align,
@@ -297,7 +299,7 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
 /// still in use.
 static int32_t first_free_slot(const struct StreamLibPipeWireVideoSource *video_source)
 {
-    for (uint32_t index = 0; index < video_source->buffer_count; index++) {
+    for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
         if (video_source->slots[index].pipewire_buffer == NULL)
             return (int32_t)index;
     }
@@ -600,7 +602,7 @@ int32_t streamlib_pipewire_video_source_dequeue_slot(
     // it — so holding it is the only way a failed frame does not become the
     // previous picture republished under a new consumer's eyes.
     int32_t slot = -1;
-    for (uint32_t index = 0; index < video_source->buffer_count; index++) {
+    for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
         if (video_source->slots[index].dequeued_buffer != NULL) {
             slot = (int32_t)index;
             break;
