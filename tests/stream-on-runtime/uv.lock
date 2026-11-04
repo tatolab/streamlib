@@ -1877,7 +1877,7 @@ test = [{ name = "pytest", specifier = ">=7.0" }]
 
 [[package]]
 name = "tatolab-h264"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/streamlib-h264" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1888,7 +1888,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-h265"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/streamlib-h265" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1899,7 +1899,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-microphone"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-microphone" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1910,7 +1910,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-opus"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-opus" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1921,7 +1921,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.7" }]
 
 [[package]]
 name = "tatolab-speaker"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-speaker" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1932,7 +1932,7 @@ requires-dist = [{ name = "tatolab-stream", specifier = ">=0.47.0" }]
 
 [[package]]
 name = "tatolab-stream"
-version = "0.68.19"
+version = "0.68.20"
 source = { editable = "../../sdk/tatolab-stream" }
 dependencies = [
     { name = "msgpack" },
@@ -1952,7 +1952,7 @@ test = [
 
 [[package]]
 name = "tatolab-testpattern"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-testpattern" }
 dependencies = [
     { name = "tatolab-stream" },
@@ -1966,7 +1966,7 @@ test = [{ name = "pytest", specifier = ">=7.0" }]
 
 [[package]]
 name = "tatolab-virtualcamera"
-version = "0.68.19"
+version = "0.68.20"
 source = { directory = "../../packages/tatolab-virtualcamera" }
 dependencies = [
     { name = "tatolab-stream" },
