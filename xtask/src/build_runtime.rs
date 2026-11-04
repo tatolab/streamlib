@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
 };
-pub(crate) use runtime_unit_layout::browser_host_executable_beside_the_lend;
+pub(crate) use runtime_unit_layout::browser_host_directory_beside_the_lend;
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
     RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME, lend_directory_in_the_runtime_unit,

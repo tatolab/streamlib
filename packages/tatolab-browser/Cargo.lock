@@ -1110,6 +1110,7 @@ version = "0.1.0"
 dependencies = [
  "cef",
  "libc",
+ "objc2",
  "tatolab-browser-page-bridge",
  "tatolab-browser-tab-protocol",
  "tracing",

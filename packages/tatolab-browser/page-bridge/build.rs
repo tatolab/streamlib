@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
-//! The subprocess binary sits inside the CEF runtime, beside `libcef.so`.
+//! On Linux the subprocess binary sits inside the CEF runtime, beside
+//! `libcef.so`; on macOS it loads CEF's framework from its app bundle.
 
 fn main() {
-    println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    }
 }

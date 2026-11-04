@@ -36,14 +36,18 @@ Linux only for now. Frames cross the CPU once per paint; zero-copy is next.
 ## Build it
 
 The wheel itself carries no CEF. The browser host, its CEF subprocess and the
-CEF runtime ship in the runtime unit, under `lib/tatolab/browser-host/`.
+CEF runtime ship in the runtime unit, under `lib/tatolab/browser-host/`: on
+Linux side by side, on macOS as `tatolab-browser-host.app`, with CEF's
+framework and the subprocess as the helper apps CEF launches inside it.
+`python3 -I scripts/fetch_cef_binary_distribution.py <directory>` lays out the
+distribution for this machine, licence included, for `CEF_PATH`.
 Building them needs CEF's binary distribution, the one `cef-dll-sys` links
 against. `export-cef-dir`, which fetches it for `cef-dll-sys`, leaves out the
 distribution's `LICENSE.txt`; copy it into `$CEF_PATH` from the official
 `cef_binary_*_linux64_minimal` archive:
 
 ```bash
-export CEF_PATH=/path/to/cef   # the directory holding libcef.so and LICENSE.txt
+export CEF_PATH=/path/to/cef   # holding libcef.so (or the macOS framework) and LICENSE.txt
 cargo xtask build-runtime      # stages the browser host when CEF_PATH is set
 uvx maturin@1.9.6 build --release   # in packages/tatolab-browser
 ```

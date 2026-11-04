@@ -10,6 +10,8 @@
 //! the host.
 
 mod browser_host_cef_thread;
+#[cfg(target_os = "macos")]
+mod browser_host_macos_application;
 mod browser_host_page_handlers;
 mod browser_host_tab;
 mod browser_host_tab_connections;
@@ -97,6 +99,10 @@ fn run_the_browser_host(command_line: &BrowserHostCommandLine) -> Result<(), Str
         .state_directory
         .join(CEF_ROOT_CACHE_DIRECTORY_NAME);
     request_a_stop_on_sigterm_and_sigint();
+    #[cfg(target_os = "macos")]
+    let _cef_framework = browser_host_macos_application::load_the_cef_framework_of_this_bundle()?;
+    #[cfg(target_os = "macos")]
+    browser_host_macos_application::make_the_shared_application_a_cef_application()?;
     let (cef_thread_requests, requests_to_serve) = cef_thread_request_channel();
     initialize_cef(
         &cef_runtime_directory,

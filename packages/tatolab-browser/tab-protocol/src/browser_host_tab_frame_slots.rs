@@ -260,11 +260,14 @@ mod tests {
         assert!(unsafe { node_side.slot(3) }.is_none());
     }
 
+    /// A slot a whole page long, since macOS rounds a shared memory object
+    /// up to its page size.
     #[test]
     fn slots_short_of_the_extent_are_refused() {
-        let host_side = BrowserHostTabFrameSlots::create(1, 4, 2).unwrap();
+        let (width, height) = (128, 64);
+        let host_side = BrowserHostTabFrameSlots::create(1, width, height).unwrap();
         let handed_over = duplicate_descriptor(host_side.shared_memory_descriptor());
-        let refusal = BrowserHostTabFrameSlots::map_handed_over(handed_over, 2, 4, 2)
+        let refusal = BrowserHostTabFrameSlots::map_handed_over(handed_over, 2, width, height)
             .err()
             .unwrap();
         assert!(refusal.to_string().contains("short of"), "{refusal}");

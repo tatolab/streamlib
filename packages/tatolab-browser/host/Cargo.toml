@@ -20,3 +20,6 @@ tatolab-browser-page-bridge = { path = "../page-bridge" }
 tatolab-browser-tab-protocol = { path = "../tab-protocol" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
