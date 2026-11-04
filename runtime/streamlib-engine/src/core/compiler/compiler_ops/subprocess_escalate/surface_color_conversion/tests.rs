@@ -703,9 +703,19 @@ fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
         return;
     };
     let service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
-    let source = gpu
-        .acquire_render_target_dma_buf_image(PIXEL_WIDTH, PIXEL_HEIGHT, TextureFormat::Rgba8Unorm)
-        .expect("a render-target DMA-BUF image");
+    let source = match gpu.acquire_render_target_dma_buf_image(
+        PIXEL_WIDTH,
+        PIXEL_HEIGHT,
+        TextureFormat::Rgba8Unorm,
+    ) {
+        Ok(source) => source,
+        Err(refusal) if refusal.to_string().contains("no RT-capable DRM modifier") => {
+            println!("the driver offers no render-target DRM modifier ({refusal}) — skipping");
+            service.stop();
+            return;
+        }
+        Err(refusal) => panic!("a render-target DMA-BUF image: {refusal}"),
+    };
     if source.vulkan_inner().chosen_drm_format_modifier() == 0 {
         println!("the driver chose the linear modifier, so nothing here is tiled — skipping");
         service.stop();
