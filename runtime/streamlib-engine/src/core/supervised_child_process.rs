@@ -122,6 +122,7 @@ impl SupervisedChildProcess {
                 let stopping = Arc::clone(&stopping);
                 let running_child_process_id = Arc::clone(&running_child_process_id);
                 move || {
+                    let mut last_started_process_id = None;
                     let ended_by = keep_the_child_running(
                         &launch,
                         &readiness_probe,
@@ -129,8 +130,11 @@ impl SupervisedChildProcess {
                         &stopping,
                         &running_child_process_id,
                         &woken,
+                        &mut last_started_process_id,
                     );
-                    let _ = std::fs::remove_file(&launch.pidfile_path);
+                    if let Some(process_id) = last_started_process_id {
+                        remove_the_pidfile_while_it_names(&launch.pidfile_path, process_id);
+                    }
                     report(ended_by);
                 }
             })?;
@@ -226,6 +230,7 @@ fn keep_the_child_running(
     stopping: &AtomicBool,
     running_child_process_id: &Mutex<Option<u32>>,
     woken: &mpsc::Receiver<()>,
+    last_started_process_id: &mut Option<u32>,
 ) -> SupervisedChildProcessEvent {
     let mut restart_backoff = ChildProcessRestartBackoff::new();
     loop {
@@ -239,6 +244,7 @@ fn keep_the_child_running(
                     let process_id = child.id();
                     *running = Some(process_id);
                     drop(running);
+                    *last_started_process_id = Some(process_id);
                     write_the_pidfile(launch, process_id);
                     tracing::info!(
                         "{} {process_id} is running from {}",
@@ -417,6 +423,16 @@ fn write_the_pidfile(launch: &SupervisedChildProcessLaunch, process_id: u32) {
             launch.child_name_for_the_log,
             launch.pidfile_path.display()
         );
+    }
+}
+
+/// Remove `pidfile_path` only while it still holds `process_id`, so a
+/// successor supervisor's pidfile for the same service is kept.
+fn remove_the_pidfile_while_it_names(pidfile_path: &Path, process_id: u32) {
+    let names_the_process = std::fs::read_to_string(pidfile_path)
+        .is_ok_and(|pidfile| pidfile.trim().parse::<u32>() == Ok(process_id));
+    if names_the_process {
+        let _ = std::fs::remove_file(pidfile_path);
     }
 }
 
@@ -618,6 +634,33 @@ mod tests {
                 SupervisedChildProcessEvent::Ready,
                 SupervisedChildProcessEvent::Stopped,
             ]
+        );
+    }
+
+    #[test]
+    fn stopping_keeps_a_pidfile_a_successor_rewrote() {
+        let directory = tempfile::tempdir().unwrap();
+        let launch = launch_in(
+            directory.path(),
+            a_stand_in_child_executable(directory.path()),
+            false,
+        );
+        let mut supervisor =
+            SupervisedChildProcess::start(launch.clone(), Box::new(|| true), Box::new(|_| {}))
+                .unwrap();
+        assert!(wait_until(Duration::from_secs(10), || {
+            supervisor.running_child_process_id().is_some() && launch.pidfile_path.is_file()
+        }));
+        let successor_process_id = supervisor.running_child_process_id().unwrap() + 1;
+        std::fs::write(&launch.pidfile_path, format!("{successor_process_id}\n")).unwrap();
+
+        supervisor.stop();
+
+        assert_eq!(
+            std::fs::read_to_string(&launch.pidfile_path)
+                .unwrap()
+                .trim(),
+            successor_process_id.to_string()
         );
     }
 
