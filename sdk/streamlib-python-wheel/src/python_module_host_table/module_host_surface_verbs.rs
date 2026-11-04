@@ -504,8 +504,10 @@ impl SurfacesLentToNativeCode {
         use crate::python_helper_process_pixel_exchange::CpuReadbackCopyDirection;
 
         let source_surface_id = self.surface_id_of_a_handle(source)?;
+        // SAFETY: the module host table lends the memory to fill for this verb
+        // alone, and nothing else views it while the verb runs.
         let (destination_format, destination_bytes) =
-            four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)?;
+            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(*pixels_to_fill) }?;
         let native_escalate_channel = self.native_escalate_channel()?;
         let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
             "this helper was started without its surface-share socket, so it reaches no \
@@ -536,7 +538,7 @@ impl SurfacesLentToNativeCode {
                 format: staging.format,
                 width: staging.width,
                 height: staging.height,
-                row_stride_bytes: u64::from(staging.bytes_per_row),
+                row_stride_bytes: staging.bytes_per_row,
             },
             destination_format,
             pixels_to_fill.row_stride_bytes,
@@ -558,8 +560,10 @@ impl SurfacesLentToNativeCode {
         use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 
         let source_surface_id = self.surface_id_of_a_handle(source)?;
+        // SAFETY: the module host table lends the memory to fill for this verb
+        // alone, and nothing else views it while the verb runs.
         let (destination_format, destination_bytes) =
-            four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)?;
+            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(*pixels_to_fill) }?;
         let surface_share_client = self.surface_share_client.as_ref().ok_or_else(|| {
             "this helper was started without its surface-share connection, so it reaches no \
              IOSurface to read host memory from"
@@ -607,7 +611,7 @@ impl SurfacesLentToNativeCode {
                 format: source_view.format,
                 width: source_view.width,
                 height: source_view.height,
-                row_stride_bytes: u64::from(source_view.bytes_per_row),
+                row_stride_bytes: source_view.bytes_per_row,
             },
             destination_format,
             pixels_to_fill.row_stride_bytes,
@@ -738,10 +742,14 @@ fn four_byte_pixel_rows_handed_by_the_module(
     })
 }
 
+/// # Safety
+/// The module lends `pixels_to_fill.pixels` mutably for the call, and no other
+/// view of those bytes is live while the returned slice is, which lives no
+/// longer than the call.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn four_byte_pixel_memory_handed_by_the_module_to_fill(
-    pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
-) -> Result<(streamlib::sdk::rhi::PixelFormat, &mut [u8]), String> {
+unsafe fn four_byte_pixel_memory_handed_by_the_module_to_fill<'lent>(
+    pixels_to_fill: ModuleHostTableHostMemoryPixelsToFill,
+) -> Result<(streamlib::sdk::rhi::PixelFormat, &'lent mut [u8]), String> {
     // SAFETY: the SDK hands a view live for the call.
     let format_name = unsafe { pixels_to_fill.pixel_format.as_str() }
         .map_err(|_| "the pixel format name is not UTF-8".to_string())?;
