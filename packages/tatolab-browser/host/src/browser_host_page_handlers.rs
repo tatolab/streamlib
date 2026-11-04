@@ -88,19 +88,46 @@ wrap_render_handler! {
     }
 }
 
-/// The texture `info` describes, cut to the tab's extent, or `None` when CEF
-/// painted something the node cannot import.
+/// The pixel format wire name of what CEF painted, or `None` for one the node
+/// cannot import.
+fn painted_pixel_format_of(info: &AcceleratedPaintInfo) -> Option<&'static str> {
+    if info.format == ColorType::BGRA_8888 {
+        Some("bgra32")
+    } else if info.format == ColorType::RGBA_8888 {
+        Some("rgba32")
+    } else {
+        None
+    }
+}
+
+/// The IOSurface `info` names, at the tab's extent, or `None` when CEF
+/// painted something the node cannot import; the runtime refuses one smaller
+/// than the extent.
+#[cfg(target_os = "macos")]
 fn painted_texture_of_the_page(
     info: &AcceleratedPaintInfo,
     tab: &BrowserHostTab,
 ) -> Option<PaintedTextureOfThePage> {
-    let pixel_format = if info.format == ColorType::BGRA_8888 {
-        "bgra32"
-    } else if info.format == ColorType::RGBA_8888 {
-        "rgba32"
-    } else {
+    let pixel_format = painted_pixel_format_of(info)?;
+    if info.shared_texture_io_surface.is_null() {
         return None;
-    };
+    }
+    Some(PaintedTextureOfThePage {
+        width: tab.tab_request.width,
+        height: tab.tab_request.height,
+        pixel_format,
+        iosurface: info.shared_texture_io_surface.cast_const(),
+    })
+}
+
+/// The texture `info` describes, cut to the tab's extent, or `None` when CEF
+/// painted something the node cannot import.
+#[cfg(target_os = "linux")]
+fn painted_texture_of_the_page(
+    info: &AcceleratedPaintInfo,
+    tab: &BrowserHostTab,
+) -> Option<PaintedTextureOfThePage> {
+    let pixel_format = painted_pixel_format_of(info)?;
     let plane_count = usize::try_from(info.plane_count).ok()?;
     let planes = info
         .planes

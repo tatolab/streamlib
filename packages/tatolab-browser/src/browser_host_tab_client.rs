@@ -10,7 +10,9 @@
 //! opened again in the new one.
 
 use std::collections::VecDeque;
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,19 +26,26 @@ use tatolab_browser_tab_protocol::{
     TabProtocolMessageFromNode, TabProtocolMessageReader, TabProtocolMessageWriter,
     TabProtocolSocketFailure,
 };
+#[cfg(target_os = "macos")]
+use tatolab_browser_tab_protocol::{PaintedIOSurfaceReceiverOfTheNode, RetainedPaintedIOSurface};
+#[cfg(target_os = "linux")]
+use tatolab_module_sdk::ModuleHostForeignDmaBuf;
+#[cfg(target_os = "macos")]
+use tatolab_module_sdk::ModuleHostForeignIOSurface;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostColorInfo, ModuleHostForeignDmaBuf, ModuleHostHostMemoryPixels,
-    ModuleHostInputPort, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
-    ModuleHostOutputPort, ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,
-    ModuleHostSurface,
+    ModuleHost, ModuleHostColorInfo, ModuleHostHostMemoryPixels, ModuleHostInputPort,
+    ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort,
+    ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState, ModuleHostSurface,
 };
 
 use crate::page_audio_blocks::PageAudioStreamTimeline;
 use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
 };
+#[cfg(target_os = "linux")]
+use crate::painted_textures_adopted_by_the_node::PaintedTextureDmaBufIdentity;
 use crate::painted_textures_adopted_by_the_node::{
-    PaintedTextureDmaBufIdentity, PaintedTextureLayout, PaintedTexturesAdoptedByTheNode,
+    PaintedTextureIdentity, PaintedTextureLayout, PaintedTexturesAdoptedByTheNode,
 };
 use crate::video_frame_record::PaintedPageVideoFrame;
 
@@ -80,6 +89,18 @@ const MOST_PAINTED_TEXTURE_COPIES_FAILED_IN_A_ROW: u32 = 30;
 /// over before it opens again painting into frame slots.
 const FIRST_PAINTED_TEXTURE_BUDGET: Duration = Duration::from_secs(10);
 
+/// How long a node waits for the IOSurface a `TexturePainted` names to cross
+/// its Mach port, which the host sends it on first.
+#[cfg(target_os = "macos")]
+const PAINTED_IOSURFACE_ARRIVAL_BUDGET: Duration = Duration::from_millis(100);
+
+/// What a painted texture the node adopted is kept alive by: the DMA-BUF it
+/// was handed over as on Linux, the IOSurface on macOS.
+#[cfg(target_os = "linux")]
+type PaintedTextureKeptAliveBy = File;
+#[cfg(target_os = "macos")]
+type PaintedTextureKeptAliveBy = RetainedPaintedIOSurface;
+
 /// Why a connection to the host stopped being served.
 enum BrowserHostConnectionEnd {
     /// The host or the node ended it.
@@ -91,6 +112,8 @@ enum BrowserHostConnectionEnd {
 
 /// One texture the host handed over with `TexturePainted`.
 struct PaintedTextureHandedOver {
+    #[cfg(target_os = "macos")]
+    painted_texture_number: u64,
     width: u32,
     height: u32,
     pixel_format: String,
@@ -171,7 +194,12 @@ struct BrowserHostTabOfOneNode {
 struct OpenBrowserHostTabConnection {
     reader: TabProtocolMessageReader,
     frame_slots: BrowserHostTabFrameSlots,
-    painted_textures_adopted: PaintedTexturesAdoptedByTheNode<ModuleHostSurface>,
+    painted_textures_adopted:
+        PaintedTexturesAdoptedByTheNode<ModuleHostSurface, PaintedTextureKeptAliveBy>,
+    /// The Mach port painted IOSurfaces cross on, for a tab asked to paint
+    /// into textures.
+    #[cfg(target_os = "macos")]
+    painted_iosurface_receiver: Option<PaintedIOSurfaceReceiverOfTheNode>,
     painted_texture_copies_failed_in_a_row: u32,
     /// When the first painted texture is due, until one arrives; `None` for a
     /// tab painting into frame slots.
@@ -244,11 +272,20 @@ impl BrowserHostTabOfOneNode {
         let mut reader = TabProtocolMessageReader::over(socket);
         let mut writer = TabProtocolMessageWriter::over(writing_half)
             .sending_within(SEND_TO_THE_BROWSER_HOST_BUDGET);
+        let paints_into_painted_textures =
+            self.paints_into_painted_textures.load(Ordering::Acquire);
+        #[cfg(target_os = "macos")]
+        let painted_iosurface_receiver = paints_into_painted_textures
+            .then(checked_in_painted_iosurface_receiver)
+            .transpose()?;
         let tab_request = BrowserHostTabRequest {
-            paint_into_shared_textures: self.paints_into_painted_textures.load(Ordering::Acquire),
+            paint_into_shared_textures: paints_into_painted_textures,
+            #[cfg(target_os = "macos")]
+            painted_iosurface_mach_service_name: painted_iosurface_receiver
+                .as_ref()
+                .map(|(service_name, _)| service_name.clone()),
             ..self.tab_request.clone()
         };
-        let paints_into_painted_textures = tab_request.paint_into_shared_textures;
         writer
             .send(
                 &TabProtocolMessageFromNode::OpenTab {
@@ -305,6 +342,8 @@ impl BrowserHostTabOfOneNode {
             reader,
             frame_slots,
             painted_textures_adopted: PaintedTexturesAdoptedByTheNode::default(),
+            #[cfg(target_os = "macos")]
+            painted_iosurface_receiver: painted_iosurface_receiver.map(|(_, receiver)| receiver),
             painted_texture_copies_failed_in_a_row: 0,
             first_painted_texture_deadline: paints_into_painted_textures
                 .then(|| Instant::now() + FIRST_PAINTED_TEXTURE_BUDGET),
@@ -377,6 +416,8 @@ impl BrowserHostTabOfOneNode {
                     let published = self.publish_the_painted_texture(
                         connection,
                         PaintedTextureHandedOver {
+                            #[cfg(target_os = "macos")]
+                            painted_texture_number,
                             width,
                             height,
                             pixel_format,
@@ -478,59 +519,10 @@ impl BrowserHostTabOfOneNode {
         connection: &mut OpenBrowserHostTabConnection,
         painted: PaintedTextureHandedOver,
     ) -> Result<(), String> {
-        let mut plane_dma_bufs = Vec::with_capacity(painted.plane_offsets_bytes.len());
-        for _ in 0..painted.plane_offsets_bytes.len() {
-            let plane_dma_buf =
-                connection
-                    .reader
-                    .take_attached_descriptor()
-                    .map_err(|failure| {
-                        format!("a painted texture's plane did not arrive: {failure}")
-                    })?;
-            plane_dma_bufs.push(File::from(plane_dma_buf));
-        }
-        if self.closing.load(Ordering::Acquire) {
+        let (width, height) = (painted.width, painted.height);
+        let Some(adopted_surface) = self.adopt_the_painted_texture(connection, painted)? else {
             return Ok(());
-        }
-        let dma_buf_identity = the_one_dma_buf_every_plane_lives_in(&plane_dma_bufs)?;
-        let Some(dma_buf) = plane_dma_bufs.into_iter().next() else {
-            return Err("a painted texture was handed over with no plane".to_string());
         };
-        let layout = PaintedTextureLayout {
-            dma_buf_identity,
-            width: painted.width,
-            height: painted.height,
-            pixel_format: painted.pixel_format,
-            allocation_byte_size: painted.allocation_byte_size,
-            plane_offsets_bytes: painted.plane_offsets_bytes,
-            plane_strides_bytes: painted.plane_strides_bytes,
-            drm_format_modifier: painted.drm_format_modifier,
-        };
-        let (width, height) = (layout.width, layout.height);
-        let adopted_layout = layout.clone();
-        let adopted_surface =
-            connection
-                .painted_textures_adopted
-                .adopted_or_adopt(layout, dma_buf, |dma_buf| {
-                    self.module_host
-                        .import_dma_buf(&ModuleHostForeignDmaBuf {
-                            fd: dma_buf.as_raw_fd(),
-                            width: adopted_layout.width,
-                            height: adopted_layout.height,
-                            pixel_format: &adopted_layout.pixel_format,
-                            allocation_byte_size: adopted_layout.allocation_byte_size,
-                            plane_offsets_bytes: &adopted_layout.plane_offsets_bytes,
-                            plane_strides_bytes: &adopted_layout.plane_strides_bytes,
-                            drm_format_modifier: adopted_layout.drm_format_modifier,
-                        })
-                        .map_err(|refusal| {
-                            format!(
-                                "the runtime did not adopt the {} texture the page painted into \
-                             (DRM format modifier {:#x}): {refusal}",
-                                adopted_layout.pixel_format, adopted_layout.drm_format_modifier
-                            )
-                        })
-                })?;
         let painted_frame_texture = match self.acquire_a_painted_frame_texture(width, height) {
             Ok(painted_frame_texture) => painted_frame_texture,
             Err(refusal) => {
@@ -570,6 +562,130 @@ impl BrowserHostTabOfOneNode {
             Err(refusal) => self.drop_a_frame(&refusal),
         }
         Ok(())
+    }
+
+    /// The surface the DMA-BUF texture `painted` names was adopted as,
+    /// adopting it the first time; `None` while the node closes.
+    #[cfg(target_os = "linux")]
+    fn adopt_the_painted_texture<'adopted>(
+        &self,
+        connection: &'adopted mut OpenBrowserHostTabConnection,
+        painted: PaintedTextureHandedOver,
+    ) -> Result<Option<&'adopted ModuleHostSurface>, String> {
+        let mut plane_dma_bufs = Vec::with_capacity(painted.plane_offsets_bytes.len());
+        for _ in 0..painted.plane_offsets_bytes.len() {
+            let plane_dma_buf =
+                connection
+                    .reader
+                    .take_attached_descriptor()
+                    .map_err(|failure| {
+                        format!("a painted texture's plane did not arrive: {failure}")
+                    })?;
+            plane_dma_bufs.push(File::from(plane_dma_buf));
+        }
+        if self.closing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let dma_buf_identity = the_one_dma_buf_every_plane_lives_in(&plane_dma_bufs)?;
+        let Some(dma_buf) = plane_dma_bufs.into_iter().next() else {
+            return Err("a painted texture was handed over with no plane".to_string());
+        };
+        let layout = PaintedTextureLayout {
+            painted_texture_identity: PaintedTextureIdentity::DmaBuf(dma_buf_identity),
+            width: painted.width,
+            height: painted.height,
+            pixel_format: painted.pixel_format,
+            allocation_byte_size: painted.allocation_byte_size,
+            plane_offsets_bytes: painted.plane_offsets_bytes,
+            plane_strides_bytes: painted.plane_strides_bytes,
+            drm_format_modifier: painted.drm_format_modifier,
+        };
+        let adopted_layout = layout.clone();
+        connection
+            .painted_textures_adopted
+            .adopted_or_adopt(layout, dma_buf, |dma_buf| {
+                self.module_host
+                    .import_dma_buf(&ModuleHostForeignDmaBuf {
+                        fd: dma_buf.as_raw_fd(),
+                        width: adopted_layout.width,
+                        height: adopted_layout.height,
+                        pixel_format: &adopted_layout.pixel_format,
+                        allocation_byte_size: adopted_layout.allocation_byte_size,
+                        plane_offsets_bytes: &adopted_layout.plane_offsets_bytes,
+                        plane_strides_bytes: &adopted_layout.plane_strides_bytes,
+                        drm_format_modifier: adopted_layout.drm_format_modifier,
+                    })
+                    .map_err(|refusal| {
+                        format!(
+                            "the runtime did not adopt the {} texture the page painted into \
+                             (DRM format modifier {:#x}): {refusal}",
+                            adopted_layout.pixel_format, adopted_layout.drm_format_modifier
+                        )
+                    })
+            })
+            .map(Some)
+    }
+
+    /// The surface the IOSurface `painted` names was adopted as, adopting it
+    /// the first time; `None` while the node closes.
+    #[cfg(target_os = "macos")]
+    fn adopt_the_painted_texture<'adopted>(
+        &self,
+        connection: &'adopted mut OpenBrowserHostTabConnection,
+        painted: PaintedTextureHandedOver,
+    ) -> Result<Option<&'adopted ModuleHostSurface>, String> {
+        let receiver = connection
+            .painted_iosurface_receiver
+            .as_ref()
+            .ok_or_else(|| {
+                "the browser host painted a texture into a tab with no Mach port for it".to_string()
+            })?;
+        let iosurface = receiver
+            .receive_painted_iosurface_numbered(
+                painted.painted_texture_number,
+                PAINTED_IOSURFACE_ARRIVAL_BUDGET,
+            )
+            .map_err(|failure| {
+                format!(
+                    "the IOSurface of painted texture {} did not arrive: {failure}",
+                    painted.painted_texture_number
+                )
+            })?;
+        if self.closing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let layout = PaintedTextureLayout {
+            painted_texture_identity: PaintedTextureIdentity::IOSurface {
+                iosurface_id: iosurface.iosurface_id(),
+            },
+            width: painted.width,
+            height: painted.height,
+            pixel_format: painted.pixel_format,
+            allocation_byte_size: painted.allocation_byte_size,
+            plane_offsets_bytes: painted.plane_offsets_bytes,
+            plane_strides_bytes: painted.plane_strides_bytes,
+            drm_format_modifier: painted.drm_format_modifier,
+        };
+        let adopted_layout = layout.clone();
+        connection
+            .painted_textures_adopted
+            .adopted_or_adopt(layout, iosurface, |iosurface| {
+                self.module_host
+                    .import_iosurface(&ModuleHostForeignIOSurface {
+                        iosurface: iosurface.as_iosurface_ref(),
+                        pixel_format: &adopted_layout.pixel_format,
+                        width: adopted_layout.width,
+                        height: adopted_layout.height,
+                    })
+                    .map_err(|refusal| {
+                        format!(
+                            "the runtime did not adopt the {} IOSurface the page painted into: \
+                             {refusal}",
+                            adopted_layout.pixel_format
+                        )
+                    })
+            })
+            .map(Some)
     }
 
     fn publish_the_frame_in_slot(
@@ -872,6 +988,7 @@ impl BrowserHostTabOfOneNode {
 
 /// The one DMA-BUF every plane of a painted texture lives in; the runtime
 /// adopts a texture from one descriptor.
+#[cfg(target_os = "linux")]
 fn the_one_dma_buf_every_plane_lives_in(
     plane_dma_bufs: &[File],
 ) -> Result<PaintedTextureDmaBufIdentity, String> {
@@ -890,6 +1007,24 @@ fn the_one_dma_buf_every_plane_lives_in(
         }
     }
     Ok(first_identity)
+}
+
+/// A Mach port checked in under a name no other tab of this process holds,
+/// with the name the browser host looks it up by.
+#[cfg(target_os = "macos")]
+fn checked_in_painted_iosurface_receiver()
+-> Result<(String, PaintedIOSurfaceReceiverOfTheNode), String> {
+    static PAINTED_IOSURFACE_RECEIVERS_CHECKED_IN: AtomicU64 = AtomicU64::new(0);
+    let service_name = format!(
+        "com.tatolab.browser.paint.{}.{}",
+        std::process::id(),
+        PAINTED_IOSURFACE_RECEIVERS_CHECKED_IN.fetch_add(1, Ordering::Relaxed)
+    );
+    let receiver =
+        PaintedIOSurfaceReceiverOfTheNode::check_in(&service_name).map_err(|failure| {
+            format!("the Mach port painted IOSurfaces cross on was not checked in: {failure}")
+        })?;
+    Ok((service_name, receiver))
 }
 
 fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
@@ -934,6 +1069,7 @@ impl BrowserPageRendering {
             audio_sample_rate: config.audio_sample_rate,
             frame_slot_count: BROWSER_HOST_TAB_FRAME_SLOT_COUNT,
             paint_into_shared_textures: true,
+            painted_iosurface_mach_service_name: None,
         };
         tab_request.refuse_what_cef_cannot_render()?;
         let tab = Arc::new(BrowserHostTabOfOneNode {
