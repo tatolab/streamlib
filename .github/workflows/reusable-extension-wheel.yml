@@ -59,6 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        platform: [manylinux, aarch64-apple-darwin]
         include:
           - platform: manylinux
             runner: ubuntu-latest
