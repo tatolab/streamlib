@@ -20,6 +20,9 @@ use crate::browser_host_tab::{BrowserHostTab, BrowserHostTabId};
 
 /// How long a new connection has to send its `OpenTab`.
 const OPEN_TAB_REQUEST_BUDGET: Duration = Duration::from_secs(10);
+/// How long a send to a node may block before its connection is ended, so a
+/// node that stops reading never stalls the CEF thread every tab shares.
+const SEND_TO_THE_NODE_BUDGET: Duration = Duration::from_secs(1);
 
 /// Accept tab connections on `listener` for the life of the host, each served
 /// on a thread of its own.
@@ -49,8 +52,11 @@ fn serve_one_tab_connection(
     connection: UnixStream,
     cef_thread_requests: &CefThreadRequestSender,
 ) {
-    if let Err(failure) = connection.set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET)) {
-        tracing::warn!("tab {tab_id}'s connection takes no read timeout: {failure}");
+    let timeouts_set = connection
+        .set_read_timeout(Some(OPEN_TAB_REQUEST_BUDGET))
+        .and_then(|()| connection.set_write_timeout(Some(SEND_TO_THE_NODE_BUDGET)));
+    if let Err(failure) = timeouts_set {
+        tracing::warn!("tab {tab_id}'s connection takes no timeouts: {failure}");
         return;
     }
     let split = connection
@@ -147,17 +153,6 @@ fn open_the_requested_tab(
             return None;
         }
     };
-    let frame_slots_descriptor = frame_slots.shared_memory_descriptor();
-    let opened_answer = TabProtocolMessageFromBrowserHost::TabOpened {
-        tab_protocol_version: TAB_PROTOCOL_VERSION,
-        browser_host_process_id: std::process::id(),
-    };
-    if writer
-        .send(&opened_answer, &[frame_slots_descriptor])
-        .is_err()
-    {
-        return None;
-    }
     let tab = Arc::new(BrowserHostTab::new(
         tab_id,
         tab_request,
@@ -165,11 +160,16 @@ fn open_the_requested_tab(
         frame_slots,
     ));
     let (opened, open_outcome) = std::sync::mpsc::sync_channel(1);
+    let refuse_the_open_tab = |reason: String| {
+        tracing::warn!("tab {tab_id} was refused: {reason}");
+        tab.send_to_the_node(&TabProtocolMessageFromBrowserHost::TabRefused { reason });
+        tab.end_the_connection();
+    };
     if !cef_thread_requests.send(CefThreadRequest::OpenTab {
         tab: Arc::clone(&tab),
         opened,
     }) {
-        tab.end_the_connection();
+        refuse_the_open_tab("the browser host is stopping".to_string());
         return None;
     }
     match open_outcome.recv() {
@@ -188,15 +188,11 @@ fn open_the_requested_tab(
             Some((tab, reader))
         }
         Ok(Err(reason)) => {
-            tab.log_to_the_node(
-                tatolab_browser_tab_protocol::BrowserHostTabLogLevel::Error,
-                reason,
-            );
-            tab.end_the_connection();
+            refuse_the_open_tab(reason);
             None
         }
         Err(_) => {
-            tab.end_the_connection();
+            refuse_the_open_tab("the browser host is stopping".to_string());
             None
         }
     }

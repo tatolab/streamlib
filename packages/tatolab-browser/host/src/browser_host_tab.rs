@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use tatolab_browser_tab_protocol::{
-    BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest,
+    BrowserHostTabFrameSlots, BrowserHostTabLogLevel, BrowserHostTabRequest, TAB_PROTOCOL_VERSION,
     TabProtocolMessageFromBrowserHost, TabProtocolMessageWriter,
 };
 
@@ -80,6 +80,26 @@ impl BrowserHostTab {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .send(message, &[]);
+        if sent.is_err() {
+            self.end_the_connection();
+        }
+    }
+
+    /// Tell the node its tab opened, handing it the frame slots; sent from the
+    /// CEF thread before it paints the page, so it is the node's first message.
+    pub fn answer_that_the_tab_opened(&self) {
+        let opened_answer = TabProtocolMessageFromBrowserHost::TabOpened {
+            tab_protocol_version: TAB_PROTOCOL_VERSION,
+            browser_host_process_id: std::process::id(),
+        };
+        let sent = self
+            .writer_to_the_node
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .send(
+                &opened_answer,
+                &[self.frame_slots.shared_memory_descriptor()],
+            );
         if sent.is_err() {
             self.end_the_connection();
         }

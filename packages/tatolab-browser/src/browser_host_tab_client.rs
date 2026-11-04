@@ -9,6 +9,7 @@
 //! none. When the host ends, the runtime starts it again and the tab is
 //! opened again in the new one.
 
+use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -56,6 +57,8 @@ const BROWSER_HOST_RECONNECT_POLL_INTERVAL: Duration = Duration::from_millis(250
 const BROWSER_HOST_RECONNECT_REPORT_INTERVAL: Duration = Duration::from_secs(30);
 
 const DATA_INPUT_WAIT: Duration = Duration::from_millis(50);
+/// How many `data` messages wait for a restarting browser host before the oldest is dropped.
+const MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY: usize = 256;
 const PAINTS_BETWEEN_REPORTS: u64 = 600;
 
 /// What a page is opened with.
@@ -697,9 +700,13 @@ fn deliver_data_messages_to_the_page(
     data_input_port: &ModuleHostInputPort,
 ) {
     let module_host = &tab.module_host;
-    let counters = &tab.counters;
     let delivery_stopped = || tab.closing.load(Ordering::Acquire) || module_host.stop_requested();
+    let mut held_while_the_browser_host_is_away = VecDeque::new();
     while !delivery_stopped() {
+        send_the_data_messages_held_for_the_browser_host(
+            tab,
+            &mut held_while_the_browser_host_is_away,
+        );
         match module_host.wait_for_any_input_port(DATA_INPUT_WAIT) {
             Ok(false) => continue,
             Ok(true) => {}
@@ -723,31 +730,60 @@ fn deliver_data_messages_to_the_page(
                     return;
                 }
             };
-            let refusal = match page_data_detail_json_of_msgpack_map(message.payload()) {
+            match page_data_detail_json_of_msgpack_map(message.payload()) {
                 Ok(detail_json) => {
-                    if tab.send_to_the_browser_host(&TabProtocolMessageFromNode::DeliverPageData {
-                        detail_json,
-                    }) {
-                        counters
-                            .data_messages_delivered
-                            .fetch_add(1, Ordering::Relaxed);
-                        continue;
+                    held_while_the_browser_host_is_away.push_back(detail_json);
+                    if held_while_the_browser_host_is_away.len()
+                        > MOST_DATA_MESSAGES_HELD_WHILE_THE_BROWSER_HOST_IS_AWAY
+                    {
+                        held_while_the_browser_host_is_away.pop_front();
+                        count_a_data_message_that_did_not_reach_the_page(
+                            tab,
+                            "the browser host is away, and the oldest data message held for it was dropped",
+                        );
                     }
-                    "the browser host is not connected".to_string()
+                    send_the_data_messages_held_for_the_browser_host(
+                        tab,
+                        &mut held_while_the_browser_host_is_away,
+                    );
                 }
-                Err(refusal) => refusal,
-            };
-            if counters
-                .data_messages_refused
-                .fetch_add(1, Ordering::Relaxed)
-                == 0
-            {
-                tab.log(
-                    ModuleHostLogLevel::Warn,
-                    &format!("a data message did not reach the page: {refusal}"),
-                );
+                Err(refusal) => count_a_data_message_that_did_not_reach_the_page(tab, &refusal),
             }
         }
+    }
+}
+
+/// Send the held `data` messages oldest first, keeping the rest held once a
+/// send fails because the browser host is away.
+fn send_the_data_messages_held_for_the_browser_host(
+    tab: &BrowserHostTabOfOneNode,
+    held_while_the_browser_host_is_away: &mut VecDeque<String>,
+) {
+    while let Some(detail_json) = held_while_the_browser_host_is_away.pop_front() {
+        let message = TabProtocolMessageFromNode::DeliverPageData { detail_json };
+        if !tab.send_to_the_browser_host(&message) {
+            if let TabProtocolMessageFromNode::DeliverPageData { detail_json } = message {
+                held_while_the_browser_host_is_away.push_front(detail_json);
+            }
+            return;
+        }
+        tab.counters
+            .data_messages_delivered
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn count_a_data_message_that_did_not_reach_the_page(tab: &BrowserHostTabOfOneNode, refusal: &str) {
+    if tab
+        .counters
+        .data_messages_refused
+        .fetch_add(1, Ordering::Relaxed)
+        == 0
+    {
+        tab.log(
+            ModuleHostLogLevel::Warn,
+            &format!("a data message did not reach the page: {refusal}"),
+        );
     }
 }
 

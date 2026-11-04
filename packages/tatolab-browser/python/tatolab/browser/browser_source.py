@@ -10,7 +10,8 @@ paints is written from host memory into a texture from the node's output pool
 and published as a `VideoFrame`; the page's audio is published on `audio`;
 every `data` message reaches the page as a `tatolab:data` DOM event, and every
 `window.tatolab.publish(object)` call is written to `events`. When the host
-ends, the runtime starts it again and the page opens again in it. Python runs
+ends, the runtime starts it again and the page opens again in it, receiving the
+latest 256 `data` messages that arrived meanwhile. Python runs
 at start and stop, never per frame.
 """
 

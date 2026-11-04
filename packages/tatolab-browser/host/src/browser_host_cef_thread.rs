@@ -253,6 +253,7 @@ pub fn serve_the_cef_thread_until_stopped(
                     &mut tenant_profiles,
                 )
                 .map(|browser| {
+                    tab.answer_that_the_tab_opened();
                     open_tabs.insert(
                         tab.tab_id,
                         OpenTab {
