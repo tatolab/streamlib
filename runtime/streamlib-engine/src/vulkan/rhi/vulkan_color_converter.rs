@@ -203,6 +203,42 @@ impl VulkanColorConverter {
         dst_stride_bytes: u32,
         info: &ResolvedColorInfo,
     ) -> Result<Arc<VulkanComputeKernel>> {
+        self.prepare_image_to_yuyv_destination(
+            src,
+            dst.byte_size(),
+            dst_stride_bytes,
+            info,
+            |kernel| kernel.set_storage_buffer_storage(1, dst),
+        )
+    }
+
+    /// [`PixelBuffer`](crate::core::rhi::PixelBuffer)-shape destination
+    /// variant of [`Self::prepare_image_to_yuyv_buffer`]: a `yuyv` pixel
+    /// buffer the CPU reads the converted picture from.
+    pub fn prepare_image_to_yuyv_pixel_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::PixelBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<Arc<VulkanComputeKernel>> {
+        self.prepare_image_to_yuyv_destination(
+            src,
+            dst.plane_size(0),
+            dst_stride_bytes,
+            info,
+            |kernel| kernel.set_storage_buffer_pixel(1, dst),
+        )
+    }
+
+    fn prepare_image_to_yuyv_destination(
+        &self,
+        src: &Texture,
+        dst_byte_size: u64,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+        bind_the_destination: impl FnOnce(&VulkanComputeKernel) -> Result<()>,
+    ) -> Result<Arc<VulkanComputeKernel>> {
         let (width, height) = (src.width(), src.height());
         if dst_stride_bytes < width * 2 || !dst_stride_bytes.is_multiple_of(4) {
             return Err(Error::Configuration(format!(
@@ -211,11 +247,10 @@ impl VulkanColorConverter {
             )));
         }
         let needed = u64::from(dst_stride_bytes) * u64::from(height);
-        if dst.byte_size() < needed {
+        if dst_byte_size < needed {
             return Err(Error::Configuration(format!(
-                "color converter image→YUYV: destination holds {} bytes but {height} rows of \
-                 {dst_stride_bytes} need {needed}",
-                dst.byte_size()
+                "color converter image→YUYV: destination holds {dst_byte_size} bytes but \
+                 {height} rows of {dst_stride_bytes} need {needed}"
             )));
         }
         let kernel = kernel_built_once(&self.image_to_yuyv_buffer_kernel, || {
@@ -229,7 +264,7 @@ impl VulkanColorConverter {
             )
         })?;
         kernel.set_sampled_texture(0, src)?;
-        kernel.set_storage_buffer_storage(1, dst)?;
+        bind_the_destination(&kernel)?;
         let push = ColorConverterPushConstants::from_resolved_for_rgb_to_ycbcr(
             info,
             width,
