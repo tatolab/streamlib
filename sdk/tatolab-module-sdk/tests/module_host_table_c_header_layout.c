@@ -98,7 +98,11 @@ _Static_assert(offsetof(ModuleHostTable, audio_playback_stream_close) == POINTER
 _Static_assert(offsetof(ModuleHostTable, surface_import_iosurface) == POINTER_SLOT(29), "ModuleHostTable.surface_import_iosurface");
 _Static_assert(offsetof(ModuleHostTable, surface_write_from_host_memory) == POINTER_SLOT(30), "ModuleHostTable.surface_write_from_host_memory");
 _Static_assert(offsetof(ModuleHostTable, surface_lend_by_surface_id) == POINTER_SLOT(31), "ModuleHostTable.surface_lend_by_surface_id");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(32), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_acquire) == POINTER_SLOT(32), "ModuleHostTable.shared_native_service_lease_acquire");
+_Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_state) == POINTER_SLOT(33), "ModuleHostTable.shared_native_service_lease_state");
+_Static_assert(offsetof(ModuleHostTable, shared_native_service_lease_release) == POINTER_SLOT(34), "ModuleHostTable.shared_native_service_lease_release");
+_Static_assert(offsetof(ModuleHostTable, node_fail_unrecoverably) == POINTER_SLOT(35), "ModuleHostTable.node_fail_unrecoverably");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(36), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -119,8 +123,12 @@ _Static_assert(sizeof(ModuleHostTableIOSurfaceImport) == 3 * POINTER + 8, "Modul
 _Static_assert(offsetof(ModuleHostTableHostMemoryPixels, width) == 4 * POINTER, "ModuleHostTableHostMemoryPixels.width");
 _Static_assert(offsetof(ModuleHostTableHostMemoryPixels, row_stride_bytes) == 4 * POINTER + 8, "ModuleHostTableHostMemoryPixels.row_stride_bytes");
 _Static_assert(sizeof(ModuleHostTableHostMemoryPixels) == 4 * POINTER + 16, "ModuleHostTableHostMemoryPixels size");
+_Static_assert(sizeof(ModuleHostTableSharedNativeServiceLeaseHandle) == 8, "ModuleHostTableSharedNativeServiceLeaseHandle size");
+_Static_assert(offsetof(ModuleHostTableSharedNativeServiceLease, endpoint_socket_path) == 8, "ModuleHostTableSharedNativeServiceLease.endpoint_socket_path");
+_Static_assert(offsetof(ModuleHostTableSharedNativeServiceLease, tenant_stream_id) == 8 + 2 * POINTER, "ModuleHostTableSharedNativeServiceLease.tenant_stream_id");
+_Static_assert(sizeof(ModuleHostTableSharedNativeServiceLease) == 8 + 4 * POINTER, "ModuleHostTableSharedNativeServiceLease size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 6, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 7, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");

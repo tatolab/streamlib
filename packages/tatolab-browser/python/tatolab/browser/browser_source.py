@@ -3,20 +3,22 @@
 
 """`BrowserSource`: a web page rendered offscreen by Chromium, as a stream source.
 
-`start()` lends the node's ports to this wheel's Rust, which runs CEF's browser
-process inside this helper. Each frame CEF paints is written from host memory
-into a texture from the node's output pool and published as a `VideoFrame`;
-the page's audio is published on `audio`; every `data` message reaches the
-page as a `tatolab:data` DOM event, and every `window.tatolab.publish(object)`
-call is written to `events`. CEF's child processes run the
-`tatolab-browser-subprocess` binary this wheel ships, never `sys.executable`,
-and die with the helper. Python runs at start and stop, never per frame.
+`start()` lends the node's ports to this wheel's Rust, which opens the page as
+a tab in the machine's browser host: one Chromium (CEF) the runtime runs for
+every stream, giving each stream a profile of its own. Each frame the host
+paints is written from host memory into a texture from the node's output pool
+and published as a `VideoFrame`; the page's audio is published on `audio`;
+every `data` message reaches the page as a `tatolab:data` DOM event, and every
+`window.tatolab.publish(object)` call is written to `events`. When the host
+ends, the runtime starts it again and the page opens again in it, receiving the
+latest `data` messages that arrived meanwhile, up to 256 of them and 64 MiB.
+A page the host can no longer render, or a host the runtime gives up on, fails
+the node. Python runs at start and stop, never per frame.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 from typing import Annotated
 
 from tatolab.stream import RuntimeContextFullAccess, VideoFrame, log, node
@@ -28,8 +30,6 @@ VIDEO_OUTPUT_PORT = "video"
 EVENTS_OUTPUT_PORT = "events"
 AUDIO_OUTPUT_PORT = "audio"
 DATA_INPUT_PORT = "data"
-
-CEF_RUNTIME_DIRECTORY = Path(__file__).resolve().parent / "cef"
 
 
 @dataclasses.dataclass
@@ -88,7 +88,6 @@ class BrowserSource:
         config = self._config
         self._rendering = _native.BrowserPageRendering(
             module_host_table,
-            str(CEF_RUNTIME_DIRECTORY),
             VIDEO_OUTPUT_PORT,
             EVENTS_OUTPUT_PORT,
             AUDIO_OUTPUT_PORT,
@@ -125,6 +124,7 @@ class BrowserSource:
             f"audio_blocks_published={rendering.audio_blocks_published} "
             f"events_published={rendering.events_published} "
             f"data_messages_delivered={rendering.data_messages_delivered} "
-            f"data_messages_refused={rendering.data_messages_refused}"
+            f"data_messages_refused={rendering.data_messages_refused} "
+            f"browser_host_reconnects={rendering.browser_host_reconnects}"
         )
         self._rendering = None

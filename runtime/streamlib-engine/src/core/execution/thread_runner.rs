@@ -861,14 +861,26 @@ fn run_manual_mode(
                         break;
                     }
                     Err(restart_refusal) => {
-                        next_helper_process_restart_at = after_a_helper_process_death(
-                            id,
-                            state,
-                            &mut restart_backoff,
-                            restart_refusal.to_string(),
-                            Duration::ZERO,
-                        );
-                        already_reported_failure = next_helper_process_restart_at.is_none();
+                        if let Some(reason_the_node_gave) =
+                            processor.lock().failure_the_node_reported_of_itself()
+                        {
+                            tracing::error!(
+                                "[{}] the node failed itself: {}",
+                                id,
+                                reason_the_node_gave
+                            );
+                            state.fail_with(reason_the_node_gave);
+                            already_reported_failure = true;
+                        } else {
+                            next_helper_process_restart_at = after_a_helper_process_death(
+                                id,
+                                state,
+                                &mut restart_backoff,
+                                restart_refusal.to_string(),
+                                Duration::ZERO,
+                            );
+                            already_reported_failure = next_helper_process_restart_at.is_none();
+                        }
                     }
                 }
             }
@@ -883,19 +895,32 @@ fn run_manual_mode(
             // died on its own is noticed here, by the process rather than by
             // its escalate socket, whose EOF a surviving descendant defers
             // indefinitely.
-            let (has_failed_unrecoverably, why_the_helper_process_died_on_its_own) = {
+            let (
+                failure_the_node_reported_of_itself,
+                has_failed_unrecoverably,
+                why_the_helper_process_died_on_its_own,
+            ) = {
                 let mut processor = processor.lock();
                 processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
                 (
+                    processor.failure_the_node_reported_of_itself(),
                     processor.has_failed_unrecoverably(),
                     processor.why_the_out_of_process_helper_died_on_its_own(),
                 )
             };
             match (
+                failure_the_node_reported_of_itself,
                 has_failed_unrecoverably,
                 why_the_helper_process_died_on_its_own,
             ) {
-                (_, Some(exit_reason)) => {
+                // A node that failed itself is not started again, even when
+                // its helper exits after saying so.
+                (Some(reason_the_node_gave), _, _) => {
+                    tracing::error!("[{}] the node failed itself: {}", id, reason_the_node_gave);
+                    state.fail_with(reason_the_node_gave);
+                    already_reported_failure = true;
+                }
+                (None, _, Some(exit_reason)) => {
                     helper_process_stopped_answering_at = None;
                     next_helper_process_restart_at = after_a_helper_process_death(
                         id,
@@ -906,7 +931,7 @@ fn run_manual_mode(
                     );
                     already_reported_failure = next_helper_process_restart_at.is_none();
                 }
-                (true, None) => {
+                (None, true, None) => {
                     // A helper that is exiting closes its escalate socket
                     // before its process can be collected; only one still
                     // there after the grace has stopped answering.
@@ -920,7 +945,7 @@ fn run_manual_mode(
                         already_reported_failure = true;
                     }
                 }
-                (false, None) => {}
+                (None, false, None) => {}
             }
         }
 

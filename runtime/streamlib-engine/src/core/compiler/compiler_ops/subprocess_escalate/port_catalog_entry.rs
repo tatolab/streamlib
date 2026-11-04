@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use super::failure_the_node_reported_of_itself::FailureTheNodeReportedOfItself;
+use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestReadInboundLinkCatalogEntry, EscalateRequestSetOutputPortCatalogEntry,
@@ -19,18 +21,22 @@ use crate::core::output_port_catalog_entries::{
     CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
 };
 
-/// The catalog entries of the node a helper-placed processor runs for: its own
-/// output ports' and the upstream ones its inbound links reach.
+/// What the node a helper-placed processor runs for reaches beside the GPU: its
+/// own output ports' catalog entries, the upstream ones its inbound links
+/// reach, the helper's leases on the runtime's shared native services, and
+/// the failure the node reported of itself.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct CatalogEntriesAHelperPlacedProcessorReaches {
+pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) catalog_entries_of_its_output_ports: Arc<CatalogEntriesOfOutputPorts>,
     pub(crate) upstream_catalog_entries_by_its_inbound_links:
         Arc<UpstreamCatalogEntriesByInboundLink>,
+    pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
+    pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
 }
 
 /// Replace the entry the helper's output port carries.
 pub(super) fn handle_set_output_port_catalog_entry(
-    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     rid: String,
     request: EscalateRequestSetOutputPortCatalogEntry,
 ) -> EscalateResponse {
@@ -40,7 +46,7 @@ pub(super) fn handle_set_output_port_catalog_entry(
         section,
         entry,
     } = request;
-    match catalog_entries
+    match what_the_node_reaches
         .catalog_entries_of_its_output_ports
         .replace_entry_of(&port, CatalogEntry { section, entry })
     {
@@ -58,7 +64,7 @@ pub(super) fn handle_set_output_port_catalog_entry(
 /// Answer with the current entry of the output port feeding the helper's input
 /// port, or with none.
 pub(super) fn handle_read_inbound_link_catalog_entry(
-    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     rid: String,
     request: EscalateRequestReadInboundLinkCatalogEntry,
 ) -> EscalateResponse {
@@ -67,7 +73,7 @@ pub(super) fn handle_read_inbound_link_catalog_entry(
         port,
         inbound_link,
     } = request;
-    match catalog_entries
+    match what_the_node_reaches
         .upstream_catalog_entries_by_its_inbound_links
         .catalog_entry_of_inbound_link(&port, inbound_link.as_deref())
     {
@@ -105,7 +111,7 @@ mod tests {
     }
 
     fn dispatched(
-        catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
         request: serde_json::Value,
     ) -> EscalateResponse {
         match serde_json::from_value::<EscalateRequest>(request)
@@ -113,14 +119,14 @@ mod tests {
         {
             EscalateRequest::SetOutputPortCatalogEntry(request) => {
                 handle_set_output_port_catalog_entry(
-                    catalog_entries,
+                    what_the_node_reaches,
                     request.request_id.clone(),
                     request,
                 )
             }
             EscalateRequest::ReadInboundLinkCatalogEntry(request) => {
                 handle_read_inbound_link_catalog_entry(
-                    catalog_entries,
+                    what_the_node_reaches,
                     request.request_id.clone(),
                     request,
                 )
@@ -131,13 +137,13 @@ mod tests {
 
     #[test]
     fn a_helpers_set_replaces_its_ports_entry_and_a_downstream_read_sees_it() {
-        let catalog_entries_of_the_writer = CatalogEntriesAHelperPlacedProcessorReaches {
+        let catalog_entries_of_the_writer = WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::new(
                 CatalogEntriesOfOutputPorts::as_declared_by(&[output_port_named("encoded_video")]),
             ),
             ..Default::default()
         };
-        let catalog_entries_of_the_reader = CatalogEntriesAHelperPlacedProcessorReaches::default();
+        let catalog_entries_of_the_reader = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
         catalog_entries_of_the_reader
             .upstream_catalog_entries_by_its_inbound_links
             .record_inbound_link(
@@ -182,7 +188,7 @@ mod tests {
 
     #[test]
     fn a_set_hang_does_not_read_is_refused_naming_the_port_and_the_field() {
-        let catalog_entries = CatalogEntriesAHelperPlacedProcessorReaches {
+        let catalog_entries = WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::new(
                 CatalogEntriesOfOutputPorts::as_declared_by(&[output_port_named("frames")]),
             ),

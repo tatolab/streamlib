@@ -59,6 +59,16 @@
         },
         {
           "type": "toml",
+          "path": "packages/tatolab-browser/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-browser/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
           "path": "packages/tatolab-opus/Cargo.toml",
           "jsonpath": "$.package.version"
         },

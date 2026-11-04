@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::EscalateHandleRegistry;
-use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::test_support::LiveSurfaceShareServiceForATest;
 #[cfg(target_os = "linux")]
@@ -86,7 +86,7 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-iosurface".to_string(),
             width,
@@ -227,7 +227,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
                 request_id: "req-pooled".to_string(),
                 width,
@@ -376,7 +376,7 @@ fn next_processor_output_frame_over_the_escalate_op(
     match handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-pooled".to_string(),
             width: 64,
@@ -632,7 +632,7 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     let Some(EscalateResponse::Ok(allocated)) = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-fresh-slot".to_string(),
             width: descriptor.width,
@@ -691,7 +691,7 @@ fn acquire_tensor_storage_buffer_over_the_escalate_op(
     match handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer {
             request_id: "req-tensor".to_string(),
             shape: shape.to_vec(),
@@ -780,7 +780,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     let released = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-release-tensor".to_string(),
             handle_id: surface_id.clone(),
@@ -873,7 +873,7 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
         let released = handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
                 request_id: "req-release-tensor".to_string(),
                 handle_id: surface_id.clone(),
@@ -1068,7 +1068,7 @@ fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
     handle_id_or_refusal_of(super::super::handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         a_one_off_64x32_rgba8_unorm_texture_request(),
     ))
 }
@@ -1087,7 +1087,7 @@ fn release_a_handle_over_the_escalate_op(
     handle_id_or_refusal_of(super::super::handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-release".to_string(),
             handle_id: handle_id.to_string(),
@@ -1320,7 +1320,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
                 let answer = handle_id_or_refusal_of(super::super::handle_escalate_op(
                     &requesting_sandbox,
                     &requesting_registry,
-                    &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+                    &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
                     request,
                 ));
                 if answer_tx
@@ -1524,7 +1524,7 @@ fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_re
     let handle_id = handle_id_or_refusal_of(super::super::handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
             request_id: "req-render-target-image".to_string(),
             width: 64,
@@ -1580,7 +1580,7 @@ fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_publi
     let handle_id = handle_id_or_refusal_of(super::super::handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
             request_id: "req-one-off-pixel-buffer".to_string(),
             width: 64,
@@ -1752,7 +1752,7 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     let acquired_texture = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-texture-edges".to_string(),
             width: 64,
@@ -1783,7 +1783,7 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     let acquired_image = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
             request_id: "req-image-edges".to_string(),
             width: 64,
@@ -1853,7 +1853,7 @@ fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() 
     let handle_id = match handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-render-target-texture".to_string(),
             width: 64,
@@ -1934,7 +1934,7 @@ fn a_texture_no_opaque_fd_image_can_carry_is_refused_at_the_acquisition_where_dm
     let refusal = handle_id_or_refusal_of(handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-multi-plane-texture".to_string(),
             width: 64,

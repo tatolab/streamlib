@@ -15,8 +15,9 @@
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
 //! channel, with no interpreter on either end, as do the IOSurface import
-//! minor 4 adds, the host-memory write minor 5 adds and the lend by surface
-//! id minor 6 adds.
+//! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
+//! id minor 6 adds and the shared native service leases and node failure
+//! minor 7 adds.
 
 use std::ffi::{CStr, c_void};
 
@@ -25,7 +26,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 6;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 7;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -104,6 +105,27 @@ pub struct ModuleHostTablePortHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleHostTableSurfaceHandle {
     pub value: u64,
+}
+
+/// A lease on one of the runtime's shared native services, valid until
+/// [`ModuleHostTable::shared_native_service_lease_release`]; `0` names none.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTableSharedNativeServiceLeaseHandle {
+    pub value: u64,
+}
+
+/// What a granted lease names. Its text is the host's, alive until the lease
+/// is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleHostTableSharedNativeServiceLease {
+    pub lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+    /// The Unix socket the service accepts this node's connections on.
+    pub endpoint_socket_path: ModuleHostTableUtf8,
+    /// The stream the lease was granted to, which the service keys the
+    /// node's state by.
+    pub tenant_stream_id: ModuleHostTableUtf8,
 }
 
 /// The most planes one [`ModuleHostTableDmaBufImport`] describes.
@@ -549,6 +571,37 @@ pub struct ModuleHostTable {
         lent_surface: *mut ModuleHostTableSurfaceHandle,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
+    /// Minor 7: lease the runtime's shared native service `service_name` for
+    /// this node, the runtime starting it when no node holds a lease on it.
+    /// Refused by name when the runtime offers no such service or it failed.
+    pub shared_native_service_lease_acquire: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        service_name: ModuleHostTableUtf8,
+        granted_lease: *mut ModuleHostTableSharedNativeServiceLease,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 7: [`MODULE_HOST_TABLE_STATUS_OK`] while the leased service runs,
+    /// [`MODULE_HOST_TABLE_STATUS_EMPTY`] while the runtime starts it again,
+    /// and [`MODULE_HOST_TABLE_STATUS_ENDED`], with the reason written, once
+    /// it failed for good.
+    pub shared_native_service_lease_state: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 7: give a lease back; the service stops a grace after its last.
+    pub shared_native_service_lease_release: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        lease: ModuleHostTableSharedNativeServiceLeaseHandle,
+    ),
+    /// Minor 7: fail this node for good with `reason`, which the graph shows;
+    /// the rest of the stream keeps running and the node is not started
+    /// again. The first reason a node gives is the one kept.
+    pub node_fail_unrecoverably: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        reason: ModuleHostTableUtf8,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTableUtf8 {
@@ -923,7 +976,56 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, surface_lend_by_surface_id),
             16 + 31 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 32 * POINTER);
+    }
+
+    /// Minor 7 appends its shared native service leases and node failure
+    /// after the minor 6 lend.
+    #[test]
+    fn the_v1_7_table_appends_its_service_leases_and_node_failure_after_every_v1_6_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_acquire),
+            16 + 32 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_state),
+            16 + 33 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, shared_native_service_lease_release),
+            16 + 34 * POINTER
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTable, node_fail_unrecoverably),
+            16 + 35 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 36 * POINTER);
+    }
+
+    #[test]
+    fn a_service_lease_is_its_handle_then_its_endpoint_then_its_tenant() {
+        assert_eq!(
+            size_of::<ModuleHostTableSharedNativeServiceLeaseHandle>(),
+            8
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableSharedNativeServiceLease, lease),
+            0
+        );
+        assert_eq!(
+            offset_of!(
+                ModuleHostTableSharedNativeServiceLease,
+                endpoint_socket_path
+            ),
+            8
+        );
+        assert_eq!(
+            offset_of!(ModuleHostTableSharedNativeServiceLease, tenant_stream_id),
+            8 + 2 * POINTER
+        );
+        assert_eq!(
+            size_of::<ModuleHostTableSharedNativeServiceLease>(),
+            8 + 4 * POINTER
+        );
     }
 
     #[test]

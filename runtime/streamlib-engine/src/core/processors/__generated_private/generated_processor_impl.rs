@@ -602,6 +602,12 @@ pub trait DynGeneratedProcessor: Send + 'static {
         false
     }
 
+    /// Why this processor's node failed itself, once it has: the graph shows
+    /// it in error and its helper is not started again. `None` by default.
+    fn failure_the_node_reported_of_itself(&self) -> Option<String> {
+        None
+    }
+
     /// Why this processor's helper process died on its own, once the engine
     /// has noticed and taken its group down; `None` for a processor with no
     /// helper, one whose helper is alive, or one the engine stopped itself.

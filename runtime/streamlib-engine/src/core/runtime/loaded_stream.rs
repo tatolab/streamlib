@@ -464,6 +464,7 @@ impl LoadedStreamInThisRuntime {
             engine.surface_socket_path.clone(),
             #[cfg(target_os = "macos")]
             engine.surface_share_mach_service_rendezvous.clone(),
+            Arc::clone(&engine.shared_native_services),
             Arc::clone(&self.this_streams_identity_and_handles),
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&this_streams_runtime_context));

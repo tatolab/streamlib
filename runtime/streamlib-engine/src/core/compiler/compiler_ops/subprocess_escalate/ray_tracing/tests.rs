@@ -13,7 +13,7 @@ use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::SPIRV_MAGIC_LE;
 use super::linux_and_macos::prepare_ray_tracing_kernel_registration;
-use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRayTracingBindingKind, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas,
@@ -336,7 +336,7 @@ fn register_ray_tracing_kernel_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RegisterRayTracingKernel(req),
     )
     .expect("must produce a response");
@@ -354,7 +354,7 @@ fn register_acceleration_structure_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         req,
     )
     .expect("must produce a response");
@@ -474,7 +474,7 @@ impl ARayTracedSceneUnderTest {
         handle_escalate_op(
             &self.sandbox,
             &self.registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunRayTracingKernel(req),
         )
         .expect("must produce a response")
@@ -496,7 +496,7 @@ fn register_blas_with_invalid_vertex_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                 "blas-bad-vertices",
                 "xyz123",
@@ -519,7 +519,7 @@ fn register_blas_with_invalid_index_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                 "blas-bad-indices",
                 &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
@@ -556,7 +556,7 @@ fn register_blas_with_a_partial_vertex_or_triangle_is_refused() {
             handle_escalate_op(
                 &sandbox,
                 &registry,
-                &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+                &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
                 EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                     request_id,
                     &vertices_hex,
@@ -585,7 +585,7 @@ fn register_tlas_with_no_instances_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -606,7 +606,7 @@ fn register_tlas_with_a_transform_that_is_not_a_row_major_3x4_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -627,7 +627,7 @@ fn register_tlas_with_a_mask_wider_than_eight_bits_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -648,7 +648,7 @@ fn run_with_invalid_push_constants_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunRayTracingKernel(req),
         )
         .expect("must produce a response"),
@@ -727,7 +727,7 @@ fn register_with_invalid_stage_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterRayTracingKernel(req),
         )
         .expect("must produce a response"),
@@ -931,7 +931,7 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterRayTracingKernel(req),
         )
         .expect("must produce a response"),
@@ -1010,7 +1010,7 @@ fn a_registered_acceleration_structure_is_released_through_release_handle() {
     let released = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "release-blas".to_string(),
             handle_id: blas.clone(),
@@ -1027,7 +1027,7 @@ fn a_registered_acceleration_structure_is_released_through_release_handle() {
     let released_twice = handle_escalate_op(
         &sandbox,
         &registry,
-        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "release-blas-again".to_string(),
             handle_id: blas,
@@ -1049,7 +1049,7 @@ fn a_tlas_instance_naming_an_unregistered_structure_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                 "tlas-unknown",
                 "definitely-not-a-registered-structure",
@@ -1076,7 +1076,7 @@ fn a_tlas_instance_naming_a_top_level_structure_is_refused() {
         handle_escalate_op(
             &scene.sandbox,
             &scene.registry,
-            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                 "tlas-over-tlas",
                 &scene.tlas_id,

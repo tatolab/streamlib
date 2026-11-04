@@ -146,7 +146,9 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
     `RefusedBecauseTheFarSideIsGone` back to `RidesTheSetupCommand`, keeping every recorded link
     but one handed over past the setup command that the dead helper never opened.
   - `ProcessorState` gains `Restarting`; the state component keeps a reason on every `Error`.
-  - `local_relay_child_supervision.rs` reads its waits from `ChildProcessRestartBackoff`.
+  - The local relay reads its waits from `ChildProcessRestartBackoff` through the engine's
+    `SupervisedChildProcess` (`core/supervised_child_process.rs`), which the shared native
+    services run on too.
 
 ## REMOVED
 

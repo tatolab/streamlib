@@ -45,6 +45,36 @@ use crate::relay_secret_store::the_relay_secret_store_of_this_machine;
 /// what it started.
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
+/// Offer every node the browser host staged beside the lend, which a
+/// `BrowserSource` opens its tabs in; a unit built without it offers none.
+fn offer_the_browser_host_when_the_runtime_unit_carries_it(
+    engine: &Runner,
+    lend_directory: &std::path::Path,
+    tatolab_state_directory: &TatolabStateDirectory,
+) {
+    use streamlib::sdk::processor_interpreter::{
+        BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME, browser_host_executable_beside_the_lend,
+    };
+    let Some(browser_host_executable) = browser_host_executable_beside_the_lend(lend_directory)
+        .and_then(|executable| executable.canonicalize().ok())
+    else {
+        tracing::info!(
+            "the runtime unit carries no browser host beside its lend, so no BrowserSource can \
+             open a page"
+        );
+        return;
+    };
+    let offer = streamlib::sdk::shared_native_services::SharedNativeServiceOffer {
+        service_name: BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME.to_string(),
+        executable: browser_host_executable,
+        state_directory: tatolab_state_directory
+            .shared_native_service_state_directory(BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME),
+    };
+    if let Err(refusal) = engine.offer_shared_native_service(offer) {
+        tracing::warn!("the browser host was not offered: {refusal}");
+    }
+}
+
 /// Host the machine's streams until a machine shutdown is requested and every
 /// stream has ended, tear the engine down, end `runtime_run_in_progress_record`
 /// cleanly, and return the status `tatolabd` exits with. A start refused
@@ -93,6 +123,11 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "{no_uv}; every stream whose project's .venv needs making is recorded failed"
         ),
     }
+    offer_the_browser_host_when_the_runtime_unit_carries_it(
+        &engine,
+        &lend_directory,
+        tatolab_state_directory,
+    );
     streamlib_media_builtins::register_media_builtin_processor_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();

@@ -608,7 +608,7 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.camera._native
           uvx pyright@1.1.411
 
-      # The browser wheel links CEF, which CI does not download: `cef/dox`
+      # The browser host links CEF, which CI does not download: `cef/dox`
       # compiles the bindings unlinked, so CI holds its pure logic, lints and
       # types; its rendering runs in the rig.
       - name: "Browser: formatting, crate tests, clippy and types"

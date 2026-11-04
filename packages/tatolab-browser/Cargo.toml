@@ -1,10 +1,10 @@
 [package]
 name = "tatolab-browser"
-version = "0.1.0"
+version = "0.68.20"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
-description = "A web page as a stream source: Chromium (CEF) renders it offscreen in the node's helper, and its frames, audio and events are published through the module host table."
+description = "A web page as a stream source: the machine's shared Chromium (CEF) browser host renders it offscreen as a tab, and its frames, audio and events are published through the module host table."
 repository = "https://github.com/tatolab/streamlib"
 license = "BUSL-1.1"
 publish = false
@@ -15,19 +15,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
-# The module host table the paint, audio and data threads publish through,
-# with no Python attached. The one engine-facing dependency, and it links no
-# engine.
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.5.0", features = ["pyo3"] }
-tatolab-browser-page-bridge = { path = "page-bridge" }
-cef = { version = "=156.3.0", default-features = false }
+# The module host table the tab's threads publish through, with no Python
+# attached. The one engine-facing dependency, and it links no engine.
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.7.0", features = ["pyo3"] }
+tatolab-browser-tab-protocol = { path = "tab-protocol" }
 rmp = "0.8.15"
 rmpv = "1.3.1"
 serde_json = "1"
-libc = "0.2"
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
 # third party would build one, with its own root, its own lockfile and no
 # engine crate.
 [workspace]
-members = ["page-bridge"]
+members = ["page-bridge", "tab-protocol", "host"]

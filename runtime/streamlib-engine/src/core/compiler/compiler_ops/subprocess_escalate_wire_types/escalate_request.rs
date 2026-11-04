@@ -19,6 +19,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "acquire_image")]
     AcquireImage(EscalateRequestAcquireImage),
 
+    #[serde(rename = "acquire_shared_native_service_lease")]
+    AcquireSharedNativeServiceLease(EscalateRequestAcquireSharedNativeServiceLease),
+
     #[serde(rename = "acquire_pixel_buffer")]
     AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer),
 
@@ -37,6 +40,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "copy_surface_to_surface")]
     CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface),
 
+    #[serde(rename = "fail_the_node")]
+    FailTheNode(EscalateRequestFailTheNode),
+
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
@@ -45,6 +51,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "open_device_export_staging")]
     OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging),
+
+    #[serde(rename = "read_shared_native_service_lease_state")]
+    ReadSharedNativeServiceLeaseState(EscalateRequestReadSharedNativeServiceLeaseState),
 
     #[serde(rename = "read_inbound_link_catalog_entry")]
     ReadInboundLinkCatalogEntry(EscalateRequestReadInboundLinkCatalogEntry),
@@ -66,6 +75,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "register_ray_tracing_kernel")]
     RegisterRayTracingKernel(EscalateRequestRegisterRayTracingKernel),
+
+    #[serde(rename = "release_shared_native_service_lease")]
+    ReleaseSharedNativeServiceLease(EscalateRequestReleaseSharedNativeServiceLease),
 
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
@@ -90,6 +102,52 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
+}
+
+/// Lease a native service the runtime's host offers every node, starting it
+/// when no node holds a lease on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestAcquireSharedNativeServiceLease {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The name the host offered the service under, such as `browser-host`.
+    pub(crate) service_name: String,
+}
+
+/// Ask whether a leased service is there to connect to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestReadSharedNativeServiceLeaseState {
+    /// The `handle_id` the lease was granted under.
+    pub(crate) lease_id: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// Give a lease back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestReleaseSharedNativeServiceLease {
+    /// The `handle_id` the lease was granted under.
+    pub(crate) lease_id: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// The helper's node failed in a way it cannot recover from: the graph shows
+/// it in error with `reason`, and the rest of the stream keeps running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestFailTheNode {
+    /// Why the node failed, as the graph shows it.
+    pub(crate) reason: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
 }
 
 /// Convert between a YCbCr surface and an RGBA texture through the engine's

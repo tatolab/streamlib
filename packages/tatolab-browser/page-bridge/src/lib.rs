@@ -72,27 +72,27 @@ fn javascript_string_literal(text: &str) -> String {
 }
 
 /// The switch the browser process appends to every child's command line,
-/// naming the helper whose life each child is bound to.
-pub const BROWSER_HELPER_PID_SWITCH_NAME: &str = "tatolab-browser-helper-pid";
+/// naming the browser process whose life each child is bound to.
+pub const BROWSER_PROCESS_PID_SWITCH_NAME: &str = "tatolab-browser-process-pid";
 
-/// Ends this process when the browser helper that launched it dies.
-pub fn die_with_the_browser_helper() {
-    let Some(browser_helper_pid) = browser_helper_pid_named_in(std::env::args()) else {
+/// Ends this process when the browser process that launched it dies.
+pub fn die_with_the_browser_process() {
+    let Some(browser_process_pid) = browser_process_pid_named_in(std::env::args()) else {
         return;
     };
-    // Armed before the parent check: a helper that died earlier fails the
+    // Armed before the parent check: a browser process that died earlier fails the
     // check, and one that dies later fires the watch.
-    arm_the_browser_helper_exit_watch(browser_helper_pid);
+    arm_the_browser_process_exit_watch(browser_process_pid);
     // SAFETY: getppid takes nothing and cannot fail.
-    if unsafe { libc::getppid() } != browser_helper_pid {
-        end_this_process_with_its_browser_helper();
+    if unsafe { libc::getppid() } != browser_process_pid {
+        end_this_process_with_its_browser_process();
     }
 }
 
-fn browser_helper_pid_named_in(
+fn browser_process_pid_named_in(
     command_line_arguments: impl IntoIterator<Item = String>,
 ) -> Option<libc::pid_t> {
-    let switch_prefix = format!("--{BROWSER_HELPER_PID_SWITCH_NAME}=");
+    let switch_prefix = format!("--{BROWSER_PROCESS_PID_SWITCH_NAME}=");
     command_line_arguments.into_iter().find_map(|argument| {
         argument
             .strip_prefix(&switch_prefix)
@@ -101,13 +101,13 @@ fn browser_helper_pid_named_in(
 }
 
 /// Exits at once, running no exit handlers, since CEF's threads may be live.
-fn end_this_process_with_its_browser_helper() -> ! {
+fn end_this_process_with_its_browser_process() -> ! {
     // SAFETY: _exit ends the process and touches nothing else.
     unsafe { libc::_exit(0) }
 }
 
 #[cfg(target_os = "linux")]
-fn arm_the_browser_helper_exit_watch(_browser_helper_pid: libc::pid_t) {
+fn arm_the_browser_process_exit_watch(_browser_process_pid: libc::pid_t) {
     // SAFETY: prctl with PR_SET_PDEATHSIG takes a signal number and touches
     // nothing else.
     unsafe {
@@ -116,14 +116,14 @@ fn arm_the_browser_helper_exit_watch(_browser_helper_pid: libc::pid_t) {
 }
 
 #[cfg(target_os = "macos")]
-fn arm_the_browser_helper_exit_watch(browser_helper_pid: libc::pid_t) {
+fn arm_the_browser_process_exit_watch(browser_process_pid: libc::pid_t) {
     // SAFETY: kqueue takes nothing and returns a descriptor or -1.
     let exit_queue = unsafe { libc::kqueue() };
     if exit_queue < 0 {
-        end_this_process_with_its_browser_helper();
+        end_this_process_with_its_browser_process();
     }
-    let browser_helper_exit = libc::kevent {
-        ident: browser_helper_pid as libc::uintptr_t,
+    let browser_process_exit = libc::kevent {
+        ident: browser_process_pid as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
         flags: libc::EV_ADD | libc::EV_ONESHOT,
         fflags: libc::NOTE_EXIT,
@@ -134,7 +134,7 @@ fn arm_the_browser_helper_exit_watch(browser_helper_pid: libc::pid_t) {
     let registered = unsafe {
         libc::kevent(
             exit_queue,
-            &browser_helper_exit,
+            &browser_process_exit,
             1,
             std::ptr::null_mut(),
             0,
@@ -142,10 +142,10 @@ fn arm_the_browser_helper_exit_watch(browser_helper_pid: libc::pid_t) {
         )
     };
     if registered < 0 {
-        end_this_process_with_its_browser_helper();
+        end_this_process_with_its_browser_process();
     }
     std::thread::Builder::new()
-        .name("tatolab-browser-helper-exit-watch".to_string())
+        .name("tatolab-browser-process-exit-watch".to_string())
         .spawn(move || {
             let mut fired = std::mem::MaybeUninit::<libc::kevent>::zeroed();
             loop {
@@ -164,11 +164,11 @@ fn arm_the_browser_helper_exit_watch(browser_helper_pid: libc::pid_t) {
                 if received > 0
                     || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
                 {
-                    end_this_process_with_its_browser_helper();
+                    end_this_process_with_its_browser_process();
                 }
             }
         })
-        .unwrap_or_else(|_| end_this_process_with_its_browser_helper());
+        .unwrap_or_else(|_| end_this_process_with_its_browser_process());
 }
 
 wrap_v8_handler! {
@@ -272,7 +272,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_browser_helper_pid_is_read_from_its_switch_and_nothing_else() {
+    fn the_browser_process_pid_is_read_from_its_switch_and_nothing_else() {
         let arguments = |listed: &[&str]| {
             listed
                 .iter()
@@ -280,22 +280,22 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            browser_helper_pid_named_in(arguments(&[
+            browser_process_pid_named_in(arguments(&[
                 "tatolab-browser-subprocess",
                 "--type=renderer",
-                "--tatolab-browser-helper-pid=4242",
+                "--tatolab-browser-process-pid=4242",
             ])),
             Some(4242)
         );
         assert_eq!(
-            browser_helper_pid_named_in(arguments(&[
+            browser_process_pid_named_in(arguments(&[
                 "tatolab-browser-subprocess",
                 "--type=gpu-process"
             ])),
             None
         );
         assert_eq!(
-            browser_helper_pid_named_in(arguments(&["--tatolab-browser-helper-pid=not-a-pid"])),
+            browser_process_pid_named_in(arguments(&["--tatolab-browser-process-pid=not-a-pid"])),
             None
         );
     }

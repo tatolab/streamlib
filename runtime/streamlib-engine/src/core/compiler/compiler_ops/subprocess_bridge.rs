@@ -59,8 +59,9 @@ use super::subprocess_escalate::handle_lifecycle::{
     EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
 };
 use super::subprocess_escalate::{
-    CatalogEntriesAHelperPlacedProcessorReaches, ESCALATE_OP_ANSWERED_BY_NOTHING,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatTheNodeOfAHelperPlacedProcessorReaches,
     process_bridge_message, refusal_of_an_escalate_request,
+    shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
 };
 
 /// Env var advertising the inherited child-end fd number of the escalate
@@ -380,6 +381,8 @@ pub struct SubprocessBridge {
     /// entered into the parent's texture cache, which needs the same
     /// capability the escalate worker dispatches against.
     sandbox: GpuContextLimitedAccess,
+    /// The helper's shared native service leases, given back with the bridge.
+    shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     frame_demultiplexing_reader_thread: Option<JoinHandle<()>>,
     escalate_worker_thread: Option<JoinHandle<()>>,
     /// The native escalate socket, shut down with the bridge so its worker
@@ -401,21 +404,23 @@ impl SubprocessBridge {
             None,
             sandbox,
             processor_id,
-            CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         )
     }
 
     /// Wrap a socketpair parent end and spawn the reader thread and the
-    /// escalate worker, which dispatches against `sandbox` and the helper's
-    /// node's `catalog_entries`; with `native_escalate_stream`, a second worker
+    /// escalate worker, which dispatches against `sandbox` and what the
+    /// helper's node reaches; with `native_escalate_stream`, a second worker
     /// answers the helper's native code over it, against the same registry.
     pub(crate) fn new(
         stream: UnixStream,
         native_escalate_stream: Option<UnixStream>,
         sandbox: GpuContextLimitedAccess,
         processor_id: String,
-        catalog_entries: CatalogEntriesAHelperPlacedProcessorReaches,
+        what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches,
     ) -> Result<Self> {
+        let shared_native_service_leases =
+            Arc::clone(&what_the_node_reaches.shared_native_service_leases);
         let read_half = stream.try_clone().map_err(|e| {
             Error::Runtime(format!(
                 "failed to clone escalate socketpair for reader: {e}"
@@ -434,7 +439,7 @@ impl SubprocessBridge {
             process_bridge_message(
                 &dispatch_sandbox,
                 &dispatch_registry,
-                &catalog_entries,
+                &what_the_node_reaches,
                 frame,
             )
         });
@@ -471,6 +476,7 @@ impl SubprocessBridge {
             lifecycle_rx,
             registry,
             sandbox,
+            shared_native_service_leases,
             frame_demultiplexing_reader_thread: Some(frame_demultiplexing_reader_thread),
             escalate_worker_thread: Some(escalate_worker_thread),
             native_escalate_socket_for_shutting_down,
@@ -630,6 +636,7 @@ impl Drop for SubprocessBridge {
         // connection registered those on the helper's behalf, so the
         // service's disconnect watchdog rightly never reclaims them.
         release_everything_a_torn_down_helper_held(&self.sandbox, &self.registry);
+        self.shared_native_service_leases.release_every_lease();
         // Detached, never joined: the OS reaps both on process exit.
         self.frame_demultiplexing_reader_thread.take();
         self.escalate_worker_thread.take();
@@ -1795,7 +1802,7 @@ mod tests {
             None,
             sandbox,
             "p-bridge-test".into(),
-            CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         )
         .expect("bridge construction");
 
@@ -1843,7 +1850,7 @@ mod tests {
             None,
             sandbox,
             "p-bridge-test".into(),
-            CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         )
         .expect("bridge construction");
 
@@ -1876,7 +1883,7 @@ mod tests {
             Some(native_parent_end),
             sandbox,
             "p-native-escalate-test".into(),
-            CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
         )
         .expect("bridge construction");
 
@@ -1996,7 +2003,7 @@ mod tests {
                 None,
                 sandbox.clone(),
                 format!("p-crash-{cycle}"),
-                CatalogEntriesAHelperPlacedProcessorReaches::default(),
+                WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
             )
             .expect("bridge construction");
 
