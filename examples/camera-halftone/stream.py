@@ -4,7 +4,8 @@
 """A Tatolab stream: camera → a halftone compute kernel → H.264, shared on this machine.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. `CameraSource` and `H264Encoder` are native built-ins; the effect
+manifest. `CameraSource` and `H264Encoder` come from the `tatolab-camera` and
+`tatolab-h264` modules; the effect
 between them is this project's own node, and the GLSL it dispatches is a
 string in that module, compiled by the engine when the node sets up.
 
@@ -12,14 +13,9 @@ Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from nodes.halftone_compute import HalftoneCompute
 
@@ -34,7 +30,7 @@ CAPTURE_MAX_HEIGHT = 1080
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera screened into halftone dots, encoded and exposed on this machine."""
-    camera_config: CameraSourceConfig = {
+    camera_config: dict[str, object] = {
         "max_width": CAPTURE_MAX_WIDTH,
         "max_height": CAPTURE_MAX_HEIGHT,
     }

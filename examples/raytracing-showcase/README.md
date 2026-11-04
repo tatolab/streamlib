@@ -38,7 +38,7 @@ def main(stream_builder: StreamBuilder) -> None:
 ```
 
 **The runtime opens no windows.** What a stream shows, it exposes: the cut goes
-through an `H264Encoder`, a native built-in, whose `encoded_video` is exposed as
+through an `H264Encoder` from the `tatolab-h264` module, whose `encoded_video` is exposed as
 a track at this machine's local relay, which a browser plays and any MoQ client
 reads.
 
@@ -212,8 +212,10 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-h264` from this checkout, as an editable path dependency
+(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project, so
+the build needs a Rust toolchain. The runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command

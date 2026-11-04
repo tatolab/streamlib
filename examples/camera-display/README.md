@@ -21,10 +21,12 @@ def main(stream_builder: StreamBuilder) -> None:
 - `tatolab dev` reads `stream.py` from the current directory and loads its one
   `@stream` function into this machine's runtime, `tatolabd` — found by
   convention, never declared.
-- `CameraSource` and `H264Encoder` are **native built-ins**: they ship inside
-  the runtime, and their per-frame paths never enter a Python interpreter.
-  `add` takes the class itself, and its `config` is a `TypedDict`
-  (`CameraSourceConfig`), so a type checker catches a misspelled key.
+- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
+  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
+  its own child process, and its per-frame path is the module's Rust, never
+  Python.
+  `add` takes the class itself and a plain dict as its `config`; the keys are
+  the fields of `CameraSourceConfig` in `tatolab.camera`.
 - **The runtime opens no windows.** What a stream shows, it exposes: `expose`
   makes the encoder's output a track at this machine's local relay, which a
   browser plays and any other stream or MoQ client reads. `Exposure.PRIVATE`
@@ -43,8 +45,10 @@ uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
-only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
+(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+so the build needs a Rust toolchain. The runtime itself is not on pip.
 
 Use `tatolab dev` while editing — it loads the stream again on every saved edit
 — and `tatolab run` otherwise. Both keep the stream as long as the command
@@ -98,5 +102,5 @@ Everything is literal config in `stream.py` — edit it and save while
 | Knob | Where | Effect |
 | --- | --- | --- |
 | `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `max_width` / `max_height` | `CameraSourceConfig` | Resolution cap; the negotiated format is clamped to fit. Default 1920×1080. |
+| `max_width` / `max_height` | `camera_config` in `stream.py` (`CameraSourceConfig` in `tatolab.camera`) | Resolution cap; the negotiated format is clamped to fit. Default 1920×1080. |
 | `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |

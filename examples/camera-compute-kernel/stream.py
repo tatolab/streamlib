@@ -4,7 +4,8 @@
 """A Tatolab stream: camera → a GLSL compute kernel → H.264, shared on this machine.
 
 `tatolab dev` loads the one `@stream` below by convention — there is no
-manifest. `CameraSource` and `H264Encoder` are native built-ins; the effect
+manifest. `CameraSource` and `H264Encoder` come from the `tatolab-camera` and
+`tatolab-h264` modules; the effect
 between them is this project's own Python, and the GLSL it dispatches is a
 string in that module, so there is no shader toolchain to install.
 
@@ -12,14 +13,9 @@ Nodes live in their own modules, never in this file: each one runs in its own
 child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import (
-    CameraSource,
-    CameraSourceConfig,
-    Exposure,
-    H264Encoder,
-    StreamBuilder,
-    stream,
-)
+from tatolab.camera import CameraSource
+from tatolab.h264 import H264Encoder
+from tatolab.stream import Exposure, StreamBuilder, stream
 
 from nodes.grayscale_compute import GrayscaleCompute
 
@@ -31,7 +27,7 @@ CAMERA_DEVICE_ID: str | None = None
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     """The camera graded to black and white by a compute kernel, encoded and exposed on this machine."""
-    camera_config: CameraSourceConfig = {"max_width": 1920, "max_height": 1080}
+    camera_config: dict[str, object] = {"max_width": 1920, "max_height": 1080}
     if CAMERA_DEVICE_ID is not None:
         camera_config["device_id"] = CAMERA_DEVICE_ID
     camera = stream_builder.add(CameraSource, config=camera_config)
