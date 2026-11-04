@@ -21,6 +21,12 @@ from tatolab.browser import BrowserSource, BrowserSourceOutputProbe
 
 PAGE_MIXING_INPUTS_URL = (Path(__file__).resolve().parent / "page_mixing_inputs.html").as_uri()
 
+# The microphone the page plays: a backend-named device, as
+# `MicrophoneSourceConfig.device_id` takes it. `None` opens the backend's
+# default source, which on a machine whose default is a capture card's silent
+# HDMI audio leaves the page's meter flat.
+MICROPHONE_DEVICE_ID: str | None = None
+
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 FRAME_RATE = 30
@@ -32,7 +38,10 @@ def main(stream_builder: StreamBuilder) -> None:
     camera = stream_builder.add(
         CameraSource, config={"max_width": CANVAS_WIDTH, "max_height": CANVAS_HEIGHT}
     )
-    microphone = stream_builder.add(MicrophoneSource)
+    microphone_config: dict[str, object] = {}
+    if MICROPHONE_DEVICE_ID is not None:
+        microphone_config["device_id"] = MICROPHONE_DEVICE_ID
+    microphone = stream_builder.add(MicrophoneSource, config=microphone_config)
     browser = stream_builder.add(
         BrowserSource,
         config={
