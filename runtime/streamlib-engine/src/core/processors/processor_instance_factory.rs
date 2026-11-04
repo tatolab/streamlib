@@ -244,21 +244,17 @@ pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
-    /// Each built-in node type this runtime does not have, with why.
-    built_in_node_types_this_runtime_lacks:
-        RwLock<HashMap<ProcessorClassImportPath, WhyThisRuntimeLacksABuiltInNodeType>>,
+    /// Each former built-in node type, with the module node that replaced it.
+    built_in_node_types_moved_to_modules:
+        RwLock<HashMap<ProcessorClassImportPath, ModuleNodeThatReplacedABuiltIn>>,
 }
 
-/// Why a built-in node type a graph may name is not one this runtime has.
+/// The module node type a former built-in became, and the distribution that
+/// ships it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum WhyThisRuntimeLacksABuiltInNodeType {
-    CompiledOutOnThisFloor {
-        floors_it_runs_on: String,
-    },
-    MovedToAModule {
-        module_node_type: ProcessorClassImportPath,
-        module_distribution: String,
-    },
+struct ModuleNodeThatReplacedABuiltIn {
+    module_node_type: ProcessorClassImportPath,
+    module_distribution: String,
 }
 
 /// The machine's registry of natively compiled node types.
@@ -281,7 +277,7 @@ impl ProcessorInstanceFactory {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
-            built_in_node_types_this_runtime_lacks: RwLock::new(HashMap::new()),
+            built_in_node_types_moved_to_modules: RwLock::new(HashMap::new()),
         }
     }
 
@@ -425,21 +421,6 @@ impl ProcessorInstanceFactory {
         Ok(())
     }
 
-    /// Record a built-in this floor compiles out, so a graph naming it is
-    /// refused naming the floors it runs on rather than as a type nobody has.
-    pub fn register_built_in_node_type_absent_on_this_floor(
-        &self,
-        node_type: ProcessorClassImportPath,
-        floors_it_runs_on: impl Into<String>,
-    ) {
-        self.built_in_node_types_this_runtime_lacks.write().insert(
-            node_type,
-            WhyThisRuntimeLacksABuiltInNodeType::CompiledOutOnThisFloor {
-                floors_it_runs_on: floors_it_runs_on.into(),
-            },
-        );
-    }
-
     /// Record a built-in that left the runtime for a module, so a graph naming
     /// it is refused naming the module's node type and the distribution to
     /// install.
@@ -449,35 +430,27 @@ impl ProcessorInstanceFactory {
         module_node_type: ProcessorClassImportPath,
         module_distribution: impl Into<String>,
     ) {
-        self.built_in_node_types_this_runtime_lacks.write().insert(
+        self.built_in_node_types_moved_to_modules.write().insert(
             node_type,
-            WhyThisRuntimeLacksABuiltInNodeType::MovedToAModule {
+            ModuleNodeThatReplacedABuiltIn {
                 module_node_type,
                 module_distribution: module_distribution.into(),
             },
         );
     }
 
-    /// Refuse a built-in this runtime does not have: one this floor compiles
-    /// out, naming the floors it runs on, or one that moved to a module,
-    /// naming the module.
+    /// Refuse a built-in that moved to a module, naming the module node type
+    /// and the distribution to install.
     pub fn refuse_a_built_in_node_type_this_runtime_lacks(
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Result<()> {
         match self
-            .built_in_node_types_this_runtime_lacks
+            .built_in_node_types_moved_to_modules
             .read()
             .get(node_type)
         {
-            Some(WhyThisRuntimeLacksABuiltInNodeType::CompiledOutOnThisFloor {
-                floors_it_runs_on,
-            }) => Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
-                node_type: node_type.clone(),
-                this_floor: this_floors_name().to_string(),
-                floors_it_runs_on: floors_it_runs_on.clone(),
-            }),
-            Some(WhyThisRuntimeLacksABuiltInNodeType::MovedToAModule {
+            Some(ModuleNodeThatReplacedABuiltIn {
                 module_node_type,
                 module_distribution,
             }) => Err(Error::BuiltInNodeTypeMovedToAModule {
@@ -598,16 +571,6 @@ fn config_the_node_type_takes<C: serde::de::DeserializeOwned>(
         node_type: node_type.clone(),
         refusal: refusal.to_string(),
     })
-}
-
-/// This floor as a person names it.
-fn this_floors_name() -> &'static str {
-    match std::env::consts::OS {
-        "linux" => "Linux",
-        "macos" => "macOS",
-        "windows" => "Windows",
-        other => other,
-    }
 }
 
 /// The refusal when a second processor claims a class import path the registry
@@ -1045,24 +1008,6 @@ mod tests {
                 &python_class,
                 &a_misspelled_setting,
             )
-            .unwrap();
-    }
-
-    #[test]
-    fn only_a_type_recorded_absent_on_this_floor_is_refused_as_absent() {
-        let factory = ProcessorInstanceFactory::new();
-        let compiled_out_here = class_import_path("tatolab.stream:CompiledOutHere");
-        factory
-            .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
-
-        assert!(matches!(
-            factory.refuse_a_built_in_node_type_this_runtime_lacks(&compiled_out_here),
-            Err(Error::BuiltInNodeTypeAbsentOnThisFloor { .. })
-        ));
-        factory
-            .refuse_a_built_in_node_type_this_runtime_lacks(&class_import_path(
-                "tatolab.stream:RelayTrackSource",
-            ))
             .unwrap();
     }
 

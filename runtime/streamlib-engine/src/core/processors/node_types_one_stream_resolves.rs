@@ -161,7 +161,7 @@ impl NodeTypesOneStreamResolves {
     }
 
     /// Refuse a node this stream cannot add before anything is added: a
-    /// built-in this floor compiles out, or a config a native type would not
+    /// built-in that moved to a module, or a config a native type would not
     /// take. A described type's config is checked by its own config class,
     /// where the node runs.
     pub fn refuse_a_node_this_stream_cannot_add(

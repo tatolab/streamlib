@@ -136,10 +136,8 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
         .collect()
 }
 
-/// A golden reads whole; with its module nodes taken out, any built-ins left
-/// load on a runtime with no interpreter. A built-in this floor compiles out is refused for it,
-/// naming the floor, and the rest loads once those nodes are taken out too —
-/// which is as much of it as this floor can run.
+/// A golden reads whole, and with its module nodes taken out, any built-ins
+/// left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
@@ -152,45 +150,14 @@ fn every_golden_graph_loads_on_this_floor() {
             &recorded_graph_document,
             &module_node_names_in(&recorded_graph_document),
         );
-        let graph =
-            GraphSnapshot::from_graph_document(graph_document.clone()).unwrap_or_else(|refusal| {
-                panic!("{path:?} without its module nodes no longer reads: {refusal}")
-            });
+        let graph = GraphSnapshot::from_graph_document(graph_document).unwrap_or_else(|refusal| {
+            panic!("{path:?} without its module nodes no longer reads: {refusal}")
+        });
         if graph.nodes.is_empty() {
             continue;
         }
-        let node_names_compiled_out_here: BTreeSet<String> = graph
-            .nodes
-            .iter()
-            .filter(|node| {
-                PROCESSOR_REGISTRY
-                    .refuse_a_built_in_node_type_this_runtime_lacks(&node.processor_type)
-                    .is_err()
-            })
-            .map(|node| node.name.clone())
-            .collect();
-
-        let loaded = load_on_a_fresh_engine(&graph);
-
-        if node_names_compiled_out_here.is_empty() {
-            loaded.unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
-            continue;
-        }
-        match loaded {
-            Err(Error::BuiltInNodeTypeAbsentOnThisFloor { .. }) => {}
-            other => panic!(
-                "{path:?} names {node_names_compiled_out_here:?}, which this floor compiles out, \
-                 and should be refused naming the floor: got {other:?}"
-            ),
-        }
-        let the_rest = GraphSnapshot::from_graph_document(without_the_nodes(
-            &graph_document,
-            &node_names_compiled_out_here,
-        ))
-        .expect("a golden without some of its nodes still reads");
-        load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
-            panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
-        });
+        load_on_a_fresh_engine(&graph)
+            .unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
     }
 }
 
