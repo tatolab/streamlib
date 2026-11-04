@@ -464,7 +464,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, virtual-camera-pipewire-door)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -2187,7 +2187,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — SHIPPED (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ virtual-camera-pipewire-door; unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
