@@ -325,9 +325,10 @@ jobs:
       extension_build_extra_dnf_packages: clang git libuuid-devel
       extension_builds_for_macos: false
 
-  # Pure Python, so one wheel serves every platform, built as tatolab-stream's is.
+  # Pure Python, so one wheel serves every platform. A wheel only, as for every
+  # extension: an sdist would archive LICENSE as the symlink it is here.
   build-tatolab-compositor-distribution:
-    name: tatolab-compositor wheel and sdist
+    name: tatolab-compositor wheel
     needs: build-tatolab-stream-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -345,8 +346,8 @@ jobs:
         with:
           version: ${{ env.PINNED_UV_VERSION }}
 
-      - name: Build the tatolab-compositor wheel and sdist
-        run: uv build --out-dir packages/tatolab-compositor/dist packages/tatolab-compositor
+      - name: Build the tatolab-compositor wheel
+        run: uv build --wheel --out-dir packages/tatolab-compositor/dist packages/tatolab-compositor
 
       - name: Collect the tatolab-stream this release publishes
         uses: actions/download-artifact@v7
@@ -376,13 +377,11 @@ jobs:
               print('tatolab-compositor exports', node_entry_point.name, node_entry_point.load())
           "
 
-      - name: Keep the distributions for the upload
+      - name: Keep the wheel for the upload
         uses: actions/upload-artifact@v6
         with:
           name: pypi-distribution-tatolab-compositor
-          path: |
-            packages/tatolab-compositor/dist/*.whl
-            packages/tatolab-compositor/dist/*.tar.gz
+          path: packages/tatolab-compositor/dist/*.whl
           if-no-files-found: error
 
   build-tatolab-opus-distribution:
