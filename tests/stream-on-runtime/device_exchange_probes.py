@@ -75,7 +75,14 @@ class _FrameProbeBase:
         if payload is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        _report(lambda: self._probe(ctx, VideoFrame.from_bytes(payload)))
+        frame = VideoFrame.from_bytes(payload)
+        frame_held_against_producer_reuse = (
+            ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
+        )
+        try:
+            _report(lambda: self._probe(ctx, frame))
+        finally:
+            del frame_held_against_producer_reuse
 
 
 @node
