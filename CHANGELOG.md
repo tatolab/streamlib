@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.26](https://github.com/tatolab/streamlib/compare/v0.68.25...v0.68.26) (2026-11-04)
+
+
+### Bug Fixes
+
+* **engine:** let a PipeWire camera consumer ask for more buffers ([#3153](https://github.com/tatolab/streamlib/issues/3153)) ([a74354c](https://github.com/tatolab/streamlib/commit/a74354c8470204216b78e28d987286e10d22bafc))
+
 ## [0.68.25](https://github.com/tatolab/streamlib/compare/v0.68.24...v0.68.25) (2026-11-04)
 
 
