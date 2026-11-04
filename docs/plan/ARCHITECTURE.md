@@ -545,7 +545,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   interface and the virtual camera output stream. Only data-plane verbs and plain, generation-checked handles cross it, never an
   RHI object, and the engine never calls module code through it. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
-  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #PRNUM]
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #3128]
 - **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
   carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
   generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
@@ -2235,7 +2235,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   macropixel. Owner rulings, 2026-09-06, 2026-11-02 and 2026-11-04.
   [virtual-camera-sink — SHIPPED #2196, #2197, #2198; macos-capability-parity;
   runtime-hosting — SHIPPED #2704; media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123;
-  virtual-camera-pipewire-door — SHIPPED #PRNUM]
+  virtual-camera-pipewire-door — SHIPPED #3128]
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the
