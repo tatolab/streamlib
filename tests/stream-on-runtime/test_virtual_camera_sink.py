@@ -1,37 +1,27 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`VirtualCameraSink` from Python: built-in class to a camera other programs see.
+"""`VirtualCameraSink`, the `tatolab-virtualcamera` module: a stream's frames to a camera other programs see.
 
 The load test needs no device: `tatolabd` loads the graph and its start is
 then refused at the GPU. The camera tests start a graph on `tatolabd`, so they
 carry `requires_gpu` like every other graph test here — and they need
 the one-time permission the sink itself never takes: the v4l2loopback module
 loaded with its control node writable, which `tatolab enable-virtual-camera`
-installs. Without it they skip naming the verb, since the refusal path is what
-the engine's own unit tests already prove and a skipped test says why.
+installs. Without it they skip naming the verb, and the refusal test runs
+instead.
 
 The reader side is a few V4L2 ioctls over `fcntl`, not a tool: what an
 application sees is a `/dev/video*` node whose `card` is the configured name,
 answering `VIDIOC_QUERYCAP` with capture, and handing back YUYV frames at the
 frame's extent carrying the frame's own stamp. That is the whole contract, so
 the test speaks it directly.
-
-The PipeWire door's own test is the mirror of the first camera test on the
-other door: with the door named, a `Video/Source` node carrying the configured
-name and `media.role = Camera` — the two properties a portal's access rule
-grants a camera client — is in the session graph while the stream runs and
-gone once `tatolabd` has exited. It reads the graph through `pw-dump`, which is what any
-operator would reach for, and skips where no session answers.
 """
 
 import fcntl
-import json
 import mmap
 import os
-import shutil
 import struct
-import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -39,10 +29,11 @@ from typing import Literal
 
 import pytest
 
-import tatolab.stream
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from tatolab.testpattern import TestPatternSource
+from tatolab.virtualcamera import VirtualCameraSink
 
 CONTROL_NODE = Path("/dev/v4l2loopback")
 
@@ -91,7 +82,7 @@ READINESS_TIMEOUT_SECONDS = 20.0
 # The camera names carry this test's pid, so each stream is compiled in this
 # process rather than run from a `*_streams.py` module, whose compile has its own.
 REFUSED_CAMERA_NAME = "Refused cam"
-PIPEWIRE_CAMERA_NAME = f"StreamLib pipewire {os.getpid()}"
+PIPEWIRE_DOOR_CAMERA_NAME = "Refused pipewire cam"
 FIRST_LOOPBACK_CAMERA_NAME = f"StreamLib test {os.getpid()}"
 SECOND_LOOPBACK_CAMERA_NAME = f"{FIRST_LOOPBACK_CAMERA_NAME} B"
 FRAMES_CAMERA_NAME = f"StreamLib frames {os.getpid()}"
@@ -110,7 +101,7 @@ V4L2LOOPBACK_CONFIG_SIZE = 72
 V4L2LOOPBACK_CONFIG_LABEL_OFFSET = 8
 
 # Every label a test here can create, so teardown recognises its own devices.
-THIS_SUITES_LABEL_PREFIXES = ("StreamLib test ", "StreamLib frames ", "Refused cam")
+THIS_SUITES_LABEL_PREFIXES = ("StreamLib test ", "StreamLib frames ", "Refused ")
 
 
 def remove_loopback_devices_labelled_by_this_suite() -> None:
@@ -152,69 +143,6 @@ def remove_loopback_devices_labelled_by_this_suite() -> None:
 def leave_no_camera_behind():
     yield
     remove_loopback_devices_labelled_by_this_suite()
-
-
-def pipewire_camera_nodes_named(camera_name: str) -> list[dict]:
-    """Every `Video/Source` node in the session graph carrying `camera_name`.
-
-    A session that is absent, stalled or answering nonsense reads as "no such
-    camera" rather than erroring: this is a probe, and the assertions that use
-    it already say what they expected to find.
-    """
-    try:
-        dump = subprocess.run(
-            ["pw-dump", "Node"], capture_output=True, text=True, timeout=20, check=False
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return []
-    if dump.returncode != 0:
-        return []
-    try:
-        objects = json.loads(dump.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    matched = []
-    for entry in objects:
-        properties = (entry.get("info") or {}).get("props") or {}
-        if properties.get("node.description") != camera_name:
-            continue
-        matched.append(properties)
-    return matched
-
-
-def await_pipewire_camera(
-    camera_name: str, present: bool, tatolabd: RuntimeProcessUnderTest
-) -> list[dict]:
-    deadline = time.monotonic() + CAMERA_APPEARS_TIMEOUT_SECONDS
-    while True:
-        found = pipewire_camera_nodes_named(camera_name)
-        if bool(found) == present:
-            return found
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                f"PipeWire node {camera_name!r} "
-                f"{'never appeared' if present else 'outlived its processor'}"
-                f"; tatolabd's standard error:\n{tatolabd.recent_stderr()}"
-            )
-        time.sleep(CAMERA_POLL_INTERVAL_SECONDS)
-
-
-def a_pipewire_session_answers() -> bool:
-    if shutil.which("pw-dump") is None:
-        return False
-    try:
-        probe = subprocess.run(
-            ["pw-dump", "Core"], capture_output=True, text=True, timeout=20, check=False
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return probe.returncode == 0
-
-
-needs_a_pipewire_session = pytest.mark.skipif(
-    not a_pipewire_session_answers(),
-    reason="no PipeWire session answers here, so the PipeWire door has nothing to register with",
-)
 
 
 needs_the_loopback_permission = pytest.mark.skipif(
@@ -368,18 +296,18 @@ def _add_a_test_pattern_into_virtual_cameras(
     taking the other door.
     """
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": width, "height": height}
+        TestPatternSource, config={"width": width, "height": height}
     )
     for camera_name in camera_names:
         sink = stream_builder.add(
-            tatolab.stream.VirtualCameraSink, config={"name": camera_name, "door": door}
+            VirtualCameraSink, config={"name": camera_name, "door": door}
         )
         stream_builder.connect(pattern.output("video"), sink.input("video"))
 
 
 @stream
 def a_virtual_camera_sink_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.VirtualCameraSink)
+    stream_builder.add(VirtualCameraSink)
 
 
 @stream
@@ -390,8 +318,10 @@ def a_test_pattern_into_a_loopback_camera_this_machine_may_refuse(
 
 
 @stream
-def a_test_pattern_into_a_pipewire_camera(stream_builder: StreamBuilder) -> None:
-    _add_a_test_pattern_into_virtual_cameras(stream_builder, [PIPEWIRE_CAMERA_NAME], "pipewire")
+def a_test_pattern_into_a_camera_on_the_pipewire_door(stream_builder: StreamBuilder) -> None:
+    _add_a_test_pattern_into_virtual_cameras(
+        stream_builder, [PIPEWIRE_DOOR_CAMERA_NAME], "pipewire"
+    )
 
 
 @stream
@@ -417,7 +347,7 @@ def a_test_pattern_into_a_loopback_camera_read_back_as_yuyv(
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback")
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
@@ -431,7 +361,7 @@ def test_node_name_defaults_to_the_type_name(
 # ---- without the permission: a refusal by name, and the runtime keeps running
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback")
 @pytest.mark.requires_gpu
 @pytest.mark.skipif(
     control_node_is_writable(),
@@ -452,7 +382,8 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
         stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
-    refusal = tatolabd.await_stderr_containing("Setup failed:")
+    tatolabd.await_stderr_containing("Setup failed:")
+    refusal = tatolabd.stderr_text
     assert node_states["virtualcamerasink"] == "Error", node_states
     assert node_states["testpatternsource"] == "Running", (
         f"the source keeps running beside the refused sink: {node_states}"
@@ -466,47 +397,36 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
     tatolabd.await_clean_exit()
 
 
-# ---- the door a machine with no permission gets ---------------------------
+# ---- the PipeWire door: refused by name, whatever the control node says ---
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback")
 @pytest.mark.requires_gpu
-@needs_a_pipewire_session
-@pytest.mark.rig_only_capability(reason="DMA-BUF modifiers")
-def test_without_the_control_node_a_pipewire_camera_node_appears(
+def test_the_pipewire_door_is_refused_naming_the_loopback_door_and_the_runtime_keeps_running(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """The second door, proven the way the first one is: a camera named in the
-    config is in the session graph while the graph runs and gone after it.
-
-    `media.class` and `media.role` are asserted rather than merely the name,
-    because WirePlumber's portal access rule grants camera clients exactly the
-    nodes carrying that pair — a node missing one is in `pw-dump` and in no
-    picker a user can see, which is the failure that looks like success."""
-    camera_name = PIPEWIRE_CAMERA_NAME
-    assert not pipewire_camera_nodes_named(camera_name), "a stale node carries this run's name"
-
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(a_test_pattern_into_a_pipewire_camera)
+        compile_stream_to_graph(a_test_pattern_into_a_camera_on_the_pipewire_door)
     )
-    tatolabd.local_api_client().await_every_node_running(
+
+    node_states = tatolabd.local_api_client().await_every_node_past_setup(
         stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
-    (node,) = await_pipewire_camera(camera_name, present=True, tatolabd=tatolabd)
-    assert node.get("media.class") == "Video/Source", node
-    assert node.get("media.role") == "Camera", node
-    assert node.get("node.name") == "streamlib-camera-streamlib-pipewire-" + str(os.getpid()), node
+    refusal = tatolabd.await_stderr_containing("no PipeWire camera door")
+    assert node_states["virtualcamerasink"] == "Error", node_states
+    assert node_states["testpatternsource"] == "Running", node_states
+    assert f'"{PIPEWIRE_DOOR_CAMERA_NAME}"' in refusal, refusal
+    assert 'door="auto"' in refusal, refusal
 
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
-    await_pipewire_camera(camera_name, present=False, tatolabd=tatolabd)
 
 
 # ---- a camera other applications see (GPU + the loopback permission) -------
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
@@ -544,7 +464,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     assert not video_nodes_named(second_name)
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(

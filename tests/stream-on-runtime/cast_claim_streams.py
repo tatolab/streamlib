@@ -9,9 +9,9 @@ probes that only need a real surface published by a real producer, so they run
 on any GPU rather than only on a rig with a camera.
 """
 
-import tatolab.stream
 from tatolab.camera import CameraSource
 from tatolab.stream import NodeReference, StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 import cast_claim_probes
 from camera_under_test import camera_source_config
@@ -23,7 +23,7 @@ def _add_the_camera(stream_builder: StreamBuilder) -> NodeReference:
 
 def _add_the_test_pattern(stream_builder: StreamBuilder) -> NodeReference:
     return stream_builder.add(
-        tatolab.stream.TestPatternSource, config={"width": 640, "height": 480}
+        TestPatternSource, config={"width": 640, "height": 480}
     )
 
 

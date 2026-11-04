@@ -9,7 +9,8 @@ from typing import Any
 from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
 from tatolab.h264 import H264Encoder
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 #: The deepest config the builder compiles: 126 containers from the compile
 #: document's root, less the document, its `streams` list, the stream's entry,

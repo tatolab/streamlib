@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-media-builtins"
-description = "First-party media built-ins: native pre-built blocks (test-pattern source, camera, video codecs) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
+description = "First-party media built-ins: native pre-built blocks (the relay track source) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -31,10 +31,6 @@ hang = { version = "=0.21.16" }
 streamlib-relay-track-reader = { path = "../streamlib-relay-track-reader" }
 tokio = { workspace = true }
 url = "2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-v4l = "0.14"
-libc = { workspace = true }
 
 [features]
 # Forwarded so a hardware-tier test in this crate gates the same way the engine's

@@ -11,8 +11,8 @@ extent — so every fit case has a stream of its own.
 
 from typing import Any
 
-import tatolab.stream
 from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 import model_input_tensor_kernel_probes
 
@@ -21,7 +21,7 @@ def _wire_a_test_pattern_into_probe(
     stream_builder: StreamBuilder, probe_class: type, probe_config: "dict[str, Any] | None"
 ) -> None:
     pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource,
+        TestPatternSource,
         config={
             "width": model_input_tensor_kernel_probes.FRAME_WIDTH,
             "height": model_input_tensor_kernel_probes.FRAME_HEIGHT,

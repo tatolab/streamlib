@@ -14,10 +14,10 @@
 mod common;
 
 use common::{
-    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
-    a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_mode_of, the_reloads_queued_at_the_start,
-    the_stream_action_once_ended,
+    NATIVE_ONLY_STREAM_NODE_NAME, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
+    a_native_only_stream_graph, a_stream_record, an_executable_standing_in_for_the_interpreter,
+    call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_mode_of,
+    the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -338,14 +338,14 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let exposed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "expose_port",
-        serde_json::json!({"stream": parked_stream_id, "node": "testpattern", "port": "video", "level": "private"}),
+        serde_json::json!({"stream": parked_stream_id, "node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private"}),
     )
     .json();
     first_runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
         exposed,
-        serde_json::json!({"stream": parked_stream_id, "node": "testpattern", "port": "video", "level": "private", "recorded": true})
+        serde_json::json!({"stream": parked_stream_id, "node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private", "recorded": true})
     );
     assert_eq!(the_mode_of(&record_path), 0o600);
     let recorded = machine_root
@@ -354,7 +354,7 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     assert!(recorded.stopped);
     assert_eq!(
         serde_json::to_value(&recorded.exposure_rulings).unwrap(),
-        serde_json::json!([{"node": "testpattern", "port": "video", "level": "private"}])
+        serde_json::json!([{"node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private"}])
     );
 
     let mut second_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(

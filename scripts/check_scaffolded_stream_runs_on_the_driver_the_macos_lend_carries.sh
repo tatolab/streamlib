@@ -11,8 +11,8 @@
 #
 # The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`
 # and the `tatolab-h264` module, from the wheel directories because no index
-# carries this version yet, and the numpy the scaffold declares — and no
-# runtime. Passes when `tatolabd` opened
+# carries this version yet, the `tatolab-testpattern` module from this
+# checkout, and the numpy the scaffold declares — and no runtime. Passes when `tatolabd` opened
 # the lend's Vulkan loader, the source wrote frames by the stream's `graph`, and
 # the encoder encoded or refused by name. Needs a Mac with no Vulkan driver of
 # its own, or the claim is not proven.
@@ -55,6 +55,9 @@ python3 -m venv /tmp/scaffold-check/.venv
   --find-links "$tatolab_stream_wheel_directory" --find-links "$tatolab_h264_wheel_directory" \
   tatolab-stream tatolab-h264
 /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
+# Pure Python; `--no-deps` keeps its `tatolab-stream` to this run's build.
+/tmp/scaffold-check/.venv/bin/pip install --no-deps \
+  "$(cd "$(dirname "$0")/.." && pwd)/packages/tatolab-testpattern"
 if /tmp/scaffold-check/.venv/bin/python -c '
 import importlib.util, sys
 sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)

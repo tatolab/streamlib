@@ -132,7 +132,10 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
 
         The destination is an `rgba8_unorm` texture of the source's extent,
         allocated with `"storage_binding"` usage; the conversion scales
-        nothing. `color_info` names the source's primaries, transfer, matrix
+        nothing. On Linux the reverse also holds: an RGBA texture converts
+        into a `yuyv` pixel buffer of its extent, tightly packed, which the
+        CPU reads once the call returns; `color_info` then names the
+        destination's matrix and range. `color_info` names the source's primaries, transfer, matrix
         and range, and an axis left `None` takes the YCbCr default (BT.709,
         limited range). The source's transfer curve is kept. The source is
         read through the plane layout it was registered with, so a padded

@@ -101,6 +101,16 @@
           "type": "toml",
           "path": "packages/tatolab-compositor/pyproject.toml",
           "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-testpattern/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-virtualcamera/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }

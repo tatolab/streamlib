@@ -16,10 +16,6 @@ from ._built_in_node import BuiltInNode
 __all__ = [
     "RelayTrackSource",
     "RelayTrackSourceConfig",
-    "TestPatternSource",
-    "TestPatternSourceConfig",
-    "VirtualCameraSink",
-    "VirtualCameraSinkConfig",
 ]
 
 
@@ -96,95 +92,3 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RelayTrackSource"
-
-
-class TestPatternSourceConfig(TypedDict, total=False):
-    """`TestPatternSource`'s config: the keys `stream_builder.add` takes."""
-
-    height: int
-    """Frame height in pixels.
-
-    Default: `720`.
-    """
-
-    width: int
-    """Frame width in pixels.
-
-    Default: `1280`.
-    """
-
-
-class TestPatternSource(BuiltInNode[TestPatternSourceConfig]):
-    """Synthetic SMPTE-style color bars with a bouncing potato and the sample stream's
-    captions, rendered on the GPU — demos a pipeline with no camera attached.
-
-    Outputs:
-        `video`: Test-pattern video frames.
-            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-
-    Config: `TestPatternSourceConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:TestPatternSource"
-
-    # Keeps pytest from collecting the `Test*`-named class in user suites.
-    __test__: ClassVar[bool] = False
-
-
-class VirtualCameraSinkConfig(TypedDict, total=False):
-    """`VirtualCameraSink`'s config: the keys `stream_builder.add` takes."""
-
-    door: Literal["auto", "v4l2loopback", "pipewire"]
-    """Which door to take.
-
-    Values:
-        `auto`: The loopback door when the control node is writable, else PipeWire.
-        `v4l2loopback`: The loopback door or a refusal by name.
-        `pipewire`: The PipeWire camera door.
-
-    Default: `"auto"`.
-    """
-
-    name: str | None
-    """The camera's name in every picker. Absent: `StreamLib Camera` plus a short id
-    that is unique per node and stream and stable across runs of the stream.
-    """
-
-
-class VirtualCameraSink(BuiltInNode[VirtualCameraSinkConfig]):
-    """Presents video frames as a virtual camera any Linux application can select.
-
-    Each instance is one camera that exists while its node runs — created at setup,
-    removed at teardown, like a USB camera plugged in and pulled out — showing whatever
-    the graph writes into it. Add as many instances as the graph needs; each is its own
-    camera. Off Linux the runtime refuses a graph naming it at load, naming the
-    platform.
-
-    Under the `auto` door the sink creates a v4l2loopback device when the module's
-    control node is writable — the door every application sees — and otherwise registers
-    a PipeWire camera node, which needs no module and no root. The door is logged at
-    setup; without permission to create a loopback camera the log names `tatolab
-    enable-virtual-camera`, the one-time command that grants it behind your desktop's
-    password prompt. The `v4l2loopback` door refuses by name at `setup()` in that case,
-    and the runtime keeps running. The `pipewire` door is taken whatever the control
-    node says, refusing by name where no PipeWire session answers, or where the device
-    the runtime built on exports no DMA-BUF (the software device never does) — there
-    only the loopback door serves, and `auto` without its permission refuses too. One
-    instance is never on both doors: a session manager mirrors every V4L2 capture device
-    into the portal's camera set, so it would list the same camera twice. The engine
-    never loads a module or asks for elevation.
-
-    A loopback device a reader still holds at teardown is left in place and reclaimed by
-    name at the next setup; a PipeWire node is gone with its stream. Frames are stamped
-    with their monotonic timestamp on both doors, and the format follows the first
-    frame's extent — YUYV at an even width on the loopback door, RGBA offered as a
-    DMA-BUF the consumer imports with no copy (or a shared-memory sibling) on the
-    PipeWire one. An extent change re-negotiates it.
-
-    Inputs:
-        `video` (newest): Video frames to present as the camera's picture.
-
-    Config: `VirtualCameraSinkConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:VirtualCameraSink"

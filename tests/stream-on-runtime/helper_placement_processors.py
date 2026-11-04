@@ -85,25 +85,22 @@ class ReportsUpstreamProcessSink:
 
 
 @node
-class ReportsItsOwnProcessVideoSink:
-    """Announces its own process, reading frames a native built-in produced.
+class ReportsItsOwnProcessTrackSink:
+    """Announces its own process at setup, downstream of a native built-in.
 
-    The frames come from `TestPatternSource`, which is native and therefore
+    The track comes from `RelayTrackSource`, which is native and therefore
     has no process of its own — so this sink's pid, set against `tatolabd`'s,
     is what discriminates the two sides of the boundary.
     """
 
-    def __init__(self) -> None:
-        self.announced = False
-
     @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    def track_from_upstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        report("TRACK_SINK_PID", {"pid": os.getpid()})
 
     def process(self, ctx) -> None:
-        if ctx.inputs.read("video_from_upstream") is None or self.announced:
-            return
-        self.announced = True
-        report("VIDEO_SINK_PID", {"pid": os.getpid()})
+        ctx.inputs.read("track_from_upstream")
 
 
 @node(execution="continuous", interval_ms=10)

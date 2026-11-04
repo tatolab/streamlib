@@ -533,3 +533,93 @@ fn a_foreign_dma_buf_read_through_a_host_mapping_converts_through_its_padded_lay
     }
     service.stop();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_rgba_texture_converts_into_a_yuyv_pixel_buffer_the_cpu_reads() {
+    let Some(gpu) = gpu_or_skip("an_rgba_texture_converts_into_a_yuyv_pixel_buffer_the_cpu_reads")
+    else {
+        return;
+    };
+    let registry = EscalateHandleRegistry::new();
+    let (yuyv_source_id, _yuyv_source) = a_pooled_yuyv_frame(&gpu);
+    let rgba_texture_id = a_storage_texture(&gpu, PIXEL_WIDTH, storage_and_copy_usage());
+    convert_through_the_escalate_op(
+        &gpu,
+        &registry,
+        &yuyv_source_id,
+        &rgba_texture_id,
+        bt709_limited(),
+    )
+    .expect("the white-and-black picture lands in an RGBA texture");
+    let (yuyv_destination_id, yuyv_destination) = gpu
+        .acquire_pixel_buffer(PIXEL_WIDTH, PIXEL_HEIGHT, PixelFormat::Yuyv422)
+        .expect("a YUYV destination");
+    yuyv_destination
+        .write_this_plane_from(
+            0,
+            &vec![PADDING_BYTE; (PIXEL_WIDTH * PIXEL_HEIGHT * 2) as usize],
+        )
+        .expect("fill the destination with padding");
+
+    convert_through_the_escalate_op(
+        &gpu,
+        &registry,
+        &rgba_texture_id,
+        &yuyv_destination_id.to_string(),
+        bt709_limited(),
+    )
+    .expect("RGBA → YUYV");
+
+    let converted = unsafe {
+        std::slice::from_raw_parts(
+            yuyv_destination.plane_base_address(0),
+            (PIXEL_WIDTH * PIXEL_HEIGHT * 2) as usize,
+        )
+    };
+    for (at, (&value, &expected)) in converted.iter().zip(yuyv_bytes().iter()).enumerate() {
+        assert!(
+            value.abs_diff(expected) <= CHANNEL_TOLERANCE,
+            "byte {at} is {value}, expected {expected}"
+        );
+    }
+    assert_eq!(
+        gpu.producer_registered_texture_for_surface_id(&rgba_texture_id)
+            .expect("registered")
+            .current_layout(),
+        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        "the source rests where a sampler reads it"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_yuyv_pixel_buffer_of_another_extent_is_refused() {
+    let Some(gpu) = gpu_or_skip("a_yuyv_pixel_buffer_of_another_extent_is_refused") else {
+        return;
+    };
+    let registry = EscalateHandleRegistry::new();
+    let (yuyv_source_id, _yuyv_source) = a_pooled_yuyv_frame(&gpu);
+    let rgba_texture_id = a_storage_texture(&gpu, PIXEL_WIDTH, storage_and_copy_usage());
+    convert_through_the_escalate_op(
+        &gpu,
+        &registry,
+        &yuyv_source_id,
+        &rgba_texture_id,
+        bt709_limited(),
+    )
+    .expect("an RGBA texture to convert out of");
+    let (wider_destination_id, _wider_destination) = gpu
+        .acquire_pixel_buffer(PIXEL_WIDTH * 2, PIXEL_HEIGHT, PixelFormat::Yuyv422)
+        .expect("a wider YUYV destination");
+
+    let refusal = convert_through_the_escalate_op(
+        &gpu,
+        &registry,
+        &rgba_texture_id,
+        &wider_destination_id.to_string(),
+        bt709_limited(),
+    )
+    .expect_err("the conversion scales nothing");
+    assert!(refusal.contains("scales nothing"), "{refusal}");
+}

@@ -12,8 +12,8 @@ local relay. Node names carry the stream's number, so the runtime's log tells
 each helper apart.
 """
 
-import tatolab.stream
 from tatolab.stream import StreamBuilder
+from tatolab.testpattern import TestPatternSource
 
 from tatolab.h264 import H264Encoder
 
@@ -27,7 +27,7 @@ def test_pattern_through_an_owned_device_encoder(
 ) -> None:
     """Add `test_pattern_<n>` → `encoder_<n>` and expose the encoder's `encoded_video`."""
     test_pattern = stream_builder.add(
-        tatolab.stream.TestPatternSource, name=f"test_pattern_{stream_number}"
+        TestPatternSource, name=f"test_pattern_{stream_number}"
     )
     encoder = stream_builder.add(
         H264Encoder,

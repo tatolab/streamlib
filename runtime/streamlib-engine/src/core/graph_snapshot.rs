@@ -774,13 +774,16 @@ mod tests {
     }
 
     #[test]
-    fn a_built_in_this_floor_compiles_out_is_refused_naming_this_floor_and_where_it_runs() {
-        let compiled_out_here =
-            ProcessorClassImportPath::of_built_in_node("GraphSnapshotTestCompiledOutHere");
-        PROCESSOR_REGISTRY
-            .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
+    fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
+        let moved_out = ProcessorClassImportPath::of_built_in_node("GraphSnapshotTestMovedOut");
+        PROCESSOR_REGISTRY.register_built_in_node_type_moved_to_a_module(
+            moved_out.clone(),
+            ProcessorClassImportPath::new("tatolab.snapshottest:GraphSnapshotTestMovedOut")
+                .unwrap(),
+            "tatolab-snapshottest",
+        );
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "elsewhere", "type": compiled_out_here.as_str()}]
+            "nodes": [{"name": "moved", "type": moved_out.as_str()}]
         }))
         .unwrap();
 
@@ -789,19 +792,18 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(&refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { node_type, .. } if *node_type == compiled_out_here),
+            matches!(&refusal, Error::BuiltInNodeTypeMovedToAModule { node_type, .. } if *node_type == moved_out),
             "{refusal:?}"
         );
         let refusal = refusal.to_string();
         assert!(
-            refusal.contains("`tatolab.stream:GraphSnapshotTestCompiledOutHere`"),
+            refusal.contains("`tatolab.snapshottest:GraphSnapshotTestMovedOut`"),
             "{refusal}"
         );
-        assert!(refusal.contains("runs on Plan 9 only"), "{refusal}");
-        #[cfg(target_os = "macos")]
-        assert!(refusal.contains("on macOS"), "{refusal}");
-        #[cfg(target_os = "linux")]
-        assert!(refusal.contains("on Linux"), "{refusal}");
+        assert!(
+            refusal.contains("pip install tatolab-snapshottest"),
+            "{refusal}"
+        );
     }
 
     #[test]

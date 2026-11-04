@@ -238,7 +238,8 @@ jobs:
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
       extension_build_needs_the_shader_compilers: true
 
-  # A user's `uv sync` resolves `tatolab-stream` and `tatolab-h264` from PyPI,
+  # A user's `uv sync` resolves `tatolab-stream`, `tatolab-h264` and
+  # `tatolab-testpattern` from PyPI,
   # where every earlier release is a candidate. This run's distributions are not
   # there yet, so they join PyPI as find-links, and the scaffold must lock the
   # ones just built — a scaffold that capped a version or named another index
@@ -248,6 +249,7 @@ jobs:
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-h264-distribution
+      - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -265,14 +267,14 @@ jobs:
         with:
           version: ${{ env.PINNED_UV_VERSION }}
 
-      - name: Collect the tatolab-stream and tatolab-h264 this run built
+      - name: Collect the tatolab-stream, tatolab-h264 and tatolab-testpattern this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: pypi-distribution-tatolab-{stream,h264-*}
+          pattern: pypi-distribution-tatolab-{stream,h264-*,testpattern}
           path: /tmp/this-runs-distributions
           merge-multiple: true
 
-      - name: The scaffold locks this run's tatolab-stream and tatolab-h264
+      - name: The scaffold locks this run's tatolab-stream, tatolab-h264 and tatolab-testpattern
         run: |
           set -euo pipefail
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
@@ -281,7 +283,7 @@ jobs:
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-h264; do
+          for distribution_name in tatolab-stream tatolab-h264 tatolab-testpattern; do
             locked_version="$(python3 - "$distribution_name" <<'EOF'
           import sys
           import tomllib
@@ -384,6 +386,115 @@ jobs:
           path: packages/tatolab-compositor/dist/*.whl
           if-no-files-found: error
 
+  # Pure Python, so one wheel serves every platform, and it ships as a namespace
+  # portion of `tatolab` beside the stream package. A wheel only, as for every
+  # extension: an sdist would archive LICENSE as the symlink it is here.
+  build-tatolab-testpattern-distribution:
+    name: tatolab-testpattern wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-testpattern wheel
+        run: uv build --wheel --out-dir packages/tatolab-testpattern/dist packages/tatolab-testpattern
+
+      # The kernel source and the two baked overlays are read from the package
+      # at setup, so a wheel without them builds a node that cannot render.
+      - name: The wheel ships the kernel, the overlays, its licence and no tatolab/__init__.py
+        run: |
+          set -euo pipefail
+          unzip -Z1 packages/tatolab-testpattern/dist/*.whl > /tmp/testpattern-wheel-member-names.txt
+          for required_member in \
+            tatolab/testpattern/__init__.py \
+            tatolab/testpattern/test_pattern_frame.comp \
+            tatolab/testpattern/potato_sprite_160x160.rgba \
+            tatolab/testpattern/sample_stream_captions_548x62.rgba; do
+            if ! grep -qx "$required_member" /tmp/testpattern-wheel-member-names.txt; then
+              echo "::error::the tatolab-testpattern wheel does not list $required_member"
+              exit 1
+            fi
+          done
+          if ! grep -q '\.dist-info/licenses/LICENSE$' /tmp/testpattern-wheel-member-names.txt; then
+            echo "::error::the tatolab-testpattern wheel carries no LICENSE in .dist-info/licenses/"
+            exit 1
+          fi
+          if grep -qx 'tatolab/__init__.py' /tmp/testpattern-wheel-member-names.txt; then
+            echo "::error::the tatolab-testpattern wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
+      - name: Keep the wheel for the upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: pypi-distribution-tatolab-testpattern
+          path: packages/tatolab-testpattern/dist/*.whl
+          if-no-files-found: error
+
+  # Pure Python and Linux only at run time, so one wheel serves every platform.
+  # A wheel only: an sdist would archive LICENSE as the symlink it is here.
+  build-tatolab-virtualcamera-distribution:
+    name: tatolab-virtualcamera wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-virtualcamera wheel
+        run: uv build --wheel --out-dir packages/tatolab-virtualcamera/dist packages/tatolab-virtualcamera
+
+      - name: The wheel ships the sink, its kernel ABI and its licence and no tatolab/__init__.py
+        run: |
+          set -euo pipefail
+          unzip -Z1 packages/tatolab-virtualcamera/dist/*.whl > /tmp/virtualcamera-wheel-member-names.txt
+          for required_member in \
+            tatolab/virtualcamera/__init__.py \
+            tatolab/virtualcamera/v4l2_output_device_abi.py \
+            tatolab/virtualcamera/v4l2loopback_control_node.py \
+            tatolab/virtualcamera/v4l2_loopback_output_device.py; do
+            if ! grep -qx "$required_member" /tmp/virtualcamera-wheel-member-names.txt; then
+              echo "::error::the tatolab-virtualcamera wheel does not list $required_member"
+              exit 1
+            fi
+          done
+          if ! grep -q '\.dist-info/licenses/LICENSE$' /tmp/virtualcamera-wheel-member-names.txt; then
+            echo "::error::the tatolab-virtualcamera wheel carries no LICENSE in .dist-info/licenses/"
+            exit 1
+          fi
+          if grep -qx 'tatolab/__init__.py' /tmp/virtualcamera-wheel-member-names.txt; then
+            echo "::error::the tatolab-virtualcamera wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
+      - name: Keep the wheel for the upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: pypi-distribution-tatolab-virtualcamera
+          path: packages/tatolab-virtualcamera/dist/*.whl
+          if-no-files-found: error
+
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution
     permissions:
@@ -413,13 +524,15 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
-  # The stream `tatolab new` scaffolds imports `tatolab.h264`, so the machines
-  # are given the manylinux wheel this run built, as a user's `uv sync` would.
+  # The stream `tatolab new` scaffolds imports `tatolab.h264` and
+  # `tatolab.testpattern`, so the machines are given the distributions this run
+  # built, as a user's `uv sync` would.
   check-the-linux-runtime-tarball-on-machines-with-no-vulkan-driver:
     name: The Linux runtime tarball starts a stream on machines with no Vulkan driver
     needs:
       - build-linux-runtime-tarball
       - build-tatolab-h264-distribution
+      - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -441,13 +554,19 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: pypi-distribution-tatolab-h264-manylinux
-          path: ${{ runner.temp }}/tatolab-h264-distribution
+          path: ${{ runner.temp }}/first-party-module-distributions
+
+      - name: Collect the tatolab-testpattern distribution this run built
+        uses: actions/download-artifact@v7
+        with:
+          name: pypi-distribution-tatolab-testpattern
+          path: ${{ runner.temp }}/first-party-module-distributions
 
       - name: The tarball starts a stream on machines with no Vulkan driver
         run: >-
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
-          "$RUNNER_TEMP/tatolab-h264-distribution"
+          "$RUNNER_TEMP/first-party-module-distributions"
 
   # Before PyPI takes anything: an upload whose Linux runtime could not then be
   # published would leave the release half out.
@@ -483,6 +602,8 @@ jobs:
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
+      - build-tatolab-testpattern-distribution
+      - build-tatolab-virtualcamera-distribution
       - build-tatolab-h264-distribution
       - build-tatolab-h265-distribution
       - build-tatolab-camera-distribution

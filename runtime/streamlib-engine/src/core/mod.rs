@@ -84,7 +84,10 @@ pub mod processor_interpreter {
     };
     pub use super::compiler::compiler_ops::processor_interpreter_spawn_host::{
         PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
+        PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
         PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
+        PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
+        PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
         SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, processor_interpreter_bootstrap_path,
     };
     pub use super::compiler::compiler_ops::python_processor_declaration::{

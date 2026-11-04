@@ -45,10 +45,11 @@ SECONDS_A_STARVED_OUTPUT_IS_WATCHED = 0.5
 # processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 
-# The stream the test launches: one native source and nothing else. Everything
+# The stream the test launches: one test pattern source and nothing else. Everything
 # downstream of it is added live.
 STREAM_WITH_ONE_PATTERN_SOURCE = '''\
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, stream
+from tatolab.testpattern import TestPatternSource
 
 
 @stream
@@ -129,7 +130,7 @@ class LiveAddedEffect:
 
 # A native built-in is named over the control plane by the type `graph`
 # reports for one, its class in `tatolab.stream`.
-LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:TestPatternSource"
+LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:RelayTrackSource"
 
 
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
@@ -236,7 +237,7 @@ def start_the_pattern_stream(
     project_files: "dict[str, str]",
 ) -> PatternStreamRunning:
     """`tatolab run` on a project holding the one-source stream and `project_files`,
-    once its engine has started."""
+    once its engine has started and its source is running."""
     app_directory = make_tatolab_project(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}
     )
@@ -244,11 +245,13 @@ def start_the_pattern_stream(
     tatolab_run = tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory))
     stream_id = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_id"]
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    local_api = tatolabd.local_api_client()
+    local_api.await_every_node_running(stream=stream_id)
     return PatternStreamRunning(
         app_directory=app_directory,
         tatolabd=tatolabd,
         tatolab_run=tatolab_run,
-        local_api=tatolabd.local_api_client(),
+        local_api=local_api,
         stream_id=stream_id,
     )
 
@@ -265,8 +268,8 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     connect wires a link into a source that was already publishing; the second
     consumer of that same source port proves the channel was sized for a late
     subscriber; the downstream effect proves a helper's output can be wired
-    after its setup; the live-added pattern proves a native built-in can be
-    added live; the disconnect stops the flow
+    after its setup; the live-added relay track proves a native built-in can
+    be added live; the disconnect stops the flow
     the tap was seeing; the remove takes the processor and its links away.
     """
     pattern_stream = start_the_pattern_stream(
@@ -387,17 +390,17 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     # A native built-in added live, by the type `graph` reports for one: its
     # class in `tatolab.stream`, resolved apart from a project's processors.
-    live_added_pattern = local_api.call_tool(
+    live_added_relay_track = local_api.call_tool(
         "add_node",
         {
             "stream": stream_id,
             "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
-            "config": {"width": 320, "height": 180},
-            "name": "live-added-pattern",
+            "config": {"broadcast": "desk/live-added.hang", "track": "pattern/video"},
+            "name": "live-added-relay-track",
         },
     )
     assert (
-        await_node_state(local_api, stream_id, live_added_pattern["name"], "Running")
+        await_node_state(local_api, stream_id, live_added_relay_track["name"], "Running")
         == "Running"
     )
 

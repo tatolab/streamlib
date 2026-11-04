@@ -8,6 +8,8 @@ path of its class, `stream_graph_builder_nodes:<qualname>` — a name a child
 process can import.
 """
 
+import dataclasses
+
 from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
@@ -55,3 +57,24 @@ class FrameFilters:
             frame = ctx.inputs.read("video_from_upstream")
             if frame is not None:
                 ctx.outputs.write("video_to_downstream", frame)
+
+
+@dataclasses.dataclass
+class RigMonitorConfig:
+    """What a `RigMonitor` shows its picture under."""
+
+    name: "str | None" = None
+
+
+@node
+class RigMonitor:
+    """Shows each frame it reads under the name it is configured with."""
+
+    def __init__(self, config: RigMonitorConfig) -> None:
+        self._config = config
+
+    @node.input(delivery_profile="newest")
+    def video(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("video")

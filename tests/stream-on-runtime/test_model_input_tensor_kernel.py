@@ -5,7 +5,7 @@
 beneath `tatolabd`, and matches a torch reference of the same parameters for every fit, layout and
 dtype.
 
-Every probe runs in a processor interpreter fed by a native `TestPatternSource`,
+Every probe runs in a processor interpreter fed by the `TestPatternSource` module,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the
 scenario's stream on `tatolabd` and asserts on that line. A rig whose torch
 sees no device to read the tensor on skips.

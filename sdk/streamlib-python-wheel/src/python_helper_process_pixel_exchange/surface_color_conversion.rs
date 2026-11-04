@@ -12,8 +12,9 @@ use super::{HelperProcessGpuExchangeClient, escalate_round_trip_to_parent};
 const COLOR_INFO_AXIS_ATTRIBUTES: [&str; 4] = ["primaries", "transfer", "matrix", "range"];
 
 impl HelperProcessGpuExchangeClient {
-    /// Have the engine convert one YCbCr pixel buffer into an RGBA texture
-    /// with its colour converter, returning once the conversion has retired.
+    /// Have the engine convert one YCbCr pixel buffer into an RGBA texture —
+    /// or on Linux an RGBA texture into a `yuyv` pixel buffer — with its
+    /// colour converter, returning once the conversion has retired.
     ///
     /// The parent resolves an adopted source once and keeps it for this
     /// helper's later conversions, so this client marks each adoption it

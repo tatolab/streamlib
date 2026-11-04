@@ -23,7 +23,6 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
-from tatolab.stream import TestPatternSource
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -152,7 +151,7 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
     stream_graph = compiled["stream_graph"]
     assert stream_graph["stream"] == "main"
     assert [node["type"] for node in stream_graph["nodes"]] == [
-        TestPatternSource.type,
+        "tatolab.testpattern:TestPatternSource",
         "nodes.halftone_lens_effect:HalftoneLensEffect",
         "nodes.brightness_meter:BrightnessMeter",
         "tatolab.h264.processors:H264Encoder",

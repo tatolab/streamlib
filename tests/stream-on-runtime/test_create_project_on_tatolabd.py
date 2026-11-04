@@ -84,13 +84,15 @@ def create_project_through_tatolab_mcp(
     return asyncio.run(asyncio.wait_for(create_through_the_verb(), MCP_SESSION_TIMEOUT_SECONDS))
 
 
-def point_tatolab_stream_and_the_h264_module_at_this_checkout(project_directory: Path) -> None:
-    """Have uv take `tatolab-stream` and `tatolab-h264` from this checkout, as the suite tests them."""
+def point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory: Path) -> None:
+    """Have uv take `tatolab-stream`, `tatolab-h264` and `tatolab-testpattern` from this checkout,
+    as the suite tests them."""
     with (project_directory / "pyproject.toml").open("a", encoding="utf-8") as pyproject:
         pyproject.write(
             "\n[tool.uv.sources]\n"
             f'tatolab-stream = {{ path = "{REPOSITORY_ROOT / "sdk" / "tatolab-stream"}" }}\n'
             f'tatolab-h264 = {{ path = "{REPOSITORY_ROOT / "packages" / "streamlib-h264"}" }}\n'
+            f'tatolab-testpattern = {{ path = "{REPOSITORY_ROOT / "packages" / "tatolab-testpattern"}" }}\n'
         )
 
 
@@ -149,7 +151,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     queued_stop = local_api.call_tool("stop_stream", {"stream": created["stream"]})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
     (project_directory / ".venv").unlink()
-    point_tatolab_stream_and_the_h264_module_at_this_checkout(project_directory)
+    point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory)
     queued_start = local_api.call_tool("start_stream", {"stream": created["stream"]})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 

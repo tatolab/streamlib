@@ -134,24 +134,25 @@ VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and tatolab-opus, and \`maturin develop\` this wheel into it"
 
-# The streams capture, play and code video through the microphone, speaker and
-# H.264 modules, built from this checkout into that venv when it cannot import them.
-if ! "$VENV_PYTHON" -c 'import tatolab.microphone, tatolab.speaker, tatolab.h264' >/dev/null 2>&1; then
-    say "building tatolab-microphone, tatolab-speaker and tatolab-h264 into $PACKAGE_DIR/.venv"
+# The streams draw, capture, play and code video through the test pattern,
+# microphone, speaker and H.264 modules, built from this checkout into that venv
+# when it cannot import them.
+if ! "$VENV_PYTHON" -c 'import tatolab.microphone, tatolab.speaker, tatolab.h264, tatolab.testpattern' >/dev/null 2>&1; then
+    say "building tatolab-microphone, tatolab-speaker, tatolab-h264 and tatolab-testpattern into $PACKAGE_DIR/.venv"
     VIRTUAL_ENV="$PACKAGE_DIR/.venv" uv pip install --quiet \
         "$REPO_ROOT/packages/tatolab-microphone" "$REPO_ROOT/packages/tatolab-speaker" \
-        "$REPO_ROOT/packages/streamlib-h264" >&2 \
-        || cannot_run "the audio and H.264 modules did not build into $PACKAGE_DIR/.venv"
+        "$REPO_ROOT/packages/streamlib-h264" "$REPO_ROOT/packages/tatolab-testpattern" >&2 \
+        || cannot_run "the audio, H.264 and test pattern modules did not build into $PACKAGE_DIR/.venv"
 fi
 
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
 # would be measured and reported as a PASS for code that is not in the tree.
 if ! IMPORT_FAILURE="$("$VENV_PYTHON" -c '
 import tatolab.h264
-import tatolab.stream
+from tatolab.testpattern import TestPatternSource
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
-_ = (tatolab.stream.TestPatternSource, tatolab.h264.H264Decoder, OpusEncoder, OpusDecoder, WhepPlayer, WhipPublisher)
+_ = (TestPatternSource, tatolab.h264.H264Decoder, OpusEncoder, OpusDecoder, WhepPlayer, WhipPublisher)
 ' 2>&1)"; then
     say "$IMPORT_FAILURE" >&2
     cannot_run "the venv cannot import this wheel beside tatolab-stream. Rebuild with \`maturin develop\` — this arm measures the extension, not the tree."
