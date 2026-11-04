@@ -99,10 +99,11 @@ class ReleasingEveryDistributionOnTheOneVersion(unittest.TestCase):
             distribution_name,
         ) in extension_package_directory_and_distribution_names():
             package_path = f"packages/{directory_name}"
-            for manifest_name, version_table in (
-                ("Cargo.toml", "package"),
-                ("pyproject.toml", "project"),
-            ):
+            # A pure-Python extension has no crate manifest to move.
+            versioned_manifests = [("pyproject.toml", "project")]
+            if (REPOSITORY_ROOT / package_path / "Cargo.toml").is_file():
+                versioned_manifests.append(("Cargo.toml", "package"))
+            for manifest_name, version_table in versioned_manifests:
                 manifest = tomllib.loads(
                     (REPOSITORY_ROOT / package_path / manifest_name).read_text(
                         encoding="utf-8"
@@ -113,26 +114,17 @@ class ReleasingEveryDistributionOnTheOneVersion(unittest.TestCase):
                     seeded_release_version(),
                     f"{distribution_name} {manifest_name}",
                 )
+                self.assertIn(
+                    {
+                        "type": "toml",
+                        "path": f"{package_path}/{manifest_name}",
+                        "jsonpath": f"$.{version_table}.version",
+                    },
+                    extra_files,
+                    f"{distribution_name} {manifest_name}",
+                )
             self.assertNotIn(package_path, configured_packages, distribution_name)
             self.assertNotIn(package_path, seeded_packages, distribution_name)
-            self.assertIn(
-                {
-                    "type": "toml",
-                    "path": f"{package_path}/Cargo.toml",
-                    "jsonpath": "$.package.version",
-                },
-                extra_files,
-                distribution_name,
-            )
-            self.assertIn(
-                {
-                    "type": "toml",
-                    "path": f"{package_path}/pyproject.toml",
-                    "jsonpath": "$.project.version",
-                },
-                extra_files,
-                distribution_name,
-            )
 
     def test_the_release_builds_and_publishes_every_extension(self):
         release_workflow = (
@@ -143,9 +135,11 @@ class ReleasingEveryDistributionOnTheOneVersion(unittest.TestCase):
             _,
             distribution_name,
         ) in extension_package_directory_and_distribution_names():
-            self.assertIn(
-                f"extension_distribution_name: {distribution_name}\n",
-                release_workflow,
+            # A compiled extension is built by reusable-extension-wheel.yml; a
+            # pure-Python one keeps its distributions as its own artifact.
+            self.assertTrue(
+                f"extension_distribution_name: {distribution_name}\n" in release_workflow
+                or f"name: pypi-distribution-{distribution_name}\n" in release_workflow,
                 f"{RELEASE_TO_PYPI_WORKFLOW_RELATIVE_PATH} never builds {distribution_name}",
             )
 

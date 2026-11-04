@@ -29,16 +29,28 @@ on:
         description: "This run's artifact holding the tatolab-stream the release publishes beside the extension"
         type: string
         required: true
-      extension_build_compiles_glsl_with_glslc:
-        description: "Whether a build script in the extension's closure runs glslc, which the manylinux image lacks"
+      extension_build_needs_the_shader_compilers:
+        description: "Whether a build script in the extension's closure runs glslc, glslangValidator or spirv-opt, which the manylinux image lacks"
         type: boolean
         required: false
         default: false
+      extension_build_extra_dnf_packages:
+        description: "Packages the extension's manylinux build installs beside the ones every extension needs"
+        type: string
+        required: false
+        default: ""
+      extension_builds_for_macos:
+        description: "Whether the extension has an Apple Silicon wheel; false for a Linux-only one"
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   build-extension-wheel:
     name: ${{ matrix.platform }} wheel (${{ inputs.extension_distribution_name }})
-    runs-on: ${{ matrix.runner }}
+    # macos-26 is pinned for the reason reusable-macos-runtime-unit.yml pins it:
+    # the image decides the SDK the wheel links against.
+    runs-on: ${{ matrix.platform == 'manylinux' && 'ubuntu-latest' || 'macos-26' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -49,13 +61,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: manylinux
-            runner: ubuntu-latest
-          # Pinned for the reason reusable-macos-runtime-unit.yml pins it: the image decides
-          # the SDK the wheel links against.
-          - platform: aarch64-apple-darwin
-            runner: macos-26
+        platform: [manylinux, aarch64-apple-darwin]
+        exclude:
+          - platform: ${{ !inputs.extension_builds_for_macos && 'aarch64-apple-darwin' || 'no-platform-excluded' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -110,10 +118,10 @@ jobs:
               return 1
             }
             install_build_dependencies_with_bounded_retry \
-              pkgconfig clang-devel cmake ninja-build
-            if [ "${{ inputs.extension_build_compiles_glsl_with_glslc }}" = true ]; then
-              bash "$GITHUB_WORKSPACE/scripts/install_glslc_from_the_locked_shaderc_sources.sh" /opt/glslc
-              export PATH="/opt/glslc/bin:$PATH"
+              pkgconfig clang-devel cmake ninja-build ${{ inputs.extension_build_extra_dnf_packages }}
+            if [ "${{ inputs.extension_build_needs_the_shader_compilers }}" = true ]; then
+              bash "$GITHUB_WORKSPACE/scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh" /opt/shader-compilers
+              export PATH="/opt/shader-compilers/bin:$PATH"
             fi
 
       # The image ships both, which is all `aws-lc-sys` needs here.
