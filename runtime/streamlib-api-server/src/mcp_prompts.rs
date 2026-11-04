@@ -30,12 +30,10 @@ use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, Runtime
 
 use crate::mcp::LocalApiMcpServerHandler;
 
-/// The import path `VirtualCameraSink` registers under, which the virtual
-/// camera recipe looks up in the catalog. This crate does not link the media
-/// built-ins, so a dev-dependency test pins it against the built-in's own
-/// derived path.
+/// The node type the `tatolab-virtualcamera` distribution declares, which the
+/// virtual camera recipe looks up in the catalog.
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
-    "tatolab.stream:VirtualCameraSink";
+    "tatolab.virtualcamera:VirtualCameraSink";
 
 const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the recipe is rendered against and every step's tool call names, by the name `list_streams` and `graph` report.";
 const LINK_ID_ARGUMENT_DESCRIPTION: &str =
@@ -543,7 +541,8 @@ fn show_channel_on_virtual_camera_recipe(
         McpError::invalid_params(
             format!(
                 "this node's catalog has no `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`: \
-                 the virtual camera is a Linux built-in"
+                 the virtual camera is the Linux module `tatolab-virtualcamera`, installed in \
+                 the stream's environment"
             ),
             None,
         )
@@ -590,9 +589,8 @@ fn show_channel_on_virtual_camera_recipe(
             graph_recipe_step_calling_tool(
                 "graph",
                 "confirm the link `connect` returned has `state` `wired` and the camera's node's \
-                 `components.state` is `Running`. `VirtualCameraSink` is a native built-in, so \
-                 its link is wired as soon as `connect` returns; a link onto a node in a helper \
-                 process instead reads `pending` until that helper answers, and `error` with the \
+                 `components.state` is `Running`. `VirtualCameraSink` runs in a helper process, \
+                 so its link reads `pending` until that helper answers, and `error` with the \
                  helper's own reason in `error_reason` where it could not open its port.",
             ),
         ],
@@ -600,16 +598,4 @@ fn show_channel_on_virtual_camera_recipe(
             "The camera goes away with its node: `remove_node` with that `name`.".to_string(),
         ),
     })
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    #[test]
-    fn the_virtual_camera_prompt_names_the_path_the_built_in_registers_under() {
-        assert_eq!(
-            super::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
-            streamlib_media_builtins::VirtualCameraSink::Processor::processor_class_import_path()
-                .as_str()
-        );
-    }
 }

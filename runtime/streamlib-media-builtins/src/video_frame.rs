@@ -279,26 +279,6 @@ pub struct MasteringDisplay {
     pub white_point_y: u32,
 }
 
-// The engine accepts only its own primitive types in public signatures, so a
-// bag's colour reaches the engine as H.273 bytes and resolves through the
-// engine's one byte → id table.
-
-impl ColorInfo {
-    /// The fully resolved description the engine's colour kernels take:
-    /// every absent axis filled with `resolve_color_defaults`' answer for a
-    /// source of `kind`.
-    #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn resolve_defaults(
-        &self,
-        kind: streamlib::sdk::color::ColorSpaceKind,
-    ) -> streamlib::sdk::color::ResolvedColorInfo {
-        use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
-        use streamlib::sdk::color::ResolveH273ColorVuiDefaults as _;
-
-        color_info_to_h273_color_vui(self).resolve_defaults(kind)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,9 +444,15 @@ mod tests {
     /// bag's colour see.
     #[test]
     fn every_bag_colour_name_resolves_to_the_engine_id_it_always_has() {
-        use streamlib::sdk::color::{ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId};
+        use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
+        use streamlib::sdk::color::{
+            ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolveH273ColorVuiDefaults as _,
+            TransferId,
+        };
 
-        let resolved = |color_info: ColorInfo| color_info.resolve_defaults(ColorSpaceKind::Yuv);
+        let resolved = |color_info: ColorInfo| {
+            color_info_to_h273_color_vui(&color_info).resolve_defaults(ColorSpaceKind::Yuv)
+        };
 
         for (name, expected) in [
             (Primaries::Bt709, PrimariesId::Bt709),

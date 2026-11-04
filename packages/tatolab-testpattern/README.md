@@ -30,4 +30,4 @@ uv venv --python 3.12 .venv && VIRTUAL_ENV=.venv uv pip install ../../sdk/tatola
 ```
 
 The pixel tests run on a runtime, in the integration suite's
-`test_native_builtin_blocks.py`.
+`test_test_pattern_module.py`.

@@ -5724,7 +5724,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-media-builtins",
  "streamlib-relay-adapter-sdk",
  "streamlib-runtime-client-contract",
  "tempfile",
@@ -5867,7 +5866,6 @@ name = "streamlib-media-builtins"
 version = "0.68.20"
 dependencies = [
  "hang",
- "libc",
  "moq-json",
  "moq-net",
  "moq-tokio",
@@ -5883,7 +5881,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "v4l",
 ]
 
 [[package]]

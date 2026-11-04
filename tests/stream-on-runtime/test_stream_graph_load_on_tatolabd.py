@@ -54,11 +54,7 @@ from stream_runs_on_tatolabd import (
     stream_id_of_a_hand_written_graph,
     stream_id_of_a_one_stream_project,
 )
-from tatolab.stream import (
-    RelayTrackSource,
-    VirtualCameraSink,
-    _built_in_nodes,
-)
+from tatolab.stream import RelayTrackSource, _built_in_nodes
 from tatolab.stream._built_in_node import BuiltInNode
 
 #: The H.264 encoder module's node type, which the suite venv installs.
@@ -72,13 +68,6 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
     if inspect.isclass(exported)
     and issubclass(exported, BuiltInNode)
     and exported is not BuiltInNode
-]
-
-# The native VirtualCameraSink is compiled on Linux only.
-BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
-    built_in_node_class
-    for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
-    if built_in_node_class is not VirtualCameraSink or sys.platform.startswith("linux")
 ]
 
 # The keys a built-in's config cannot leave out; every other built-in loads with none.
@@ -162,12 +151,12 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
                     "type": built_in_node_class.type,
                     "config": CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT.get(built_in_node_class, {}),
                 }
-                for built_in_node_class in BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES
+                for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
             ],
         }
     )
 
-    assert loaded_with(run_outcome) == len(BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES)
+    assert loaded_with(run_outcome) == len(EVERY_BUILT_IN_NODE_CLASS)
 
 
 # ---- loading ----------------------------------------------------------------
@@ -391,22 +380,6 @@ def test_a_compile_document_nested_far_past_the_maximum_is_refused_rather_than_c
     refusal = refused_naming(run_outcome)
     assert NOT_THE_COMPILE_DOCUMENT in refusal
     assert COMPILE_DOCUMENT_NESTED_PAST_THE_MAXIMUM in refusal
-
-
-def test_a_virtual_camera_sink_loads_on_linux_and_is_refused_at_load_naming_the_platform_elsewhere(
-    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
-):
-    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        {"stream": "camera", "nodes": [{"name": "camera", "type": VirtualCameraSink.type, "config": {}}]}
-    )
-    if sys.platform.startswith("linux"):
-        assert loaded_with(run_outcome) == 1
-        return
-
-    refusal = refused_naming(run_outcome)
-    assert "`tatolab.stream:VirtualCameraSink`" in refusal
-    assert "macOS" in refusal
-    assert "runs on Linux only" in refusal
 
 
 def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_and_the_setting(

@@ -232,7 +232,7 @@ def test_a_cuda_method_call_is_named():
     "use, name, peer",
     [
         ("stream_builder.add(VirtualCameraSink)", "VirtualCameraSink", None),
-        ("stream_builder.add(tatolab.stream.VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream_builder.add(tatolab.virtualcamera.VirtualCameraSink)", "VirtualCameraSink", None),
         ("ctx.gpu_full_access.create_ray_tracing_kernel(stages, groups)", "create_ray_tracing_kernel", None),
         ("ctx.gpu_full_access.build_triangles_blas(vertices, indices)", "build_triangles_blas", None),
         ("ctx.gpu_full_access.build_tlas(instances)", "build_tlas", None),
@@ -289,7 +289,7 @@ def test_a_protocol_declaring_a_single_floor_member_is_not_a_use_of_it():
 def test_importing_a_single_floor_name_is_not_a_use_of_it():
     assert findings_in(
         """\
-        from tatolab.stream import VirtualCameraSink
+        from tatolab.virtualcamera import VirtualCameraSink
         __all__ = ["VirtualCameraSink"]
         """
     ) == []

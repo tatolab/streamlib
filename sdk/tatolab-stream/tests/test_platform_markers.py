@@ -30,7 +30,7 @@ MARKED_TEST_DIRECTORIES = (
 
 LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "MoltenVK has no VK_KHR_ray_tracing_pipeline",
-    "VirtualCameraSink is v4l2loopback and PipeWire",
+    "VirtualCameraSink is v4l2loopback",
     "DMA-BUF and OPAQUE_FD are Linux file-descriptor handles",
     "the CUDA Array Interface is CUDA",
     # A test whose body is a Linux mechanism.

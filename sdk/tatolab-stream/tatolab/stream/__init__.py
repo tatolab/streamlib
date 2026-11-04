@@ -24,8 +24,6 @@ from . import log as log
 from . import msgpack as msgpack
 from ._built_in_nodes import RelayTrackSource as RelayTrackSource
 from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
-from ._built_in_nodes import VirtualCameraSink as VirtualCameraSink
-from ._built_in_nodes import VirtualCameraSinkConfig as VirtualCameraSinkConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
 from ._gpu_protocols import ComputeKernel as ComputeKernel
 from ._gpu_protocols import GpuContextFullAccess as GpuContextFullAccess
@@ -145,8 +143,6 @@ __all__ = [
     "RuntimeContextLimitedAccess",
     "StreamBuilder",
     "VideoFrame",
-    "VirtualCameraSink",
-    "VirtualCameraSinkConfig",
     "catalog",
     "clock",
     "compile_stream_to_graph",

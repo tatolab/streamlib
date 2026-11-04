@@ -4,7 +4,7 @@
     {
       "id": "golden01",
       "name": "testpatternsource",
-      "type": "tatolab.stream:TestPatternSource",
+      "type": "tatolab.testpattern:TestPatternSource",
       "config": {
         "width": 1280,
         "height": 720
@@ -115,7 +115,7 @@
     {
       "id": "golden08",
       "name": "virtualcamerasink",
-      "type": "tatolab.stream:VirtualCameraSink",
+      "type": "tatolab.virtualcamera:VirtualCameraSink",
       "config": {
         "name": "Golden Camera",
         "door": "auto"

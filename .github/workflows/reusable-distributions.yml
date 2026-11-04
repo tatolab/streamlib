@@ -442,6 +442,62 @@ jobs:
           path: packages/tatolab-testpattern/dist/*.whl
           if-no-files-found: error
 
+  # Pure Python, Linux only at run time, so one wheel serves every platform the
+  # index lists; it ships as a namespace portion of `tatolab` beside the stream
+  # package.
+  build-tatolab-virtualcamera-distribution:
+    name: tatolab-virtualcamera wheel and sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+          sparse-checkout: |
+            LICENSE
+            packages/tatolab-virtualcamera
+          sparse-checkout-cone-mode: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-virtualcamera wheel and sdist
+        run: uv build --out-dir packages/tatolab-virtualcamera/dist packages/tatolab-virtualcamera
+
+      - name: The wheel ships the sink and its kernel ABI and no tatolab/__init__.py
+        run: |
+          set -euo pipefail
+          unzip -Z1 packages/tatolab-virtualcamera/dist/*.whl > /tmp/virtualcamera-wheel-member-names.txt
+          for required_member in \
+            tatolab/virtualcamera/__init__.py \
+            tatolab/virtualcamera/v4l2_output_device_abi.py \
+            tatolab/virtualcamera/v4l2loopback_control_node.py \
+            tatolab/virtualcamera/v4l2_loopback_output_device.py; do
+            if ! grep -qx "$required_member" /tmp/virtualcamera-wheel-member-names.txt; then
+              echo "::error::the tatolab-virtualcamera wheel does not list $required_member"
+              exit 1
+            fi
+          done
+          if grep -qx 'tatolab/__init__.py' /tmp/virtualcamera-wheel-member-names.txt; then
+            echo "::error::the tatolab-virtualcamera wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
+      - name: Keep the distributions for the upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: pypi-distribution-tatolab-virtualcamera
+          path: |
+            packages/tatolab-virtualcamera/dist/*.whl
+            packages/tatolab-virtualcamera/dist/*.tar.gz
+          if-no-files-found: error
+
   build-tatolab-opus-distribution:
     needs: build-tatolab-stream-distribution
     permissions:
@@ -550,6 +606,7 @@ jobs:
       - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
       - build-tatolab-testpattern-distribution
+      - build-tatolab-virtualcamera-distribution
       - build-tatolab-h264-distribution
       - build-tatolab-h265-distribution
       - build-tatolab-camera-distribution
