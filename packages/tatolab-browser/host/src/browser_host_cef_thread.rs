@@ -466,6 +466,14 @@ wrap_app! {
                 Some(&CefString::from("autoplay-policy")),
                 Some(&CefString::from("no-user-gesture-required")),
             );
+            // Chromium's default GL setup cannot render into an exportable
+            // shared texture on NVIDIA's Linux driver; ANGLE over EGL can.
+            for (switch, value) in [("use-gl", "angle"), ("use-angle", "gl-egl")] {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from(switch)),
+                    Some(&CefString::from(value)),
+                );
+            }
             if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
                 command_line.append_switch_with_value(
                     Some(&CefString::from("ozone-platform")),
