@@ -17,9 +17,10 @@ use parking_lot::Mutex;
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, ComputeBindingSpec,
-    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture,
+    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture, TextureFormat,
 };
 use crate::core::{Error, Result};
+use crate::host_rhi::HostTextureExt as _;
 
 use super::{HostVulkanDevice, VulkanComputeKernel};
 
@@ -344,6 +345,19 @@ impl VulkanColorConverter {
                 dst.width(),
                 dst.height()
             )));
+        }
+        if dst.format() != TextureFormat::Rgba8Unorm {
+            return Err(Error::Configuration(format!(
+                "color converter image→image: destination is {:?}; the kernel writes rgba8_unorm",
+                dst.format()
+            )));
+        }
+        if src.vulkan_inner().image() == dst.vulkan_inner().image() {
+            return Err(Error::Configuration(
+                "color converter image→image: the source and destination are one image, which \
+                 cannot be sampled and written in one dispatch"
+                    .to_string(),
+            ));
         }
         let kernel = kernel_built_once(&self.image_to_image_kernel, || {
             let label = format!(
@@ -1258,6 +1272,19 @@ mod tests {
             panic!("an NV12 source has no image to sample");
         };
         assert!(matches!(refusal, Error::NotSupported(_)), "{refusal:?}");
+    }
+
+    #[test]
+    fn the_image_to_image_kernel_refuses_one_image_as_source_and_destination() {
+        let Some(device) = try_device() else { return };
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Rgba32, PixelFormat::Rgba32)
+                .expect("RGBA→RGBA converter");
+        let texture = allocate_storage_target_in_general(&device, 4, 4);
+        let Err(refusal) = converter.prepare_image_to_image_storage(&texture, &texture) else {
+            panic!("one image cannot be sampled and written in one dispatch");
+        };
+        assert!(refusal.to_string().contains("one image"), "{refusal:?}");
     }
 
     /// NV12 whose Y plane starts past byte 0 of the bound buffer — behind

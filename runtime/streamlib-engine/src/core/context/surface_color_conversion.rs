@@ -36,6 +36,16 @@ enum SurfaceColorConversionSourcePixels {
     ImportedIOSurface(crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer),
 }
 
+/// Whether a conversion source is an RGBA or BGRA texture this session keeps.
+enum RgbaOrBgraTextureSourceLookup {
+    Kept,
+    /// Read as a pixel buffer instead; a failed texture lookup's refusal is
+    /// kept to name if that read fails too.
+    NotATextureSource {
+        texture_lookup_refusal: Option<Error>,
+    },
+}
+
 /// A conversion source resolved once and read on every later conversion: its
 /// pixels, what its registration says they are, and the layout the converter
 /// reads them through.
@@ -120,38 +130,52 @@ impl SurfaceColorConversionSession {
                 ycbcr_side_color,
             );
         }
-        if self.converts_from_an_rgba_or_bgra_texture(gpu, source_surface_id)? {
-            return self.convert_an_rgba_or_bgra_texture_into_an_rgba_texture(
-                gpu,
-                source_surface_id,
-                destination_surface_id,
-            );
-        }
-        let source_color = ycbcr_side_color;
-        let mut pooled_frame_source_of_this_conversion;
-        let source = match pooled_frame_held_in_this_process(gpu, source_surface_id)? {
-            Some(pooled_frame_source) => {
-                pooled_frame_source_of_this_conversion = pooled_frame_source;
-                &mut pooled_frame_source_of_this_conversion
-            }
-            None => {
-                if !self.sources_by_surface_id.contains_key(source_surface_id) {
-                    let resolved = resolve_color_conversion_source_through_the_surface_store(
+        let texture_lookup_refusal =
+            match self.rgba_or_bgra_texture_source_kept_for(gpu, source_surface_id) {
+                RgbaOrBgraTextureSourceLookup::Kept => {
+                    return self.convert_an_rgba_or_bgra_texture_into_an_rgba_texture(
                         gpu,
                         source_surface_id,
-                    )?;
-                    self.sources_by_surface_id
-                        .insert(source_surface_id.to_string(), resolved);
+                        destination_surface_id,
+                    );
                 }
-                self.sources_by_surface_id
-                    .get_mut(source_surface_id)
-                    .ok_or_else(|| {
-                        Error::GpuError(format!(
-                            "surface {source_surface_id} was resolved and is gone"
-                        ))
-                    })?
-            }
-        };
+                RgbaOrBgraTextureSourceLookup::NotATextureSource {
+                    texture_lookup_refusal,
+                } => texture_lookup_refusal,
+            };
+        let source_color = ycbcr_side_color;
+        let mut pooled_frame_source_of_this_conversion;
+        let source =
+            match pooled_frame_held_in_this_process(gpu, source_surface_id)? {
+                Some(pooled_frame_source) => {
+                    pooled_frame_source_of_this_conversion = pooled_frame_source;
+                    &mut pooled_frame_source_of_this_conversion
+                }
+                None => {
+                    if !self.sources_by_surface_id.contains_key(source_surface_id) {
+                        let resolved = resolve_color_conversion_source_through_the_surface_store(
+                        gpu,
+                        source_surface_id,
+                    )
+                    .map_err(|pixel_buffer_refusal| match &texture_lookup_refusal {
+                        Some(texture_lookup_refusal) => Error::GpuError(format!(
+                            "surface {source_surface_id} resolves neither as a pixel buffer \
+                             ({pixel_buffer_refusal}) nor as a texture ({texture_lookup_refusal})"
+                        )),
+                        None => pixel_buffer_refusal,
+                    })?;
+                        self.sources_by_surface_id
+                            .insert(source_surface_id.to_string(), resolved);
+                    }
+                    self.sources_by_surface_id
+                        .get_mut(source_surface_id)
+                        .ok_or_else(|| {
+                            Error::GpuError(format!(
+                                "surface {source_surface_id} was resolved and is gone"
+                            ))
+                        })?
+                }
+            };
         let destination = resolve_color_conversion_destination(gpu, destination_surface_id)?;
         let destination_texture = destination.texture();
         if (destination_texture.width(), destination_texture.height())
@@ -329,40 +353,48 @@ impl SurfaceColorConversionSession {
     /// registered, imported and kept the first time a conversion names it. A
     /// source this session already reads as YCbCr, or a pooled frame, never
     /// asks the surface store.
-    fn converts_from_an_rgba_or_bgra_texture(
+    fn rgba_or_bgra_texture_source_kept_for(
         &mut self,
         gpu: &GpuContext,
         source_surface_id: &str,
-    ) -> Result<bool> {
+    ) -> RgbaOrBgraTextureSourceLookup {
         if self
             .rgba_or_bgra_texture_sources_by_surface_id
             .contains_key(source_surface_id)
         {
-            return Ok(true);
+            return RgbaOrBgraTextureSourceLookup::Kept;
         }
+        let not_a_texture_source = RgbaOrBgraTextureSourceLookup::NotATextureSource {
+            texture_lookup_refusal: None,
+        };
         if self.sources_by_surface_id.contains_key(source_surface_id)
             || crate::core::rhi::PublishedPixelBufferFrameId::parse(source_surface_id).is_some()
         {
-            return Ok(false);
+            return not_a_texture_source;
         }
         let Some(store) = gpu.surface_store() else {
-            return Ok(false);
+            return not_a_texture_source;
         };
-        let Ok((texture, layout_the_producer_left_it_in)) = store.lookup_texture(source_surface_id)
-        else {
-            return Ok(false);
-        };
+        let (texture, layout_the_producer_left_it_in) =
+            match store.lookup_texture(source_surface_id) {
+                Ok(looked_up) => looked_up,
+                Err(texture_lookup_refusal) => {
+                    return RgbaOrBgraTextureSourceLookup::NotATextureSource {
+                        texture_lookup_refusal: Some(texture_lookup_refusal),
+                    };
+                }
+            };
         if !matches!(
             texture.format(),
             TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm
         ) {
-            return Ok(false);
+            return not_a_texture_source;
         }
         self.rgba_or_bgra_texture_sources_by_surface_id.insert(
             source_surface_id.to_string(),
             TextureRegistration::new(texture, layout_the_producer_left_it_in),
         );
-        Ok(true)
+        RgbaOrBgraTextureSourceLookup::Kept
     }
 
     /// Copy the RGBA or BGRA texture `source_surface_id` into the RGBA
