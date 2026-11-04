@@ -205,14 +205,14 @@ impl std::fmt::Debug for HostMappingReadByGpu {
 /// A page-aligned anonymous mapping of `byte_len` bytes, released on drop —
 /// the stand-in for a caller-owned host range in this module's device tests.
 #[cfg(test)]
-pub(crate) struct PageAlignedHostRange {
-    pub(crate) ptr: *mut u8,
-    pub(crate) byte_len: usize,
+struct PageAlignedHostRange {
+    ptr: *mut u8,
+    byte_len: usize,
 }
 
 #[cfg(test)]
 impl PageAlignedHostRange {
-    pub(crate) fn new(byte_len: usize) -> Self {
+    fn new(byte_len: usize) -> Self {
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -228,10 +228,6 @@ impl PageAlignedHostRange {
             ptr: ptr.cast(),
             byte_len,
         }
-    }
-
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
     }
 }
 

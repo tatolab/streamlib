@@ -228,7 +228,7 @@ impl PipeWireCameraNode {
         height: u32,
         frames_per_second: Option<u32>,
     ) -> Result<()> {
-        if width % 2 != 0 {
+        if !width.is_multiple_of(2) {
             return Err(Error::Runtime(format!(
                 "VirtualCameraSink \"{}\": a {width}x{height} frame has an odd width, and YUY2 \
                  packs two pixels into each four bytes",
