@@ -2,8 +2,8 @@
 
 > **Asked for by the owner, 2026-11-04.** The owner picked "Loopback door now, PipeWire later" on
 > `media-built-ins-become-modules` and asked that the second door not be left undone ("I worry
-> if that means it will never get down"). Issue #3124. Where the door lives is the owner's call,
-> in [NEEDS DECISION] D1 below.
+> if that means it will never get down"). Issue #3124. The owner chose where the door lives,
+> D1 below: in the node's own process.
 
 `tatolab.virtualcamera:VirtualCameraSink` has one door, v4l2loopback. A machine without the
 v4l2loopback module loaded or permitted gets no virtual camera at all, and `door = "pipewire"` is
@@ -62,7 +62,7 @@ virtual camera entry in §Media I/O to IN-FLIGHT.
 
 ## Decisions
 
-### [NEEDS DECISION] D1 — where the PipeWire camera lives
+### DECIDED D1 — where the PipeWire camera lives (owner, 2026-11-04: A)
 
 - **A (recommended) — in the node's own process, over shared memory.** The engine's camera
   door keeps only its shared-memory arm, retargeted to `SPA_VIDEO_FORMAT_YUY2`, and is exported
@@ -76,7 +76,8 @@ virtual camera entry in §Media I/O to IN-FLIGHT.
   arm, but puts a per-node device in the app process, against the same rule, and adds a
   per-frame escalation hop.
 
-The rest of this proposal is written for A.
+The owner chose A. The one CPU copy is the price a shared-memory camera pays, and the one every
+consumer can read; B stays open as a later zero-copy arm the module would not see.
 
 ### D2 — the module becomes an extension wheel
 

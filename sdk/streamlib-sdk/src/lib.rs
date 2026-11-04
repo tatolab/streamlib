@@ -209,6 +209,11 @@ pub mod sdk {
         /// output device at `S_FMT`.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_v4l2_color;
+
+        /// The virtual camera's PipeWire door, for the host table's virtual
+        /// camera output stream.
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::linux_pipewire_camera;
     }
 }
 

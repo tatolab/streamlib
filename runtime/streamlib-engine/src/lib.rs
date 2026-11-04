@@ -204,6 +204,15 @@ pub mod linux_v4l2_color {
     pub use crate::linux::v4l2_color::{V4l2PixFormatColorFields, resolved_color_to_v4l2_color};
 }
 
+/// The virtual camera's PipeWire door: a `Video/Source` camera node fed YUY2
+/// rows over shared memory, opened by the node that uses it.
+#[cfg(target_os = "linux")]
+pub mod linux_pipewire_camera {
+    pub use crate::linux::pipewire_video_source::{
+        PipeWireCameraFramePresentation, PipeWireCameraNode,
+    };
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod host_rhi;
 

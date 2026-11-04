@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A caller-owned host range the GPU reads — the read-direction twin of
-//! [`super::HostMappingWrittenByGpu`].
+//! A caller-owned host range the GPU reads.
 //!
 //! The imported tier binds the range itself as a `VkBuffer` through
 //! `VK_EXT_external_memory_host`, so a kernel reads the caller's pages in
@@ -203,10 +202,49 @@ impl std::fmt::Debug for HostMappingReadByGpu {
     }
 }
 
+/// A page-aligned anonymous mapping of `byte_len` bytes, released on drop —
+/// the stand-in for a caller-owned host range in this module's device tests.
+#[cfg(test)]
+pub(crate) struct PageAlignedHostRange {
+    pub(crate) ptr: *mut u8,
+    pub(crate) byte_len: usize,
+}
+
+#[cfg(test)]
+impl PageAlignedHostRange {
+    pub(crate) fn new(byte_len: usize) -> Self {
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                byte_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
+        Self {
+            ptr: ptr.cast(),
+            byte_len,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
+    }
+}
+
+#[cfg(test)]
+impl Drop for PageAlignedHostRange {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.ptr.cast(), self.byte_len) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vulkan::rhi::vulkan_host_mapping_imported_as_buffer::PageAlignedHostRange;
     use crate::vulkan::rhi::{RhiCommandRecorder, VulkanAccess, VulkanStage};
 
     fn device_or_skip() -> Option<Arc<HostVulkanDevice>> {

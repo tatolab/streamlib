@@ -33,9 +33,10 @@
 // `failure_text` buffer or the source's own, and the Rust side emits them
 // through `tracing`.
 
-/// The engine's textures are `R8G8B8A8_UNORM`, whose DRM fourcc is
-/// `DRM_FORMAT_ABGR8888` — the byte order SPA spells `RGBA`.
-#define STREAMLIB_PIPEWIRE_VIDEO_FORMAT SPA_VIDEO_FORMAT_RGBA
+/// Packed 4:2:2, two bytes a pixel: what the loopback door writes, so both
+/// doors carry the one picture `convert_surface_into` produces.
+#define STREAMLIB_PIPEWIRE_VIDEO_FORMAT SPA_VIDEO_FORMAT_YUY2
+#define STREAMLIB_PIPEWIRE_VIDEO_BYTES_PER_PIXEL 2
 
 #define STREAMLIB_PIPEWIRE_VIDEO_POD_BUILDER_CAPACITY 2048
 
@@ -45,21 +46,16 @@
 
 /// One negotiated buffer, in two lifetimes.
 ///
-/// The first three live with PipeWire's buffer set — added and removed as
-/// consumers come and go. The shared-memory allocation lives with the *offered
-/// extent* instead, and is deliberately not freed when a buffer is removed: the
-/// caller imports that mapping into the RHI for the extent's whole life, and a
-/// mapping that came and went under a consumer reconnect would leave the GPU
-/// writing an address this process no longer owns.
+/// The first two live with PipeWire's buffer set — added and removed as
+/// consumers come and go. The shared-memory allocation lives with the offered
+/// extent instead, so a consumer reconnecting reuses it rather than the shim
+/// mapping and unmapping under every reconnect.
 struct StreamLibPipeWireVideoBufferSlot {
     struct pw_buffer *pipewire_buffer;
     /// Held between dequeue and queue, and NULL otherwise.
     struct pw_buffer *dequeued_buffer;
-    /// The shim's own copy of the caller's exported descriptor, so each side
-    /// closes what it opened; -1 on the shared-memory sibling.
-    int dma_buf_fd;
-    /// The shared-memory sibling's own allocation; -1 and NULL until a consumer
-    /// takes that sibling, and then stable until the extent is replaced.
+    /// -1 and NULL until a consumer takes this slot, and then stable until the
+    /// extent is replaced.
     int shared_memory_fd;
     uint8_t *shared_memory;
     size_t shared_memory_byte_size;
@@ -73,13 +69,12 @@ struct StreamLibPipeWireVideoSource {
     /// Scratch the property dict borrows for the stream's whole life.
     char node_name[STREAMLIB_PIPEWIRE_VIDEO_NODE_NAME_CAPACITY];
 
-    /// The picture last offered, and the planes exported for it. Read and
-    /// written only with the thread loop's lock held.
+    /// The picture last offered and its buffer count. Read and written only
+    /// with the thread loop's lock held.
     struct StreamLibPipeWireVideoOfferedFormat offered_format;
-    struct StreamLibPipeWireVideoDmaBufPlane planes[STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS];
-    uint32_t plane_count;
+    uint32_t buffer_count;
 
-    uint32_t negotiated_buffer_kind;
+    bool consumer_negotiated;
     struct StreamLibPipeWireVideoBufferSlot slots[STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS];
 
     bool stream_failed;
@@ -161,49 +156,8 @@ uint32_t streamlib_pipewire_video_source_properties(struct StreamLibPipeWireStre
     return count;
 }
 
-/// One `EnumFormat` offering the engine's tiled DMA-BUF modifier.
-///
-/// `MANDATORY` says a consumer that cannot take a modifier must reject this
-/// pod rather than silently drop the property and import linear memory that was
-/// never linear. `DONT_FIXATE` is the negotiation's second half: the consumer
-/// answers with the modifier list it can import, and the source re-offers one
-/// fixed value — which is this one, since the engine allocated its textures
-/// before the stream could negotiate and has exactly one to give.
-static struct spa_pod *build_dma_buf_format(
-    struct spa_pod_builder *pod_builder,
-    const struct StreamLibPipeWireVideoOfferedFormat *offered_format, bool fixated)
-{
-    struct spa_pod_frame format_frame;
-    struct spa_rectangle size = SPA_RECTANGLE(offered_format->width, offered_format->height);
-    struct spa_fraction framerate = SPA_FRACTION(offered_format->framerate_numerator,
-                                                 offered_format->framerate_denominator);
-
-    spa_pod_builder_push_object(pod_builder, &format_frame, SPA_TYPE_OBJECT_Format,
-                                SPA_PARAM_EnumFormat);
-    spa_pod_builder_add(pod_builder, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
-                        SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-                        SPA_FORMAT_VIDEO_format, SPA_POD_Id(STREAMLIB_PIPEWIRE_VIDEO_FORMAT),
-                        SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&size),
-                        SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&framerate), 0);
-    if (fixated) {
-        spa_pod_builder_prop(pod_builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
-        spa_pod_builder_long(pod_builder, (int64_t)offered_format->drm_modifier);
-    } else {
-        spa_pod_builder_prop(pod_builder, SPA_FORMAT_VIDEO_modifier,
-                             SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
-        struct spa_pod_frame choice_frame;
-        spa_pod_builder_push_choice(pod_builder, &choice_frame, SPA_CHOICE_Enum, 0);
-        // A choice enum leads with its default and then repeats the
-        // alternatives; with one modifier the default is also the only one.
-        spa_pod_builder_long(pod_builder, (int64_t)offered_format->drm_modifier);
-        spa_pod_builder_long(pod_builder, (int64_t)offered_format->drm_modifier);
-        spa_pod_builder_pop(pod_builder, &choice_frame);
-    }
-    return spa_pod_builder_pop(pod_builder, &format_frame);
-}
-
-/// The same picture with no modifier property at all: the shared-memory
-/// sibling, for a consumer that cannot import a DMA-BUF.
+/// The one `EnumFormat` a camera offers: raw YUY2 with no modifier property,
+/// which is what makes it a shared-memory offer.
 static struct spa_pod *build_shared_memory_format(
     struct spa_pod_builder *pod_builder,
     const struct StreamLibPipeWireVideoOfferedFormat *offered_format)
@@ -217,61 +171,39 @@ static struct spa_pod *build_shared_memory_format(
     return spa_format_video_raw_build(pod_builder, SPA_PARAM_EnumFormat, &info);
 }
 
+uint32_t streamlib_pipewire_video_source_offered_video_format(void)
+{
+    return STREAMLIB_PIPEWIRE_VIDEO_FORMAT;
+}
+
 struct StreamLibPipeWireVideoOfferReport streamlib_pipewire_video_source_describe_offer(
-    const struct StreamLibPipeWireVideoOfferedFormat *offered_format, bool fixated)
+    const struct StreamLibPipeWireVideoOfferedFormat *offered_format)
 {
     uint8_t pod_storage[STREAMLIB_PIPEWIRE_VIDEO_POD_BUILDER_CAPACITY];
     struct spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(pod_storage, sizeof(pod_storage));
     struct StreamLibPipeWireVideoOfferReport report = {0};
 
-    struct spa_pod *dma_buf_format = build_dma_buf_format(&pod_builder, offered_format, fixated);
-    struct spa_pod *shared_memory_format = build_shared_memory_format(&pod_builder,
-                                                                     offered_format);
-    if (dma_buf_format == NULL || shared_memory_format == NULL)
+    struct spa_pod *format = build_shared_memory_format(&pod_builder, offered_format);
+    if (format == NULL)
         return report;
-
     struct spa_video_info_raw parsed = {0};
-    if (spa_format_video_raw_parse(dma_buf_format, &parsed) < 0)
+    if (spa_format_video_raw_parse(format, &parsed) < 0)
         return report;
     report.width = parsed.size.width;
     report.height = parsed.size.height;
-
-    const struct spa_pod_prop *modifier_prop =
-        spa_pod_find_prop(dma_buf_format, NULL, SPA_FORMAT_VIDEO_modifier);
-    if (modifier_prop == NULL)
-        return report;
-    report.dma_buf_modifier_is_mandatory =
-        (modifier_prop->flags & SPA_POD_PROP_FLAG_MANDATORY) != 0;
-    report.dma_buf_modifier_may_not_be_fixated =
-        (modifier_prop->flags & SPA_POD_PROP_FLAG_DONT_FIXATE) != 0;
-    if (SPA_POD_TYPE(&modifier_prop->value) == SPA_TYPE_Choice) {
-        // A choice enum leads with its default and then lists the
-        // alternatives, so the count a consumer may pick from is one fewer
-        // than the values present.
-        uint32_t value_count = SPA_POD_CHOICE_N_VALUES(&modifier_prop->value);
-        report.dma_buf_modifier_count = value_count > 0 ? value_count - 1 : 0;
-        report.dma_buf_modifier = *(int64_t *)SPA_POD_BODY(
-            SPA_POD_CHOICE_CHILD(&modifier_prop->value));
-    } else {
-        report.dma_buf_modifier_count = 1;
-        report.dma_buf_modifier = *(int64_t *)SPA_POD_BODY(&modifier_prop->value);
-    }
-
-    report.shared_memory_format_carries_a_modifier =
-        spa_pod_find_prop(shared_memory_format, NULL, SPA_FORMAT_VIDEO_modifier) != NULL;
-    report.both_formats_were_built = true;
+    report.video_format = parsed.format;
+    report.carries_a_modifier = spa_pod_find_prop(format, NULL, SPA_FORMAT_VIDEO_modifier) != NULL;
+    report.was_built = true;
     return report;
 }
 
 /// Bytes one row of the offered picture occupies.
 static uint32_t offered_stride_bytes(const struct StreamLibPipeWireVideoSource *video_source)
 {
-    return video_source->offered_format.width * 4;
+    return video_source->offered_format.width * STREAMLIB_PIPEWIRE_VIDEO_BYTES_PER_PIXEL;
 }
 
-/// Bytes one whole picture occupies on the shared-memory sibling. The DMA-BUF
-/// path uses the caller's own exported plane size instead, which carries the
-/// driver's tiling.
+/// Bytes one whole picture occupies.
 static uint32_t offered_byte_size(const struct StreamLibPipeWireVideoSource *video_source)
 {
     return offered_stride_bytes(video_source) * video_source->offered_format.height;
@@ -281,10 +213,6 @@ static uint32_t offered_byte_size(const struct StreamLibPipeWireVideoSource *vid
 /// where it is.
 static void release_slot_buffer(struct StreamLibPipeWireVideoBufferSlot *slot)
 {
-    if (slot->dma_buf_fd >= 0) {
-        close(slot->dma_buf_fd);
-        slot->dma_buf_fd = -1;
-    }
     slot->pipewire_buffer = NULL;
     slot->dequeued_buffer = NULL;
 }
@@ -295,26 +223,8 @@ static void release_every_slot_buffer(struct StreamLibPipeWireVideoSource *video
         release_slot_buffer(&video_source->slots[index]);
 }
 
-/// Give up the extent's own copies of the caller's exported descriptors.
-///
-/// The shim duplicates on the way in rather than borrowing: between the caller
-/// dropping one extent's descriptors and handing over the next, the numbers
-/// sitting in `planes` would otherwise be closed — and the loop thread can run
-/// `add_buffer` in that window and duplicate a reused descriptor, handing a
-/// consumer an unrelated file as its camera.
-static void release_every_plane_descriptor(struct StreamLibPipeWireVideoSource *video_source)
-{
-    for (uint32_t index = 0; index < video_source->plane_count; index++) {
-        if (video_source->planes[index].file_descriptor >= 0) {
-            close(video_source->planes[index].file_descriptor);
-            video_source->planes[index].file_descriptor = -1;
-        }
-    }
-    video_source->plane_count = 0;
-}
-
-/// Give up the extent's shared memory. Only a replaced extent or a closing
-/// source may do this, because the caller's RHI import names these addresses.
+/// Give up the extent's shared memory, on a replaced extent or a closing
+/// source.
 static void release_every_slot_shared_memory(struct StreamLibPipeWireVideoSource *video_source)
 {
     for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
@@ -331,12 +241,8 @@ static void release_every_slot_shared_memory(struct StreamLibPipeWireVideoSource
     }
 }
 
-/// Answer PipeWire's format offer.
-///
-/// Two answers are possible and both are this function's: a format still
-/// carrying `DONT_FIXATE` is the consumer asking which modifier to settle on,
-/// answered by re-offering one fixed value; a settled format is answered with
-/// the buffer and metadata parameters, which is what makes PipeWire allocate.
+/// Answer a settled format with the buffer and metadata parameters, which is
+/// what makes PipeWire allocate.
 static void on_stream_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
     struct StreamLibPipeWireVideoSource *video_source = data;
@@ -349,7 +255,7 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
     if (param == NULL) {
         // The consumer went away and the format was cleared; the next one
         // negotiates from scratch.
-        video_source->negotiated_buffer_kind = STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_NONE;
+        video_source->consumer_negotiated = false;
         return;
     }
 
@@ -360,43 +266,22 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
         record_stream_failure(video_source, "PipeWire settled a format that is not raw video");
         return;
     }
-
     struct spa_video_info_raw negotiated = {0};
     if (spa_format_video_raw_parse(param, &negotiated) < 0) {
         record_stream_failure(video_source, "PipeWire settled a raw video format that would "
                                             "not parse");
         return;
     }
-
-    if (negotiated.flags & SPA_VIDEO_FLAG_MODIFIER_FIXATION_REQUIRED) {
-        const struct spa_pod *fixated[1] = {build_dma_buf_format(&pod_builder, &video_source->offered_format, true)};
-        entry_points->pw_stream_update_params(video_source->stream, fixated, 1);
-        return;
-    }
-
-    bool consumer_took_dma_buf = (negotiated.flags & SPA_VIDEO_FLAG_MODIFIER) != 0;
-    video_source->negotiated_buffer_kind =
-        consumer_took_dma_buf ? STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_DMA_BUF
-                              : STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_SHARED_MEMORY;
-
-    uint32_t data_type_mask = consumer_took_dma_buf ? (1u << SPA_DATA_DmaBuf)
-                                                    : (1u << SPA_DATA_MemFd);
-    // The exact count, not a range: every DMA-BUF was exported before the
-    // stream could negotiate, so a larger count would name a texture that does
-    // not exist. The shared-memory sibling matches it so both paths hand the
-    // caller the same slot indices.
-    uint32_t buffer_size = consumer_took_dma_buf ? video_source->planes[0].byte_size
-                                                 : offered_byte_size(video_source);
-    uint32_t buffer_stride = consumer_took_dma_buf ? video_source->planes[0].stride_bytes
-                                                   : offered_stride_bytes(video_source);
+    video_source->consumer_negotiated = true;
 
     const struct spa_pod *params[2];
     params[0] = spa_pod_builder_add_object(
         &pod_builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_buffers,
-        SPA_POD_Int((int32_t)video_source->plane_count), SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
-        SPA_PARAM_BUFFERS_size, SPA_POD_Int((int32_t)buffer_size), SPA_PARAM_BUFFERS_stride,
-        SPA_POD_Int((int32_t)buffer_stride), SPA_PARAM_BUFFERS_align, SPA_POD_Int(16),
-        SPA_PARAM_BUFFERS_dataType, SPA_POD_Int((int32_t)data_type_mask));
+        SPA_POD_Int((int32_t)video_source->buffer_count), SPA_PARAM_BUFFERS_blocks,
+        SPA_POD_Int(1), SPA_PARAM_BUFFERS_size,
+        SPA_POD_Int((int32_t)offered_byte_size(video_source)), SPA_PARAM_BUFFERS_stride,
+        SPA_POD_Int((int32_t)offered_stride_bytes(video_source)), SPA_PARAM_BUFFERS_align,
+        SPA_POD_Int(16), SPA_PARAM_BUFFERS_dataType, SPA_POD_Int(1 << SPA_DATA_MemFd));
     params[1] = spa_pod_builder_add_object(
         &pod_builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
         SPA_POD_Id(SPA_META_Header), SPA_PARAM_META_size,
@@ -404,34 +289,24 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
     entry_points->pw_stream_update_params(video_source->stream, params, 2);
 }
 
-/// Give one allocated PipeWire buffer its memory.
-///
-/// On the DMA-BUF path the memory is the caller's texture and this only writes
-/// the descriptor down; on the shared-memory sibling the shim allocates, since
-/// `PW_STREAM_FLAG_ALLOC_BUFFERS` makes every block the client's to provide.
 /// The slot a newly added buffer takes: the first one PipeWire is not already
 /// holding.
 ///
 /// First-free rather than a running count, because `remove_buffer` can retire
 /// buffers in any order — a counter would hand the next `add_buffer` a slot
-/// still in use, and the slot index *is* which of the caller's textures the
-/// buffer names.
+/// still in use.
 static int32_t first_free_slot(const struct StreamLibPipeWireVideoSource *video_source)
 {
-    for (uint32_t index = 0; index < video_source->plane_count; index++) {
+    for (uint32_t index = 0; index < video_source->buffer_count; index++) {
         if (video_source->slots[index].pipewire_buffer == NULL)
             return (int32_t)index;
     }
     return -1;
 }
 
-/// Give one allocated PipeWire buffer its memory.
-///
-/// On the DMA-BUF path the memory is the caller's texture and this writes down
-/// its own duplicate of the descriptor; on the shared-memory sibling the shim
-/// allocates, since `PW_STREAM_FLAG_ALLOC_BUFFERS` makes every block the
-/// client's to provide. That allocation happens at most once per offered
-/// extent — see `struct StreamLibPipeWireVideoBufferSlot`.
+/// Give one allocated PipeWire buffer its memory. `PW_STREAM_FLAG_ALLOC_BUFFERS`
+/// makes every block the client's to provide, and a slot's memfd is allocated
+/// at most once per offered extent.
 static void on_stream_add_buffer(void *data, struct pw_buffer *buffer)
 {
     struct StreamLibPipeWireVideoSource *video_source = data;
@@ -440,75 +315,48 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *buffer)
     int32_t slot_index = first_free_slot(video_source);
     if (slot_index < 0) {
         record_stream_failure(video_source,
-                              "PipeWire allocated more buffers than the source exported");
+                              "PipeWire allocated more buffers than the camera offered");
         return;
     }
     struct StreamLibPipeWireVideoBufferSlot *slot = &video_source->slots[slot_index];
 
-    if (block->type == SPA_DATA_DmaBuf) {
-        const struct StreamLibPipeWireVideoDmaBufPlane *plane = &video_source->planes[slot_index];
-        // Duplicated again, per buffer: `planes` holds the extent's copy,
-        // which `set_extent` closes when the extent is replaced, while this
-        // one lives exactly as long as the buffer PipeWire named it in. One
-        // owner per lifetime is what keeps a descriptor from being closed
-        // while something still reads it.
-        int duplicated = fcntl(plane->file_descriptor, F_DUPFD_CLOEXEC, 0);
-        if (duplicated < 0) {
-            record_stream_failure(video_source,
-                                  "the camera's exported DMA-BUF could not be duplicated");
+    if (slot->shared_memory == NULL) {
+        size_t byte_size = offered_byte_size(video_source);
+        int shared_memory_fd = memfd_create("streamlib-camera", MFD_CLOEXEC);
+        if (shared_memory_fd < 0) {
+            record_stream_failure(video_source, "the camera could not create a memfd");
             return;
         }
-        slot->dma_buf_fd = duplicated;
-        block->flags = SPA_DATA_FLAG_READABLE;
-        block->fd = duplicated;
-        block->mapoffset = plane->offset_bytes;
-        block->maxsize = plane->byte_size;
-        block->data = NULL;
-        block->chunk->offset = 0;
-        block->chunk->stride = (int32_t)plane->stride_bytes;
-        block->chunk->size = plane->byte_size;
-    } else {
-        if (slot->shared_memory == NULL) {
-            size_t byte_size = offered_byte_size(video_source);
-            int shared_memory_fd = memfd_create("streamlib-camera", MFD_CLOEXEC);
-            if (shared_memory_fd < 0) {
-                record_stream_failure(video_source,
-                                      "the shared-memory sibling could not create a memfd");
-                return;
-            }
-            if (ftruncate(shared_memory_fd, (off_t)byte_size) < 0) {
-                close(shared_memory_fd);
-                record_stream_failure(video_source,
-                                      "the shared-memory sibling could not size its memfd");
-                return;
-            }
-            void *mapping = mmap(NULL, byte_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                                 shared_memory_fd, 0);
-            if (mapping == MAP_FAILED) {
-                close(shared_memory_fd);
-                record_stream_failure(video_source,
-                                      "the shared-memory sibling could not map its memfd");
-                return;
-            }
-            slot->shared_memory_fd = shared_memory_fd;
-            slot->shared_memory = mapping;
-            slot->shared_memory_byte_size = byte_size;
+        if (ftruncate(shared_memory_fd, (off_t)byte_size) < 0) {
+            close(shared_memory_fd);
+            record_stream_failure(video_source, "the camera could not size its memfd");
+            return;
         }
-
-        block->type = SPA_DATA_MemFd;
-        block->flags = SPA_DATA_FLAG_READABLE;
-        block->fd = slot->shared_memory_fd;
-        block->mapoffset = 0;
-        block->maxsize = (uint32_t)slot->shared_memory_byte_size;
-        block->data = slot->shared_memory;
-        block->chunk->offset = 0;
-        block->chunk->stride = (int32_t)offered_stride_bytes(video_source);
-        block->chunk->size = (uint32_t)slot->shared_memory_byte_size;
+        void *mapping =
+            mmap(NULL, byte_size, PROT_READ | PROT_WRITE, MAP_SHARED, shared_memory_fd, 0);
+        if (mapping == MAP_FAILED) {
+            close(shared_memory_fd);
+            record_stream_failure(video_source, "the camera could not map its memfd");
+            return;
+        }
+        slot->shared_memory_fd = shared_memory_fd;
+        slot->shared_memory = mapping;
+        slot->shared_memory_byte_size = byte_size;
     }
 
+    block->type = SPA_DATA_MemFd;
+    block->flags = SPA_DATA_FLAG_READABLE;
+    block->fd = slot->shared_memory_fd;
+    block->mapoffset = 0;
+    block->maxsize = (uint32_t)slot->shared_memory_byte_size;
+    block->data = slot->shared_memory;
+    block->chunk->offset = 0;
+    block->chunk->stride = (int32_t)offered_stride_bytes(video_source);
+    block->chunk->size = (uint32_t)slot->shared_memory_byte_size;
+
     slot->pipewire_buffer = buffer;
-    // The slot index is how a dequeued buffer names the caller's plane at the
-    // same index, so it has to survive the round trip through PipeWire.
+    // The slot index survives the round trip through PipeWire, so a dequeued
+    // buffer names its own mapping.
     buffer->user_data = (void *)(uintptr_t)(slot_index + 1);
 }
 
@@ -572,7 +420,6 @@ static void destroy_video_source(struct StreamLibPipeWireVideoSource *video_sour
     // The buffers went with the stream above; the extent's shared memory is
     // this source's alone and goes last.
     release_every_slot_shared_memory(video_source);
-    release_every_plane_descriptor(video_source);
     free(video_source);
 }
 
@@ -599,9 +446,7 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
     streamlib_pipewire_copy_entry_points(&video_source->entry_points, entry_points);
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
-        video_source->slots[index].dma_buf_fd = -1;
         video_source->slots[index].shared_memory_fd = -1;
-        video_source->planes[index].file_descriptor = -1;
     }
 
     uint32_t property_count = streamlib_pipewire_video_source_properties(
@@ -644,13 +489,11 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
 
     // Connected with no format at all and inactive: the node registers and is
     // listed, and nothing can negotiate against it until `set_extent` states a
-    // format — which is what keeps `add_buffer` from ever firing before the
-    // engine's textures are exported.
+    // format.
     //
     // No `AUTOCONNECT`: a camera is selected by whoever wants it, not linked to
     // the session default. `DRIVER` because the frame's arrival is the cadence,
-    // and `ALLOC_BUFFERS` because on the DMA-BUF path only the engine can
-    // allocate the memory.
+    // and `ALLOC_BUFFERS` because the camera owns its memfds.
     connect_result = resolved->pw_stream_connect(
         video_source->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
         PW_STREAM_FLAG_INACTIVE | PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_ALLOC_BUFFERS, NULL, 0);
@@ -674,16 +517,15 @@ fail:
 
 int streamlib_pipewire_video_source_set_extent(
     struct StreamLibPipeWireVideoSource *video_source, uint32_t width, uint32_t height,
-    uint32_t framerate_numerator, uint32_t framerate_denominator, uint64_t drm_modifier,
-    const struct StreamLibPipeWireVideoDmaBufPlane *planes, uint32_t plane_count,
+    uint32_t framerate_numerator, uint32_t framerate_denominator, uint32_t buffer_count,
     char *failure_text, size_t failure_text_capacity)
 {
     uint8_t pod_storage[STREAMLIB_PIPEWIRE_VIDEO_POD_BUILDER_CAPACITY];
     struct spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(pod_storage, sizeof(pod_storage));
 
-    if (plane_count == 0 || plane_count > STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS) {
+    if (buffer_count == 0 || buffer_count > STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS) {
         streamlib_pipewire_copy_failure_text(failure_text, failure_text_capacity,
-                          "a camera offers between one and eight exported buffers");
+                                             "a camera offers between one and eight buffers");
         return -1;
     }
     if (width == 0 || height == 0 || framerate_denominator == 0) {
@@ -695,42 +537,24 @@ int streamlib_pipewire_video_source_set_extent(
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
 
-    // The previous extent's shared memory goes here and nowhere else. The
-    // caller has already dropped whatever imported it — see this function's
-    // contract — and a consumer that still holds a buffer reads through its
-    // own mapping of the memfd, not this address space's.
+    // The previous extent's shared memory goes here and nowhere else. A
+    // consumer that still holds a buffer reads through its own mapping of the
+    // memfd, not this address space's.
     release_every_slot_shared_memory(video_source);
-    release_every_plane_descriptor(video_source);
 
     video_source->offered_format = (struct StreamLibPipeWireVideoOfferedFormat){
         .width = width,
         .height = height,
         .framerate_numerator = framerate_numerator,
         .framerate_denominator = framerate_denominator,
-        .drm_modifier = drm_modifier,
     };
-    for (uint32_t index = 0; index < plane_count; index++) {
-        video_source->planes[index] = planes[index];
-        video_source->planes[index].file_descriptor =
-            fcntl(planes[index].file_descriptor, F_DUPFD_CLOEXEC, 0);
-        if (video_source->planes[index].file_descriptor < 0) {
-            video_source->plane_count = index;
-            release_every_plane_descriptor(video_source);
-            resolved->pw_thread_loop_unlock(video_source->thread_loop);
-            streamlib_pipewire_copy_failure_text(
-                failure_text, failure_text_capacity,
-                "an exported camera buffer's descriptor could not be duplicated");
-            return -1;
-        }
-    }
-    video_source->plane_count = plane_count;
-    video_source->negotiated_buffer_kind = STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_NONE;
+    video_source->buffer_count = buffer_count;
+    video_source->consumer_negotiated = false;
 
-    const struct spa_pod *params[2] = {
-        build_dma_buf_format(&pod_builder, &video_source->offered_format, false),
+    const struct spa_pod *params[1] = {
         build_shared_memory_format(&pod_builder, &video_source->offered_format),
     };
-    int update_result = resolved->pw_stream_update_params(video_source->stream, params, 2);
+    int update_result = resolved->pw_stream_update_params(video_source->stream, params, 1);
     if (update_result >= 0)
         resolved->pw_stream_set_active(video_source->stream, true);
     resolved->pw_thread_loop_unlock(video_source->thread_loop);
@@ -745,14 +569,14 @@ int streamlib_pipewire_video_source_set_extent(
     return 0;
 }
 
-uint32_t streamlib_pipewire_video_source_negotiated_buffer_kind(
+bool streamlib_pipewire_video_source_consumer_negotiated(
     struct StreamLibPipeWireVideoSource *video_source)
 {
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
-    uint32_t kind = video_source->negotiated_buffer_kind;
+    bool negotiated = video_source->consumer_negotiated;
     resolved->pw_thread_loop_unlock(video_source->thread_loop);
-    return kind;
+    return negotiated;
 }
 
 /// The slot a dequeued buffer names, or -1 when it carries none.
@@ -765,16 +589,10 @@ static int32_t slot_index_of(struct pw_buffer *buffer)
 }
 
 int32_t streamlib_pipewire_video_source_dequeue_slot(
-    struct StreamLibPipeWireVideoSource *video_source, uint32_t *buffer_kind_out)
+    struct StreamLibPipeWireVideoSource *video_source)
 {
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
-
-    // Read under the same lock as the dequeue: a renegotiation between two
-    // separate calls would hand back a slot allocated for one buffer kind
-    // while the caller still believed the other, and fill it the wrong way.
-    if (buffer_kind_out != NULL)
-        *buffer_kind_out = video_source->negotiated_buffer_kind;
 
     // A slot an earlier frame took and could not fill is still ours, so it is
     // handed out again rather than a fresh one being taken. There is no way to
@@ -782,7 +600,7 @@ int32_t streamlib_pipewire_video_source_dequeue_slot(
     // it — so holding it is the only way a failed frame does not become the
     // previous picture republished under a new consumer's eyes.
     int32_t slot = -1;
-    for (uint32_t index = 0; index < video_source->plane_count; index++) {
+    for (uint32_t index = 0; index < video_source->buffer_count; index++) {
         if (video_source->slots[index].dequeued_buffer != NULL) {
             slot = (int32_t)index;
             break;
@@ -846,9 +664,7 @@ int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSour
         // left on it, so a stale size would hand the consumer the previous
         // picture's extent.
         block->chunk->offset = 0;
-        block->chunk->stride = block->type == SPA_DATA_DmaBuf
-                                   ? (int32_t)video_source->planes[slot].stride_bytes
-                                   : (int32_t)offered_stride_bytes(video_source);
+        block->chunk->stride = (int32_t)offered_stride_bytes(video_source);
         block->chunk->size = block->maxsize;
         block->chunk->flags = 0;
     }
