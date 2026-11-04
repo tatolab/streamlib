@@ -1,6 +1,6 @@
 name: Release Extension Wheel
 
-# One extension wheel per platform the runtime runs on — manylinux and Apple
+# One extension wheel per platform the extension runs on — manylinux and Apple
 # Silicon — built the way a third party would build one: its own standalone
 # maturin project, its own lockfile, no engine crate linked. Both are kept as
 # this run's `pypi-distribution-*` artifacts, which reusable-distributions.yml uploads
@@ -34,6 +34,11 @@ on:
         type: boolean
         required: false
         default: false
+      extension_builds_an_apple_silicon_wheel:
+        description: "Whether the extension builds on macOS; a Linux-only one ships its manylinux wheel alone"
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   build-extension-wheel:
@@ -48,14 +53,10 @@ jobs:
     # failing withholds the whole upload.
     strategy:
       fail-fast: false
+      # macos-26 is pinned for the reason reusable-macos-runtime-unit.yml pins it:
+      # the image decides the SDK the wheel links against.
       matrix:
-        include:
-          - platform: manylinux
-            runner: ubuntu-latest
-          # Pinned for the reason reusable-macos-runtime-unit.yml pins it: the image decides
-          # the SDK the wheel links against.
-          - platform: aarch64-apple-darwin
-            runner: macos-26
+        include: ${{ fromJSON(inputs.extension_builds_an_apple_silicon_wheel && '[{"platform":"manylinux","runner":"ubuntu-latest"},{"platform":"aarch64-apple-darwin","runner":"macos-26"}]' || '[{"platform":"manylinux","runner":"ubuntu-latest"}]') }}
 
     steps:
       - uses: actions/checkout@v5

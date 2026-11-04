@@ -308,7 +308,8 @@ jobs:
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
   # The node side of a web page source: its wheel carries no browser, which is
-  # the shared browser host the runtime unit ships.
+  # the shared browser host the runtime unit ships. Linux only until its macOS
+  # half lands.
   build-tatolab-browser-distribution:
     needs: build-tatolab-stream-distribution
     permissions:
@@ -320,6 +321,7 @@ jobs:
       extension_import_package_name: tatolab.browser
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      extension_builds_an_apple_silicon_wheel: false
 
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
