@@ -49,7 +49,8 @@ mod linux_surface_check_out;
 #[cfg(target_os = "linux")]
 pub use linux_surface_check_out::{
     CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, CheckedOutSurface, CheckedOutTexture,
-    CheckedOutTextureMemory, SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD,
+    CheckedOutTextureMemory, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD, SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD,
     SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT, SurfaceShareCheckOutFds,
     check_out_surface_on_surface_share, device_uuid_of_its_hex_spelling,
     publish_image_layout_on_surface_share, refusal_the_surface_share_service_answered,

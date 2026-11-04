@@ -484,6 +484,11 @@ impl SurfaceShareState {
         false
     }
 
+    /// Whether a registration lives under `pool_slot_key`.
+    pub fn is_registered(&self, pool_slot_key: &str) -> bool {
+        self.inner.surfaces.read().contains_key(pool_slot_key)
+    }
+
     pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
         self.inner.surfaces.read().values().cloned().collect()
     }
