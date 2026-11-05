@@ -18,9 +18,12 @@ use crate::core::RuntimeContext;
 use crate::core::child_process_restart_backoff::{
     CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF, ChildProcessRestartBackoff,
 };
-use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::context::{
+    IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClock,
+};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId};
+use crate::core::media_clock::MediaClock;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
@@ -120,16 +123,15 @@ fn run_continuous_mode(
     interval_ms: u32,
     runtime_ctx: &RuntimeContext,
 ) {
-    let sleep_duration = if interval_ms > 0 {
-        std::time::Duration::from_millis(interval_ms as u64)
-    } else {
-        std::time::Duration::from_micros(100)
-    };
-
+    let stream_clock = &runtime_ctx.stream_clock;
+    let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
+    let mut next_deadline_stream_ns = stream_clock.now_ns();
     let mut was_paused = false;
 
     loop {
-        if shutdown_rx.try_recv().is_ok() {
+        if wait_for_stream_time_or_shutdown(stream_clock, next_deadline_stream_ns, shutdown_rx)
+            == ContinuousRunnerWaitOutcome::ShutdownRequested
+        {
             tracing::info!("[{}] Received shutdown signal", id);
             break;
         }
@@ -145,13 +147,108 @@ fn run_continuous_mode(
         }
 
         if is_paused {
-            std::thread::sleep(PAUSE_CHECK_INTERVAL);
+            if wait_on_the_machine_clock_or_shutdown(PAUSE_CHECK_INTERVAL, shutdown_rx)
+                == ContinuousRunnerWaitOutcome::ShutdownRequested
+            {
+                tracing::info!("[{}] Received shutdown signal", id);
+                break;
+            }
+            next_deadline_stream_ns = stream_clock.now_ns();
             continue;
         }
 
         dispatch_process(id, processor, runtime_ctx);
 
-        std::thread::sleep(sleep_duration);
+        next_deadline_stream_ns = next_continuous_deadline_stream_ns(
+            next_deadline_stream_ns,
+            interval_stream_ns,
+            stream_clock.now_ns(),
+        );
+    }
+}
+
+/// Stream nanoseconds between a continuous processor's calls; a floor of
+/// 100 µs when its config names no interval.
+fn continuous_interval_stream_ns(interval_ms: u32) -> i64 {
+    if interval_ms > 0 {
+        i64::from(interval_ms) * 1_000_000
+    } else {
+        100_000
+    }
+}
+
+/// The first deadline on the `previous + k·interval` grid after
+/// `stream_now_ns`: a processor that overran fires once, never a backlog.
+fn next_continuous_deadline_stream_ns(
+    previous_deadline_stream_ns: i64,
+    interval_stream_ns: i64,
+    stream_now_ns: i64,
+) -> i64 {
+    let intervals_passed = stream_now_ns
+        .saturating_sub(previous_deadline_stream_ns)
+        .max(0)
+        / interval_stream_ns;
+    previous_deadline_stream_ns.saturating_add(
+        intervals_passed
+            .saturating_add(1)
+            .saturating_mul(interval_stream_ns),
+    )
+}
+
+/// How a continuous runner's wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContinuousRunnerWaitOutcome {
+    /// The wait ran its course.
+    DeadlineReached,
+    ShutdownRequested,
+}
+
+/// Longest single wait before the continuous runner re-reads its stream clock,
+/// so a live rescale reaches a wait already under way.
+const CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK: Duration = Duration::from_millis(100);
+
+/// Wait on the shutdown channel until `stream_clock` reaches
+/// `deadline_stream_ns`.
+fn wait_for_stream_time_or_shutdown(
+    stream_clock: &StreamClock,
+    deadline_stream_ns: i64,
+    shutdown_rx: &crossbeam_channel::Receiver<()>,
+) -> ContinuousRunnerWaitOutcome {
+    loop {
+        if shutdown_rx.try_recv().is_ok() {
+            return ContinuousRunnerWaitOutcome::ShutdownRequested;
+        }
+        let machine_now_ns = MediaClock::now().as_nanos() as i64;
+        let machine_ns_to_go = stream_clock
+            .machine_time_ns_reaching(deadline_stream_ns, machine_now_ns)
+            .saturating_sub(machine_now_ns);
+        if machine_ns_to_go <= 0 {
+            return ContinuousRunnerWaitOutcome::DeadlineReached;
+        }
+        let wait = Duration::from_nanos(machine_ns_to_go as u64)
+            .min(CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK);
+        if wait_on_the_machine_clock_or_shutdown(wait, shutdown_rx)
+            == ContinuousRunnerWaitOutcome::ShutdownRequested
+        {
+            return ContinuousRunnerWaitOutcome::ShutdownRequested;
+        }
+    }
+}
+
+/// Wait `wait` on the machine's monotonic clock, waking early for a shutdown.
+fn wait_on_the_machine_clock_or_shutdown(
+    wait: Duration,
+    shutdown_rx: &crossbeam_channel::Receiver<()>,
+) -> ContinuousRunnerWaitOutcome {
+    match shutdown_rx.recv_timeout(wait) {
+        Ok(()) => ContinuousRunnerWaitOutcome::ShutdownRequested,
+        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            ContinuousRunnerWaitOutcome::DeadlineReached
+        }
+        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+            let _ = crossbeam_channel::after(wait).recv();
+            ContinuousRunnerWaitOutcome::DeadlineReached
+        }
     }
 }
 
@@ -1903,5 +2000,76 @@ mod tests {
         assert_eq!(state.current(), ProcessorState::Restarting);
         assert!(next_start >= before + Duration::from_secs(1));
         assert!(next_start < before + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_continuous_deadline_steps_one_interval_on_its_grid() {
+        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_050), 1_100);
+        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 900), 1_100);
+    }
+
+    #[test]
+    fn an_overrun_skips_to_the_next_deadline_after_now_on_the_same_grid() {
+        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_350), 1_400);
+        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_400), 1_500);
+    }
+
+    fn a_scaled_stream_clock(scale: f64) -> StreamClock {
+        StreamClock::starting_now(crate::core::context::StreamClockSpec::Scaled {
+            scale,
+            step_ns: crate::core::context::DEFAULT_SCALED_STREAM_CLOCK_STEP_NS,
+        })
+    }
+
+    #[test]
+    fn a_wait_on_a_half_speed_stream_takes_twice_the_stream_time_on_the_machine_clock() {
+        let stream_clock = a_scaled_stream_clock(0.5);
+        let (_shutdown_tx, shutdown_rx) = crossbeam_channel::unbounded::<()>();
+        let machine_started = Instant::now();
+        let deadline_stream_ns = stream_clock.now_ns() + 20_000_000;
+
+        let outcome =
+            wait_for_stream_time_or_shutdown(&stream_clock, deadline_stream_ns, &shutdown_rx);
+
+        assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
+        assert!(machine_started.elapsed() >= Duration::from_millis(40));
+        assert!(stream_clock.now_ns() >= deadline_stream_ns);
+    }
+
+    #[test]
+    fn a_rescale_reaches_a_wait_already_under_way() {
+        let stream_clock = Arc::new(a_scaled_stream_clock(0.001));
+        let (_shutdown_tx, shutdown_rx) = crossbeam_channel::unbounded::<()>();
+        let deadline_stream_ns = stream_clock.now_ns() + 50_000_000;
+        let rescaling_clock = Arc::clone(&stream_clock);
+        let rescaler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            rescaling_clock
+                .rescale("warped", 1.0)
+                .expect("a scaled clock rescales");
+        });
+        let machine_started = Instant::now();
+
+        let outcome =
+            wait_for_stream_time_or_shutdown(&stream_clock, deadline_stream_ns, &shutdown_rx);
+
+        rescaler.join().expect("the rescaling thread finishes");
+        assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
+        assert!(machine_started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_shutdown_ends_a_continuous_wait_before_its_deadline() {
+        let stream_clock = a_scaled_stream_clock(0.001);
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::unbounded::<()>();
+        shutdown_tx.send(()).expect("the shutdown channel is open");
+
+        let outcome = wait_for_stream_time_or_shutdown(
+            &stream_clock,
+            stream_clock.now_ns() + 1_000_000_000,
+            &shutdown_rx,
+        );
+
+        assert_eq!(outcome, ContinuousRunnerWaitOutcome::ShutdownRequested);
     }
 }

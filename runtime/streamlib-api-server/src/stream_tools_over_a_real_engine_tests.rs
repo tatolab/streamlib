@@ -481,6 +481,17 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             level,
         )
     }
+    fn set_stream_clock_scale(
+        &self,
+        stream_id: &str,
+        scale: f64,
+    ) -> Result<streamlib::sdk::context::StreamClockReading> {
+        OperationsOnTheStreamsLoadedInThisRuntime::set_stream_clock_scale(
+            self.engine.as_ref(),
+            stream_id,
+            scale,
+        )
+    }
 }
 
 /// The one stream a finished stream action took in.
@@ -791,6 +802,43 @@ async fn expose_port_changes_a_loaded_port_live_and_records_a_stopped_streams_ru
     assert!(
         refusal.contains("nowhere") && refusal.contains("source"),
         "{refusal}"
+    );
+}
+
+/// `set_stream_clock_scale` reaches the named stream's clock, refusing a stream
+/// whose clock is not running and a stream the runtime has not loaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+
+    let not_started = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "set_stream_clock_scale",
+            json!({ "stream": live, "scale": 0.5 }),
+        )
+        .await,
+    )
+    .expect_err("a stream that is not started has no clock to scale");
+    assert!(
+        not_started.contains(&format!("`{live}` is not started")),
+        "{not_started}"
+    );
+
+    let not_loaded = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "set_stream_clock_scale",
+            json!({ "stream": "nowhere", "scale": 0.5 }),
+        )
+        .await,
+    )
+    .expect_err("a stream that is not loaded is refused");
+    assert!(
+        not_loaded.contains("nowhere") && not_loaded.contains(&live),
+        "{not_loaded}"
     );
 }
 

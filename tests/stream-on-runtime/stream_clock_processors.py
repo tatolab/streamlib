@@ -69,3 +69,49 @@ class StreamTimeStampReporterSink:
         elif self.messages_read > MESSAGES_BETWEEN_THE_FIRST_AND_THE_LAST_REPORTED:
             report("STREAM_TIME_STAMPS", {"first": self.first, "last": seen})
             self.reported = True
+
+
+#: Ticks a continuous counter times at each scale before it reports them.
+TICKS_TIMED_AT_EACH_SCALE = 20
+
+#: The continuous counter's interval, in stream milliseconds.
+CONTINUOUS_TICK_COUNTER_INTERVAL_MS = 10
+
+
+@node(execution="continuous", interval_ms=CONTINUOUS_TICK_COUNTER_INTERVAL_MS)
+class ContinuousTickCounterSource:
+    """Times its ticks on both clocks at the scale it starts on, then at the next one."""
+
+    def __init__(self) -> None:
+        self.scales_reported: "list[float]" = []
+        self.ticks_at_this_scale: "list[dict[str, float]]" = []
+        self.stream_time_ns_last_read = -1
+        self.stream_time_went_backwards = False
+
+    def process(self, ctx) -> None:
+        stream_time_ns = ctx.time
+        if stream_time_ns < self.stream_time_ns_last_read:
+            self.stream_time_went_backwards = True
+        self.stream_time_ns_last_read = stream_time_ns
+        scale = ctx.stream_clock.scale
+        if self.ticks_at_this_scale and self.ticks_at_this_scale[0]["scale"] != scale:
+            self.ticks_at_this_scale = []
+        if len(self.scales_reported) >= 2 or scale in self.scales_reported:
+            return
+        self.ticks_at_this_scale.append(
+            {"scale": scale, "stream_time_ns": stream_time_ns, "machine_time_ns": monotonic_now_ns()}
+        )
+        if len(self.ticks_at_this_scale) <= TICKS_TIMED_AT_EACH_SCALE:
+            return
+        first, last = self.ticks_at_this_scale[1], self.ticks_at_this_scale[-1]
+        report(
+            f"CONTINUOUS_TICKS_AT_SCALE_{len(self.scales_reported)}",
+            {
+                "scale": scale,
+                "ticks": len(self.ticks_at_this_scale) - 2,
+                "machine_elapsed_ns": last["machine_time_ns"] - first["machine_time_ns"],
+                "stream_elapsed_ns": last["stream_time_ns"] - first["stream_time_ns"],
+                "stream_time_went_backwards": self.stream_time_went_backwards,
+            },
+        )
+        self.scales_reported.append(scale)

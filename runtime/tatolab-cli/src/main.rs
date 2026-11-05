@@ -226,6 +226,22 @@ enum TatolabVerb {
         #[arg(long = "remove")]
         remove: bool,
     },
+    /// Run a stream's scaled clock at another scale, live.
+    #[command(
+        long_about = "Stream time carries on from where it stands at the new scale — 0.5 runs the \
+                      stream at half speed, 1 at real time — and every node's time, write stamps \
+                      and continuous pace follow it. Refused for a stream on the real or a stepped \
+                      clock, and for a scale above 1. Live only: the stream's next load runs the \
+                      clock its stream function names.",
+        override_usage = "tatolab clock [STREAM] --scale <SCALE>"
+    )]
+    Clock {
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
+        stream: Option<String>,
+        /// Stream seconds per machine second from now on.
+        #[arg(long = "scale", required = true)]
+        scale: f64,
+    },
     /// List the relays the runtime joins: each one's adapter, state, settings and secrets set.
     #[command(
         long_about = "Every relay instance: the local relay's two built-in listeners and each \
@@ -373,6 +389,9 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 (false, false) => ExposePortLevel::Private,
             },
         ),
+        TatolabVerb::Clock { stream, scale } => {
+            stream_actions_on_the_runtime::set_stream_clock_scale(stream.as_deref(), scale)
+        }
         TatolabVerb::Relays => relay_verbs_on_the_runtime::list_relays(),
         TatolabVerb::Relay { relay_verb } => relay_verbs_on_the_runtime::run_relay_verb(relay_verb),
         TatolabVerb::Graph { requested_stream } => {

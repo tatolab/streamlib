@@ -1459,26 +1459,34 @@ class HelperProcessLifecycle:
 
     def _run_continuous(self, interval_ms: int) -> None:
         assert self._hosted is not None
-        interval_ns = (
+        interval_stream_ns = (
             interval_ms * 1_000_000
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
-        with start_monotonic_timer(interval_ns) as timer:
-            # Once at the start and then once per tick, as the native runner
-            # paces a continuous processor.
-            self._hosted.call_hook("process", self._hosted.limited_access_context)
-            self._drain_commands_arriving_mid_run()
-            while self._running:
-                expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
-                if expirations < 0:
-                    log.error("the interval timer failed; leaving the continuous loop")
-                    self._running = False
-                elif expirations > 0:
-                    # Once per wake however many ticks it covered — drift-free
-                    # pacing, not backlog replay.
-                    self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._drain_commands_arriving_mid_run()
+        context = self._hosted.limited_access_context
+        # Once at the start and then once per tick, as the native runner
+        # paces a continuous processor.
+        self._hosted.call_hook("process", context)
+        self._drain_commands_arriving_mid_run()
+        while self._running:
+            scale = context.stream_clock.scale
+            machine_interval_ns = max(1, round(interval_stream_ns / scale))
+            with start_monotonic_timer(machine_interval_ns) as timer:
+                # The timer ticks on the machine clock at the stream's scale;
+                # a live rescale re-arms it at the next wake.
+                while self._running and context.stream_clock.scale == scale:
+                    expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
+                    if expirations < 0:
+                        log.error(
+                            "the interval timer failed; leaving the continuous loop"
+                        )
+                        self._running = False
+                    elif expirations > 0:
+                        # Once per wake however many ticks it covered —
+                        # drift-free pacing, not backlog replay.
+                        self._hosted.call_hook("process", context)
+                    self._drain_commands_arriving_mid_run()
 
     def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
         """Park until upstream notifies or the parent sends a command.

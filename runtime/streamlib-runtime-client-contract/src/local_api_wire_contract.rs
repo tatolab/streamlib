@@ -383,6 +383,15 @@ pub struct ExposePortToolResult {
     pub not_recorded_because: Option<String>,
 }
 
+/// The `set_stream_clock_scale` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetStreamClockScaleToolResult {
+    /// The stream's id.
+    pub stream: String,
+    /// Stream seconds per machine second from now on.
+    pub scale: f64,
+}
+
 /// The `describe_runtime` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DescribeRuntimeToolResult {

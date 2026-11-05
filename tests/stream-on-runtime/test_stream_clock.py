@@ -16,8 +16,10 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from engine_media_clock import engine_media_clock_now_ns
+from stream_clock_processors import CONTINUOUS_TICK_COUNTER_INTERVAL_MS
 from stream_clock_streams import (
     SLOW_MOTION_SCALE,
+    continuous_ticks_in_slow_motion,
     stream_times_in_real_time,
     stream_times_in_slow_motion,
 )
@@ -93,3 +95,66 @@ def test_a_real_time_streams_nodes_read_and_stamp_the_machine_clock(
         assert seen["writer_scale"] == 1.0, seen
         assert before <= seen["written_stream_time_ns"] <= seen["stamp_ns"] <= after, seen
         assert seen["written_stream_time_ns"] <= seen["written_machine_time_ns"], seen
+
+
+#: The scale the test warps the slow-motion stream to while it runs.
+LIVE_RESCALED_SCALE = 0.25
+
+#: How far a tick's mean machine interval may stray from the one its scale names.
+TICK_INTERVAL_TOLERANCE = 0.25
+
+
+def assert_ticks_paced_on_stream_time(reported: "dict[str, Any]", scale: float) -> None:
+    assert reported["scale"] == scale, reported
+    interval_ns = CONTINUOUS_TICK_COUNTER_INTERVAL_MS * 1_000_000
+    stream_interval_ns = reported["stream_elapsed_ns"] / reported["ticks"]
+    machine_interval_ns = reported["machine_elapsed_ns"] / reported["ticks"]
+    assert abs(stream_interval_ns / interval_ns - 1) < TICK_INTERVAL_TOLERANCE, (
+        f"at {scale}× a tick took {stream_interval_ns / 1e6:.2f} stream ms, not "
+        f"{CONTINUOUS_TICK_COUNTER_INTERVAL_MS}: {reported}"
+    )
+    assert abs(machine_interval_ns * scale / interval_ns - 1) < TICK_INTERVAL_TOLERANCE, (
+        f"at {scale}× a tick took {machine_interval_ns / 1e6:.2f} machine ms, not "
+        f"{CONTINUOUS_TICK_COUNTER_INTERVAL_MS / scale}: {reported}"
+    )
+
+
+def test_a_continuous_node_fires_on_stream_time_and_follows_a_live_rescale(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(continuous_ticks_in_slow_motion)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+
+    at_the_declared_scale = tatolabd.await_marker(
+        "CONTINUOUS_TICKS_AT_SCALE_0", timeout=REPORT_TIMEOUT_SECONDS
+    )
+    rescaled = tatolabd.local_api_client().call_tool(
+        "set_stream_clock_scale", {"stream": stream_id, "scale": LIVE_RESCALED_SCALE}
+    )
+    at_the_live_scale = tatolabd.await_marker(
+        "CONTINUOUS_TICKS_AT_SCALE_1", timeout=REPORT_TIMEOUT_SECONDS
+    )
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert rescaled == {"stream": stream_id, "scale": LIVE_RESCALED_SCALE}
+    assert_ticks_paced_on_stream_time(at_the_declared_scale, SLOW_MOTION_SCALE)
+    assert_ticks_paced_on_stream_time(at_the_live_scale, LIVE_RESCALED_SCALE)
+    assert at_the_live_scale["stream_time_went_backwards"] is False, at_the_live_scale
+    assert graph["clock"]["scale"] == LIVE_RESCALED_SCALE, graph
+
+
+def test_a_real_time_streams_clock_is_not_rescaled(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(stream_times_in_real_time)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+
+    refusal = tatolabd.local_api_client().call_tool_refusal(
+        "set_stream_clock_scale", {"stream": stream_id, "scale": 0.5}
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert f"`{stream_id}` runs on a real clock" in refusal, refusal

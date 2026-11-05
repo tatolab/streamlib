@@ -13,6 +13,7 @@ use super::{
     Runner, StreamAction, StreamActionQueued, StreamListing, StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
+use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
 use crate::core::graph::OutputPortExposureLevel;
 use crate::core::processors::InstalledModuleOfANodeType;
@@ -114,6 +115,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         port: &str,
         level: OutputPortExposureLevel,
     ) -> Result<OutputPortExposureOutcome>;
+
+    /// [`Runner::set_stream_clock_scale`].
+    fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading>;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -221,5 +225,9 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         level: OutputPortExposureLevel,
     ) -> Result<OutputPortExposureOutcome> {
         Runner::expose_port(self, stream_id, node, port, level)
+    }
+
+    fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {
+        Runner::set_stream_clock_scale(self, stream_id, scale)
     }
 }
