@@ -100,19 +100,15 @@ impl HelperGpuPoolClaimTables {
                     hand_over.claimant_column_index
                 )
             })?;
+        if let std::collections::hash_map::Entry::Vacant(unmapped_pool) =
+            self.claim_tables_by_pool.lock().entry(pool)
         {
-            let mut claim_tables_by_pool = self.claim_tables_by_pool.lock();
-            if !claim_tables_by_pool.contains_key(&pool) {
-                let shared_rows = GpuPoolClaimTableMemfd::adopt(claim_table_memfd)
-                    .map_err(|adoption_failure| adoption_failure.to_string())?;
-                claim_tables_by_pool.insert(
-                    pool,
-                    Arc::new(HelperGpuPoolClaimTable {
-                        shared_rows,
-                        claimant_column,
-                    }),
-                );
-            }
+            let shared_rows = GpuPoolClaimTableMemfd::adopt(claim_table_memfd)
+                .map_err(|adoption_failure| adoption_failure.to_string())?;
+            unmapped_pool.insert(Arc::new(HelperGpuPoolClaimTable {
+                shared_rows,
+                claimant_column,
+            }));
         }
         let mut pool_slot_key_by_pool_and_row = self.pool_slot_key_by_pool_and_row.lock();
         pool_slot_key_by_pool_and_row.retain(|(row_pool, _), _| *row_pool != pool);
