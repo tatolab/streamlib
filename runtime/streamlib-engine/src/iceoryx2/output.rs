@@ -682,6 +682,15 @@ impl OutputWriter {
         }
     }
 
+    /// Stream time now, the stamp a write that names none carries; the machine
+    /// clock before the host has wired this processor instance.
+    pub fn stream_time_now_ns(&self) -> i64 {
+        self.host_inner().map_or_else(
+            || MediaClock::now().as_nanos() as i64,
+            OutputWriterInner::implicit_stamp_now_ns,
+        )
+    }
+
     /// Publish `value` as a msgpack named map on `port`, stamped with stream time now, as a message
     /// that starts a group.
     pub fn write_msgpack<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {

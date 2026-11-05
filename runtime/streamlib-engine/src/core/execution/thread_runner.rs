@@ -152,13 +152,12 @@ fn run_continuous_mode(
     runtime_ctx: &RuntimeContext,
     clock_it_paces_on: &StreamClock,
 ) {
-    let stream_clock = clock_it_paces_on;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
-    let mut next_deadline_stream_ns = stream_clock.now_ns();
+    let mut next_deadline_ns = clock_it_paces_on.now_ns();
     let mut was_paused = false;
 
     loop {
-        if wait_for_stream_time_or_shutdown(stream_clock, next_deadline_stream_ns, shutdown_rx)
+        if wait_for_stream_time_or_shutdown(clock_it_paces_on, next_deadline_ns, shutdown_rx)
             == ContinuousRunnerWaitOutcome::ShutdownRequested
         {
             tracing::info!("[{}] Received shutdown signal", id);
@@ -182,16 +181,16 @@ fn run_continuous_mode(
                 tracing::info!("[{}] Received shutdown signal", id);
                 break;
             }
-            next_deadline_stream_ns = stream_clock.now_ns();
+            next_deadline_ns = clock_it_paces_on.now_ns();
             continue;
         }
 
         dispatch_process(id, processor, runtime_ctx);
 
-        next_deadline_stream_ns = next_continuous_deadline_stream_ns(
-            next_deadline_stream_ns,
+        next_deadline_ns = next_continuous_deadline_stream_ns(
+            next_deadline_ns,
             interval_stream_ns,
-            stream_clock.now_ns(),
+            clock_it_paces_on.now_ns(),
         );
     }
 }

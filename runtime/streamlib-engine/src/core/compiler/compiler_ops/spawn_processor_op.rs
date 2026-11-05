@@ -262,9 +262,15 @@ fn spawn_dedicated_thread(
                 "[{}] Attaching ProcessorInstanceComponent to graph",
                 proc_id_clone
             );
+            let paced_by_real_time = processor_arc_clone.lock().is_paced_by_real_time();
             {
                 let mut graph = graph_arc_clone.write();
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
+                    if paced_by_real_time
+                        && let Some(step_progress) = node.get::<StepProgressOfOneNodeComponent>()
+                    {
+                        step_progress.0.note_it_stands_outside_the_step_barrier();
+                    }
                     processor_to_attach.attach_to(node);
                 }
             }
@@ -350,21 +356,17 @@ fn spawn_dedicated_thread(
                     .map(|step_progress| Arc::clone(&step_progress.0))
                     .unwrap_or_default();
 
-                let (exec_config, execution_the_node_runs_in, paced_by_real_time) = {
+                let (exec_config, execution_the_node_runs_in) = {
                     let processor = processor_arc_clone.lock();
                     let exec_config = processor.execution_config();
-                    let paced_by_real_time = processor.is_paced_by_real_time();
                     let execution_the_node_runs_in = processor.out_of_process_link_wiring().map_or(
                         exec_config.execution,
                         |out_of_process_link_wiring| {
                             out_of_process_link_wiring.far_side_process_execution()
                         },
                     );
-                    (exec_config, execution_the_node_runs_in, paced_by_real_time)
+                    (exec_config, execution_the_node_runs_in)
                 };
-                if paced_by_real_time {
-                    step_progress.note_it_stands_outside_the_step_barrier();
-                }
 
                 (
                     state,

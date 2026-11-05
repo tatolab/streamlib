@@ -210,7 +210,10 @@ def test_a_node_paced_by_real_time_writes_on_the_machine_clock_beside_steps_it_n
     assert len(seen) == REAL_TIME_PACED_MESSAGES_REPORTED, seen
     interval_ns = REAL_TIME_PACED_WRITER_INTERVAL_MS * 1_000_000
     for earlier, later in zip(seen, seen[1:]):
-        assert later["stamp_ns"] == later["written_stream_time_ns"], later
+        assert later["stamp_ns"] >= later["written_stream_time_ns"], (
+            f"a write is stamped on stream time at the write, no earlier than the writer read it: {later}"
+        )
+        assert later["stamp_ns"] > earlier["stamp_ns"], seen
         machine_gap_ns = later["written_machine_time_ns"] - earlier["written_machine_time_ns"]
         assert machine_gap_ns >= interval_ns * 0.9, (
             f"the node paced by real time wrote {machine_gap_ns / 1e6:.1f} machine ms apart: {seen}"

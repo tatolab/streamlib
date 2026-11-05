@@ -4,7 +4,8 @@
 //! A stepped stream of native nodes runs behind its step barrier: a continuous
 //! source, a slow reactive middle and a sink run exactly the steps the clock
 //! names, faster than real time, every message stamped with its step's time and
-//! none dropped. A node that paces itself is refused in a stepped stream.
+//! none dropped. A manual node is refused in a stepped stream unless it is
+//! paced by real time, and a node paced by real time never holds a step.
 
 use std::path::Path;
 use std::sync::{Arc, Once};
@@ -111,6 +112,42 @@ impl streamlib_engine::ManualProcessor for SelfPacedSource::Processor {
     }
 }
 
+#[streamlib::sdk::processor(execution = manual, paced_by_real_time, output("frames"))]
+pub struct RealTimePacedManualSource;
+
+impl streamlib_engine::ManualProcessor for RealTimePacedManualSource::Processor {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// How long the node paced by real time takes over each call, on the machine clock.
+const REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL: Duration = Duration::from_millis(300);
+
+#[streamlib::sdk::processor(
+    execution = continuous(interval_ms = 50),
+    paced_by_real_time,
+    output("ticks"),
+)]
+pub struct SlowRealTimePacedTickSource;
+
+impl streamlib_engine::ContinuousProcessor for SlowRealTimePacedTickSource::Processor {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        std::thread::sleep(REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL);
+        self.outputs.write_msgpack("ticks", &0u64)
+    }
+}
+
+#[streamlib::sdk::processor(execution = reactive, input("ticks", delivery_profile = "ordered"))]
+pub struct RealTimePacedTickSink;
+
+impl streamlib_engine::ReactiveProcessor for RealTimePacedTickSink::Processor {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        while self.inputs.read_raw("ticks")?.is_some() {}
+        Ok(())
+    }
+}
+
 fn register_the_test_nodes() {
     static REGISTERED: Once = Once::new();
     REGISTERED.call_once(|| {
@@ -119,6 +156,9 @@ fn register_the_test_nodes() {
         PROCESSOR_REGISTRY.register::<SteppedTickSink::Processor>();
         PROCESSOR_REGISTRY.register::<SelfPacedSource::Processor>();
         PROCESSOR_REGISTRY.register::<EveryThirdStepTickSink::Processor>();
+        PROCESSOR_REGISTRY.register::<RealTimePacedManualSource::Processor>();
+        PROCESSOR_REGISTRY.register::<SlowRealTimePacedTickSource::Processor>();
+        PROCESSOR_REGISTRY.register::<RealTimePacedTickSink::Processor>();
     });
 }
 
@@ -325,5 +365,65 @@ fn a_continuous_consumer_slower_than_the_steps_takes_what_waited_for_it_at_its_d
         batches.concat(),
         (0..batches.concat().len() as u64).collect::<Vec<_>>(),
         "the sink takes every tick in order, none dropped: {batches:?}"
+    );
+}
+
+#[test]
+#[serial]
+fn nodes_paced_by_real_time_load_in_a_stepped_stream_and_never_hold_its_steps() {
+    register_the_test_nodes();
+    TICKS_THE_SINK_TOOK.lock().clear();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "stepped-beside-real-time",
+            "clock": serde_json::to_value(StreamClockSpec::Stepped {
+                step_ns: STEP_NS,
+                pace: None,
+                stop_after_steps: Some(STEPS_THE_STREAM_RUNS),
+            }).expect("a clock spec serializes"),
+            "nodes": [
+                {"name": "source", "type": SteppedTickSource::processor_class_import_path().as_str()},
+                {"name": "relay", "type": SlowSteppedRelay::processor_class_import_path().as_str()},
+                {"name": "sink", "type": SteppedTickSink::processor_class_import_path().as_str()},
+                {"name": "camera", "type": RealTimePacedManualSource::processor_class_import_path().as_str()},
+                {"name": "slow-live", "type": SlowRealTimePacedTickSource::processor_class_import_path().as_str()},
+                {"name": "live-sink", "type": RealTimePacedTickSink::processor_class_import_path().as_str()},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "ticks"}, "target": {"node": "relay", "port": "ticks"}},
+                {"source": {"node": "relay", "port": "relayed"}, "target": {"node": "sink", "port": "relayed"}},
+                {"source": {"node": "slow-live", "port": "ticks"}, "target": {"node": "live-sink", "port": "ticks"}},
+            ],
+        }),
+    )
+    .expect("a stepped stream holding nodes paced by real time loads");
+    let started = Instant::now();
+    stream.start().expect("the stream starts");
+    stream
+        .wait_until_every_processor_is_running(Duration::from_secs(10))
+        .expect("a manual node paced by real time runs in a stepped stream");
+    wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
+    let ran_for = started.elapsed();
+
+    let held_by_the_slow_live_node =
+        REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL * STEPS_THE_STREAM_RUNS as u32;
+    assert!(
+        ran_for < held_by_the_slow_live_node / 2,
+        "{STEPS_THE_STREAM_RUNS} unpaced steps took {ran_for:?} beside a node paced by real time \
+         taking {REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL:?} a call"
+    );
+    let ticks_the_sink_took = TICKS_THE_SINK_TOOK.lock().clone();
+    assert_eq!(
+        ticks_the_sink_took
+            .iter()
+            .map(|(tick, _)| *tick)
+            .collect::<Vec<_>>(),
+        (0..STEPS_THE_STREAM_RUNS).collect::<Vec<_>>(),
+        "the step chain runs every step: {ticks_the_sink_took:?}"
     );
 }
