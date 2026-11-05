@@ -27,7 +27,7 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::Loade
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{
     CaptureDeviceAccessPrompting, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
-    StreamClock, StreamClockReading, StreamClockSpec, platform_audio_clock_for_one_stream,
+    StreamClock, StreamClockReading, platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
@@ -540,6 +540,10 @@ impl LoadedStreamInThisRuntime {
         if let Some(stepped_clock) =
             SteppedClockTheCoordinatorRuns::of(this_streams_runtime_context.stream_clock.spec())
         {
+            let earlier_step_coordinator = self.step_coordinator.lock().take();
+            if let Some(earlier_step_coordinator) = earlier_step_coordinator {
+                earlier_step_coordinator.stop();
+            }
             *self.step_coordinator.lock() = Some(StreamStepCoordinatorOfOneStream::start(
                 Weak::clone(&self.this_stream),
                 self.stream_id(),
@@ -1248,21 +1252,6 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         graph.validate(&self.node_types_this_stream_resolves)?;
-        if let StreamClockSpec::Stepped { .. } = graph.clock
-            && let Some(python_node) = graph.nodes.iter().find(|node| {
-                !self
-                    .node_types_this_stream_resolves
-                    .is_a_natively_compiled_node_type(&node.processor_type)
-            })
-        {
-            return Err(Error::GraphError(format!(
-                "the stream `{}` names a stepped clock, and its node `{}` runs in a helper \
-                 process, which does not join the step barrier yet; a stepped stream holds \
-                 native nodes only",
-                self.stream_id(),
-                python_node.name
-            )));
-        }
         self.compiler
             .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 

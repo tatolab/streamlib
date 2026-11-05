@@ -79,6 +79,29 @@ impl streamlib_engine::ReactiveProcessor for SteppedTickSink::Processor {
     }
 }
 
+/// Each batch the slow sink took: the ticks it read in one call.
+static TICK_BATCHES_THE_SLOW_SINK_TOOK: Mutex<Vec<Vec<u64>>> = Mutex::new(Vec::new());
+
+#[streamlib::sdk::processor(
+    execution = continuous(interval_ms = 150),
+    input("ticks", delivery_profile = "ordered"),
+)]
+pub struct EveryThirdStepTickSink;
+
+impl streamlib_engine::ContinuousProcessor for EveryThirdStepTickSink::Processor {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        let mut batch = Vec::new();
+        while let Some(message) = self.inputs.read_raw("ticks")? {
+            batch.push(
+                rmp_serde::from_slice(&message.payload_bytes)
+                    .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?,
+            );
+        }
+        TICK_BATCHES_THE_SLOW_SINK_TOOK.lock().push(batch);
+        Ok(())
+    }
+}
+
 #[streamlib::sdk::processor(execution = manual, output("frames"))]
 pub struct SelfPacedSource;
 
@@ -95,6 +118,7 @@ fn register_the_test_nodes() {
         PROCESSOR_REGISTRY.register::<SlowSteppedRelay::Processor>();
         PROCESSOR_REGISTRY.register::<SteppedTickSink::Processor>();
         PROCESSOR_REGISTRY.register::<SelfPacedSource::Processor>();
+        PROCESSOR_REGISTRY.register::<EveryThirdStepTickSink::Processor>();
     });
 }
 
@@ -258,4 +282,48 @@ fn a_node_that_paces_itself_fails_a_stepped_stream_naming_it() {
         "the refusal names the node and why: {refusal}"
     );
     wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
+}
+
+#[test]
+#[serial]
+fn a_continuous_consumer_slower_than_the_steps_takes_what_waited_for_it_at_its_deadline() {
+    register_the_test_nodes();
+    TICK_BATCHES_THE_SLOW_SINK_TOOK.lock().clear();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "slow-consumer",
+            "clock": serde_json::to_value(StreamClockSpec::Stepped {
+                step_ns: STEP_NS,
+                pace: None,
+                stop_after_steps: Some(STEPS_THE_STREAM_RUNS),
+            }).expect("a clock spec serializes"),
+            "nodes": [
+                {"name": "source", "type": SteppedTickSource::processor_class_import_path().as_str()},
+                {"name": "sink", "type": EveryThirdStepTickSink::processor_class_import_path().as_str()},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "ticks"}, "target": {"node": "sink", "port": "ticks"}},
+            ],
+        }),
+    )
+    .expect("a stepped stream with a slow continuous consumer loads");
+    stream.start().expect("the stream starts");
+    wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
+
+    let batches = TICK_BATCHES_THE_SLOW_SINK_TOOK.lock().clone();
+    assert_eq!(
+        batches.len() as u64,
+        STEPS_THE_STREAM_RUNS.div_ceil(3),
+        "the sink runs every third step: {batches:?}"
+    );
+    assert_eq!(
+        batches.concat(),
+        (0..batches.concat().len() as u64).collect::<Vec<_>>(),
+        "the sink takes every tick in order, none dropped: {batches:?}"
+    );
 }

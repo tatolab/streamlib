@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[derive(Debug, Default)]
 pub struct StepProgressOfOneNode {
     finishes_every_step: AtomicBool,
+    panicked_mid_callback: AtomicBool,
     steps_finished: AtomicU64,
     callbacks_in_flight: AtomicU32,
 }
@@ -24,6 +25,9 @@ pub struct StepProgressReadingOfOneNode {
     pub steps_finished: u64,
     /// Callbacks of the node's started and not yet returned.
     pub callbacks_in_flight: u32,
+    /// Whether a callback of the node's panicked, so it will never finish one
+    /// again.
+    pub panicked_mid_callback: bool,
 }
 
 impl StepProgressReadingOfOneNode {
@@ -42,13 +46,20 @@ impl StepProgressOfOneNode {
         self.finishes_every_step.store(true, Ordering::Release);
     }
 
-    /// Note a callback started; a step cannot close while it runs.
-    pub fn note_a_callback_started(&self) {
+    /// Note a callback started, until the returned guard drops; a step cannot
+    /// close while it runs, and a panic out of it is noted as the node's end.
+    pub fn callback_in_flight(&self) -> StepProgressCallbackInFlight<'_> {
+        self.note_a_callback_started();
+        StepProgressCallbackInFlight {
+            step_progress: self,
+        }
+    }
+
+    fn note_a_callback_started(&self) {
         self.callbacks_in_flight.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Note a callback returned.
-    pub fn note_a_callback_returned(&self) {
+    fn note_a_callback_returned(&self) {
         let _ = self.callbacks_in_flight.try_update(
             Ordering::AcqRel,
             Ordering::Acquire,
@@ -68,7 +79,26 @@ impl StepProgressOfOneNode {
             finishes_every_step: self.finishes_every_step.load(Ordering::Acquire),
             steps_finished: self.steps_finished.load(Ordering::Acquire),
             callbacks_in_flight: self.callbacks_in_flight.load(Ordering::Acquire),
+            panicked_mid_callback: self.panicked_mid_callback.load(Ordering::Acquire),
         }
+    }
+}
+
+/// One callback of a node's, counted in flight on its step-ledger entry for as
+/// long as this lives.
+#[must_use = "the callback counts in flight only while this guard lives"]
+pub struct StepProgressCallbackInFlight<'a> {
+    step_progress: &'a StepProgressOfOneNode,
+}
+
+impl Drop for StepProgressCallbackInFlight<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.step_progress
+                .panicked_mid_callback
+                .store(true, Ordering::Release);
+        }
+        self.step_progress.note_a_callback_returned();
     }
 }
 
@@ -83,10 +113,23 @@ mod tests {
     #[test]
     fn a_node_in_a_callback_holds_the_step_open() {
         let progress = StepProgressOfOneNode::default();
-        progress.note_a_callback_started();
+        let callback = progress.callback_in_flight();
         assert!(!progress.reading().lets_the_step_close(0));
-        progress.note_a_callback_returned();
+        drop(callback);
         assert!(progress.reading().lets_the_step_close(0));
+        assert!(!progress.reading().panicked_mid_callback);
+    }
+
+    #[test]
+    fn a_callback_that_panics_is_noted_as_the_nodes_end() {
+        let progress = StepProgressOfOneNode::default();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _callback = progress.callback_in_flight();
+            panic!("a callback panicked");
+        }));
+        assert!(panicked.is_err());
+        assert!(progress.reading().panicked_mid_callback);
+        assert_eq!(progress.reading().callbacks_in_flight, 0);
     }
 
     #[test]

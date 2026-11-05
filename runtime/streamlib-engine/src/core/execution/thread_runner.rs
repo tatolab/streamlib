@@ -211,12 +211,14 @@ fn run_continuous_mode_on_steps(
         };
 
         let is_paused = pause_gate.load(Ordering::Acquire);
-        if is_paused && !was_paused {
-            dispatch_on_pause(id, processor, runtime_ctx);
-            was_paused = true;
-        } else if !is_paused && was_paused {
-            dispatch_on_resume(id, processor, runtime_ctx);
-            was_paused = false;
+        if is_paused != was_paused {
+            let _callback_in_flight = step_progress.callback_in_flight();
+            if is_paused {
+                dispatch_on_pause(id, processor, runtime_ctx);
+            } else {
+                dispatch_on_resume(id, processor, runtime_ctx);
+            }
+            was_paused = is_paused;
         }
 
         let step_stream_ns = stream_clock.now_ns();
@@ -338,18 +340,22 @@ fn run_reactive_mode(
         #[cfg(unix)]
         shutdown_wake_fd,
         pause_gate,
-        |callback| match callback {
-            ReactiveRunnerProcessorCallback::OnPause => {
-                dispatch_on_pause(id, processor, runtime_ctx)
+        |callback| {
+            let _callback_in_flight =
+                counts_its_callbacks_on_the_step_ledger.then(|| step_progress.callback_in_flight());
+            match callback {
+                ReactiveRunnerProcessorCallback::OnPause => {
+                    dispatch_on_pause(id, processor, runtime_ctx)
+                }
+                ReactiveRunnerProcessorCallback::OnResume => {
+                    dispatch_on_resume(id, processor, runtime_ctx)
+                }
+                ReactiveRunnerProcessorCallback::Process => {
+                    dispatch_process(id, processor, runtime_ctx)
+                }
             }
-            ReactiveRunnerProcessorCallback::OnResume => {
-                dispatch_on_resume(id, processor, runtime_ctx)
-            }
-            ReactiveRunnerProcessorCallback::Process if counts_its_callbacks_on_the_step_ledger => {
-                dispatch_process_on_the_step_ledger(id, processor, runtime_ctx, step_progress)
-            }
-            ReactiveRunnerProcessorCallback::Process => {
-                dispatch_process(id, processor, runtime_ctx)
+            if counts_its_callbacks_on_the_step_ledger {
+                runtime_ctx.stream_clock.note_step_progress();
             }
         },
     );
@@ -1242,9 +1248,10 @@ fn dispatch_process_on_the_step_ledger(
     runtime_ctx: &RuntimeContext,
     step_progress: &StepProgressOfOneNode,
 ) {
-    step_progress.note_a_callback_started();
-    dispatch_process(id, processor, runtime_ctx);
-    step_progress.note_a_callback_returned();
+    {
+        let _callback_in_flight = step_progress.callback_in_flight();
+        dispatch_process(id, processor, runtime_ctx);
+    }
     runtime_ctx.stream_clock.note_step_progress();
 }
 

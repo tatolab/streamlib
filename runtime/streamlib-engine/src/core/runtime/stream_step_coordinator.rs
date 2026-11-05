@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use crate::core::context::{StreamClock, StreamClockSpec};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphWeight, ProcessorMetrics, StateComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, LinkState,
+    LinkStateComponent, ProcessorMetrics, ProcessorPauseGateComponent, StateComponent,
     StepProgressOfOneNodeComponent, StepProgressReadingOfOneNode,
 };
 use crate::core::processors::ProcessorState;
@@ -35,6 +36,13 @@ pub(crate) struct StepLedgerEntryOfOneNode {
     pub(crate) has_failed: bool,
 }
 
+impl StepLedgerEntryOfOneNode {
+    /// Whether the node will never finish a callback again.
+    fn has_ended(&self) -> bool {
+        self.has_failed || self.step_progress.panicked_mid_callback
+    }
+}
+
 /// One link's bag counts on a stream's step ledger: what its producer wrote,
 /// and what its destination took or lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,6 +50,9 @@ pub(crate) struct StepLedgerEntryOfOneLink {
     pub(crate) written_bags: u64,
     pub(crate) taken_bags: u64,
     pub(crate) dropped_bags: u64,
+    /// Whether the link's destination is subscribed, so every bag written
+    /// from here on reaches it.
+    pub(crate) is_wired: bool,
 }
 
 impl StepLedgerEntryOfOneLink {
@@ -63,19 +74,32 @@ impl StepLedgerReading {
     /// Read the ledger off `graph`: each node's step progress and state, and
     /// each link's producer's written count beside its destination's taken and
     /// dropped counts.
+    ///
+    /// A link into a continuous node or a paused one is left off: such a node
+    /// takes what waits for it when it next runs, never within the step that
+    /// wrote it.
     pub(crate) fn read_off(graph: &Graph) -> Self {
         let mut reading = Self::default();
+        let mut processor_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
         for node in graph.traversal().v(()).iter() {
+            let step_progress = node
+                .get::<StepProgressOfOneNodeComponent>()
+                .map(|step_progress| step_progress.0.reading())
+                .unwrap_or_default();
+            if step_progress.finishes_every_step
+                || node
+                    .get::<ProcessorPauseGateComponent>()
+                    .is_some_and(ProcessorPauseGateComponent::is_paused)
+            {
+                processor_ids_that_take_bags_on_their_own_pace.insert(node.id().to_string());
+            }
             reading.nodes_by_processor_id.insert(
                 node.id().to_string(),
                 StepLedgerEntryOfOneNode {
                     display_name: node.display_name.clone(),
-                    step_progress: node
-                        .get::<StepProgressOfOneNodeComponent>()
-                        .map(|step_progress| step_progress.0.reading())
-                        .unwrap_or_default(),
+                    step_progress,
                     has_failed: node
                         .get::<StateComponent>()
                         .is_some_and(|state| state.current() == ProcessorState::Error),
@@ -103,6 +127,15 @@ impl StepLedgerReading {
             }
         }
         for link in graph.traversal().e(()).iter() {
+            if processor_ids_that_take_bags_on_their_own_pace
+                .contains(link.to_port().processor_id().as_str())
+            {
+                continue;
+            }
+            let is_wired = link
+                .get::<LinkStateComponent>()
+                .map_or(link.state, |link_state| link_state.0)
+                == LinkState::Wired;
             let (taken_bags, dropped_bags) = taken_and_dropped_bags_by_link_id
                 .get(link.id.as_str())
                 .copied()
@@ -120,17 +153,18 @@ impl StepLedgerReading {
                     written_bags,
                     taken_bags,
                     dropped_bags,
+                    is_wired,
                 },
             );
         }
         reading
     }
 
-    /// The display name of a node that failed, when one has.
+    /// The display name of a node that failed or panicked, when one has.
     pub(crate) fn a_failed_node(&self) -> Option<&str> {
         self.nodes_by_processor_id
             .values()
-            .find(|node| node.has_failed)
+            .find(|node| node.has_ended())
             .map(|node| node.display_name.as_str())
     }
 
@@ -152,21 +186,30 @@ impl StepLedgerReading {
     }
 }
 
-/// The bags each link held in flight when the coordinator first read it: a
-/// link wired mid-run joins with whatever its producer wrote before it, which
-/// will never reach it.
+/// The bags each link held in flight when its destination subscribed: a link
+/// wired mid-run joins with whatever its producer wrote before it, which will
+/// never reach it.
 #[derive(Debug, Default)]
 pub(crate) struct StepLedgerLinkBaselines {
     bags_in_flight_by_link_id: HashMap<String, u64>,
 }
 
 impl StepLedgerLinkBaselines {
-    /// Note every link of `reading` not seen before.
-    pub(crate) fn note_the_links_first_seen_in(&mut self, reading: &StepLedgerReading) {
+    /// Follow the links of `reading`: a link not wired yet is baselined at
+    /// what it holds in flight now, a wired one keeps the baseline it had when
+    /// it was first seen wired, and a link gone from the graph is forgotten.
+    pub(crate) fn follow_the_links_in(&mut self, reading: &StepLedgerReading) {
+        self.bags_in_flight_by_link_id
+            .retain(|link_id, _| reading.links_by_link_id.contains_key(link_id));
         for (link_id, link) in &reading.links_by_link_id {
-            self.bags_in_flight_by_link_id
-                .entry(link_id.clone())
-                .or_insert_with(|| link.bags_in_flight());
+            if link.is_wired {
+                self.bags_in_flight_by_link_id
+                    .entry(link_id.clone())
+                    .or_insert_with(|| link.bags_in_flight());
+            } else {
+                self.bags_in_flight_by_link_id
+                    .insert(link_id.clone(), link.bags_in_flight());
+            }
         }
     }
 
@@ -217,6 +260,12 @@ pub(crate) struct StreamStepCoordinatorOfOneStream {
     thread: Option<JoinHandle<()>>,
 }
 
+impl Drop for StreamStepCoordinatorOfOneStream {
+    fn drop(&mut self) {
+        let _ = self.stop_requested.try_send(());
+    }
+}
+
 impl StreamStepCoordinatorOfOneStream {
     /// Start the step barrier of `stream`, which runs `stream_clock`.
     pub(crate) fn start(
@@ -260,7 +309,12 @@ fn run_the_step_barrier(
     stepped_clock: SteppedClockTheCoordinatorRuns,
     stop_request_arrival: &crossbeam_channel::Receiver<()>,
 ) {
-    let a_stop_was_requested = || !stop_request_arrival.is_empty();
+    let a_stop_was_requested = || {
+        !matches!(
+            stop_request_arrival.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        )
+    };
     let read_the_ledger = || stream.upgrade().map(|stream| stream.step_ledger_reading());
     let ask_for_the_streams_shutdown = |reason: &str| {
         if let Some(stream) = stream.upgrade() {
@@ -293,7 +347,7 @@ fn run_the_step_barrier(
         return;
     };
     let mut baselines = StepLedgerLinkBaselines::default();
-    baselines.note_the_links_first_seen_in(&first_reading);
+    baselines.follow_the_links_in(&first_reading);
     let first_step_opened_at = Instant::now();
     let mut step_index: u64 = 0;
 
@@ -316,7 +370,7 @@ fn run_the_step_barrier(
                 ));
                 return;
             }
-            baselines.note_the_links_first_seen_in(&reading);
+            baselines.follow_the_links_in(&reading);
             let closes = reading.lets_the_step_close(step_index, &baselines);
             if closes && previous_reading.as_ref() == Some(&reading) {
                 break;
@@ -348,7 +402,10 @@ fn run_the_step_barrier(
         {
             let opens_at =
                 first_step_opened_at + Duration::from_nanos(machine_ns_from_the_first_step);
-            if stop_request_arrival.recv_deadline(opens_at).is_ok() {
+            if !matches!(
+                stop_request_arrival.recv_deadline(opens_at),
+                Err(crossbeam_channel::RecvTimeoutError::Timeout)
+            ) {
                 return;
             }
         }
@@ -390,6 +447,7 @@ mod tests {
             finishes_every_step: true,
             steps_finished: 1,
             callbacks_in_flight: 0,
+            panicked_mid_callback: false,
         };
 
     const A_REACTIVE_NODE_IN_A_CALLBACK: StepProgressReadingOfOneNode =
@@ -397,12 +455,14 @@ mod tests {
             finishes_every_step: false,
             steps_finished: 0,
             callbacks_in_flight: 1,
+            panicked_mid_callback: false,
         };
 
     const AN_IDLE_REACTIVE_NODE: StepProgressReadingOfOneNode = StepProgressReadingOfOneNode {
         finishes_every_step: false,
         steps_finished: 0,
         callbacks_in_flight: 0,
+        panicked_mid_callback: false,
     };
 
     fn a_link(written_bags: u64, taken_bags: u64, dropped_bags: u64) -> StepLedgerEntryOfOneLink {
@@ -410,6 +470,7 @@ mod tests {
             written_bags,
             taken_bags,
             dropped_bags,
+            is_wired: true,
         }
     }
 
@@ -457,6 +518,7 @@ mod tests {
                 finishes_every_step: true,
                 steps_finished: 0,
                 callbacks_in_flight: 0,
+                panicked_mid_callback: false,
             }],
             [],
         );
@@ -464,17 +526,44 @@ mod tests {
     }
 
     #[test]
-    fn bags_a_link_missed_before_the_ledger_saw_it_never_hold_a_step_open() {
+    fn bags_written_before_a_link_was_wired_never_hold_a_step_open() {
         let mut baselines = StepLedgerLinkBaselines::default();
-        baselines.note_the_links_first_seen_in(&a_reading([], [a_link(5, 0, 0)]));
+        baselines.follow_the_links_in(&a_reading(
+            [],
+            [StepLedgerEntryOfOneLink {
+                is_wired: false,
+                ..a_link(3, 0, 0)
+            }],
+        ));
+        baselines.follow_the_links_in(&a_reading([], [a_link(5, 0, 0)]));
         assert!(
-            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(7, 2, 0)])
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(5, 2, 0)])
                 .lets_the_step_close(0, &baselines)
         );
         assert!(
-            !a_reading([AN_IDLE_REACTIVE_NODE], [a_link(8, 2, 0)])
+            !a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 2, 0)])
                 .lets_the_step_close(0, &baselines)
         );
+    }
+
+    #[test]
+    fn a_link_gone_from_the_graph_takes_its_baseline_with_it() {
+        let mut baselines = StepLedgerLinkBaselines::default();
+        baselines.follow_the_links_in(&a_reading([], [a_link(5, 0, 0)]));
+        baselines.follow_the_links_in(&a_reading([], []));
+        assert_eq!(baselines.bags_in_flight_when_first_seen("l0"), 0);
+    }
+
+    #[test]
+    fn a_node_that_panicked_mid_callback_is_named_as_failed() {
+        let reading = a_reading(
+            [StepProgressReadingOfOneNode {
+                panicked_mid_callback: true,
+                ..AN_IDLE_REACTIVE_NODE
+            }],
+            [],
+        );
+        assert_eq!(reading.a_failed_node(), Some("node"));
     }
 
     #[test]
