@@ -696,6 +696,9 @@ fn fill_texture_with(gpu: &GpuContext, texture: &crate::core::rhi::Texture, rgba
 #[cfg(target_os = "linux")]
 #[test]
 fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+    };
     use crate::host_rhi::HostTextureExt as _;
     let Some(gpu) =
         gpu_or_skip("a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture")
@@ -710,7 +713,10 @@ fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
     ) {
         Ok(source) => source,
         Err(refusal) if refusal.to_string().contains("no RT-capable DRM modifier") => {
-            println!("the driver offers no render-target DRM modifier ({refusal}) — skipping");
+            skip_because_this_machine_lacks_naming_the_refusal(
+                RigOnlyCapability::DmaBufModifiers,
+                format!("the driver offers no render-target DRM modifier: {refusal}"),
+            );
             service.stop();
             return;
         }
