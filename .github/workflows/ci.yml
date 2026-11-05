@@ -314,6 +314,15 @@ jobs:
           path: target/tests/trybuild
           key: ${{ steps.restore-trybuild.outputs.cache-primary-key }}
 
+      # Its own target dir: `--cfg loom` rebuilds every dependency, and the
+      # workspace build must not see that cfg.
+      - name: GPU pool claim table loom model
+        if: ${{ !cancelled() }}
+        env:
+          RUSTFLAGS: --cfg loom
+          CARGO_TARGET_DIR: target/loom
+        run: cargo test --locked --release -p streamlib-ipc-types --test gpu_pool_claim_table_loom_model
+
       - name: Engine and media built-ins doctests
         if: ${{ !cancelled() }}
         run: >-

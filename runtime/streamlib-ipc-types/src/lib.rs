@@ -18,6 +18,15 @@
 
 use iceoryx2::prelude::*;
 
+mod gpu_pool_claim_table;
+pub use gpu_pool_claim_table::{
+    GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS,
+    GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT, GPU_POOL_CLAIM_TABLE_ROW_BYTES,
+    GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,
+    GPU_POOL_CLAIM_TABLE_ROW_PUBLISHED_GENERATION_OFFSET, GPU_POOL_CLAIM_TABLE_ROWS,
+    GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled, GpuPoolSlotRehandTest,
+};
+
 /// The initial iceoryx2 slot capacity every channel publisher is primed at.
 ///
 /// This is a HINT, never a cap. Publishers open under
