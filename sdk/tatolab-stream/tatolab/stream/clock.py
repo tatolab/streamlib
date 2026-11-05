@@ -32,7 +32,13 @@ drift. Use the [`MonotonicTimer`] it returns as a context manager;
 
 Both functions reach the runtime, which lends `tatolab.runtime` to the
 interpreter it starts for a node; where nothing is lent they raise
-`RuntimeError` naming themselves.
+`RuntimeError` naming themselves. Both stay on the machine's clock whatever
+clock a stream runs on.
+
+A stream names its own clock with `stream_builder.run_on_clock(...)`:
+[`RealTimeStreamClock`] (the default), [`ScaledStreamClock`] or
+[`SteppedStreamClock`]. A node reads that stream's time as `ctx.time` and
+which clock it is as `ctx.stream_clock`, a [`StreamClockReading`].
 """
 
 from __future__ import annotations
@@ -41,8 +47,21 @@ from types import TracebackType
 from typing import Literal, Protocol
 
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
+from ._stream_clock_spec import (
+    DEFAULT_SCALED_STREAM_CLOCK_STEP_NS,
+    RealTimeStreamClock,
+    ScaledStreamClock,
+    SteppedStreamClock,
+    StreamClock,
+)
 
 __all__ = [
+    "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
+    "RealTimeStreamClock",
+    "ScaledStreamClock",
+    "SteppedStreamClock",
+    "StreamClock",
+    "StreamClockReading",
     "MonotonicTimer",
     "monotonic_now_ns",
     "start_monotonic_timer",
@@ -95,3 +114,28 @@ def monotonic_now_ns() -> int:
 def start_monotonic_timer(interval_ns: int) -> MonotonicTimer:
     """Start a drift-free timer ticking every `interval_ns`, first at `now + interval_ns`."""
     ...
+
+
+@runtime_backed_protocol
+class StreamClockReading(Protocol):
+    """Which clock a node's stream runs on and where it stands, as `ctx.stream_clock` reads it."""
+
+    @property
+    def mode(self) -> Literal["real", "scaled", "stepped"]:
+        """The clock's mode."""
+        ...
+
+    @property
+    def scale(self) -> float:
+        """Stream seconds per machine second; 1.0 when real."""
+        ...
+
+    @property
+    def step_ns(self) -> int | None:
+        """Stream nanoseconds per step, or `None` when the clock does not step."""
+        ...
+
+    @property
+    def step_index(self) -> int | None:
+        """The step open now, or `None` when the clock does not step."""
+        ...

@@ -90,6 +90,7 @@ fn help_lists_exactly_the_served_verbs() {
             "rename",
             "streams",
             "expose",
+            "clock",
             "relays",
             "relay",
             "graph",

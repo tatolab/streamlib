@@ -29,6 +29,7 @@ mod output;
 mod payload;
 mod posix_shared_memory_headroom;
 mod read_mode;
+mod stream_clock_board;
 
 #[cfg(test)]
 pub(crate) use audio_window::{AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire};
@@ -109,3 +110,4 @@ pub use payload::{
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;
+pub use stream_clock_board::{StreamClockBoard, StreamClockBoardReader};

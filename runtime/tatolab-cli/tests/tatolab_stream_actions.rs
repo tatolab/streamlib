@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab run`, `stop`, `start`, `rm`, `rename`, `streams` and `expose` run as a user runs
+//! `tatolab run`, `stop`, `start`, `rm`, `rename`, `streams`, `expose` and `clock` run as a user runs
 //! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
 //! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
@@ -436,6 +436,68 @@ fn expose_sends_private_public_or_internal_by_its_flag() {
             "{level_flags:?}"
         );
     }
+}
+
+#[test]
+fn clock_sends_the_scale_and_says_the_stream_runs_at_it() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(&json!({ "stream": "cam", "scale": 0.25 }).to_string()),
+    );
+
+    let printed = printed_by_a_successful(
+        &isolated_machine_directories,
+        &["clock", "cam", "--scale", "0.25"],
+    );
+
+    assert_eq!(printed, "cam runs its clock at 0.25× from now on.\n");
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
+        [json!({"stream": "cam", "scale": 0.25})]
+    );
+}
+
+#[test]
+fn a_scale_that_is_not_finite_is_refused_before_any_call() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(&json!({ "stream": "cam", "scale": 0.25 }).to_string()),
+    );
+
+    for not_finite_scale in ["inf", "NaN"] {
+        let refused = isolated_machine_directories.run_tatolab(&[
+            "clock",
+            "cam",
+            "--scale",
+            not_finite_scale,
+        ]);
+
+        assert_eq!(refused.status.code(), Some(2));
+        assert!(standard_error_text(&refused).contains("is not a finite number"));
+    }
+    assert!(
+        stub_local_api_server
+            .recorded_arguments_of("set_stream_clock_scale")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_scale_the_runtime_refused_exits_one_in_its_own_words() {
+    let refusal = "the stream `cam` runs on a real clock; only a scaled clock's scale changes";
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_failure(refusal),
+    );
+
+    let refused = isolated_machine_directories.run_tatolab(&["clock", "cam", "--scale", "0.5"]);
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        standard_error_text(&refused),
+        format!("error: set_stream_clock_scale failed: {refusal}\n")
+    );
+    assert_eq!(standard_output_text(&refused), "");
 }
 
 #[test]

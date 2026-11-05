@@ -31,6 +31,7 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "limited_access_view_of_runtime_context_for_helper_process",
+    "machine_nanoseconds_until_this_helpers_stream_clock_reaches",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
     "note_stop_request_from_parent_on_runtime_context",
@@ -63,6 +64,12 @@ def limited_access_view_of_runtime_context_for_helper_process(
     full_access_context: _stream_protocols.RuntimeContextFullAccess,
 ) -> _stream_protocols.RuntimeContextLimitedAccess:
     """The limited-access view of the same node: same configuration, links and pause state."""
+
+def machine_nanoseconds_until_this_helpers_stream_clock_reaches(
+    stream_deadline_ns: int,
+) -> int:
+    """Machine nanoseconds until this helper's stream clock reaches stream time
+    `stream_deadline_ns`, as the clock runs now; zero or less once it has."""
 
 def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool

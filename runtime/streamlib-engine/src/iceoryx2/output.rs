@@ -38,6 +38,7 @@ use super::{
     DataChannelPayloadDescriptor, DataChannelSampleUserHeader, MessageGroupBoundary,
     data_channel_payload_cache_lines_for,
 };
+use crate::core::context::StreamClock;
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -211,6 +212,9 @@ pub struct OutputWriterInner {
     /// The node's output-port catalog entries, reached once the processor is
     /// created for its node.
     catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
+    /// The clock of the stream this processor runs in, reached once it is
+    /// spawned; a write with no stamp is stamped on it.
+    stream_clock: std::sync::OnceLock<Arc<StreamClock>>,
 }
 
 impl ChannelEgress {
@@ -377,6 +381,21 @@ impl OutputWriterInner {
             declared_output_ports: Mutex::new(HashSet::new()),
             bag_counts: Arc::new(BagCountsByOutputPort::default()),
             catalog_entries_of_output_ports: std::sync::OnceLock::new(),
+            stream_clock: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Reach the clock of the stream this processor runs in.
+    pub(crate) fn reach_the_stream_clock(&self, stream_clock: Arc<StreamClock>) {
+        let _ = self.stream_clock.set(stream_clock);
+    }
+
+    /// The stamp a write that names none carries: stream time now, or the
+    /// machine clock before the processor has reached its stream's clock.
+    fn implicit_stamp_now_ns(&self) -> i64 {
+        match self.stream_clock.get() {
+            Some(stream_clock) => stream_clock.now_ns(),
+            None => MediaClock::now().as_nanos() as i64,
         }
     }
 
@@ -849,10 +868,10 @@ impl OutputWriter {
         }
     }
 
-    /// Publish `value` as a msgpack named map on `port`, stamped now, as a message
+    /// Publish `value` as a msgpack named map on `port`, stamped with stream time now, as a message
     /// that starts a group.
     pub fn write_msgpack<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
-        let timestamp_ns = MediaClock::now().as_nanos() as i64;
+        let timestamp_ns = self.wired_inner_for_port(port)?.implicit_stamp_now_ns();
         self.write_msgpack_with_timestamp(port, value, timestamp_ns)
     }
 
@@ -1279,6 +1298,45 @@ mod tests {
         assert_eq!(
             notifications_after_the_drain, 1,
             "a drained listener must be woken by the next send"
+        );
+    }
+
+    #[test]
+    fn a_write_naming_no_stamp_is_stamped_with_its_streams_time() {
+        let pubsub = open_channel_data_service("stream-clock-stamp", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = Arc::new(output_writer_with_one_channel(
+            &pubsub,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        ));
+        let one_second_ago_ns = MediaClock::now().as_nanos() as i64 - 1_000_000_000;
+        let half_speed_since_a_second_ago = Arc::new(StreamClock::starting_at(
+            crate::core::context::StreamClockSpec::Scaled {
+                scale: 0.5,
+                step_ns: 1_000,
+            },
+            one_second_ago_ns,
+        ));
+        inner.reach_the_stream_clock(Arc::clone(&half_speed_since_a_second_ago));
+        let writer = OutputWriter::from_inner_arc(inner);
+
+        let machine_before_ns = MediaClock::now().as_nanos() as i64;
+        writer.write_msgpack("out", &42u32).unwrap();
+        let machine_after_ns = MediaClock::now().as_nanos() as i64;
+
+        let sample = subscriber
+            .receive()
+            .unwrap()
+            .expect("the write was published");
+        let stamp_ns = sample.user_header().timestamp_ns;
+        assert!(
+            half_speed_since_a_second_ago.stream_time_ns_at(machine_before_ns) <= stamp_ns
+                && stamp_ns <= half_speed_since_a_second_ago.stream_time_ns_at(machine_after_ns),
+            "{stamp_ns} is not the stream's time across the write"
+        );
+        assert!(
+            stamp_ns < machine_before_ns - 400_000_000,
+            "a half-speed clock started a second ago is half a second behind the machine clock"
         );
     }
 

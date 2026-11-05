@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, overload
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
 if TYPE_CHECKING:
+    from .clock import StreamClockReading
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
     from .catalog import CatalogEntry
     from ._message import Message
@@ -116,6 +117,14 @@ class NodeLinkDataAccess(Protocol):
 
         A declared port no link has reached reads as empty and drops what is
         written to it; only an undeclared name is refused.
+        """
+        ...
+
+    def adopt_the_stream_clock_board(self, service_name: str) -> None:
+        """Read the stream's clock off the board the parent named, from now on.
+
+        `ctx.time` and every write with no stamp then follow the stream's clock.
+        Raises `RuntimeError` for a second board.
         """
         ...
 
@@ -266,7 +275,16 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
 
     @property
     def time(self) -> int:
-        """The runtime's monotonic time in nanoseconds."""
+        """Stream time now in nanoseconds, on the clock the node's stream runs on.
+
+        In a real-time stream it is `monotonic_now_ns()`; in a scaled or stepped
+        stream it is the stream's own time, in the same monotonic epoch.
+        """
+        ...
+
+    @property
+    def stream_clock(self) -> StreamClockReading:
+        """Which clock the node's stream runs on and where it stands."""
         ...
 
     @property
@@ -537,7 +555,7 @@ class LinkOutputDataWriter(Protocol):
         """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
         `payload` is any contiguous buffer — `bytes`, a `memoryview`, a numpy
-        array — and `tatolab.stream.msgpack.pack` encodes a record. Omitting `timestamp_ns` stamps the monotonic now.
+        array — and `tatolab.stream.msgpack.pack` encodes a record. Omitting `timestamp_ns` stamps stream time now.
         `starts_group=True` says the message stands alone; only encoded media
         passes `False`, for a message a decoder cannot enter at. A payload over
         the channel's ceiling is dropped and counted against this port, never
@@ -555,7 +573,7 @@ class LinkOutputDataWriter(Protocol):
         """Loan `payload_byte_len` bytes on `port_name` to fill in place: `with ctx.outputs.loan(...) as out:`.
 
         The sample is published when the block exits cleanly, stamped
-        `timestamp_ns` or the monotonic now, and given back when it raises. A
+        `timestamp_ns` or stream time now, and given back when it raises. A
         write or a second loan on the port is refused while this one is open,
         so a port's order is its write order. A port no link has reached, or a
         payload over the channel's ceiling, loans bytes that publish nowhere.

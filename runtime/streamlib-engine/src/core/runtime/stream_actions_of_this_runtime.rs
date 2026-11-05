@@ -43,7 +43,7 @@ use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects
     WhatTheProjectsCodeGaveTheCompile, compile_the_stream_function_in_the_projects_interpreter,
     the_projects_venv_interpreter,
 };
-use crate::core::context::CaptureDeviceAccessPrompting;
+use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
@@ -1402,6 +1402,20 @@ impl Runner {
         self.show_the_streams_actions_under_way_prepare(&mut listings);
         listings.sort_by(|first, second| first.stream_id.cmp(&second.stream_id));
         listings
+    }
+
+    /// Run the scaled clock of the loaded stream whose id is `stream_id` at
+    /// `scale` from now on; stream time carries on from where it stands. Live
+    /// only: the stream's record keeps the clock its stream function names.
+    pub fn set_stream_clock_scale(
+        &self,
+        stream_id: &str,
+        scale: f64,
+    ) -> Result<StreamClockReading> {
+        let loaded = self.loaded_stream_of_the_id(stream_id)?;
+        loaded
+            .log_route()
+            .run_entered(|| loaded.set_stream_clock_scale(scale))
     }
 
     /// Put output port `port` of node `node` in the stream whose id is

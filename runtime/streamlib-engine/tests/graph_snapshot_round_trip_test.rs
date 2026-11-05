@@ -558,3 +558,76 @@ fn a_load_refused_at_a_link_adds_no_stream() {
     )
     .expect("the refused stream's name is free for the next load");
 }
+
+#[test]
+#[serial]
+fn a_streams_clock_loads_renders_and_loads_back() {
+    let source = register_test_type("ClockedSource", "_unused_in", "video");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let graph = serde_json::json!({
+        "stream": "slow-motion",
+        "clock": {"mode": "scaled", "scale": 0.5, "step_ns": 1000},
+        "nodes": [{"name": "source", "type": source.as_str()}],
+    });
+
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph).expect("the stream loads");
+    let rendered = the_graph_document_of(&first);
+    assert_eq!(
+        rendered["clock"],
+        serde_json::json!({"mode": "scaled", "scale": 0.5, "step_ns": 1000})
+    );
+
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("the rendered graph loads back");
+    assert_eq!(the_graph_document_of(&second)["clock"], rendered["clock"]);
+}
+
+#[test]
+#[serial]
+fn a_stream_on_real_time_renders_no_clock_key() {
+    let source = register_test_type("UnclockedSource", "_unused_in", "video");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "live",
+            "nodes": [{"name": "source", "type": source.as_str()}],
+        }),
+    )
+    .expect("the stream loads");
+    assert!(the_graph_document_of(&stream).get("clock").is_none());
+}
+
+#[test]
+#[serial]
+fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
+    let source = register_test_type("SteppedSource", "_unused_in", "video");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    for clock in [
+        serde_json::json!({"mode": "stepped", "step_ns": 0}),
+        serde_json::json!({"mode": "scaled", "scale": 4.0}),
+        serde_json::json!({"mode": "scaled", "scale": 0.0}),
+    ] {
+        let refusal = the_refusal_of(
+            load(
+                &runner,
+                project_directory.path(),
+                serde_json::json!({
+                    "stream": "warped",
+                    "clock": clock,
+                    "nodes": [{"name": "source", "type": source.as_str()}],
+                }),
+            ),
+            "its clock is one this runtime does not run",
+        );
+        assert!(
+            refusal.to_string().contains("`warped`"),
+            "{refusal} names the stream"
+        );
+    }
+}

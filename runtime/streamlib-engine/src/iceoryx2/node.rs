@@ -22,6 +22,7 @@ use super::helper_process_loss_count_board::{
     HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
     output_port_keys,
 };
+use super::stream_clock_board::{StreamClockBoard, StreamClockBoardReader};
 use super::{
     DataChannelPayloadCacheLine, DataChannelSampleUserHeader, MAX_INPUT_PORT_BORROW_QUOTA,
     MAX_PUBLISHERS_PER_CHANNEL,
@@ -29,6 +30,7 @@ use super::{
 use crate::core::error::{Error, Result};
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry,
+    StreamClockBoardEntry, StreamClockBoardKey,
 };
 use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
@@ -46,6 +48,16 @@ const LOSS_COUNT_BOARD_MAX_READERS: usize = 1;
 /// with the same headroom a channel gives each port slot for a node a crash left
 /// behind.
 const LOSS_COUNT_BOARD_MAX_NODES: usize = 2 * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT;
+
+/// Readers a stream clock board admits: one per helper process the stream
+/// may hold at once.
+const STREAM_CLOCK_BOARD_MAX_READERS: usize = 256;
+
+/// Nodes a stream clock board admits: its engine's and every reader's, with
+/// the same headroom a channel gives each port slot for a node a crash left
+/// behind.
+const STREAM_CLOCK_BOARD_MAX_NODES: usize =
+    ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT * (STREAM_CLOCK_BOARD_MAX_READERS + 1);
 
 /// Samples a channel publisher loans at once: every write loans, fills and sends
 /// one before the next.
@@ -499,6 +511,52 @@ impl Iceoryx2Node {
             output_port_names,
             service,
         )
+    }
+
+    /// Create the clock board a scaled or stepped stream publishes `initial`
+    /// on, as its one writer.
+    pub fn create_stream_clock_board(
+        &self,
+        service_name: &str,
+        initial: StreamClockBoardEntry,
+    ) -> Result<StreamClockBoard> {
+        let service = {
+            let node = self.inner.lock();
+            let iceoryx2_service_name = iceoryx2_service_name_of(service_name)?;
+            node.service_builder(&iceoryx2_service_name)
+                .blackboard_creator::<StreamClockBoardKey>()
+                .max_readers(STREAM_CLOCK_BOARD_MAX_READERS)
+                .max_nodes(STREAM_CLOCK_BOARD_MAX_NODES)
+                .add::<StreamClockBoardEntry>(StreamClockBoardKey::STREAM_CLOCK, initial)
+                .create()
+                .map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "could not create the stream clock board '{service_name}': {refusal:?}"
+                    ))
+                })?
+        };
+        StreamClockBoard::writing(service_name.to_string(), service)
+    }
+
+    /// Open the clock board a helper's stream published, as one of its readers.
+    pub fn open_stream_clock_board_reader(
+        &self,
+        service_name: &str,
+    ) -> Result<StreamClockBoardReader> {
+        let service = {
+            let node = self.inner.lock();
+            let iceoryx2_service_name = iceoryx2_service_name_of(service_name)?;
+            node.service_builder(&iceoryx2_service_name)
+                .blackboard_opener::<StreamClockBoardKey>()
+                .open()
+                .map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "could not open the stream clock board '{service_name}' its engine \
+                         named: {refusal:?}"
+                    ))
+                })?
+        };
+        StreamClockBoardReader::reading(service_name.to_string(), service)
     }
 }
 

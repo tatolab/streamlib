@@ -92,6 +92,14 @@ impl Compiler {
         f(&mut graph, &tx)
     }
 
+    /// Read the graph under its read lock, logging nothing.
+    pub fn scope_reading<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Graph) -> R,
+    {
+        f(&self.graph.read())
+    }
+
     /// The operations logged and not yet committed, in the order they were
     /// logged.
     #[cfg(test)]

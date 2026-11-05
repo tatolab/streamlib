@@ -20,7 +20,6 @@ use crate::python_gpu_surface_pixel_exchange::{
     HOST_VISIBLE_DLPACK_DEVICE, PixelExchangeTensorLayout, dlpack_capsule_over,
     dlpack_device_as_python_pair, exchange_shape_for_max_version,
 };
-use crate::python_logging::monotonic_clock_now_ns;
 
 /// A read message's payload, held where the sample put it until the borrow and
 /// every export of it are gone.
@@ -336,7 +335,7 @@ impl PythonPortPayloadLoan {
         };
         let timestamp_ns = self
             .timestamp_ns
-            .unwrap_or_else(|| monotonic_clock_now_ns() as i64);
+            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
         python
             .detach(|| {
                 output_writer.publish_output_port_payload_loan(

@@ -387,6 +387,15 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "expose_port",
                 ))
             }
+            fn set_stream_clock_scale(
+                &self,
+                _stream_id: &str,
+                _scale: f64,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::context::StreamClockReading> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "set_stream_clock_scale",
+                ))
+            }
             fn every_loaded_stream_and_the_output_ports_it_exposes(
                 &self,
             ) -> Vec<::streamlib::sdk::runtime::LoadedStreamAndTheOutputPortsItExposes> {

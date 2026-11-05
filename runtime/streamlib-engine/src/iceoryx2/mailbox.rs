@@ -60,6 +60,13 @@ impl PortMailboxQueuedFrame {
         }
     }
 
+    /// Count this frame as passed over by a port that may pass bags over.
+    fn record_eviction_as_passed_over(self) {
+        if let Some(counter) = self.dropped_bag_counter {
+            counter.record_one_bag_passed_over_on_eviction();
+        }
+    }
+
     /// Hand this frame to a reader, noting on its link's count what was lost
     /// ahead of it.
     fn taken_by_a_reader(self) -> PortMailboxDeliveredBag {
@@ -215,6 +222,8 @@ impl PortMailbox {
                         self.take_out_of_the_total(&evicted);
                         if self.read_mode.a_bag_passed_over_is_lost() {
                             evicted.record_eviction();
+                        } else {
+                            evicted.record_eviction_as_passed_over();
                         }
                         if let Some(notice) = &self.eviction_notice {
                             notice();

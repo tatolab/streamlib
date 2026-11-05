@@ -20,6 +20,7 @@ mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod shared_pool_entry_freeing;
 pub(crate) mod silent_null_audio_device_backend;
+mod stream_clock;
 pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;
 mod surface_claimed_against_producer_reuse;
@@ -34,7 +35,6 @@ mod surface_to_surface_copy;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
 mod texture_ring;
-mod time_context;
 mod video_capture_instant_resolver;
 mod video_device_backend;
 
@@ -86,6 +86,11 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
 pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
+pub use stream_clock::{
+    DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClock, StreamClockReading, StreamClockSpec,
+    machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,
+    stream_time_ns_on_a_published_clock,
+};
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };
@@ -99,7 +104,6 @@ pub use texture_registration::TextureRegistration;
 pub use texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
 };
-pub use time_context::TimeContext;
 pub(crate) use video_capture_instant_resolver::{
     DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
 };
