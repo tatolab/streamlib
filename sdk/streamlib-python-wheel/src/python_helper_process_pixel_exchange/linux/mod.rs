@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
+use streamlib::sdk::rhi::PixelFormat;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 use streamlib_surface_client::{
-    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, SurfaceShareCheckOutFds,
+    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SurfaceShareCheckOutFds, refusal_the_surface_share_service_answered,
     resource_type_of_a_check_out,
 };
 
@@ -21,6 +23,7 @@ use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
 mod export_staging;
 mod foreign_dma_buf;
+mod pool_slot_import_cache;
 mod storage_buffer;
 mod texture;
 
@@ -30,6 +33,10 @@ pub(crate) use export_staging::{
 pub(crate) use foreign_dma_buf::{
     DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
     HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
+};
+pub(crate) use pool_slot_import_cache::HelperPoolSlotImportsByPoolSlot;
+use pool_slot_import_cache::{
+    HelperPoolSlotImport, pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
 };
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
@@ -243,6 +250,19 @@ pub(crate) enum HelperPixelBufferMemoryFlavour {
     },
 }
 
+/// One pixel-buffer pool slot as this helper imported it: the mapped memory
+/// and the layout every frame over the slot shares.
+pub(crate) struct HelperPixelBufferPoolSlotImport {
+    pub(crate) consumer_buffer: ConsumerVulkanBuffer,
+    /// Which handle type the memory crossed as, and the fds `export_dma_buf`
+    /// and `export_opaque_fd` answer from.
+    memory_flavour: HelperPixelBufferMemoryFlavour,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    bytes_per_row: u64,
+}
+
 impl HelperCheckedOutPixelSurface {
     /// A DMA-BUF fd for the first plane, and the plane's byte size.
     ///
@@ -254,7 +274,7 @@ impl HelperCheckedOutPixelSurface {
     pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
         let HelperPixelBufferMemoryFlavour::DmaBuf {
             exportable_plane_fds,
-        } = &self.memory_flavour
+        } = &self.pixel_buffer_pool_slot_import.memory_flavour
         else {
             return Err(PyRuntimeError::new_err(format!(
                 "surface {:?} is an OPAQUE_FD pixel buffer — what a pooled frame is on a \
@@ -264,7 +284,12 @@ impl HelperCheckedOutPixelSurface {
             )));
         };
         let exported = duplicate_first_plane_fd_for_export(exportable_plane_fds, "surface")?;
-        Ok((exported.into_raw_fd(), self.consumer_buffer.plane_size(0)))
+        Ok((
+            exported.into_raw_fd(),
+            self.pixel_buffer_pool_slot_import
+                .consumer_buffer
+                .plane_size(0),
+        ))
     }
 
     /// The OPAQUE_FD memory fd plus the allocation-stable shape a foreign
@@ -276,7 +301,7 @@ impl HelperCheckedOutPixelSurface {
         let HelperPixelBufferMemoryFlavour::OpaqueFd {
             exportable_memory_fd,
             export_contract,
-        } = &self.memory_flavour
+        } = &self.pixel_buffer_pool_slot_import.memory_flavour
         else {
             return Err(a_dma_buf_pixel_buffer_exports_no_opaque_fd_error(
                 &self.surface_id,
@@ -290,7 +315,10 @@ impl HelperCheckedOutPixelSurface {
             // What this process's own import stated: the size an OPAQUE_FD
             // import must match, which the pool slot's driver requirement
             // can pad past the frame's bytes.
-            allocation_byte_size: self.consumer_buffer.imported_allocation_byte_size(),
+            allocation_byte_size: self
+                .pixel_buffer_pool_slot_import
+                .consumer_buffer
+                .imported_allocation_byte_size(),
             width: self.width,
             height: self.height,
             format_wire_name: self.format.wire_name(),
@@ -374,6 +402,29 @@ impl HelperProcessGpuExchangeClient {
         request: &serde_json::Value,
         outbound_fds: &[RawFd],
     ) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        let (response, received_fds, ()) =
+            self.surface_share_exchange(request, outbound_fds, |_| ())?;
+        Ok((response, received_fds))
+    }
+
+    /// The one exchange every surface-share request makes.
+    /// `while_the_connection_is_held` runs on the answer before the
+    /// connection is free for another request, so what it records is ordered
+    /// against the retirement notice of every later reply.
+    ///
+    /// Every pool slot import is dropped whenever this helper's connection is
+    /// replaced: the service lists a retired slot only on the connection it
+    /// handed the slot's memory to.
+    fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
+        &self,
+        request: &serde_json::Value,
+        outbound_fds: &[RawFd],
+        while_the_connection_is_held: impl FnOnce(&serde_json::Value) -> DecidedWhileTheConnectionIsHeld,
+    ) -> PyResult<(
+        serde_json::Value,
+        Vec<OwnedFd>,
+        DecidedWhileTheConnectionIsHeld,
+    )> {
         let mut connection = self.surface_share_connection.lock();
         let stream = match connection.take() {
             Some(open_stream) => open_stream,
@@ -410,6 +461,7 @@ impl HelperProcessGpuExchangeClient {
                             self.surface_socket_path.display(),
                         ))
                     })?;
+                self.pool_slot_imports_by_pool_slot.drop_every_import();
                 opened_stream
             }
         };
@@ -429,6 +481,7 @@ impl HelperProcessGpuExchangeClient {
                 self.surface_share_connections_set_aside_after_a_timeout
                     .lock()
                     .push(stream);
+                self.pool_slot_imports_by_pool_slot.drop_every_import();
                 return Err(PyRuntimeError::new_err(format!(
                     "the surface-share service did not answer within {} s; this helper set that \
                      connection aside, keeping the frames it claimed on it held until it stops, \
@@ -437,11 +490,15 @@ impl HelperProcessGpuExchangeClient {
                 )));
             }
             Err(io_failure) => {
+                self.pool_slot_imports_by_pool_slot.drop_every_import();
                 return Err(PyRuntimeError::new_err(format!(
                     "the surface-share request failed mid-stream: {io_failure}"
                 )));
             }
         };
+        self.pool_slot_imports_by_pool_slot
+            .drop_the_pool_slots_a_reply_lists_as_retired(&response);
+        let decided_while_the_connection_is_held = while_the_connection_is_held(&response);
         *connection = Some(stream);
         // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
         // this process's fd table; nothing else holds them.
@@ -449,21 +506,79 @@ impl HelperProcessGpuExchangeClient {
             .into_iter()
             .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
             .collect();
-        Ok((response, received_fds))
+        Ok((response, received_fds, decided_while_the_connection_is_held))
+    }
+
+    /// `check_out` over the surface-share socket, then the import of
+    /// whichever backing the registration names — or, for a published frame
+    /// over a pool slot this helper already imported, that import.
+    pub(crate) fn check_out_and_import(
+        self: &Arc<Self>,
+        surface_id: &str,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        let published_pool_slot = pool_slot_of_a_published_frame_id(surface_id);
+        let held_pool_slot_import = published_pool_slot.and_then(|published_pool_slot| {
+            self.pool_slot_imports_by_pool_slot
+                .import_held_for(published_pool_slot)
+        });
+        let holds_pool_slot_import = held_pool_slot_import.is_some();
+        let (response, received_fds, fresh_import_reservation) = self.surface_share_exchange(
+            &serde_json::json!({
+                "op": "check_out",
+                "surface_id": surface_id,
+                SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD: holds_pool_slot_import,
+            }),
+            &[],
+            |response| match published_pool_slot {
+                Some(published_pool_slot)
+                    if !holds_pool_slot_import
+                        && refusal_the_surface_share_service_answered(response).is_none()
+                        && !pool_slots_a_reply_lists_as_retired(response)
+                            .any(|retired_pool_slot| retired_pool_slot == published_pool_slot) =>
+                {
+                    Some(
+                        self.pool_slot_imports_by_pool_slot
+                            .reserve_for_a_fresh_import(published_pool_slot),
+                    )
+                }
+                _ => None,
+            },
+        )?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
+        let release_check_out_to_surface_share = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(self),
+            surface_id: surface_id.to_string(),
+        };
+        let pool_slot_import = match held_pool_slot_import {
+            Some(held_pool_slot_import) => held_pool_slot_import,
+            None => {
+                let imported =
+                    self.import_checked_out_pool_slot(surface_id, &response, received_fds)?;
+                if let Some(fresh_import_reservation) = fresh_import_reservation {
+                    let _ = fresh_import_reservation.set(imported.clone());
+                }
+                imported
+            }
+        };
+        self.frame_checked_out_over_a_pool_slot_import(
+            surface_id,
+            &response,
+            pool_slot_import,
+            release_check_out_to_surface_share,
+        )
     }
 
     /// Validate the checkout metadata and turn the plane fds into this
-    /// process's view of the surface — mapped memory for a pixel buffer, an
-    /// imported `VkImage` for a texture. The fds are `OwnedFd`s, so every
-    /// early return closes them by scope rather than by remembering to.
-    pub(super) fn import_checked_out_surface(
+    /// process's import of the surface — mapped memory for a pixel buffer, an
+    /// imported `VkImage` for a texture, the memory fd CUDA imports for a
+    /// tensor. The fds are `OwnedFd`s, so every early return closes them by
+    /// scope rather than by remembering to.
+    fn import_checked_out_pool_slot(
         self: &Arc<Self>,
         surface_id: &str,
         response: &serde_json::Value,
         received_fds: Vec<OwnedFd>,
-    ) -> PyResult<HelperCheckedOutSurface> {
-        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
-
+    ) -> PyResult<HelperPoolSlotImport> {
         // Trailing timeline-semaphore fds arrive after the plane fds when
         // the registration carried them — texture registrations do; a
         // pixel-buffer checkout carries none today. Peeled rather than
@@ -486,12 +601,12 @@ impl HelperProcessGpuExchangeClient {
                         produce_done_fd,
                         consume_done_fd,
                     )
-                    .map(HelperCheckedOutSurface::Texture);
+                    .map(|imported| HelperPoolSlotImport::Texture(Arc::new(imported)));
             }
             "storage_buffer" => {
                 return self
                     .import_checked_out_storage_buffer(surface_id, response, plane_fds)
-                    .map(HelperCheckedOutSurface::StorageBuffer);
+                    .map(|imported| HelperPoolSlotImport::StorageBuffer(Arc::new(imported)));
             }
             "pixel_buffer" => {}
             other => {
@@ -589,24 +704,60 @@ impl HelperProcessGpuExchangeClient {
             }
         };
 
-        Ok(HelperCheckedOutSurface::PixelBuffer(
-            HelperCheckedOutPixelSurface {
-                surface_id: surface_id.to_string(),
+        Ok(HelperPoolSlotImport::PixelBuffer(Arc::new(
+            HelperPixelBufferPoolSlotImport {
                 consumer_buffer,
+                memory_flavour,
                 width,
                 height,
                 format,
                 bytes_per_row,
-                release_to_parent: None,
-                unregister_foreign_from_surface_share: None,
-                release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
-                    exchange_client: Arc::clone(self),
-                    surface_id: surface_id.to_string(),
-                },
-                memory_flavour,
-                exchange_client: Arc::clone(self),
             },
-        ))
+        )))
+    }
+
+    /// One frame checked out over `pool_slot_import`, owing
+    /// `release_check_out_to_surface_share`.
+    fn frame_checked_out_over_a_pool_slot_import(
+        self: &Arc<Self>,
+        surface_id: &str,
+        response: &serde_json::Value,
+        pool_slot_import: HelperPoolSlotImport,
+        release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        match pool_slot_import {
+            HelperPoolSlotImport::PixelBuffer(pixel_buffer_pool_slot_import) => Ok(
+                HelperCheckedOutSurface::PixelBuffer(HelperCheckedOutPixelSurface {
+                    surface_id: surface_id.to_string(),
+                    width: pixel_buffer_pool_slot_import.width,
+                    height: pixel_buffer_pool_slot_import.height,
+                    format: pixel_buffer_pool_slot_import.format,
+                    bytes_per_row: pixel_buffer_pool_slot_import.bytes_per_row,
+                    pixel_buffer_pool_slot_import,
+                    release_to_parent: None,
+                    unregister_foreign_from_surface_share: None,
+                    release_check_out_to_surface_share,
+                    exchange_client: Arc::clone(self),
+                }),
+            ),
+            HelperPoolSlotImport::Texture(texture_pool_slot_import) => self
+                .texture_checked_out_over_a_pool_slot_import(
+                    surface_id,
+                    response,
+                    texture_pool_slot_import,
+                    release_check_out_to_surface_share,
+                )
+                .map(HelperCheckedOutSurface::Texture),
+            HelperPoolSlotImport::StorageBuffer(storage_buffer_pool_slot_import) => {
+                Ok(HelperCheckedOutSurface::StorageBuffer(
+                    self.storage_buffer_checked_out_over_a_pool_slot_import(
+                        surface_id,
+                        storage_buffer_pool_slot_import,
+                        release_check_out_to_surface_share,
+                    ),
+                ))
+            }
+        }
     }
 }
 
@@ -618,3 +769,9 @@ mod surface_share_response_timeout_tests;
 /// and on lavapipe.
 #[cfg(test)]
 mod opaque_fd_pixel_buffer_import_tests;
+
+/// The per-slot import cache against engine-exported pool slots. Needs a
+/// Vulkan device and skips where none comes up — the rig runs it on NVIDIA
+/// and on lavapipe.
+#[cfg(test)]
+mod pool_slot_import_once_tests;

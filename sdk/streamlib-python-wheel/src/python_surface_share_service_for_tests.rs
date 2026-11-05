@@ -139,6 +139,18 @@ impl SurfaceShareUnderTest {
             .to_string()
     }
 
+    /// Publish `frame_generation` as the current frame of a pool slot the
+    /// test registered itself.
+    pub(crate) fn publish_frame_generation_over_a_registered_pool_slot(
+        &self,
+        slot_id: &str,
+        frame_generation: u64,
+    ) {
+        self.check_out_leases
+            .publish_frame_generation(slot_id, frame_generation)
+            .expect("the lease table stays readable");
+    }
+
     /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
     /// as its current frame — the state a pool producer's acquire leaves
     /// behind, without needing a pool or a GPU.

@@ -97,8 +97,8 @@ pub struct SurfaceMetadata {
     /// host-side adapters) read for the source layout of their first
     /// QFOT acquire barrier.
     ///
-    /// `0` (`VK_IMAGE_LAYOUT_UNDEFINED`) is the back-compat default for
-    /// surfaces registered before the IPC schema lift (issue #633). Atomic
+    /// `0` (`VK_IMAGE_LAYOUT_UNDEFINED`) when no producer has declared a
+    /// layout. Atomic
     /// because producer-release and consumer-acquire can race; load with
     /// `Acquire`, store with `Release`.
     pub current_image_layout: AtomicI32,
@@ -235,8 +235,7 @@ pub struct SurfacePlaneCheckout {
     /// Snapshot of the surface's [`SurfaceMetadata::current_image_layout`]
     /// at lookup time (i32 per `VkImageLayout`). Consumers feed this into
     /// the source layout of their first QFOT acquire barrier. `0`
-    /// (UNDEFINED) when no producer has declared a layout — the
-    /// back-compat default for surfaces registered before issue #633.
+    /// (UNDEFINED) when no producer has declared a layout.
     pub current_image_layout: i32,
     /// Snapshot of [`SurfaceMetadata::vk_image_type`] at lookup time.
     pub vk_image_type: i32,
@@ -484,6 +483,11 @@ impl SurfaceShareState {
         false
     }
 
+    /// Whether a registration lives under `pool_slot_key`.
+    pub fn is_registered(&self, pool_slot_key: &str) -> bool {
+        self.inner.surfaces.read().contains_key(pool_slot_key)
+    }
+
     pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
         self.inner.surfaces.read().values().cloned().collect()
     }
@@ -650,8 +654,7 @@ mod tests {
 
     /// `current_image_layout` round-trips through register → lookup, and
     /// `update_image_layout` updates the value visible to subsequent
-    /// lookups. This is the per-surface half of issue #633's IPC schema
-    /// lift: producers seed the layout at registration and re-publish it
+    /// lookups: producers seed the layout at registration and re-publish it
     /// after their QFOT release barrier records, so cross-process
     /// consumers can `oldLayout=current_image_layout` instead of
     /// barriering defensively from `UNDEFINED`.
@@ -690,7 +693,7 @@ mod tests {
     }
 
     /// The seven `vk_image_*` fields round-trip through register → lookup:
-    /// the producer's declared `VkImageCreateInfo` shape (#800) must
+    /// the producer's declared `VkImageCreateInfo` shape must
     /// survive verbatim so an OPAQUE_FD `VkImage` consumer can rebuild a
     /// matching `VkImage` whose `cudaExternalMemoryMipmappedArrayDesc`
     /// equals the host's byte-for-byte. Mentally revert the

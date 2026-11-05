@@ -10,6 +10,7 @@
 //! [`streamlib_surface_client::MAX_DMA_BUF_PLANES`] plane fds — one per plane
 //! for multi-plane DMA-BUFs (e.g. NV12 with separate Y and UV allocations).
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -18,7 +19,9 @@ use std::sync::Arc;
 use std::thread;
 
 use streamlib_surface_client::{
-    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, recv_message_with_fds, send_message_with_fds,
+    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, recv_message_with_fds, send_message_with_fds,
+    split_pool_slot_and_frame_generation,
 };
 
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
@@ -32,7 +35,7 @@ use crate::core::context::surface_share_wire_verbs::{
     tensor_layout_of_a_storage_buffer_registration,
 };
 
-use super::state::{SurfaceRegistration, SurfaceShareState};
+use super::state::{SurfacePlaneCheckout, SurfaceRegistration, SurfaceShareState};
 #[cfg(test)]
 use crate::core::context::surface_share_wire_verbs::{
     VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT,
@@ -224,6 +227,7 @@ fn handle_client_connection(
     lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
+    let mut pool_slot_keys_handed_memory = PoolSlotKeysHandedMemoryOnThisConnection::default();
 
     loop {
         let mut len_buf = [0u8; 4];
@@ -260,14 +264,19 @@ fn handle_client_connection(
         // that registers and crashes is exactly the leak the watchdog cleans up.
         latch_the_first_named_runtime_id(observed_runtime_id, &request);
 
-        let (response, reply_fds) = match op {
+        let (mut response, reply_fds) = match op {
             "register" => handle_register(&state, &request, &received_fds),
             // `lookup` and `check_out` return the same planes; only
             // `check_out` claims the frame. A lookup is the host reading its
             // own table — it holds nothing, so leasing it would pin a pool
             // slot no consumer is reading.
             "lookup" => handle_lookup(&state, &request),
-            "check_out" => handle_check_out(&state, &request, lease_holder),
+            "check_out" => handle_check_out(
+                &state,
+                &request,
+                lease_holder,
+                &mut pool_slot_keys_handed_memory,
+            ),
             "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
@@ -283,6 +292,8 @@ fn handle_client_connection(
         for fd in &received_fds {
             unsafe { libc::close(*fd) };
         }
+
+        pool_slot_keys_handed_memory.list_the_retired_ones_on_the_reply(&state, &mut response);
 
         let response_bytes = serde_json::to_vec(&response)
             .map_err(|e| std::io::Error::other(format!("Failed to serialize response: {}", e)))?;
@@ -624,18 +635,67 @@ fn handle_register(
     }
 }
 
-/// `check_out` is `lookup` plus a claim: the planes cross the wire and the
-/// surface is pinned against producer reuse until this connection releases it
-/// or drops.
+/// The pool slot keys one connection was handed memory for, so the
+/// connection can tell its peer when the engine unregisters one.
+#[derive(Default)]
+struct PoolSlotKeysHandedMemoryOnThisConnection {
+    pool_slot_keys: HashSet<String>,
+}
+
+impl PoolSlotKeysHandedMemoryOnThisConnection {
+    fn remember(&mut self, pool_slot_key: &str) {
+        if !self.pool_slot_keys.contains(pool_slot_key) {
+            self.pool_slot_keys.insert(pool_slot_key.to_string());
+        }
+    }
+
+    /// Forget every remembered key `state` no longer registers and list them
+    /// on `reply` under `retired_pool_slots`. Keys are never reused, so a key
+    /// absent from the table is retired for good.
+    fn list_the_retired_ones_on_the_reply(
+        &mut self,
+        state: &SurfaceShareState,
+        reply: &mut serde_json::Value,
+    ) {
+        let mut retired_pool_slots: Vec<String> = Vec::new();
+        self.pool_slot_keys.retain(|pool_slot_key| {
+            let still_registered = state.is_registered(pool_slot_key);
+            if !still_registered {
+                retired_pool_slots.push(pool_slot_key.clone());
+            }
+            still_registered
+        });
+        if retired_pool_slots.is_empty() {
+            return;
+        }
+        if let Some(reply_fields) = reply.as_object_mut() {
+            reply_fields.insert(
+                SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD.to_string(),
+                retired_pool_slots.into(),
+            );
+        }
+    }
+}
+
+/// The pool slot a published frame id (`<slot>#<generation>`) names; `None`
+/// for every other surface id.
+fn pool_slot_of_a_published_frame_id(surface_id: &str) -> Option<&str> {
+    split_pool_slot_and_frame_generation(surface_id).map(|(pool_slot, _)| pool_slot)
+}
+
+/// `check_out` is `lookup` plus a claim: the surface is pinned against
+/// producer reuse until this connection releases it or drops.
 ///
-/// A lease that cannot be recorded refuses the checkout outright and closes
-/// the dups `lookup` already took. Handing a consumer fds the pool believes
-/// are free is exactly the silent wrongness the lease exists to remove — an
-/// error it can see beats pixels that change under it.
+/// A peer that states it holds its own import of a published frame's pool
+/// slot gets the frame's metadata and no handle. Either way the retired-frame
+/// refusal answers first, and a lease that cannot be recorded refuses the
+/// checkout outright: handing a consumer memory the pool believes is free is
+/// exactly the silent wrongness the lease exists to remove.
 fn handle_check_out(
     state: &SurfaceShareState,
     request: &serde_json::Value,
     lease_holder: SurfaceCheckOutLeaseHolderId,
+    pool_slot_keys_handed_memory: &mut PoolSlotKeysHandedMemoryOnThisConnection,
 ) -> (serde_json::Value, Vec<RawFd>) {
     let Some(surface_id) = requested_surface_id(request) else {
         return (
@@ -643,11 +703,30 @@ fn handle_check_out(
             Vec::new(),
         );
     };
-
-    let (response, reply_fds) = handle_lookup(state, request);
-    if response.get("error").is_some() {
-        return (response, reply_fds);
+    if let Some(refusal) = refusal_of_a_retired_frame_id(state.check_out_leases(), surface_id) {
+        return (refusal, Vec::new());
     }
+    let Some(checkout) = state.get_surface_planes(surface_id) else {
+        return (
+            serde_json::json!({"error": "surface not found"}),
+            Vec::new(),
+        );
+    };
+    let published_pool_slot = pool_slot_of_a_published_frame_id(surface_id);
+    let peer_holds_the_pool_slot_import = published_pool_slot.is_some()
+        && request
+            .get(SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+    let reply_fds = if peer_holds_the_pool_slot_import {
+        Vec::new()
+    } else {
+        match duplicate_the_handles_of_a_check_out(&checkout) {
+            Ok(duplicated_fds) => duplicated_fds,
+            Err(refusal) => return (refusal, Vec::new()),
+        }
+    };
 
     if let Err(refusal) =
         record_check_out_lease_or_refusal(state.check_out_leases(), surface_id, lease_holder)
@@ -658,7 +737,13 @@ fn handle_check_out(
         return (refusal, Vec::new());
     }
 
-    (response, reply_fds)
+    if !peer_holds_the_pool_slot_import && let Some(pool_slot) = published_pool_slot {
+        pool_slot_keys_handed_memory.remember(pool_slot);
+    }
+    (
+        surface_share_check_out_metadata(state, surface_id, checkout),
+        reply_fds,
+    )
 }
 
 fn handle_release_check_out(
@@ -682,74 +767,60 @@ fn handle_lookup(
             Vec::new(),
         );
     };
-
     if let Some(refusal) = refusal_of_a_retired_frame_id(state.check_out_leases(), surface_id) {
         return (refusal, Vec::new());
     }
-
-    let checkout = match state.get_surface_planes(surface_id) {
-        Some(planes) => planes,
-        None => {
-            return (
-                serde_json::json!({"error": "surface not found"}),
-                Vec::new(),
-            );
-        }
+    let Some(checkout) = state.get_surface_planes(surface_id) else {
+        return (
+            serde_json::json!({"error": "surface not found"}),
+            Vec::new(),
+        );
     };
+    match duplicate_the_handles_of_a_check_out(&checkout) {
+        Ok(duplicated_fds) => (
+            surface_share_check_out_metadata(state, surface_id, checkout),
+            duplicated_fds,
+        ),
+        Err(refusal) => (refusal, Vec::new()),
+    }
+}
 
-    // Dup each stored fd so the kernel-delivered fds in the peer's table are
-    // independent of the table's own copies. On partial failure, close every
-    // dup we already took.
+/// Dup every plane fd, then `produce_done` and `consume_done` when the
+/// registration carries them, in that order — the order a peer peels the
+/// trailing timeline fds off in. The dups are independent of the table's own
+/// copies; on a partial failure every dup already taken is closed.
+fn duplicate_the_handles_of_a_check_out(
+    checkout: &SurfacePlaneCheckout,
+) -> Result<Vec<RawFd>, serde_json::Value> {
     let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len() + 2);
-    for fd in &checkout.dma_buf_fds {
-        let dup = unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 0) };
+    let handles = checkout
+        .dma_buf_fds
+        .iter()
+        .map(|fd| (*fd, "DMA-BUF"))
+        .chain(checkout.produce_done_fd.map(|fd| (fd, "produce_done")))
+        .chain(checkout.consume_done_fd.map(|fd| (fd, "consume_done")));
+    for (source_fd, handle_name) in handles {
+        let dup = unsafe { libc::fcntl(source_fd, libc::F_DUPFD_CLOEXEC, 0) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };
             }
-            return (
-                serde_json::json!({"error": "failed to dup DMA-BUF fd"}),
-                Vec::new(),
-            );
+            return Err(serde_json::json!({"error": format!("failed to dup {handle_name} FD")}));
         }
         dup_fds.push(dup);
     }
+    Ok(dup_fds)
+}
 
-    // Append dups of the producer-side `produce_done` and consumer-side
-    // `consume_done` timeline-semaphore OPAQUE_FDs in that order. Subprocess
-    // clients detect each one's presence via the matching boolean flag in
-    // the response JSON and peel the trailing FDs off the SCM_RIGHTS list
-    // in the same order. See
-    // `docs/architecture/adapter-timeline-single-writer.md`.
-    let has_produce_done_fd = checkout.produce_done_fd.is_some();
-    let has_consume_done_fd = checkout.consume_done_fd.is_some();
-    if let Some(src) = checkout.produce_done_fd {
-        let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
-        if dup < 0 {
-            for d in &dup_fds {
-                unsafe { libc::close(*d) };
-            }
-            return (
-                serde_json::json!({"error": "failed to dup produce_done FD"}),
-                Vec::new(),
-            );
-        }
-        dup_fds.push(dup);
-    }
-    if let Some(src) = checkout.consume_done_fd {
-        let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
-        if dup < 0 {
-            for d in &dup_fds {
-                unsafe { libc::close(*d) };
-            }
-            return (
-                serde_json::json!({"error": "failed to dup consume_done FD"}),
-                Vec::new(),
-            );
-        }
-        dup_fds.push(dup);
-    }
-
+/// The registration metadata a `lookup` or `check_out` answers with,
+/// `current_image_layout` included. `has_produce_done_fd` and
+/// `has_consume_done_fd` state what the registration carries; the fds trail
+/// the planes only on a reply that sends handles.
+fn surface_share_check_out_metadata(
+    state: &SurfaceShareState,
+    surface_id: &str,
+    checkout: SurfacePlaneCheckout,
+) -> serde_json::Value {
     let surfaces = state.get_surfaces();
     let pool_slot_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
     let metadata = surfaces.iter().find(|s| s.surface_id == pool_slot_key);
@@ -773,12 +844,9 @@ fn handle_lookup(
         "plane_offsets": checkout.plane_offsets,
         "plane_strides": checkout.plane_strides,
         "drm_format_modifier": checkout.drm_format_modifier,
-        "has_produce_done_fd": has_produce_done_fd,
-        "has_consume_done_fd": has_consume_done_fd,
+        "has_produce_done_fd": checkout.produce_done_fd.is_some(),
+        "has_consume_done_fd": checkout.consume_done_fd.is_some(),
         "current_image_layout": checkout.current_image_layout,
-        // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
-        // consumers. Always echoed; absent producers see the
-        // documented defaults from `super::state`.
         "vk_image_type": checkout.vk_image_type,
         "vk_image_mip_levels": checkout.vk_image_mip_levels,
         "vk_image_array_layers": checkout.vk_image_array_layers,
@@ -800,12 +868,9 @@ fn handle_lookup(
     if let Some(pixel_planes_within_one_allocation) = &checkout.pixel_planes_within_one_allocation {
         pixel_planes_within_one_allocation.write_surface_share_fields(&mut response);
     }
-    (response, dup_fds)
+    response
 }
 
-/// Handle the `update_layout` op (#633): a producer that just issued a
-/// QFOT release barrier publishes the post-release `VkImageLayout` so
-/// the next consumer's lookup picks it up. Returns `{"success": bool}`.
 /// Publish the layout a peer left a texture in. A peer that holds the slot
 /// checked out has released it to the external queue family in that layout,
 /// and that release is recorded for the slot's owner to acquire.
@@ -1460,7 +1525,7 @@ mod tests {
     }
 
     /// `handle_type` rides along through the register/lookup wire path.
-    /// Subprocess consumers (#589 Python / #590 Deno CUDA cdylibs) read
+    /// Subprocess consumers read
     /// it to dispatch on the import API: `"dma_buf"` →
     /// `ConsumerVulkanBuffer::from_dma_buf_fds`, `"opaque_fd"` →
     /// `ConsumerVulkanBuffer::from_opaque_fd`. The default-when-absent
@@ -1673,7 +1738,7 @@ mod tests {
     /// was created with `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at
     /// all" otherwise. The consumer can only tell the two apart if the tiling
     /// crosses the wire beside the modifier, so both must survive the
-    /// round trip (#1915).
+    /// round trip.
     #[test]
     fn a_linear_modifier_stays_distinguishable_from_no_modifier_across_the_wire() {
         let state = SurfaceShareState::new();
@@ -1921,7 +1986,7 @@ mod tests {
     /// runs in the wire helper before the handler, so this exercises the
     /// shared back-pressure path every caller relies on.
     ///
-    /// Cap shape (#588 / #559):
+    /// Cap shape:
     /// - `MAX_DMA_BUF_PLANES = 4` — the data-plane cap that adapters
     ///   enforce; "this many plane fds, no more."
     /// - `MAX_SCM_RIGHTS_FDS = MAX_DMA_BUF_PLANES + 1 = 5` — the wire-level
@@ -2287,7 +2352,7 @@ mod tests {
         service.stop();
     }
 
-    /// Full `VkImageCreateInfo` round-trip through the wire (#800): a
+    /// Full `VkImageCreateInfo` round-trip through the wire: a
     /// producer ships every `vk_image_*` field on register; the consumer
     /// reads them off lookup. Locks the OPAQUE_FD VkImage consumer's
     /// ability to rebuild a matching `VkImage` whose
@@ -2428,7 +2493,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// #1872 over the wire: the slot registers once, its frames publish
+    /// Over the wire, the slot registers once, its frames publish
     /// generations, and only the current generation's id checks out. The
     /// retired id fails with an error naming the recycling — never with the
     /// recycled slot's planes.
@@ -2505,6 +2570,151 @@ mod tests {
         );
 
         drop(stream);
+        service.stop();
+    }
+
+    fn check_out_on_the_wire(
+        stream: &UnixStream,
+        surface_id: &str,
+        holds_pool_slot_import: bool,
+    ) -> (serde_json::Value, usize) {
+        let (response, reply_fds) = send_request_with_fds(
+            stream,
+            &serde_json::json!({
+                "op": "check_out",
+                "surface_id": surface_id,
+                SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD: holds_pool_slot_import,
+            }),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("check_out request");
+        close_every_fd(&reply_fds);
+        (response, reply_fds.len())
+    }
+
+    fn retired_pool_slots_of(response: &serde_json::Value) -> Vec<String> {
+        response
+            .get(SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD)
+            .and_then(|v| v.as_array())
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|key| key.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A helper that holds a slot's import is answered the frame's metadata
+    /// and no fd, and still takes the frame's lease; a recycled frame is
+    /// refused by name whether or not it says it holds the slot.
+    #[test]
+    fn a_peer_holding_the_pool_slot_import_takes_the_lease_and_receives_no_fds() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        register_pool_slot(&stream, "pool-slot-held");
+        check_out_leases
+            .publish_frame_generation("pool-slot-held", 1)
+            .expect("the pool publishes the first frame");
+        let (first, first_fd_count) = check_out_on_the_wire(&stream, "pool-slot-held#1", false);
+        assert!(first.get("error").is_none(), "{first:?}");
+        assert_eq!(
+            first_fd_count, 1,
+            "the slot's first check-out carries its memory"
+        );
+
+        check_out_leases
+            .publish_frame_generation("pool-slot-held", 2)
+            .expect("the pool publishes the next frame");
+        let (second, second_fd_count) = check_out_on_the_wire(&stream, "pool-slot-held#2", true);
+        assert!(second.get("error").is_none(), "{second:?}");
+        assert_eq!(second_fd_count, 0, "a held slot is answered without an fd");
+        assert_eq!(second.get("width").and_then(|v| v.as_u64()), Some(64));
+        assert!(second.get("current_image_layout").is_some());
+        assert_eq!(
+            lease_count_settling_to(&check_out_leases, "pool-slot-held", 2),
+            2,
+            "both check-outs take a lease"
+        );
+
+        check_out_leases
+            .publish_frame_generation("pool-slot-held", 3)
+            .expect("the pool recycles the slot");
+        for holds_pool_slot_import in [false, true] {
+            let (refused, refused_fd_count) =
+                check_out_on_the_wire(&stream, "pool-slot-held#1", holds_pool_slot_import);
+            assert_eq!(refused_fd_count, 0);
+            assert!(
+                wire_error_of(&refused).contains("recycled"),
+                "holds_pool_slot_import={holds_pool_slot_import}: {refused:?}"
+            );
+        }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// An unregistered slot the connection was handed memory for is listed
+    /// on that connection's next reply, once, and on no other connection.
+    #[test]
+    fn unregistering_a_slot_lists_it_on_the_next_reply_of_the_connection_it_was_handed_to() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let reader = connect_to_surface_share_socket(&socket_path).expect("connect reader");
+        let producer = connect_to_surface_share_socket(&socket_path).expect("connect producer");
+
+        register_pool_slot(&producer, "pool-slot-retiring");
+        check_out_leases
+            .publish_frame_generation("pool-slot-retiring", 1)
+            .expect("the pool publishes the first frame");
+        let (checked_out, _) = check_out_on_the_wire(&reader, "pool-slot-retiring#1", false);
+        assert!(retired_pool_slots_of(&checked_out).is_empty());
+        let released = ask(
+            &reader,
+            &serde_json::json!({"op": "release_check_out", "surface_id": "pool-slot-retiring#1"}),
+        );
+        assert!(retired_pool_slots_of(&released).is_empty());
+
+        let unregistered = ask(
+            &producer,
+            &serde_json::json!({
+                "op": "unregister",
+                "surface_id": "pool-slot-retiring",
+                "runtime_id": "frame-generation-test-runtime",
+            }),
+        );
+        assert_eq!(
+            unregistered.get("success").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(
+            retired_pool_slots_of(&unregistered).is_empty(),
+            "the producer was never handed the slot's memory"
+        );
+
+        let next_reply = ask(
+            &reader,
+            &serde_json::json!({"op": "lookup", "surface_id": "no-such-surface"}),
+        );
+        assert_eq!(
+            retired_pool_slots_of(&next_reply),
+            vec!["pool-slot-retiring".to_string()]
+        );
+        let reply_after = ask(
+            &reader,
+            &serde_json::json!({"op": "lookup", "surface_id": "no-such-surface"}),
+        );
+        assert!(
+            retired_pool_slots_of(&reply_after).is_empty(),
+            "a retired slot is listed once"
+        );
+
+        drop(reader);
+        drop(producer);
         service.stop();
     }
 
@@ -2681,8 +2891,7 @@ mod tests {
     }
 
     /// Round-trip `current_image_layout` through register → lookup, and
-    /// flip it through `update_layout` (#633). Locks the per-surface
-    /// half of the issue: producers seed the layout at registration and
+    /// flip it through `update_layout`. Producers seed the layout at registration and
     /// re-publish it after their QFOT release barrier records, so the
     /// next consumer's lookup sees the post-release layout instead of
     /// the synthesized UNDEFINED.
