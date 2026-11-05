@@ -26,6 +26,7 @@ from texture_ring_producer_probes import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
     RING_DEPTH,
+    SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK,
     pixel_value_of_frame,
 )
 
@@ -65,30 +66,32 @@ def slot_of(surface_id: str) -> str:
 def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     start_tatolabd_running_stream,
 ):
-    """Depth-many distinct slots, and the frame past the end reuses the first
-    slot under a new frame id.
+    """The ring's depth plus what its link's mailbox and borrow quota keep, in
+    distinct slots, and the frame past them reuses the first slot under a new
+    frame id.
 
     Against a live engine rather than a stand-in, which is what makes the
     reuse meaningful: a pool that minted a fresh texture per acquire would
-    publish from three distinct slots here.
+    publish from one more distinct slot here.
     """
+    rotated_slots = SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK
     # The sink reports once per frame it reads; the producer once at its quota.
-    reports = run_scenario(start_tatolabd_running_stream, "ring_rotation", (RING_DEPTH + 1) + 1)
+    reports = run_scenario(start_tatolabd_running_stream, "ring_rotation", (rotated_slots + 1) + 1)
     published = reports["TextureRingPublishingVideoSource"][0][
         "surface_ids_published"
     ]
 
-    assert len(published) == RING_DEPTH + 1
-    assert len(set(published)) == RING_DEPTH + 1, (
+    assert len(published) == rotated_slots + 1
+    assert len(set(published)) == rotated_slots + 1, (
         f"every publish names its own frame: {published}"
     )
     slots = [slot_of(surface_id) for surface_id in published]
-    assert len(set(slots)) == RING_DEPTH, (
-        f"a ring {RING_DEPTH} deep published from {len(set(slots))} distinct "
-        f"slots: {published}"
+    assert len(set(slots)) == rotated_slots, (
+        f"a ring rotating through {rotated_slots} slots published from "
+        f"{len(set(slots))} distinct slots: {published}"
     )
-    assert slots[RING_DEPTH] == slots[0], (
-        f"the frame past the ring's depth published from {published[RING_DEPTH]!r} "
+    assert slots[rotated_slots] == slots[0], (
+        f"the frame past the ring's rotation published from {published[rotated_slots]!r} "
         f"rather than wrapping onto {published[0]!r}'s slot"
     )
 
@@ -97,7 +100,7 @@ def test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces(
     start_tatolabd_running_stream,
 ):
     """The consumer claims the first frame with a typed read and re-reads it as
-    the producer publishes several ring depths past it: the pixels are still
+    the producer publishes past the ring's whole rotation: the pixels are still
     frame 0's, and the held slot is never published from again."""
     later_frames = FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD
     reports = run_scenario(
