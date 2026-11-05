@@ -15,6 +15,9 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use streamlib_ipc_types::GpuPoolSlotRehandTest;
+
+use super::gpu_pool_claim_table::GpuPoolClaimTableRowLease;
 use super::{SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseRegistry};
 use crate::core::rhi::published_frame_id_of_pool_slot;
 use crate::core::{Error, Result};
@@ -38,6 +41,12 @@ pub(crate) trait LeaseAwarePoolSlotResource {
     /// reuses it only when no other unheld slot is left.
     fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
         false
+    }
+
+    /// The claim table row interpreters claim this slot's frames in, when its
+    /// pool shares one.
+    fn gpu_pool_claim_table_row(&self) -> Option<&GpuPoolClaimTableRowLease> {
+        None
     }
 }
 
@@ -110,6 +119,33 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlot<Resource> {
         cross_process_holders.permits(&self.pool_slot_key)
             && !self.resource.is_in_use_per_the_platform()
             && !self.resource.is_held_in_this_process()
+            && !self
+                .resource
+                .gpu_pool_claim_table_row()
+                .is_some_and(|claim_table_row| claim_table_row.row().is_claimed())
+    }
+
+    /// Retire the slot's published frame in its claim table so no claim of it
+    /// can land, answering whether none was held; a slot whose pool shares no
+    /// table has nothing to retire there.
+    fn retire_its_frame_against_claims(&self) -> bool {
+        self.resource
+            .gpu_pool_claim_table_row()
+            .is_none_or(|claim_table_row| {
+                claim_table_row
+                    .row()
+                    .retire_for_a_rehand(self.published_frame_generation)
+                    == GpuPoolSlotRehandTest::RetiredForTheRehand
+            })
+    }
+
+    /// Admit claims of the generation the slot now publishes.
+    fn publish_its_frame_to_claims(&self) {
+        if let Some(claim_table_row) = self.resource.gpu_pool_claim_table_row() {
+            claim_table_row
+                .row()
+                .publish_generation(self.published_frame_generation);
+        }
     }
 }
 
@@ -342,10 +378,13 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
     /// It publishes nothing until [`Self::hand_off_fresh_slot`] or a reuse
     /// hands it out.
     pub(crate) fn push_fresh_slot(&mut self, pool_slot_key: String, resource: Resource) -> usize {
+        let generation_before_this_slot = resource
+            .gpu_pool_claim_table_row()
+            .map_or(0, GpuPoolClaimTableRowLease::generation_before_this_slot);
         self.slots.push(LeaseAwarePoolSlot {
             pool_slot_key,
             resource,
-            published_frame_generation: 0,
+            published_frame_generation: generation_before_this_slot,
             ring_hand_off_order: 0,
         });
         self.slots.len() - 1
@@ -397,15 +436,17 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
                 slot.ring_hand_off_order,
             )
         });
-        let mut unheld_slot_indices_oldest_first = slot_indices_oldest_hand_off_first
+        let unheld_slot_indices_oldest_first: Vec<usize> = slot_indices_oldest_hand_off_first
             .into_iter()
             .filter(|&slot_index| self.slots[slot_index].is_unheld(&reuse))
-            .take(unheld_slots_a_reuse_needs.max(1));
-        let oldest_unheld_slot_index = unheld_slot_indices_oldest_first.next()?;
-        let unheld_slot_count = 1 + unheld_slot_indices_oldest_first.count();
-        if unheld_slot_count < unheld_slots_a_reuse_needs {
+            .take(unheld_slots_a_reuse_needs.max(1))
+            .collect();
+        if unheld_slot_indices_oldest_first.len() < unheld_slots_a_reuse_needs {
             return None;
         }
+        let oldest_unheld_slot_index = unheld_slot_indices_oldest_first
+            .into_iter()
+            .find(|&slot_index| self.slots[slot_index].retire_its_frame_against_claims())?;
 
         let ring_hand_off_order = self.next_ring_hand_off_order();
         let slot = &mut self.slots[oldest_unheld_slot_index];
@@ -413,6 +454,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         let frame_generation = slot.mint_next_frame_generation();
         reuse.publish_frame_generation(&slot.pool_slot_key, frame_generation);
         minted_frame_generations_held.record(slot);
+        slot.publish_its_frame_to_claims();
         Some(oldest_unheld_slot_index)
     }
 
@@ -443,7 +485,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         for slot_index in slot_indices_to_observe {
             let slot = &mut self.slots[slot_index];
             let is_unheld = slot.is_unheld(cross_process_holders);
-            if choose(slot, is_unheld) && is_unheld {
+            if choose(slot, is_unheld) && is_unheld && slot.retire_its_frame_against_claims() {
                 chosen_slot_indices.push(slot_index);
             }
         }
@@ -481,6 +523,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         slot.ring_hand_off_order = ring_hand_off_order;
         let frame_generation = slot.mint_next_frame_generation();
         minted_frame_generations.held_for_a_hand_off().record(slot);
+        slot.publish_its_frame_to_claims();
         if let Some(leases) = check_out_leases
             && let Err(unpublishable) =
                 leases.publish_frame_generation(&slot.pool_slot_key, frame_generation)

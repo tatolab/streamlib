@@ -8,6 +8,9 @@
 use std::collections::HashMap;
 
 use super::RegisteredHandle;
+use crate::core::context::gpu_pool_claim_table::{
+    GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool,
+};
 use crate::core::context::lease_aware_pool_slot_ring::{
     LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
 };
@@ -17,9 +20,11 @@ use crate::core::context::processor_output_surface_pool::{
 };
 use crate::core::context::{
     GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore, TextureRegistration,
+    gpu_pool_claim_table_row_for_a_shared_slot,
 };
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
+use streamlib_ipc_types::GpuPoolSlotRehandTest;
 
 /// The allocation every slot of one processor output texture pool shares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +54,14 @@ pub(crate) struct ProcessorOutputPoolSlot {
     /// A texture slot's registration in the parent's texture cache, which a
     /// consumer in the parent resolves the slot to a share of.
     texture_cache_registration: Option<TextureCacheRegistrationOfAPoolSlot>,
+    gpu_pool_claim_table_row: Option<GpuPoolClaimTableRowLease>,
+}
+
+impl ProcessorOutputPoolSlot {
+    /// The claim table row other interpreters claim this slot's frames in.
+    pub(crate) fn claim_table_row(&self) -> Option<&GpuPoolClaimTableRowLease> {
+        self.gpu_pool_claim_table_row.as_ref()
+    }
 }
 
 /// A texture slot's registration in the parent's texture cache, and its handle
@@ -93,6 +106,10 @@ impl LeaseAwarePoolSlotResource for ProcessorOutputPoolSlot {
                 .as_ref()
                 .is_some_and(TextureCacheRegistrationOfAPoolSlot::is_held_by_a_reader)
     }
+
+    fn gpu_pool_claim_table_row(&self) -> Option<&GpuPoolClaimTableRowLease> {
+        self.gpu_pool_claim_table_row.as_ref()
+    }
 }
 
 type ProcessorOutputPool = ProcessorOutputSurfacePool<ProcessorOutputPoolSlot>;
@@ -101,6 +118,9 @@ type ProcessorOutputPool = ProcessorOutputSurfacePool<ProcessorOutputPoolSlot>;
 #[derive(Default)]
 pub(crate) struct ProcessorOutputPoolsOfOneHelper {
     pools_by_key: HashMap<String, (ProcessorOutputSlotDescriptor, ProcessorOutputPool)>,
+    /// The claim tables each pool key's slots lease their rows from, kept
+    /// across a descriptor change so a replaced pool's rows stay retired.
+    claim_tables_by_pool_key: HashMap<String, GpuPoolClaimTablesOfOnePool>,
     /// Slots of pools a descriptor change replaced, kept until nothing holds
     /// them: releasing a held slot would hand its resource back to its
     /// allocator, and another acquire could rewrite it under its reader.
@@ -217,6 +237,13 @@ impl ProcessorOutputPoolsOfOneHelper {
         let texture_cache_registration =
             TextureCacheRegistrationOfAPoolSlot::of_the_slot(host, &pool_slot_key);
         let surface_store = host.surface_store();
+        let gpu_pool_claim_table_row = gpu_pool_claim_table_row_for_a_shared_slot(
+            self.claim_tables_by_pool_key
+                .entry(pool_key.to_string())
+                .or_insert_with(|| GpuPoolClaimTablesOfOnePool::named(pool_key)),
+            surface_store.as_ref(),
+            &pool_slot_key,
+        );
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
         match self.pool_under(pool_key, descriptor).hand_off_a_fresh_slot(
             pool_slot_key,
@@ -224,6 +251,7 @@ impl ProcessorOutputPoolsOfOneHelper {
                 registered_handle,
                 strong_count_with_no_holder,
                 texture_cache_registration,
+                gpu_pool_claim_table_row,
             },
             surface_store
                 .as_ref()
@@ -309,6 +337,14 @@ impl ProcessorOutputPoolsOfOneHelper {
                         && lease_hand_off.as_ref().is_none_or(|hand_off| {
                             !hand_off.is_checked_out_by_any_holder(slot.pool_slot_key())
                         })
+                        && slot.resource().gpu_pool_claim_table_row().is_none_or(
+                            |claim_table_row| {
+                                claim_table_row
+                                    .row()
+                                    .retire_for_a_rehand(slot.published_frame_generation())
+                                    == GpuPoolSlotRehandTest::RetiredForTheRehand
+                            },
+                        )
                 });
         self.retiring_slots = still_held_slots;
         for slot in &unheld_slots {

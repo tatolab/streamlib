@@ -408,3 +408,73 @@ fn a_slot_flagged_to_be_freed_is_reused_only_once_no_other_slot_is_unheld() {
     ring.take_out_the_slot_at(unflagged_slot_index);
     assert_eq!(next_published(&mut ring), "slot-flagged#1");
 }
+
+/// A slot resource holding a claim table row and nothing else.
+struct SlotResourceClaimedOnlyThroughItsRow {
+    claim_table_row: crate::core::context::GpuPoolClaimTableRowLease,
+}
+
+impl LeaseAwarePoolSlotResource for SlotResourceClaimedOnlyThroughItsRow {
+    fn is_held_in_this_process(&self) -> bool {
+        false
+    }
+
+    fn gpu_pool_claim_table_row(&self) -> Option<&crate::core::context::GpuPoolClaimTableRowLease> {
+        Some(&self.claim_table_row)
+    }
+}
+
+#[test]
+fn a_slot_claimed_in_its_claim_table_is_skipped_and_its_frame_is_refused_once_rehanded() {
+    use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+    use streamlib_ipc_types::GpuPoolClaimantColumn;
+
+    let every_claim_table = crate::core::context::GpuPoolClaimTables::default();
+    let mut claim_tables = GpuPoolClaimTablesOfOnePool::named("ring-under-test");
+    let mut ring = LeaseAwarePoolSlotRing::default();
+    for pool_slot_key in ["slot-a", "slot-b"] {
+        ring.push_fresh_slot(
+            pool_slot_key.to_string(),
+            SlotResourceClaimedOnlyThroughItsRow {
+                claim_table_row: claim_tables
+                    .lease_a_row_for_a_slot(&every_claim_table, pool_slot_key)
+                    .unwrap(),
+            },
+        );
+    }
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
+    let reader = GpuPoolClaimantColumn::at(0).unwrap();
+    let hand_off = |ring: &mut LeaseAwarePoolSlotRing<SlotResourceClaimedOnlyThroughItsRow>| {
+        ring.hand_off_a_reusable_slot(ANY_ONE_UNHELD_SLOT_IS_REUSABLE, None, &minted)
+            .map(|slot_index| ring.slot(slot_index).currently_published_frame_id())
+    };
+
+    assert_eq!(hand_off(&mut ring).as_deref(), Some("slot-a#1"));
+    let slot_a_row = ring.slot(0).resource().claim_table_row.row();
+    slot_a_row.claim_frame(reader, 1).unwrap();
+
+    assert_eq!(hand_off(&mut ring).as_deref(), Some("slot-b#1"));
+    assert_eq!(hand_off(&mut ring).as_deref(), Some("slot-b#2"));
+
+    ring.slot(0)
+        .resource()
+        .claim_table_row
+        .row()
+        .release_frame_claim(reader);
+    assert_eq!(hand_off(&mut ring).as_deref(), Some("slot-a#2"));
+    assert!(
+        ring.slot(0)
+            .resource()
+            .claim_table_row
+            .row()
+            .claim_frame(reader, 1)
+            .is_err(),
+        "the rehanded slot's earlier frame is refused as recycled"
+    );
+    ring.slot(0)
+        .resource()
+        .claim_table_row
+        .row()
+        .claim_frame(reader, 2)
+        .unwrap();
+}

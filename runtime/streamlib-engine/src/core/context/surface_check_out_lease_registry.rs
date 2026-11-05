@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+use super::gpu_pool_claim_table::GpuPoolClaimTables;
 use crate::core::rhi::{pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation};
 use crate::core::{Error, Result};
 
@@ -112,6 +113,9 @@ impl SurfaceCheckOutLeaseTable {
 /// decide whether a slot may be rehanded to its producer.
 pub struct SurfaceCheckOutLeaseRegistry {
     table: Mutex<SurfaceCheckOutLeaseTable>,
+    /// The claim tables of every GPU pool whose frames cross to another
+    /// process: the shared-memory half of what cross-process holders hold.
+    gpu_pool_claim_tables: GpuPoolClaimTables,
     /// Notified whenever a lease is dropped, for a waiter on a slot's leases.
     check_out_lease_dropped: Condvar,
     next_holder_id: AtomicU64,
@@ -128,9 +132,15 @@ impl SurfaceCheckOutLeaseRegistry {
     pub fn new() -> Self {
         Self {
             table: Mutex::new(SurfaceCheckOutLeaseTable::default()),
+            gpu_pool_claim_tables: GpuPoolClaimTables::default(),
             check_out_lease_dropped: Condvar::new(),
             next_holder_id: AtomicU64::new(0),
         }
+    }
+
+    /// The claim tables GPU pools lease their slots' rows from.
+    pub fn gpu_pool_claim_tables(&self) -> &GpuPoolClaimTables {
+        &self.gpu_pool_claim_tables
     }
 
     /// Mint the identity one surface-share connection charges its leases to.
