@@ -743,8 +743,8 @@ impl InputMailboxesInner {
             });
     }
 
-    /// Write every new total of `link_id`'s dropped-bag and discarded-sample
-    /// counts onto `slot`, as the counts move.
+    /// Write every new total of `link_id`'s dropped-bag, taken-bag and
+    /// discarded-sample counts onto `slot`, as the counts move.
     ///
     /// How a helper process's counts reach its parent. Refused for a link no
     /// subscriber is bound for, and for one already mirrored.
@@ -781,6 +781,23 @@ impl InputMailboxesInner {
             .mirror_every_new_total_into(Box::new(move |dropped_bags| {
                 dropped_bags_board_slot_mirror.mirror_dropped_bags(dropped_bags)
             }))
+            .map_err(|_| already_mirrored())?;
+        let bags_off_the_mailbox_board_slot_mirror = inbound_link_board_slot_mirror.clone();
+        let bags_counted_lost_after_taking_board_slot_mirror =
+            inbound_link_board_slot_mirror.clone();
+        dropped_bag_counter
+            .mirror_every_new_taken_bag_total_into(
+                Box::new(move |bags_off_the_mailbox| {
+                    bags_off_the_mailbox_board_slot_mirror
+                        .mirror_bags_off_the_mailbox_for_its_reader(bags_off_the_mailbox)
+                }),
+                Box::new(move |bags_counted_lost_after_taking| {
+                    bags_counted_lost_after_taking_board_slot_mirror
+                        .mirror_bags_its_reader_counted_lost_after_taking_them(
+                            bags_counted_lost_after_taking,
+                        )
+                }),
+            )
             .map_err(|_| already_mirrored())?;
         if let Some(discarded_sample_counter) = discarded_sample_counter {
             discarded_sample_counter
@@ -2099,8 +2116,16 @@ mod tests {
             Some(streamlib_ipc_types::InboundLinkLossCountBoardSlot {
                 wiring_generation: 11,
                 dropped_bags: 3,
-                discarded_samples: 0,
+                ..Default::default()
             }),
+        );
+        let _ = mailboxes.read_raw("in").unwrap();
+        assert_eq!(
+            board
+                .inbound_link_slot(0)
+                .map(|slot| slot.bags_off_the_mailbox_for_its_reader),
+            Some(1),
+            "a bag read reaches the slot as taken as it is read"
         );
 
         publish_one_frame(
@@ -2116,12 +2141,12 @@ mod tests {
         );
         let _ = mailboxes.read_raw("audio").unwrap();
         assert_eq!(
-            board.inbound_link_slot(1),
-            Some(streamlib_ipc_types::InboundLinkLossCountBoardSlot {
-                wiring_generation: 12,
-                dropped_bags: 0,
-                discarded_samples: 300,
-            }),
+            board.inbound_link_slot(1).map(|slot| (
+                slot.wiring_generation,
+                slot.dropped_bags,
+                slot.discarded_samples
+            )),
+            Some((12, 0, 300)),
         );
 
         assert!(

@@ -102,7 +102,7 @@ DECIDED and SHIPPED.
 - **ADDED (§Processor model & scheduling, DECIDED):** Each non-real stream has one **stream clock
   board**, an iceoryx2 blackboard the engine creates at the stream's start and every one of its
   helpers opens read-only by the service name its `setup` command carries, beside the loss-count
-  board. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode, step_index, step_ns,
+  board. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode, a_step_is_open, step_index, step_ns,
   base_ns, anchor_ns, scale_f64_bits, pace_f64_bits }` in `streamlib-ipc-types`, with a layout
   regression test. A reader copies that one entry whole, which iceoryx2's blackboard keeps
   consistent against a concurrent write, so it always reads one published clock. A real-time stream creates no
@@ -230,13 +230,22 @@ says otherwise:
 - **A link into a continuous or paused node is left off the balance.** Such a node takes what
   waits for it when it next runs, not within the step that wrote it, so holding the step open for
   its inbound bags would never close it. A link into a reactive node is balanced as above.
+- **A link into a windowed port is left off the balance too.** The port takes its bags only once
+  they fill a window, which may span many steps, so holding the step for them would never close
+  it.
 - **A link wired mid-run is balanced from the moment it is wired.** Bags its producer wrote before
   its destination subscribed never reach it, so the ledger counts only bags written after.
-- **A native manual node fails at its start in a stepped stream**, naming it, rather than at load:
-  a native node's execution mode is known only once its instance exists. The stream then ends,
-  naming the node, as for any node that fails.
+- **A manual node fails at its start in a stepped stream**, naming it, rather than at load: a
+  native node's execution mode is known only once its instance exists, and a Python node's is
+  checked at the same point so both fail alike. The stream then ends, naming the node, as for any
+  node that fails.
+- **A helper's ledger entry rides its loss-count board.** The board a helper spawn already writes
+  its links' counts on carries its node's `{steps_finished, callbacks_in_flight}` as one more
+  entry and each inbound slot's taken bags, rather than a second per-stream board, so the ledger
+  reads a helper-placed node the way `graph` reads its counts. The step-opened event is the clock
+  board's own: every publish notifies it.
 - **A manual node blocks a live rescale above 1×.** `set_stream_clock_scale` above 1 is refused
-  for a stream holding a manual node, naming it, as a stepped stream refuses one at load.
+  for a stream holding a manual node, naming it, as a stepped stream refuses one at its start.
 
 ## DECIDED B — a node paced by real time in a scaled or stepped stream
 

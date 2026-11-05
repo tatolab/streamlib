@@ -294,6 +294,23 @@ impl InboundLinkDroppedBagCounter {
     ) -> Result<(), LossCountMirror> {
         self.0.dropped_bags.mirror_every_new_total_into(mirror)
     }
+
+    /// Write every new total of the two counts the taken count is made of
+    /// through their mirrors: bags off the mailbox for the reader, and bags the
+    /// reader counted lost after taking them. Either mirror is handed back where
+    /// its count already has one.
+    pub(crate) fn mirror_every_new_taken_bag_total_into(
+        &self,
+        bags_off_the_mailbox_mirror: LossCountMirror,
+        bags_counted_lost_after_taking_mirror: LossCountMirror,
+    ) -> Result<(), LossCountMirror> {
+        self.0
+            .bags_off_the_mailbox_for_its_reader
+            .mirror_every_new_total_into(bags_off_the_mailbox_mirror)?;
+        self.0
+            .bags_its_reader_counted_lost_after_taking_them
+            .mirror_every_new_total_into(bags_counted_lost_after_taking_mirror)
+    }
 }
 
 /// Every inbound link's dropped-bag counter for one destination processor.

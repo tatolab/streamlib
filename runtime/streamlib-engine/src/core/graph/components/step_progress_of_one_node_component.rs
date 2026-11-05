@@ -4,6 +4,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
+
 /// What one node has done in its stream's steps: its entry on the step ledger
 /// the step coordinator reads before it closes a step.
 #[derive(Debug, Default)]
@@ -36,6 +38,23 @@ impl StepProgressReadingOfOneNode {
     pub fn lets_the_step_close(&self, step_index: u64) -> bool {
         self.callbacks_in_flight == 0
             && (!self.finishes_every_step || self.steps_finished > step_index)
+    }
+
+    /// This reading with what the node's helper process wrote of its callbacks
+    /// added: the node runs there, and its host here.
+    pub fn with_what_its_helper_process_wrote(
+        self,
+        written_by_its_helper_process: HelperProcessStepProgressBoardEntry,
+    ) -> Self {
+        Self {
+            steps_finished: self
+                .steps_finished
+                .max(written_by_its_helper_process.steps_finished),
+            callbacks_in_flight: self
+                .callbacks_in_flight
+                .saturating_add(written_by_its_helper_process.callbacks_in_flight),
+            ..self
+        }
     }
 }
 
@@ -130,6 +149,29 @@ mod tests {
         assert!(panicked.is_err());
         assert!(progress.reading().panicked_mid_callback);
         assert_eq!(progress.reading().callbacks_in_flight, 0);
+    }
+
+    #[test]
+    fn a_helper_placed_node_holds_the_step_open_while_its_helper_is_in_a_callback() {
+        let progress = StepProgressOfOneNode::default();
+        progress.note_it_finishes_every_step();
+        let in_a_callback = progress.reading().with_what_its_helper_process_wrote(
+            HelperProcessStepProgressBoardEntry {
+                steps_finished: 3,
+                callbacks_in_flight: 1,
+                reserved: 0,
+            },
+        );
+        assert!(!in_a_callback.lets_the_step_close(2));
+        let returned = progress.reading().with_what_its_helper_process_wrote(
+            HelperProcessStepProgressBoardEntry {
+                steps_finished: 3,
+                callbacks_in_flight: 0,
+                reserved: 0,
+            },
+        );
+        assert!(returned.lets_the_step_close(2));
+        assert!(!returned.lets_the_step_close(3));
     }
 
     #[test]

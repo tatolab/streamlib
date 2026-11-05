@@ -110,4 +110,6 @@ pub use payload::{
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;
-pub use stream_clock_board::{StreamClockBoard, StreamClockBoardReader};
+pub use stream_clock_board::{
+    StreamClockBoard, StreamClockBoardPublishListener, StreamClockBoardReader,
+};

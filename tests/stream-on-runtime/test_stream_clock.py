@@ -16,10 +16,15 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from engine_media_clock import engine_media_clock_now_ns
-from stream_clock_processors import CONTINUOUS_TICK_COUNTER_INTERVAL_MS
+from stream_clock_processors import (
+    CONTINUOUS_TICK_COUNTER_INTERVAL_MS,
+    STEPPED_STREAM_STEP_MS,
+    STEPPED_STREAM_STEPS,
+)
 from stream_clock_streams import (
     SLOW_MOTION_SCALE,
     continuous_ticks_in_slow_motion,
+    step_times_through_a_slow_relay,
     stream_times_in_real_time,
     stream_times_in_slow_motion,
 )
@@ -158,3 +163,32 @@ def test_a_real_time_streams_clock_is_not_rescaled(
     tatolabd.await_clean_exit()
 
     assert f"`{stream_id}` runs on a real clock" in refusal, refusal
+
+
+def test_a_stepped_stream_runs_each_step_through_helpers_faster_than_real_time(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(step_times_through_a_slow_relay)
+    reported = tatolabd.await_marker("STEPPED_STREAM_RUN", timeout=REPORT_TIMEOUT_SECONDS)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    seen = reported["seen"]
+    step_ns = STEPPED_STREAM_STEP_MS * 1_000_000
+    base_ns = seen[0]["written_stream_time_ns"] - seen[0]["step_index"] * step_ns
+    assert [message["step_index"] for message in seen] == list(range(STEPPED_STREAM_STEPS)), seen
+    for message in seen:
+        step_time_ns = base_ns + message["step_index"] * step_ns
+        assert message["written_stream_time_ns"] == step_time_ns, message
+        assert message["stamp_the_relay_read_ns"] == step_time_ns, message
+        assert message["relay_stream_time_ns"] == step_time_ns, (
+            f"the step stays open while the slow relay holds its message: {message}"
+        )
+        assert message["stamp_ns"] == step_time_ns, message
+        assert message["reader_step_index"] == message["step_index"], message
+        assert message["lost_since_last_read"] == 0, message
+    stream_elapsed_ns = STEPPED_STREAM_STEPS * step_ns
+    assert reported["machine_elapsed_ns"] < stream_elapsed_ns / 2, (
+        f"{STEPPED_STREAM_STEPS} unpaced steps of {STEPPED_STREAM_STEP_MS} ms took "
+        f"{reported['machine_elapsed_ns'] / 1e6:.0f} machine ms"
+    )

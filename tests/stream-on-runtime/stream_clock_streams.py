@@ -3,10 +3,15 @@
 
 """The `@stream` functions `test_stream_clock.py` runs from the suite project."""
 
-from tatolab.stream import ScaledStreamClock, StreamBuilder, stream
+from tatolab.stream import ScaledStreamClock, SteppedStreamClock, StreamBuilder, stream
 
 from stream_clock_processors import (
+    STEPPED_STREAM_STEP_MS,
+    STEPPED_STREAM_STEPS,
     ContinuousTickCounterSource,
+    SlowStepRelay,
+    StepTimeReporterSink,
+    StepTimeWriterSource,
     StreamTimeStampReporterSink,
     StreamTimeWriterSource,
 )
@@ -42,3 +47,25 @@ def continuous_ticks_in_slow_motion(stream_builder: StreamBuilder) -> None:
     """A continuous tick counter alone, at half real time until the test rescales it."""
     stream_builder.run_on_clock(ScaledStreamClock(scale=SLOW_MOTION_SCALE))
     stream_builder.add(ContinuousTickCounterSource)
+
+
+@stream
+def step_times_through_a_slow_relay(stream_builder: StreamBuilder) -> None:
+    """A step-time writer through a slow relay into a reporter, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(
+        SteppedStreamClock(
+            step_ns=STEPPED_STREAM_STEP_MS * 1_000_000,
+            stop_after_steps=STEPPED_STREAM_STEPS,
+        )
+    )
+    writer = stream_builder.add(StepTimeWriterSource)
+    relay = stream_builder.add(SlowStepRelay)
+    reporter = stream_builder.add(StepTimeReporterSink)
+    stream_builder.connect(
+        writer.output("step_times_to_downstream"),
+        relay.input("step_times_from_upstream"),
+    )
+    stream_builder.connect(
+        relay.output("step_times_to_downstream"),
+        reporter.input("step_times_from_upstream"),
+    )

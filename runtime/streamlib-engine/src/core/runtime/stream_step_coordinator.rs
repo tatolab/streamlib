@@ -5,7 +5,7 @@
 //! closes it once every node finished it and nothing written in it is still in
 //! flight.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -68,6 +68,8 @@ impl StepLedgerEntryOfOneLink {
 pub(crate) struct StepLedgerReading {
     pub(crate) nodes_by_processor_id: BTreeMap<String, StepLedgerEntryOfOneNode>,
     pub(crate) links_by_link_id: BTreeMap<String, StepLedgerEntryOfOneLink>,
+    /// Links in the graph left off the balance on this reading.
+    pub(crate) link_ids_off_the_balance: BTreeSet<String>,
 }
 
 impl StepLedgerReading {
@@ -77,17 +79,27 @@ impl StepLedgerReading {
     ///
     /// A link into a continuous node or a paused one is left off: such a node
     /// takes what waits for it when it next runs, never within the step that
-    /// wrote it.
+    /// wrote it. So is a link into a windowed port, which takes its bags only
+    /// once they fill a window, however many steps that spans.
     pub(crate) fn read_off(graph: &Graph) -> Self {
         let mut reading = Self::default();
         let mut processor_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
+        let mut link_ids_into_a_windowed_port = std::collections::HashSet::new();
         for node in graph.traversal().v(()).iter() {
-            let step_progress = node
+            let metrics = node.get::<ProcessorMetrics>();
+            let step_progress_of_its_host = node
                 .get::<StepProgressOfOneNodeComponent>()
                 .map(|step_progress| step_progress.0.reading())
                 .unwrap_or_default();
+            let step_progress = match metrics
+                .and_then(|metrics| metrics.loss_counts.step_progress_its_helper_process_wrote())
+            {
+                Some(written_by_its_helper_process) => step_progress_of_its_host
+                    .with_what_its_helper_process_wrote(written_by_its_helper_process),
+                None => step_progress_of_its_host,
+            };
             if step_progress.finishes_every_step
                 || node
                     .get::<ProcessorPauseGateComponent>()
@@ -105,7 +117,7 @@ impl StepLedgerReading {
                         .is_some_and(|state| state.current() == ProcessorState::Error),
                 },
             );
-            let Some(metrics) = node.get::<ProcessorMetrics>() else {
+            let Some(metrics) = metrics else {
                 continue;
             };
             let loss_counts = metrics.loss_counts.loss_count_snapshot();
@@ -119,6 +131,8 @@ impl StepLedgerReading {
                     .or_default()
                     .0 = taken_bags;
             }
+            link_ids_into_a_windowed_port
+                .extend(loss_counts.discarded_samples_by_inbound_link.into_keys());
             for (link_id, dropped_bags) in loss_counts.dropped_bags_by_inbound_link {
                 taken_and_dropped_bags_by_link_id
                     .entry(link_id)
@@ -129,7 +143,9 @@ impl StepLedgerReading {
         for link in graph.traversal().e(()).iter() {
             if processor_ids_that_take_bags_on_their_own_pace
                 .contains(link.to_port().processor_id().as_str())
+                || link_ids_into_a_windowed_port.contains(link.id.as_str())
             {
+                reading.link_ids_off_the_balance.insert(link.id.to_string());
                 continue;
             }
             let is_wired = link
@@ -197,10 +213,13 @@ pub(crate) struct StepLedgerLinkBaselines {
 impl StepLedgerLinkBaselines {
     /// Follow the links of `reading`: a link not wired yet is baselined at
     /// what it holds in flight now, a wired one keeps the baseline it had when
-    /// it was first seen wired, and a link gone from the graph is forgotten.
+    /// it was first seen wired, also while it is off the balance, and a link
+    /// gone from the graph is forgotten.
     pub(crate) fn follow_the_links_in(&mut self, reading: &StepLedgerReading) {
-        self.bags_in_flight_by_link_id
-            .retain(|link_id, _| reading.links_by_link_id.contains_key(link_id));
+        self.bags_in_flight_by_link_id.retain(|link_id, _| {
+            reading.links_by_link_id.contains_key(link_id)
+                || reading.link_ids_off_the_balance.contains(link_id)
+        });
         for (link_id, link) in &reading.links_by_link_id {
             if link.is_wired {
                 self.bags_in_flight_by_link_id
@@ -439,6 +458,7 @@ mod tests {
                 .enumerate()
                 .map(|(index, link)| (format!("l{index}"), link))
                 .collect(),
+            link_ids_off_the_balance: BTreeSet::new(),
         }
     }
 
@@ -542,6 +562,25 @@ mod tests {
         );
         assert!(
             !a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 2, 0)])
+                .lets_the_step_close(0, &baselines)
+        );
+    }
+
+    #[test]
+    fn bags_queued_while_a_link_was_off_the_balance_hold_the_step_open_once_it_is_back() {
+        let mut baselines = StepLedgerLinkBaselines::default();
+        baselines.follow_the_links_in(&a_reading([], [a_link(2, 2, 0)]));
+        let mut off_the_balance_while_its_reader_is_paused = a_reading([], []);
+        off_the_balance_while_its_reader_is_paused
+            .link_ids_off_the_balance
+            .insert("l0".to_owned());
+        baselines.follow_the_links_in(&off_the_balance_while_its_reader_is_paused);
+        let back_with_a_backlog_and_a_new_bag =
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 3, 0)]);
+        baselines.follow_the_links_in(&back_with_a_backlog_and_a_new_bag);
+        assert!(!back_with_a_backlog_and_a_new_bag.lets_the_step_close(0, &baselines));
+        assert!(
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 6, 0)])
                 .lets_the_step_close(0, &baselines)
         );
     }
