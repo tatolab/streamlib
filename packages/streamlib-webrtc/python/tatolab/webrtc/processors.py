@@ -24,6 +24,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 from tatolab.stream import (
     LinkInputDataReader,
     Message,
+    PortPayloadBorrow,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
@@ -320,7 +321,7 @@ class WhipPublisher:
         self._track_by_inbound_link[inbound_link] = track
         return track
 
-    def _enters_or_continues_a_group(self, message: "Message[bytes]") -> bool:
+    def _enters_or_continues_a_group(self, message: "Message[PortPayloadBorrow]") -> bool:
         """Whether `message` is sent: a link is entered at a group start, and
         re-entered at one after a read reports a loss."""
         inbound_link = message.inbound_link
