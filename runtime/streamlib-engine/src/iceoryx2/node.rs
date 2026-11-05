@@ -526,7 +526,8 @@ impl Iceoryx2Node {
                 .open()
                 .map_err(|refusal| {
                     Error::Runtime(format!(
-                        "could not open the stream clock board '{service_name}' its engine                          named: {refusal:?}"
+                        "could not open the stream clock board '{service_name}' its engine \
+                         named: {refusal:?}"
                     ))
                 })?
         };
