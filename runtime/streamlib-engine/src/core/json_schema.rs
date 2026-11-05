@@ -1212,7 +1212,7 @@ mod graph_response_top_level_key_rendering_tests {
             .keys()
             .collect();
         declared.sort();
-        assert_eq!(declared, ["exposed", "links", "machine", "nodes", "stream"]);
+        assert_eq!(declared, ["clock", "exposed", "links", "machine", "nodes", "stream"]);
     }
 
     /// An address begins with the machine, so `graph` carries the machine's
