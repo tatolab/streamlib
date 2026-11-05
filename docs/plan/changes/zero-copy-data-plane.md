@@ -30,7 +30,7 @@ up (`macos/mod.rs:534`).
   it made once.
 - **A slow reader costs only itself.** Each link has its own borrow quota. Past it, that link
   drops and counts its own frames. The producer's pool is sized for its in-flight frames plus
-  every link's quota, so no reader ever starves another and no reader ever copies.
+  every link's mailbox depth and quota, so no reader ever starves another and no reader ever copies.
 - **What a stream author sees:** reads that never copy, `ctx.loan`, and the same `VideoFrame`,
   with `__dlpack__` and `.cpu()` unchanged.
 
@@ -113,15 +113,12 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   the samples, and for a GPU frame the claims, its reader may hold beyond its mailbox. The
   default is 2. A link's quota is stated on the input port (`borrow_quota=`), never on the
   output. Past its quota, a link drops the newest frame and counts it in that link's
-  `messages_dropped`, and no other link is affected. A producer's GPU pool holds
-  `in-flight frames + Σ quota of every link on its output`. Wiring a link grows the pool by
-  that link's quota before the link's first frame, and unwiring it shrinks the pool lazily.
-  [NEEDS DECISION] A queued `GpuPoolSlotFrame` holds no claim until its cast, so a mailbox as
-  deep as the pool's spare slots can hold a frame whose slot is rehanded; the cast then refuses
-  it as recycled. Either size the pool by `in-flight + Σ (mailbox depth + quota)` per link
-  (recommended — the claim stays at the cast as decided, and a queued frame can no longer be
-  outwaited), or keep publish-to-claim transit riding pool depth, as the surface-id entry
-  states today, and count the refusal as that link's drop. No
+  `messages_dropped`, and no other link is affected. Wiring a link grows the pool by
+  that link's mailbox depth and quota before the link's first frame, and unwiring it shrinks the pool lazily.
+  A queued `GpuPoolSlotFrame` holds no claim until its cast, so the pool also counts each
+  link's mailbox: `in-flight frames + Σ (mailbox depth + quota)` over the links on its output,
+  and a frame the mailbox accepted is never outwaited by its slot (owner, 2026-11-05).
+  Rejected: publish-to-claim transit riding pool depth, refused at the cast as a drop. No
   reader ever copies to escape the quota. Memory grows with fan-out, and that is accepted
   (owner, 2026-11-04). [zero-copy-data-plane]
   Rejected: one quota per output — a slow reader holding slots starves a timely one; and a copy
@@ -143,16 +140,14 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   socket path stays for non-pool surfaces (foreign adoptions, export stagings).
   [zero-copy-data-plane]
 - **ADDED (§Processor model, failure isolation, DECIDED):** A dead interpreter's claims die
-  with it. When the connection of an interpreter closes, including a helper restart under
+  with it. When an interpreter's process is reaped, including a helper restart under
   `helper-process-restart`, the engine zeroes its column in every claim table it was handed,
   then re-runs the ring's availability test for those pools. [zero-copy-data-plane]
-  [NEEDS DECISION] A closed connection does not prove the interpreter stopped reading: the
-  service drops a connection on an oversized or malformed message, and a live reader would keep
-  its imports while its column is zeroed and reassigned. Either clear a column only when the
-  interpreter's process is reaped, and make the service's every connection drop on a helper
-  fail-stop, so the engine kills that helper (recommended — a column is never reused while its
-  holder can still run), or keep clearing on connection close and have the helper drop every
-  import and claim the moment its connection fails.
+  A column clears only once its interpreter's process is reaped, never on a connection close
+  alone (owner, 2026-11-05). Every connection the service drops — an oversized or malformed
+  message included — is a helper fail-stop: the engine kills that helper, reaps it, and then
+  zeroes its column, so a column is never reused while its holder can still run. Rejected:
+  clearing on connection close, which leaves a live reader on a reused slot.
 - **ADDED (§Processor model, DECIDED):** Every `#[repr(C)]` value this change puts in shared
   memory has a layout regression test (size, alignment and every field offset): the user header,
   the descriptor and each kind's body, and the claim table row. Python mirrors none of them. It
@@ -205,7 +200,8 @@ The protocol, written for the ADR's Consequences. All operations are `SeqCst`. O
 - **MODIFIED (§Processor model, the surface-id entry, `:642-662`):** a published frame is still
   `<slot>#<generation>` by name, for logs, previews and the module host. On the data plane it
   travels as the descriptor, and the claim is taken where the cast is taken now, at
-  `ClaimedSurfacePixelAccess`.
+  `ClaimedSurfacePixelAccess`. Publish-to-claim transit no longer rides pool depth alone: the pool
+  counts every link's mailbox depth, so a queued frame is not refused as recycled.
 - **MODIFIED (engine code):**
   - `streamlib-ipc-types`: `DataChannelBagUserHeader` becomes `DataChannelSampleUserHeader`,
     with `DataChannelPayloadDescriptor` and its bodies, and the layout tests.
@@ -215,7 +211,7 @@ The protocol, written for the ADR's Consequences. All operations are `SeqCst`. O
     `ctx.loan` both call. The copy-in becomes the `write` convenience over it.
   - `iceoryx2/mailbox.rs`, `input.rs`: queue `Sample`s, and hand a read the sample.
   - `core/context`: `GpuPoolClaimTable` beside `SurfaceCheckOutLeaseRegistry`. `PoolSlotReuse`
-    consults both, and the ring sizes a pool from its links' quotas.
+    consults both, and the ring sizes a pool from its links' mailbox depths and quotas.
   - `linux/surface_share`, `apple/surface_share`: the slot-set hand-over, the claim table's
     handle, column assignment and clearing, and the macOS `retired_pool_slots` notice.
 - **MODIFIED (helper code, `sdk/streamlib-python-wheel/`):** `PortPayloadBorrow` and
