@@ -98,10 +98,13 @@ impl CapturedAudioBlockPublishing {
         captured: CapturedAudioBlockAwaitingPublish,
         consecutive_failed_writes: &mut u64,
     ) {
+        let first_sample_stream_timestamp_ns = self
+            .module_host
+            .stream_time_ns_of_a_machine_instant(captured.first_sample_timestamp_ns);
         let written = audio_block_message_payload(
             &captured.interleaved_sample_bytes,
             captured.sample_count,
-            captured.first_sample_timestamp_ns,
+            first_sample_stream_timestamp_ns,
             self.stream_format,
         )
         .map_err(|encode_failure| encode_failure.to_string())
@@ -109,7 +112,7 @@ impl CapturedAudioBlockPublishing {
             // The device stamped the block; a write stamped "now" would name
             // the instant of publication, not of capture.
             self.audio_output_port
-                .write(&payload, Some(captured.first_sample_timestamp_ns), true)
+                .write(&payload, Some(first_sample_stream_timestamp_ns), true)
                 .map_err(|write_failure| write_failure.to_string())
         });
         match written {

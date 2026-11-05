@@ -374,7 +374,7 @@ impl ZeroCopyCaptureLoop {
     fn publish_one_frame(
         &self,
         driver_buffer_index: u32,
-        timestamp_ns: i64,
+        capture_instant_ns: i64,
         conversion_colour: CapturedFrameColourDescription,
     ) -> Result<(), String> {
         let adopted = self
@@ -406,6 +406,9 @@ impl ZeroCopyCaptureLoop {
                 },
             )
             .map_err(|refusal| refusal.to_string())?;
+        let timestamp_ns = self
+            .module_host
+            .stream_time_ns_of_a_machine_instant(capture_instant_ns);
         let record = PublishedVideoFrame {
             surface_id: converted_frame_texture.surface_id(),
             width: self.format.width,
