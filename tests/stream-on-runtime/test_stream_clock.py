@@ -142,7 +142,7 @@ def test_a_continuous_node_fires_on_stream_time_and_follows_a_live_rescale(
     assert_ticks_paced_on_stream_time(at_the_declared_scale, SLOW_MOTION_SCALE)
     assert_ticks_paced_on_stream_time(at_the_live_scale, LIVE_RESCALED_SCALE)
     assert at_the_live_scale["stream_time_went_backwards"] is False, at_the_live_scale
-    assert graph["clock"]["scale"] == LIVE_RESCALED_SCALE, graph
+    assert graph["clock"]["scale"] == SLOW_MOTION_SCALE, graph
 
 
 def test_a_real_time_streams_clock_is_not_rescaled(
