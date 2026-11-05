@@ -700,9 +700,6 @@ fn fill_texture_with(gpu: &GpuContext, texture: &crate::core::rhi::Texture, rgba
 #[cfg(target_os = "linux")]
 #[test]
 fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
-    use crate::core::test_support::rig_only_capability_skip::{
-        RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
-    };
     use crate::host_rhi::HostTextureExt as _;
     let Some(gpu) =
         gpu_or_skip("a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture")
