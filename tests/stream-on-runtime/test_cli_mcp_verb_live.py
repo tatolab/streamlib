@@ -60,6 +60,7 @@ CONTROL_TOOL_NAMES = {
     "remove_relay",
     "list_relays",
     "describe_runtime",
+    "set_stream_clock_scale",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
