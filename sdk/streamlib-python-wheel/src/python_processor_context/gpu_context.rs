@@ -137,6 +137,24 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
 /// Every call crosses to the parent through the exchange client — the
 /// engine and its pools live one process away. `None` means this helper
 /// has no surface-share channel, and every call refuses by name.
+/// The claim a read took on the pooled GPU frame it carried, which holds the
+/// frame's slot against a rehand for as long as the read's payload is held.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "only Linux reads pooled frames through a claim table"
+    )
+)]
+pub(crate) struct PooledGpuFrameClaimHeldByARead(
+    #[cfg(target_os = "linux")]
+    #[expect(
+        dead_code,
+        reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
+    )]
+    Arc<crate::python_helper_process_pixel_exchange::HelperGpuPoolSlotFrameClaim>,
+);
+
 #[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
@@ -151,20 +169,23 @@ impl PythonGpuContextLimitedAccess {
         }
     }
 
-    /// Take in the pooled GPU frame a read carried, so the claim its cast
-    /// takes is made in the pool's claim table.
-    pub(crate) fn note_the_pooled_gpu_frame_a_read_carries(
+    /// Take in the pooled GPU frame a read carried and claim it in the pool's
+    /// claim table; `None` where no claim table covers the frame.
+    pub(crate) fn note_and_claim_the_pooled_gpu_frame_a_read_carries(
         &self,
         python: Python<'_>,
         pooled_frame: streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody,
-    ) -> PyResult<()> {
+    ) -> PyResult<Option<PooledGpuFrameClaimHeldByARead>> {
         #[cfg(target_os = "linux")]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return python
-                .detach(|| exchange_client.note_the_pooled_gpu_frame_a_read_carries(pooled_frame));
+                .detach(|| {
+                    exchange_client.note_and_claim_the_pooled_gpu_frame_a_read_carries(pooled_frame)
+                })
+                .map(|claim| claim.map(PooledGpuFrameClaimHeldByARead));
         }
         let _ = (python, pooled_frame);
-        Ok(())
+        Ok(None)
     }
 
     /// Whether this node read or acquired any pooled GPU frame a write could

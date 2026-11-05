@@ -20,6 +20,7 @@ use crate::python_gpu_surface_pixel_exchange::{
     HOST_VISIBLE_DLPACK_DEVICE, PixelExchangeTensorLayout, dlpack_capsule_over,
     dlpack_device_as_python_pair, exchange_shape_for_max_version,
 };
+use crate::python_processor_context::PooledGpuFrameClaimHeldByARead;
 
 /// A read message's payload, held where the sample put it until the borrow and
 /// every export of it are gone.
@@ -30,6 +31,7 @@ pub(crate) struct PythonPortPayloadBorrow {
     borrowed_payload: Arc<parking_lot::Mutex<InputPortMessagePayload>>,
     payload_base_address: usize,
     payload_byte_len: usize,
+    _pooled_gpu_frame_claim: Option<PooledGpuFrameClaimHeldByARead>,
 }
 
 impl PythonPortPayloadBorrow {
@@ -57,8 +59,12 @@ impl PythonPortPayloadBorrow {
         )
     }
 
-    /// Hold `payload` for Python.
-    pub(crate) fn holding(payload: InputPortMessagePayload) -> Self {
+    /// Hold `payload` for Python, with the claim a read took on the pooled
+    /// GPU frame it carries.
+    pub(crate) fn holding(
+        payload: InputPortMessagePayload,
+        pooled_gpu_frame_claim: Option<PooledGpuFrameClaimHeldByARead>,
+    ) -> Self {
         let payload_bytes = payload.bytes();
         let payload_base_address = payload_bytes.as_ptr() as usize;
         let payload_byte_len = payload_bytes.len();
@@ -66,6 +72,7 @@ impl PythonPortPayloadBorrow {
             borrowed_payload: Arc::new(parking_lot::Mutex::new(payload)),
             payload_base_address,
             payload_byte_len,
+            _pooled_gpu_frame_claim: pooled_gpu_frame_claim,
         }
     }
 

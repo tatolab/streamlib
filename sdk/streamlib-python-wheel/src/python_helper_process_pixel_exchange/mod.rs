@@ -66,6 +66,8 @@ pub(crate) use gpu_kernels::{
 };
 
 #[cfg(target_os = "linux")]
+pub(crate) use linux::HelperGpuPoolSlotFrameClaim;
+#[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
     HelperAcquiredTexture, HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
@@ -74,8 +76,7 @@ pub(crate) use linux::{
 };
 #[cfg(target_os = "linux")]
 use linux::{
-    HelperGpuPoolClaimTables, HelperGpuPoolSlotFrameClaim, HelperPixelBufferPoolSlotImport,
-    HelperPoolSlotImportsByPoolSlot,
+    HelperGpuPoolClaimTables, HelperPixelBufferPoolSlotImport, HelperPoolSlotImportsByPoolSlot,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{

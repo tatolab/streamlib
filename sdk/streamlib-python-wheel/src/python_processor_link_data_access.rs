@@ -536,17 +536,18 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
     into: Option<&Bound<'py, PyAny>>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let mut pooled_gpu_frame_claim = None;
     if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
         (payload_descriptor.known_kind(), offered_gpu_limited_access)
     {
-        let noted = gpu_limited_access
+        let claimed = gpu_limited_access
             .get()
-            .note_the_pooled_gpu_frame_a_read_carries(
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(
                 python,
                 GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
             );
-        match (noted, into) {
-            (Ok(()), _) => {}
+        match (claimed, into) {
+            (Ok(claim), _) => pooled_gpu_frame_claim = claim,
             (Err(refusal), Some(_)) => return Err(refusal),
             (Err(refusal), None) => tracing::warn!(
                 "a read on {port_name:?} kept its payload, though the pooled GPU frame it \
@@ -554,7 +555,11 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
             ),
         }
     }
-    let payload_borrow = Bound::new(python, PythonPortPayloadBorrow::holding(payload))?.into_any();
+    let payload_borrow = Bound::new(
+        python,
+        PythonPortPayloadBorrow::holding(payload, pooled_gpu_frame_claim),
+    )?
+    .into_any();
     match into {
         Some(read_target) => cast_payload_into_read_target(
             port_name,

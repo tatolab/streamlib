@@ -104,9 +104,13 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
     );
 
     publish(&share, &row_lease, 1);
-    exchange_client
-        .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&row_lease, 1))
+    let first_read_claim = exchange_client
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(&row_lease, 1))
         .expect("the first frame fetches the pool's claim table");
+    assert!(
+        first_read_claim.is_some(),
+        "the first read claims its frame"
+    );
     let first_frame = exchange_client
         .check_out_and_import(&format!("{POOL_SLOT_KEY}#1"))
         .expect("the first frame imports its slot once");
@@ -114,7 +118,7 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
         panic!("a pixel_buffer registration reads as a pixel buffer");
     };
     let slot_import = Arc::clone(&first_pixels.pixel_buffer_pool_slot_import);
-    drop(first_frame);
+    drop((first_frame, first_read_claim));
     assert!(!row_lease.row().is_claimed());
 
     // Every later frame must make no request: a closed connection and a
@@ -124,9 +128,12 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
 
     for generation in 2..=4 {
         publish(&share, &row_lease, generation);
-        exchange_client
-            .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&row_lease, generation))
-            .expect("a known slot's frame needs no hand-over");
+        let read_claim = exchange_client
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(
+                &row_lease, generation,
+            ))
+            .expect("a known slot's frame needs no hand-over")
+            .expect("a read claims the frame it carries");
         let frame_id = format!("{POOL_SLOT_KEY}#{generation}");
         let claimed = exchange_client
             .claim_surface_against_producer_reuse(&frame_id)
@@ -165,6 +172,11 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
             "the read still holds the frame"
         );
         drop(read);
+        assert!(
+            row_lease.row().is_claimed(),
+            "the read's payload still holds the frame"
+        );
+        drop(read_claim);
         assert!(!row_lease.row().is_claimed());
     }
 
@@ -174,6 +186,68 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
         .err()
         .expect("a frame its slot moved past is refused");
     assert!(recycled.to_string().contains("recycled"), "{recycled}");
+    assert!(!row_lease.row().is_claimed());
+}
+
+/// A pooled frame a read hands back uncast holds its slot from the read on:
+/// the producer can never rehand the slot under the held payload, and the
+/// frame casts however long after the read it is cast. Needs a Vulkan device;
+/// skips where none comes up.
+#[test]
+fn a_frame_a_read_holds_uncast_is_never_rehanded_before_it_is_cast() {
+    let host_device = match HostVulkanDevice::new() {
+        Ok(host_device) => host_device,
+        Err(unavailable) => {
+            tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+            return;
+        }
+    };
+    let Some(pool_slot) = a_stamped_pool_slot(&host_device, 0x33) else {
+        return;
+    };
+    let share = SurfaceShareUnderTest::start("claim-table-uncast");
+    let engine_surface_store = SurfaceStore::new(
+        share.socket_path.to_string_lossy().into_owned(),
+        "engine:claim-table-uncast-under-test".to_string(),
+    );
+    engine_surface_store
+        .connect()
+        .expect("the engine's store connects");
+    engine_surface_store
+        .register_buffer(POOL_SLOT_KEY, &pool_slot)
+        .expect("the engine registers the pool slot");
+    let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("claim-table-uncast");
+    let row_lease = claim_tables_of_the_pool
+        .lease_a_row_for_a_slot(
+            share.check_out_leases().gpu_pool_claim_tables(),
+            POOL_SLOT_KEY,
+        )
+        .expect("the pool leases its slot a row");
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "claim-table-uncast-under-test",
+        Ok(host_device.physical_device_uuid()),
+    );
+    publish(&share, &row_lease, 1);
+
+    let uncast_read_claim = exchange_client
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(&row_lease, 1))
+        .expect("the read fetches the pool's claim table")
+        .expect("the read claims the frame it carries");
+    for _ in 0..3 {
+        assert_eq!(
+            row_lease.row().retire_for_a_rehand(1),
+            GpuPoolSlotRehandTest::HeldByAClaim,
+            "the producer never rehands a slot an uncast read holds"
+        );
+    }
+
+    let frame_id = format!("{POOL_SLOT_KEY}#1");
+    let cast = exchange_client
+        .check_out_and_import(&frame_id)
+        .unwrap_or_else(|refusal| panic!("the held frame {frame_id} casts: {refusal}"));
+    drop(uncast_read_claim);
+    assert!(row_lease.row().is_claimed(), "the cast holds the frame");
+    drop(cast);
     assert!(!row_lease.row().is_claimed());
 }
 
@@ -220,8 +294,8 @@ fn a_slot_the_pool_grew_crosses_the_first_time_a_frame_names_it() {
         Ok(host_device.physical_device_uuid()),
     );
     publish(&share, &first_row, 1);
-    exchange_client
-        .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&first_row, 1))
+    let first_read_claim = exchange_client
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(&first_row, 1))
         .expect("the first frame fetches the pool's claim table");
     let first_frame = exchange_client
         .check_out_and_import(&format!("{POOL_SLOT_KEY}#1"))
@@ -245,8 +319,8 @@ fn a_slot_the_pool_grew_crosses_the_first_time_a_frame_names_it() {
         "the grown slot's row was not in the first hand-over"
     );
 
-    exchange_client
-        .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&grown_row, 1))
+    let grown_read_claim = exchange_client
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(&grown_row, 1))
         .expect("a frame of the grown slot fetches the slot set again");
     let grown_frame_id = format!("{GROWN_POOL_SLOT_KEY}#1");
     let claimed = exchange_client
@@ -272,7 +346,13 @@ fn a_slot_the_pool_grew_crosses_the_first_time_a_frame_names_it() {
         first_row.row().is_claimed(),
         "the first slot's read still holds its own frame"
     );
-    drop((claimed, read, first_frame));
+    drop((
+        claimed,
+        read,
+        first_frame,
+        first_read_claim,
+        grown_read_claim,
+    ));
     assert!(!grown_row.row().is_claimed());
     assert!(!first_row.row().is_claimed());
 }
