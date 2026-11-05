@@ -324,7 +324,7 @@ fn run_the_step_barrier(
         }
     };
     let mut baselines = StepLedgerLinkBaselines::default();
-    let mut progress_notes_seen = 0;
+    let mut waits_for_every_node_to_start = stream_clock.runs_behind_the_step_barrier();
 
     loop {
         if a_stop_was_requested() {
@@ -334,26 +334,26 @@ fn run_the_step_barrier(
             return;
         };
         let Some(step_index) = stream_clock.step_open_behind_the_barrier() else {
-            if !stream_clock.runs_behind_the_step_barrier() {
-                progress_notes_seen = stream_clock.wait_for_step_progress_after(
-                    progress_notes_seen,
-                    STEP_COORDINATOR_CLOCK_RECHECK,
-                );
+            if !stream_clock
+                .wait_until_it_runs_behind_the_step_barrier(STEP_COORDINATOR_CLOCK_RECHECK)
+            {
+                waits_for_every_node_to_start = false;
                 continue;
             }
-            let reading = stream_now.step_ledger_reading();
-            if let Some(failed_node) = reading.a_failed_node() {
+            if let Some(failed_node) = stream_now.step_ledger_reading().a_failed_node() {
                 ask_for_the_streams_shutdown(&format!(
                     "the node `{failed_node}` failed before the stream's next step opened"
                 ));
                 return;
             }
-            if stream_now
-                .wait_until_every_processor_is_running(STEP_COORDINATOR_START_RECHECK)
-                .is_ok()
-            {
+            let the_stream_runs = !waits_for_every_node_to_start
+                || stream_now
+                    .wait_until_every_processor_is_running(STEP_COORDINATOR_START_RECHECK)
+                    .is_ok();
+            if the_stream_runs {
                 baselines.follow_the_links_in(&stream_now.step_ledger_reading());
                 if let Some(opened) = stream_clock.open_the_waiting_step() {
+                    waits_for_every_node_to_start = false;
                     tracing::trace!("step {opened} opened");
                 }
             }

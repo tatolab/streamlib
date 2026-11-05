@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 use streamlib_engine::core::{
     Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClockSpec,
@@ -568,9 +568,10 @@ fn a_live_rescale_across_real_time_moves_a_running_stream_into_its_steps_and_out
         );
     }
     for pair in ticks_the_sink_took.windows(2) {
+        let stamp_gap = pair[1].1 - pair[0].1;
         assert!(
-            pair[1].1 > pair[0].1,
-            "stream time never steps back across a rescale: {ticks_the_sink_took:?}"
+            0 < stamp_gap && stamp_gap <= 2 * STEP_NS as i64,
+            "stream time neither steps back nor jumps across a rescale: {ticks_the_sink_took:?}"
         );
     }
     for pair in
@@ -582,9 +583,13 @@ fn a_live_rescale_across_real_time_moves_a_running_stream_into_its_steps_and_out
             "in steps every tick lands one step after the last: {ticks_the_sink_took:?}"
         );
     }
+    let fifteen_steps_at_four_times_real_time = Duration::from_nanos(STEP_NS * 15 / 4);
     assert!(
-        sixteen_steps_took < Duration::from_nanos(STEP_NS * 16),
-        "16 steps at 4× took {sixteen_steps_took:?}, no faster than real time"
+        fifteen_steps_at_four_times_real_time <= sixteen_steps_took
+            && sixteen_steps_took < Duration::from_nanos(STEP_NS * 16),
+        "16 steps at 4× took {sixteen_steps_took:?}, outside \
+         {fifteen_steps_at_four_times_real_time:?}..{:?}",
+        Duration::from_nanos(STEP_NS * 16)
     );
 }
 
@@ -680,4 +685,46 @@ fn a_node_that_paces_itself_fails_a_stream_scaled_above_real_time_naming_it() {
         "the refusal names the node and why: {refusal}"
     );
     wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
+}
+
+#[test]
+#[serial]
+fn a_live_rescale_above_real_time_steps_on_while_a_node_is_paused() {
+    register_the_test_nodes();
+    TICKS_THE_SINK_TOOK.lock().clear();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        a_tick_chain_on(
+            StreamClockSpec::Scaled {
+                scale: 0.5,
+                step_ns: STEP_NS,
+            },
+            "crosses-real-time-while-paused",
+        ),
+    )
+    .expect("a stream at half real time loads");
+    let idle_node = stream
+        .add_processor(ProcessorSpec::new(
+            RealTimePacedTickSink::processor_class_import_path(),
+            serde_json::json!({}),
+        ))
+        .expect("an idle node joins the stream");
+    stream.start().expect("the stream starts");
+    stream
+        .wait_until_every_processor_is_running(Duration::from_secs(10))
+        .expect("every node runs");
+    stream
+        .pause_processor(&idle_node)
+        .expect("the idle node pauses");
+
+    stream
+        .set_stream_clock_scale(4.0)
+        .expect("a running scaled stream rescales above real time");
+    let ticks_before_the_steps = TICKS_THE_SINK_TOOK.lock().len();
+    wait_for_the_sink_to_take(ticks_before_the_steps + 8, Duration::from_secs(10));
+    stream.stop().expect("the stream stops");
 }

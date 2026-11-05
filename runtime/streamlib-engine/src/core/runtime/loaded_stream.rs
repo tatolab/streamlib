@@ -35,6 +35,7 @@ use crate::core::graph::{
 };
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
+use crate::core::media_clock::MediaClock;
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, ProcessorEvent, RuntimeEvent, topics,
@@ -451,20 +452,14 @@ impl LoadedStreamInThisRuntime {
                 self.stream_id()
             )));
         };
-        if scale > 1.0
-            && let Some(node_that_paces_its_own_callbacks) =
-                self.a_node_that_paces_its_own_callbacks()
-        {
-            return Err(Error::GraphError(format!(
-                "the stream `{}` cannot run its clock at {scale}×: above 1× the clock runs in \
-                 steps every node runs on, and the node `{node_that_paces_its_own_callbacks}` \
-                 paces itself (execution = manual)",
-                self.stream_id()
-            )));
-        }
         let rescaled = this_streams_runtime_context
             .stream_clock
-            .rescale(self.stream_id(), scale)?;
+            .rescale_unless_a_node_holds_it_under_real_time(
+                self.stream_id(),
+                scale,
+                MediaClock::now().as_nanos() as i64,
+                || self.a_node_that_paces_its_own_callbacks(),
+            )?;
         tracing::info!(
             "the stream `{}` runs its clock at {scale}× from now on",
             self.stream_id()
@@ -473,7 +468,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// The display name of a node in this stream that runs its own callbacks
-    /// inside the step barrier, when one does.
+    /// inside the step barrier and has not stopped or failed, when one does.
     fn a_node_that_paces_its_own_callbacks(&self) -> Option<String> {
         self.compiler.scope_reading(|graph| {
             graph
@@ -483,6 +478,12 @@ impl LoadedStreamInThisRuntime {
                 .find(|node| {
                     node.get::<StepProgressOfOneNodeComponent>()
                         .is_some_and(|step_progress| step_progress.0.paces_its_own_callbacks())
+                        && !node.get::<StateComponent>().is_some_and(|state| {
+                            matches!(
+                                state.current(),
+                                ProcessorState::Stopped | ProcessorState::Error
+                            )
+                        })
                 })
                 .map(|node| node.display_name.clone())
         })

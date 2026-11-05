@@ -55,32 +55,21 @@ pub fn run_processor_loop(
     );
 
     match exec_config.execution {
-        ProcessExecution::Continuous { interval_ms }
-            if step_progress.stands_outside_the_step_barrier() =>
-        {
-            let _ = run_continuous_mode(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &pause_gate,
-                interval_ms,
-                &runtime_ctx,
-                &StreamClock::starting_now(StreamClockSpec::Real),
-                &mut false,
-                || false,
-            );
-            tracing::info!("[{}] Received shutdown signal", id);
-        }
         ProcessExecution::Continuous { interval_ms } => {
-            run_continuous_mode_on_its_stream_clock(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &pause_gate,
+            let continuous_runner = ContinuousRunnerOfOneProcessor {
+                id: &id,
+                processor: &processor,
+                shutdown_rx: &shutdown_rx,
+                pause_gate: &pause_gate,
                 interval_ms,
-                &runtime_ctx,
-                &step_progress,
-            );
+                runtime_ctx: &runtime_ctx,
+            };
+            if step_progress.stands_outside_the_step_barrier() {
+                run_continuous_mode_on_real_time(&continuous_runner);
+            } else {
+                run_continuous_mode_on_its_stream_clock(&continuous_runner, &step_progress);
+            }
+            tracing::info!("[{}] Received shutdown signal", id);
         }
         ProcessExecution::Reactive => {
             run_reactive_mode(
@@ -143,49 +132,55 @@ enum ContinuousRunnerLeftItsMode {
     TheClockChangedHowItAdvances,
 }
 
+/// One continuous processor and what its runner reads: its callbacks, its
+/// shutdown and pause signals, its interval and its stream's context.
+#[derive(Clone, Copy)]
+struct ContinuousRunnerOfOneProcessor<'a> {
+    id: &'a ProcessorUniqueId,
+    processor: &'a Arc<Mutex<ProcessorInstance>>,
+    shutdown_rx: &'a crossbeam_channel::Receiver<()>,
+    pause_gate: &'a Arc<AtomicBool>,
+    interval_ms: u32,
+    runtime_ctx: &'a RuntimeContext,
+}
+
+/// A continuous processor paced by real time: on the interval grid of the
+/// machine clock, whatever clock its stream runs, until a shutdown.
+fn run_continuous_mode_on_real_time(continuous_runner: &ContinuousRunnerOfOneProcessor<'_>) {
+    let machine_clock = StreamClock::starting_now(StreamClockSpec::Real);
+    let mut was_paused = false;
+    let why_the_runner_left =
+        run_continuous_mode(continuous_runner, &machine_clock, &mut was_paused, || false);
+    debug_assert_eq!(
+        why_the_runner_left,
+        ContinuousRunnerLeftItsMode::ShutdownRequested
+    );
+}
+
 /// A continuous processor on its stream's clock: in steps while the clock
 /// runs behind the step barrier, on the interval grid of stream time while it
-/// runs free, switching whenever the clock does.
+/// runs free, switching whenever the clock does; until a shutdown.
 fn run_continuous_mode_on_its_stream_clock(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    pause_gate: &Arc<AtomicBool>,
-    interval_ms: u32,
-    runtime_ctx: &RuntimeContext,
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
     step_progress: &StepProgressOfOneNode,
 ) {
-    let stream_clock = &runtime_ctx.stream_clock;
+    let stream_clock = &continuous_runner.runtime_ctx.stream_clock;
     let mut was_paused = false;
     let mut last_step_handled: Option<u64> = None;
     loop {
-        let left = if stream_clock.runs_behind_the_step_barrier() {
+        let why_the_runner_left_its_mode = if stream_clock.runs_behind_the_step_barrier() {
             run_continuous_mode_on_steps(
-                id,
-                processor,
-                shutdown_rx,
-                pause_gate,
-                interval_ms,
-                runtime_ctx,
+                continuous_runner,
                 step_progress,
                 &mut was_paused,
                 &mut last_step_handled,
             )
         } else {
-            run_continuous_mode(
-                id,
-                processor,
-                shutdown_rx,
-                pause_gate,
-                interval_ms,
-                runtime_ctx,
-                stream_clock,
-                &mut was_paused,
-                || stream_clock.runs_behind_the_step_barrier(),
-            )
+            run_continuous_mode(continuous_runner, stream_clock, &mut was_paused, || {
+                stream_clock.runs_behind_the_step_barrier()
+            })
         };
-        if left == ContinuousRunnerLeftItsMode::ShutdownRequested {
-            tracing::info!("[{}] Received shutdown signal", id);
+        if why_the_runner_left_its_mode == ContinuousRunnerLeftItsMode::ShutdownRequested {
             return;
         }
     }
@@ -193,18 +188,20 @@ fn run_continuous_mode_on_its_stream_clock(
 
 /// A continuous processor on the interval grid of `clock_it_paces_on`, until
 /// a shutdown or `leaves_when` holds.
-#[allow(clippy::too_many_arguments)]
 fn run_continuous_mode(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    pause_gate: &Arc<AtomicBool>,
-    interval_ms: u32,
-    runtime_ctx: &RuntimeContext,
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
     clock_it_paces_on: &StreamClock,
     was_paused: &mut bool,
     leaves_when: impl Fn() -> bool,
 ) -> ContinuousRunnerLeftItsMode {
+    let ContinuousRunnerOfOneProcessor {
+        id,
+        processor,
+        shutdown_rx,
+        pause_gate,
+        interval_ms,
+        runtime_ctx,
+    } = *continuous_runner;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
     let mut next_deadline_ns = clock_it_paces_on.now_ns();
 
@@ -261,18 +258,20 @@ fn run_continuous_mode(
 /// step whose time reached its next deadline, and every step it sees open
 /// marked finished, whether or not it ran; until a shutdown or the clock runs
 /// free of the barrier.
-#[allow(clippy::too_many_arguments)]
 fn run_continuous_mode_on_steps(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    pause_gate: &Arc<AtomicBool>,
-    interval_ms: u32,
-    runtime_ctx: &RuntimeContext,
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
     step_progress: &StepProgressOfOneNode,
     was_paused: &mut bool,
     last_step_handled: &mut Option<u64>,
 ) -> ContinuousRunnerLeftItsMode {
+    let ContinuousRunnerOfOneProcessor {
+        id,
+        processor,
+        shutdown_rx,
+        pause_gate,
+        interval_ms,
+        runtime_ctx,
+    } = *continuous_runner;
     let stream_clock = &runtime_ctx.stream_clock;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
     let mut next_deadline_stream_ns: Option<i64> = None;

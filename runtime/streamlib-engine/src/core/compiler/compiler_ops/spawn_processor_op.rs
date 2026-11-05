@@ -383,10 +383,10 @@ fn spawn_dedicated_thread(
             if execution_the_node_runs_in == ProcessExecution::Manual
                 && !step_progress.stands_outside_the_step_barrier()
             {
-                if runtime_ctx_clone
+                let admitted = runtime_ctx_clone
                     .stream_clock
-                    .runs_behind_the_step_barrier()
-                {
+                    .admit_unless_it_steps(|| step_progress.note_it_paces_its_own_callbacks());
+                if !admitted {
                     let refusal = format!(
                         "the node `{processor_display_name}` paces itself (execution = manual), \
                          so it cannot run in a stream whose clock steps (stepped, or scaled \
@@ -396,7 +396,6 @@ fn spawn_dedicated_thread(
                     state_arc.fail_with(refusal);
                     return;
                 }
-                step_progress.note_it_paces_its_own_callbacks();
             }
 
             if matches!(
