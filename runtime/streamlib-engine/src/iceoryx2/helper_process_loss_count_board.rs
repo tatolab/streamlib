@@ -35,7 +35,7 @@ pub(crate) const INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD: usize = MAX_INBOUND_LI
 
 /// The blackboard service a loss-count board is.
 pub(crate) type HelperProcessLossCountBoardService =
-    BlackboardPortFactory<ipc::Service, HelperProcessLossCountBoardKey>;
+    BlackboardPortFactory<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>;
 
 /// Every inbound-link slot's key, in slot order — the board's first section.
 pub(super) fn inbound_link_slot_keys() -> impl Iterator<Item = HelperProcessLossCountBoardKey> {
@@ -80,29 +80,15 @@ pub struct HelperProcessLossCountBoard {
 /// then the service.
 struct HelperProcessLossCountBoardReadHandles {
     inbound_link_slots: Vec<
-        EntryHandle<ipc::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
+        EntryHandle<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
     >,
     output_ports: Vec<(
         String,
-        EntryHandle<ipc::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
+        EntryHandle<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
     )>,
-    _reader: Reader<ipc::Service, HelperProcessLossCountBoardKey>,
+    _reader: Reader<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
-
-// SAFETY: `Reader` is the one field iceoryx2 0.10 leaves `!Send` and `!Sync`,
-// because `ipc::Service`'s `SingleThreaded` policy keeps its shared state in a
-// bare `Rc`. Every `EntryHandle` holds a clone of that same `Rc`; iceoryx2
-// declares the handle `Send + Sync` all the same, which is sound only while no
-// handle ever leaves this struct on its own — two handles dropped on two threads
-// race the count. Every clone is made while this struct is built, on one thread,
-// and every one is dropped when it drops, in one `Drop`. A read,
-// `EntryHandle::get`, loads the entry's lock-free atomic and never touches the
-// `Rc`, which is what lets `graph` read from a tokio worker. The blackboard
-// `PortFactory` is `Send + Sync` in its own right. Re-check this against the
-// source on any iceoryx2 upgrade.
-unsafe impl Send for HelperProcessLossCountBoardReadHandles {}
-unsafe impl Sync for HelperProcessLossCountBoardReadHandles {}
 
 impl HelperProcessLossCountBoard {
     /// Take a read handle on every entry of the board `service` just created.
@@ -189,14 +175,14 @@ pub struct HelperProcessLossCountBoardWriter {
 /// One inbound-link slot, and what was last written on it.
 struct InboundLinkLossCountBoardSlotBeingWritten {
     entry:
-        EntryHandleMut<ipc::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
+        EntryHandleMut<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
     last_written: InboundLinkLossCountBoardSlot,
 }
 
 /// One output port's entry, and what was last written on it.
 struct OutputPortBagCountBoardEntryBeingWritten {
     entry:
-        EntryHandleMut<ipc::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
+        EntryHandleMut<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
     last_written: OutputPortBagCountBoardEntry,
 }
 
@@ -204,21 +190,9 @@ struct OutputPortBagCountBoardEntryBeingWritten {
 struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
     output_ports: Vec<(String, Mutex<OutputPortBagCountBoardEntryBeingWritten>)>,
-    _writer: Writer<ipc::Service, HelperProcessLossCountBoardKey>,
+    _writer: Writer<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
-
-// SAFETY: `Writer` is the one field iceoryx2 0.10 leaves `!Send` and `!Sync`,
-// for the `SingleThreaded` `Rc` its shared state sits in. Every `EntryHandleMut`
-// holds a clone of that `Rc` and is declared `Send + Sync` upstream regardless,
-// which is sound only while no handle leaves this struct on its own. Every
-// clone is made while this struct is built, on one thread, and dropped when it
-// drops, in one `Drop`. A write, `EntryHandleMut::update_with_copy`, stores
-// through the entry's producer and never touches the `Rc`; the producer is
-// single-writer, which each entry's `Mutex` serialises. The blackboard
-// `PortFactory` is `Send + Sync` in its own right.
-unsafe impl Send for HelperProcessLossCountBoardWriteHandles {}
-unsafe impl Sync for HelperProcessLossCountBoardWriteHandles {}
 
 impl HelperProcessLossCountBoardWriter {
     /// Take the write handle of every entry on the board `service` opened.

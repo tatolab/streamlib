@@ -2233,7 +2233,7 @@ mod tests {
             let config = crate::iceoryx2::engine_owned_iceoryx2_config(domain_root)
                 .expect("the test domain root fits the socket-path budget");
             let mut nodes = 0;
-            iceoryx2::node::Node::<iceoryx2::prelude::ipc::Service>::list(&config, |_| {
+            iceoryx2::node::Node::<iceoryx2::prelude::ipc_threadsafe::Service>::list(&config, |_| {
                 nodes += 1;
                 iceoryx2::prelude::CallbackProgression::Continue
             })

@@ -158,7 +158,7 @@ struct ChannelEgress {
 /// a source feeding N destinations must keep the other N-1 alive.
 struct ChannelEgressLink {
     link_id: String,
-    notifier: Notifier<ipc::Service>,
+    notifier: Notifier<ipc_threadsafe::Service>,
 }
 
 /// The channel-egress primitives that prime an output port's channel
@@ -198,13 +198,6 @@ pub struct OutputWriterInner {
     /// created for its node.
     catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
 }
-
-// SAFETY: `Publisher` and `Notifier` are not `Send`, so the `Mutex` alone does
-// not make this type shareable. It is sound because every port and every loaned
-// sample is touched only while `channels` is held, and no sample outlives that
-// guard.
-unsafe impl Send for OutputWriterInner {}
-unsafe impl Sync for OutputWriterInner {}
 
 impl OutputWriterInner {
     /// Create a new inner with no channels (populated during wiring).
@@ -359,7 +352,7 @@ impl OutputWriterInner {
         &self,
         output_port: &str,
         link_id: &str,
-        notifier: Notifier<ipc::Service>,
+        notifier: Notifier<ipc_threadsafe::Service>,
     ) {
         if let Some(egress) = self.channels.lock().get_mut(output_port) {
             egress.links.push(ChannelEgressLink {

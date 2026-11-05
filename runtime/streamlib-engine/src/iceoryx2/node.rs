@@ -150,7 +150,7 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
     let config = engine_owned_iceoryx2_config(domain_root)?;
     let mut reclaimed_dead_nodes = 0u64;
     let mut dead_nodes_another_cleaner_is_reclaiming = 0u64;
-    let listing = Node::<ipc::Service>::list(&config, |node_state| {
+    let listing = Node::<ipc_threadsafe::Service>::list(&config, |node_state| {
         if let NodeState::Dead(dead_node) = node_state {
             let dead_node_id = *dead_node.id();
             match dead_node.try_remove_stale_resources() {
@@ -187,7 +187,7 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
 pub fn create_iceoryx2_node_in_engine_owned_domain(
     domain_root: &std::path::Path,
     node_name: &str,
-) -> Result<Node<ipc::Service>> {
+) -> Result<Node<ipc_threadsafe::Service>> {
     create_iceoryx2_node_in_domain(
         domain_root,
         &engine_owned_iceoryx2_prefix_for_this_user(),
@@ -200,7 +200,7 @@ pub(crate) fn create_iceoryx2_node_in_domain(
     domain_root: &std::path::Path,
     prefix: &str,
     node_name: &str,
-) -> Result<Node<ipc::Service>> {
+) -> Result<Node<ipc_threadsafe::Service>> {
     let config = iceoryx2_config_for_domain(domain_root, prefix)?;
     let node_name = NodeName::new(node_name).map_err(|refusal| {
         Error::Configuration(format!(
@@ -211,7 +211,7 @@ pub(crate) fn create_iceoryx2_node_in_domain(
         .config(&config)
         .name(&node_name)
         .signal_handling_mode(SignalHandlingMode::Disabled)
-        .create::<ipc::Service>()
+        .create::<ipc_threadsafe::Service>()
         .map_err(|failure| {
             Error::Runtime(format!(
                 "failed to create iceoryx2 node '{}' in the domain rooted at {}: {failure:?}",
@@ -233,11 +233,11 @@ pub(crate) struct ChannelSizing {
 
 /// The publisher of a channel data service: `[u8]` frames under the
 /// sequence-number user header.
-pub type ChannelDataServicePublisher = Publisher<ipc::Service, [u8], DataChannelBagUserHeader>;
+pub type ChannelDataServicePublisher = Publisher<ipc_threadsafe::Service, [u8], DataChannelBagUserHeader>;
 
 /// A subscriber to a channel data service: `[u8]` frames under the
 /// sequence-number user header.
-pub type ChannelDataServiceSubscriber = Subscriber<ipc::Service, [u8], DataChannelBagUserHeader>;
+pub type ChannelDataServiceSubscriber = Subscriber<ipc_threadsafe::Service, [u8], DataChannelBagUserHeader>;
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -245,7 +245,7 @@ pub type ChannelDataServiceSubscriber = Subscriber<ipc::Service, [u8], DataChann
 /// Services, Publishers, and Subscribers are created through this Node.
 #[derive(Clone)]
 pub struct Iceoryx2Node {
-    inner: Arc<Mutex<Node<ipc::Service>>>,
+    inner: Arc<Mutex<Node<ipc_threadsafe::Service>>>,
 }
 
 impl Iceoryx2Node {
@@ -256,7 +256,7 @@ impl Iceoryx2Node {
     }
 
     /// Share an already-created raw node.
-    pub(crate) fn wrapping(node: Node<ipc::Service>) -> Self {
+    pub(crate) fn wrapping(node: Node<ipc_threadsafe::Service>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(node)),
         }
@@ -488,9 +488,9 @@ fn iceoryx2_service_name_of(service_name: &str) -> Result<ServiceName> {
 /// [`DataChannelBagUserHeader`], the one type pair every opener
 /// presents.
 fn channel_data_service_builder(
-    node: &Node<ipc::Service>,
+    node: &Node<ipc_threadsafe::Service>,
     service_name: &ServiceName,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc::Service> {
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc_threadsafe::Service> {
     node.service_builder(service_name)
         .publish_subscribe::<[u8]>()
         .user_header::<DataChannelBagUserHeader>()
@@ -503,11 +503,11 @@ fn channel_data_service_builder(
 /// One spelling, because a test that re-states the chain to reproduce an open
 /// failure stops reproducing it the moment a setting moves on one side only.
 fn channel_data_service_builder_under_the_channel_policy(
-    node: &Node<ipc::Service>,
+    node: &Node<ipc_threadsafe::Service>,
     service_name: &ServiceName,
     max_subscribers: usize,
     channel_service_creation_depth: usize,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc::Service> {
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc_threadsafe::Service> {
     channel_data_service_builder(node, service_name)
         .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
         .max_subscribers(max_subscribers)
@@ -581,7 +581,7 @@ fn channel_data_service_built_by_something_other_than_this_engine(
 /// Handle to an iceoryx2 channel data service.
 pub struct Iceoryx2Service {
     inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
-        ipc::Service,
+        ipc_threadsafe::Service,
         [u8],
         DataChannelBagUserHeader,
     >,
@@ -690,12 +690,12 @@ pub enum ChannelReservedSlotSubscribeError {
 /// This wraps iceoryx2's `MessagingPattern::Event` — `Notifier::notify()` causes any
 /// `Listener` on the same service to become readable on its underlying fd.
 pub struct Iceoryx2NotifyService {
-    inner: iceoryx2::service::port_factory::event::PortFactory<ipc::Service>,
+    inner: iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service>,
 }
 
 impl Iceoryx2NotifyService {
     /// Create a notifier for this service.
-    pub fn create_notifier(&self) -> Result<Notifier<ipc::Service>> {
+    pub fn create_notifier(&self) -> Result<Notifier<ipc_threadsafe::Service>> {
         self.inner
             .notifier_builder()
             .create()
@@ -703,7 +703,7 @@ impl Iceoryx2NotifyService {
     }
 
     /// Create a listener for this service.
-    pub fn create_listener(&self) -> Result<Listener<ipc::Service>> {
+    pub fn create_listener(&self) -> Result<Listener<ipc_threadsafe::Service>> {
         crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&self.inner)
             .map_err(|e| Error::Runtime(format!("Failed to create listener: {:?}", e)))
     }
@@ -1517,7 +1517,7 @@ mod tests {
         use iceoryx2::node::NodeView;
 
         let mut names = Vec::new();
-        Node::<ipc::Service>::list(config, |node_state| {
+        Node::<ipc_threadsafe::Service>::list(config, |node_state| {
             if let NodeState::Alive(view) = node_state
                 && let Some(details) = view.details()
             {
@@ -1721,7 +1721,7 @@ mod tests {
 
         leave_a_dead_holder_of_the_shallow_stale_holder_channel(&domain_root);
         let shallow_service_the_holder_left =
-            <ipc::Service as iceoryx2::service::Service>::details(
+            <ipc_threadsafe::Service as iceoryx2::service::Service>::details(
                 &iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap(),
                 &long_lived_node.config(),
                 iceoryx2::service::messaging_pattern::MessagingPattern::PublishSubscribe,

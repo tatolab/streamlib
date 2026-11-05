@@ -1103,7 +1103,7 @@ mod tests {
         (shutdown_channel, shutdown_wake_fd)
     }
 
-    fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc::Service>) -> i32 {
+    fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc_threadsafe::Service>) -> i32 {
         // SAFETY: every caller uses the fd only while `listener` is alive.
         unsafe { listener.file_descriptor().native_handle() }
     }
@@ -1351,7 +1351,7 @@ mod tests {
     /// An input-only processor with a plain `in1` mailbox and, when given one,
     /// the listener its runner waits on.
     fn input_only_processor_with_plain_port(
-        listener: Option<iceoryx2::port::listener::Listener<ipc::Service>>,
+        listener: Option<iceoryx2::port::listener::Listener<ipc_threadsafe::Service>>,
     ) -> (
         Arc<Mutex<ProcessorInstance>>,
         Arc<crate::iceoryx2::InputMailboxesInner>,
@@ -1383,9 +1383,9 @@ mod tests {
     }
 
     fn open_one_listener_event_service(
-        node: &iceoryx2::node::Node<ipc::Service>,
+        node: &iceoryx2::node::Node<ipc_threadsafe::Service>,
         tag: &str,
-    ) -> iceoryx2::service::port_factory::event::PortFactory<ipc::Service> {
+    ) -> iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service> {
         node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
             .event()
             .max_notifiers(1)
@@ -1594,9 +1594,9 @@ mod tests {
 
     /// A waiter on a fresh listener, and the notifier that feeds it.
     struct ListenerWaiterFixture {
-        _node: iceoryx2::node::Node<ipc::Service>,
-        notifier: iceoryx2::port::notifier::Notifier<ipc::Service>,
-        listener: iceoryx2::port::listener::Listener<ipc::Service>,
+        _node: iceoryx2::node::Node<ipc_threadsafe::Service>,
+        notifier: iceoryx2::port::notifier::Notifier<ipc_threadsafe::Service>,
+        listener: iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
         shutdown_channel: ShutdownChannelComponent,
         waiter: ReactiveLoopFdWaiter,
     }

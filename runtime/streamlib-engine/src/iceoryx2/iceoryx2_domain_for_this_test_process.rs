@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use iceoryx2::node::Node;
-use iceoryx2::prelude::ipc;
+use iceoryx2::prelude::ipc_threadsafe;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::{
     StreamlibRuntimeDirectory, current_process_uid,
 };
@@ -64,7 +64,7 @@ pub fn iceoryx2_domain_for_this_test_process() -> &'static Iceoryx2DomainForThis
 }
 
 /// A raw iceoryx2 node in this test process's own domain.
-pub fn create_iceoryx2_node_for_this_test_process() -> Node<ipc::Service> {
+pub fn create_iceoryx2_node_for_this_test_process() -> Node<ipc_threadsafe::Service> {
     let domain = iceoryx2_domain_for_this_test_process();
     create_iceoryx2_node_in_domain(domain.root(), domain.prefix(), "streamlib-test")
         .expect("a test process opens iceoryx2 nodes in its own domain")
@@ -82,7 +82,7 @@ impl Iceoryx2Node {
 #[cfg(test)]
 pub(crate) fn a_notifier_nothing_listens_on(
     notify_service_name: &str,
-) -> iceoryx2::port::notifier::Notifier<ipc::Service> {
+) -> iceoryx2::port::notifier::Notifier<ipc_threadsafe::Service> {
     Iceoryx2Node::for_this_test_process()
         .open_or_create_notify_service(notify_service_name, 1)
         .expect("open the notify service nothing listens on")

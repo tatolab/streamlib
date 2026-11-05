@@ -159,21 +159,8 @@ struct PortBoundSubscriber {
 #[derive(Default)]
 struct InboundLinkSubscribersAndListener {
     subscribers: Vec<PortBoundSubscriber>,
-    listener: Option<Listener<ipc::Service>>,
+    listener: Option<Listener<ipc_threadsafe::Service>>,
 }
-
-// SAFETY: `Subscriber` and `Listener` are `!Send` only because `ipc::Service`
-// sets `ArcThreadSafetyPolicy` to `SingleThreaded`, which in iceoryx2 0.10 is a
-// bare `Rc` with no thread-affine state; `ipc_threadsafe::Service` differs in
-// that one type, putting the same state behind a mutex. The `Rc` is cloned only
-// into the `Sample`s `receive` returns, and everything a port shares with other
-// ports, its service or its node is an `Arc` or lock-free shared memory. So
-// moving the ports between threads is sound while every port access, and every
-// sample from creation to drop, stays inside
-// [`InputMailboxesInner::inbound_link_subscribers_and_listener`]'s guard.
-// `receive` also pops a single-consumer queue that forbids concurrent callers.
-// Re-check this against the source on any iceoryx2 upgrade.
-unsafe impl Send for InboundLinkSubscribersAndListener {}
 
 impl InboundLinkSubscribersAndListener {
     /// Remove the subscriber serving `link_id`, returning the local input port it
@@ -914,7 +901,7 @@ impl InputMailboxesInner {
     }
 
     /// Set the iceoryx2 Listener for fd-multiplexed wakeups.
-    pub fn set_listener(&self, listener: Listener<ipc::Service>) {
+    pub fn set_listener(&self, listener: Listener<ipc_threadsafe::Service>) {
         let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
         subscribers_and_listener.listener = Some(listener);
         self.listener_generation
