@@ -58,6 +58,35 @@ class NodeLinkDataAccess(Protocol):
         """
         ...
 
+    def listen_for_each_stream_clock_board_publish(self, service_name: str) -> None:
+        """Wake on each publish of the stream clock board the parent named.
+
+        How a node in a stepped stream learns a step opened. Raises
+        `RuntimeError` for a second board.
+        """
+        ...
+
+    def stream_clock_board_publish_listener_fd(self) -> int | None:
+        """The fd that turns readable once the stream clock is published, if
+        this node listens for it."""
+        ...
+
+    def take_every_stream_clock_board_publish_noted(self) -> None:
+        """Clear the stream clock listener's pending wake-ups."""
+        ...
+
+    def note_a_step_callback_started(self) -> None:
+        """Note on the loss-count board that a callback started; the stream's
+        step cannot close until it returns."""
+        ...
+
+    def note_a_step_callback_returned(
+        self, finished_step_index: int | None = None
+    ) -> None:
+        """Note on the loss-count board that a callback returned, finishing step
+        `finished_step_index` when one is named."""
+        ...
+
     def open_loss_count_board(
         self, service_name: str, output_port_names: list[str]
     ) -> None:

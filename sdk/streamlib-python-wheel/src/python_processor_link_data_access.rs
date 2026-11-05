@@ -31,7 +31,7 @@ use streamlib::sdk::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner, ReadMode,
-    ResolvedAudioWindowContract,
+    ResolvedAudioWindowContract, StreamClockBoardPublishListener,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
@@ -57,6 +57,9 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// The board this helper's loss counts are mirrored onto for its parent,
     /// once its setup opened the one the parent named.
     loss_count_board_writer: OnceLock<Arc<HelperProcessLossCountBoardWriter>>,
+    /// The wake on each publish of this helper's stream clock, once its setup
+    /// found the stream stepped.
+    stream_clock_board_publish_listener: OnceLock<StreamClockBoardPublishListener>,
     /// The ports the processor class declared. A declared port no link has
     /// reached reads as empty and swallows writes; an undeclared name is
     /// refused.
@@ -87,6 +90,7 @@ impl PythonProcessorLinkDataAccess {
             output_writer: OnceLock::new(),
             iceoryx2_node: OnceLock::new(),
             loss_count_board_writer: OnceLock::new(),
+            stream_clock_board_publish_listener: OnceLock::new(),
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
             input_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
@@ -547,6 +551,65 @@ impl PythonProcessorLinkDataAccess {
             .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
         crate::python_helper_stream_clock::adopt_the_stream_clock_board(board_reader)
             .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Wake on each publish of this helper's stream clock from here on: how a
+    /// node in a stepped stream learns a step opened.
+    fn listen_for_each_stream_clock_board_publish(
+        &self,
+        python: Python<'_>,
+        service_name: &str,
+    ) -> PyResult<()> {
+        let Some(node) = self.iceoryx2_node.get() else {
+            return Err(not_a_helper_process_data_plane_error());
+        };
+        let publish_listener = python
+            .detach(|| node.listen_for_each_stream_clock_board_publish(service_name))
+            .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
+        self.stream_clock_board_publish_listener
+            .set(publish_listener)
+            .map_err(|_| {
+                PyRuntimeError::new_err(format!(
+                    "this helper already listens for its stream clock's publishes, so it cannot \
+                     listen on {service_name:?} as well"
+                ))
+            })
+    }
+
+    /// The fd that turns readable once the stream clock is published; `None`
+    /// before this helper listens for it.
+    ///
+    /// Owned by the listener, which lives as long as this object: the caller
+    /// must not close it.
+    fn stream_clock_board_publish_listener_fd(&self) -> Option<i32> {
+        self.stream_clock_board_publish_listener
+            .get()
+            .map(StreamClockBoardPublishListener::file_descriptor)
+    }
+
+    /// Take every stream clock publish noted so far, so its fd waits for the
+    /// next.
+    fn take_every_stream_clock_board_publish_noted(&self) {
+        if let Some(publish_listener) = self.stream_clock_board_publish_listener.get() {
+            publish_listener.take_every_publish_noted();
+        }
+    }
+
+    /// Note on the loss-count board that a callback of this node started; the
+    /// stream's step cannot close until it returns.
+    fn note_a_step_callback_started(&self) {
+        if let Some(board_writer) = self.loss_count_board_writer.get() {
+            board_writer.note_a_callback_started();
+        }
+    }
+
+    /// Note on the loss-count board that a callback of this node returned,
+    /// finishing step `finished_step_index` when one is named.
+    #[pyo3(signature = (finished_step_index = None))]
+    fn note_a_step_callback_returned(&self, finished_step_index: Option<u64>) {
+        if let Some(board_writer) = self.loss_count_board_writer.get() {
+            board_writer.note_a_callback_returned(finished_step_index);
+        }
     }
 
     /// Open the loss-count board the parent created for this spawn, so every
@@ -1383,6 +1446,87 @@ mod tests {
                 ),
                 other => panic!("expected a ceiling refusal, got {other:?}"),
             }
+        });
+    }
+
+    /// A helper's callbacks reach its parent's board as the step ledger reads
+    /// them: in flight while one runs, and the step it finished once it returns.
+    #[test]
+    fn a_helpers_step_callbacks_reach_the_board_its_parent_reads() {
+        Python::initialize();
+        Python::attach(|python| {
+            let board_name = format!("wiring{}_steps/loss-counts", std::process::id());
+            let parent_board = Iceoryx2Node::for_this_test_process()
+                .create_helper_process_loss_count_board(&board_name, Vec::new())
+                .unwrap();
+            let helper = helper_plane();
+            helper
+                .open_loss_count_board(python, &board_name, Vec::new())
+                .expect("the helper opens the board its parent named");
+
+            helper.note_a_step_callback_started();
+            let in_a_callback = parent_board.step_progress_entry();
+            assert_eq!(
+                (
+                    in_a_callback.callbacks_in_flight,
+                    in_a_callback.steps_finished
+                ),
+                (1, 0)
+            );
+            helper.note_a_step_callback_returned(Some(2));
+            let returned = parent_board.step_progress_entry();
+            assert_eq!(
+                (returned.callbacks_in_flight, returned.steps_finished),
+                (0, 3)
+            );
+        });
+    }
+
+    /// A helper in a stepped stream wakes on its descriptor when the engine
+    /// opens a step, and goes quiet again once it took the wake.
+    #[test]
+    fn a_helper_listening_on_its_stream_clock_wakes_when_a_step_opens() {
+        use streamlib::sdk::context::{StreamClock, StreamClockSpec};
+
+        Python::initialize();
+        Python::attach(|python| {
+            let board_name = format!("wiring{}_steps/stream-clock", std::process::id());
+            let clock = StreamClock::starting_at(
+                StreamClockSpec::Stepped {
+                    step_ns: 1_000_000,
+                    pace: None,
+                    stop_after_steps: None,
+                },
+                10,
+            );
+            let board = Iceoryx2Node::for_this_test_process()
+                .create_stream_clock_board(&board_name, clock.published())
+                .unwrap();
+            let clock = clock.published_on(board);
+            let helper = helper_plane();
+            assert_eq!(helper.stream_clock_board_publish_listener_fd(), None);
+            helper
+                .listen_for_each_stream_clock_board_publish(python, &board_name)
+                .expect("the helper listens on the board its engine named");
+            let publish_listener_fd = helper
+                .stream_clock_board_publish_listener_fd()
+                .expect("a listening helper has the descriptor to wait on");
+            let is_readable_within = |timeout_ms: i32| {
+                let mut poll_descriptor = libc::pollfd {
+                    fd: publish_listener_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one live descriptor, counted as one.
+                unsafe { libc::poll(&mut poll_descriptor, 1, timeout_ms) == 1 }
+            };
+            helper.take_every_stream_clock_board_publish_noted();
+            assert!(!is_readable_within(0));
+
+            clock.open_step(1);
+            assert!(is_readable_within(1_000));
+            helper.take_every_stream_clock_board_publish_noted();
+            assert!(!is_readable_within(0));
         });
     }
 

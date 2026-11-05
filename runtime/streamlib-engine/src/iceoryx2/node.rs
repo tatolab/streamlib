@@ -22,12 +22,16 @@ use super::helper_process_loss_count_board::{
     HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
     output_port_keys,
 };
-use super::stream_clock_board::{StreamClockBoard, StreamClockBoardReader};
+use super::stream_clock_board::{
+    StreamClockBoard, StreamClockBoardPublishListener, StreamClockBoardReader,
+    stream_clock_board_publish_event_service_name,
+};
 use super::{DataChannelBagUserHeader, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
 use streamlib_ipc_types::{
-    HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry,
-    StreamClockBoardEntry, StreamClockBoardKey,
+    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
+    InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry, StreamClockBoardEntry,
+    StreamClockBoardKey,
 };
 use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
@@ -432,7 +436,8 @@ impl Iceoryx2Node {
         }
     }
     /// Create the loss-count board a helper spawn writes on: every inbound-link
-    /// slot and an entry per declared output port, all zero.
+    /// slot, an entry per declared output port and the step-progress entry, all
+    /// zero.
     pub fn create_helper_process_loss_count_board(
         &self,
         service_name: &str,
@@ -452,6 +457,9 @@ impl Iceoryx2Node {
             for key in output_port_keys(output_port_names.len()) {
                 creator = creator.add_with_default::<OutputPortBagCountBoardEntry>(key);
             }
+            creator = creator.add_with_default::<HelperProcessStepProgressBoardEntry>(
+                HelperProcessLossCountBoardKey::STEP_PROGRESS,
+            );
             creator.create().map_err(|refusal| {
                 Error::Runtime(format!(
                     "could not create the loss-count board '{service_name}': {refusal:?}"
@@ -510,7 +518,67 @@ impl Iceoryx2Node {
                     ))
                 })?
         };
-        StreamClockBoard::writing(service_name.to_string(), service)
+        let publish_event_service =
+            self.with_stream_clock_board_publish_event_service(service_name, |builder| {
+                builder.create().map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "could not create the event each publish on the stream clock board \
+                         '{service_name}' notifies: {refusal:?}"
+                    ))
+                })
+            })??;
+        StreamClockBoard::writing(service_name.to_string(), service, publish_event_service)
+    }
+
+    /// Listen for each publish on the clock board a helper's stream published.
+    pub fn listen_for_each_stream_clock_board_publish(
+        &self,
+        board_service_name: &str,
+    ) -> Result<StreamClockBoardPublishListener> {
+        let publish_event_service =
+            self.with_stream_clock_board_publish_event_service(board_service_name, |builder| {
+                builder.open().map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "could not open the event each publish on the stream clock board \
+                         '{board_service_name}' notifies: {refusal:?}"
+                    ))
+                })
+            })??;
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                &publish_event_service,
+            )
+            .map_err(|refusal| {
+                Error::Runtime(format!(
+                    "the event each publish on the stream clock board '{board_service_name}' \
+                 notifies refused this helper a listener: {refusal:?}"
+                ))
+            })?;
+        Ok(StreamClockBoardPublishListener::listening(
+            listener,
+            publish_event_service,
+        ))
+    }
+
+    /// Hand `create_or_open` the builder of the event each publish on the clock
+    /// board named `board_service_name` notifies, with the limits every opener
+    /// presents.
+    fn with_stream_clock_board_publish_event_service<T>(
+        &self,
+        board_service_name: &str,
+        create_or_open: impl FnOnce(iceoryx2::service::builder::event::Builder<ipc::Service>) -> T,
+    ) -> Result<T> {
+        let node = self.inner.lock();
+        let iceoryx2_service_name = iceoryx2_service_name_of(
+            &stream_clock_board_publish_event_service_name(board_service_name),
+        )?;
+        Ok(create_or_open(
+            node.service_builder(&iceoryx2_service_name)
+                .event()
+                .max_notifiers(1)
+                .max_listeners(STREAM_CLOCK_BOARD_MAX_READERS)
+                .max_nodes(STREAM_CLOCK_BOARD_MAX_NODES),
+        ))
     }
 
     /// Open the clock board a helper's stream published, as one of its readers.

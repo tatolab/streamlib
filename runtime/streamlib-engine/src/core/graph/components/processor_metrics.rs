@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
+use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
 
 use super::JsonSerializableComponent;
 use crate::iceoryx2::{
@@ -87,6 +88,19 @@ impl ProcessorLossCounts {
                     .given_up_group_count_snapshot_by_output_port(),
             },
             Self::CountedInItsHelperProcess(helper_placed) => helper_placed.loss_count_snapshot(),
+        }
+    }
+
+    /// What the processor's helper process last wrote of its step progress;
+    /// `None` for a processor counted in this process.
+    pub fn step_progress_its_helper_process_wrote(
+        &self,
+    ) -> Option<HelperProcessStepProgressBoardEntry> {
+        match self {
+            Self::CountedByPortsInThisProcess(_) => None,
+            Self::CountedInItsHelperProcess(helper_placed) => {
+                helper_placed.step_progress_its_helper_wrote()
+            }
         }
     }
 

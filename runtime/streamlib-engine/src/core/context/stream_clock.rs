@@ -381,6 +381,7 @@ impl StreamClock {
         {
             let mut published = self.published.write();
             published.step_index = step_index;
+            published.a_step_is_open = 1;
             if let Some(board) = &self.board_read_by_helpers {
                 board.publish(*published);
             }
@@ -451,7 +452,7 @@ pub fn stream_clock_reading_of_a_published_clock(
             mode: "stepped",
             scale: 1.0,
             step_ns: Some(published.step_ns),
-            step_index: Some(published.step_index),
+            step_index: (published.a_step_is_open != 0).then_some(published.step_index),
         },
         _ => StreamClockReading {
             mode: "real",
@@ -536,6 +537,27 @@ mod tests {
         assert_eq!(
             stream_time_ns_on_a_published_clock(&published, i64::MAX),
             7_300
+        );
+    }
+
+    #[test]
+    fn a_stepped_clock_reads_no_open_step_on_its_board_until_the_first_opens() {
+        let stream_clock = StreamClock::starting_at(
+            StreamClockSpec::Stepped {
+                step_ns: 100,
+                pace: None,
+                stop_after_steps: None,
+            },
+            7_000,
+        );
+        assert_eq!(
+            stream_clock_reading_of_a_published_clock(&stream_clock.published()).step_index,
+            None
+        );
+        stream_clock.open_step(0);
+        assert_eq!(
+            stream_clock_reading_of_a_published_clock(&stream_clock.published()).step_index,
+            Some(0)
         );
     }
 

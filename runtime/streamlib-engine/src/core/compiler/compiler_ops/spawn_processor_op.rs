@@ -294,6 +294,7 @@ fn spawn_dedicated_thread(
                 pause_gate_inner,
                 step_progress,
                 exec_config,
+                execution_the_node_runs_in,
                 processor_display_name,
             ) = {
                 let mut graph = graph_arc_clone.write();
@@ -349,7 +350,17 @@ fn spawn_dedicated_thread(
                     .map(|step_progress| Arc::clone(&step_progress.0))
                     .unwrap_or_default();
 
-                let exec_config = processor_arc_clone.lock().execution_config();
+                let (exec_config, execution_the_node_runs_in) = {
+                    let processor = processor_arc_clone.lock();
+                    let exec_config = processor.execution_config();
+                    let execution_the_node_runs_in = processor.out_of_process_link_wiring().map_or(
+                        exec_config.execution,
+                        |out_of_process_link_wiring| {
+                            out_of_process_link_wiring.far_side_process_execution()
+                        },
+                    );
+                    (exec_config, execution_the_node_runs_in)
+                };
 
                 (
                     state,
@@ -358,12 +369,12 @@ fn spawn_dedicated_thread(
                     pause_gate_inner,
                     step_progress,
                     exec_config,
+                    execution_the_node_runs_in,
                     processor_display_name,
                 )
             }; // Lock released here
 
-            if runtime == ProcessorRuntime::Rust
-                && exec_config.execution == ProcessExecution::Manual
+            if execution_the_node_runs_in == ProcessExecution::Manual
                 && runtime_ctx_clone.stream_clock.is_stepped()
             {
                 let refusal = format!(
@@ -375,7 +386,10 @@ fn spawn_dedicated_thread(
                 return;
             }
 
-            if matches!(exec_config.execution, ProcessExecution::Continuous { .. }) {
+            if matches!(
+                execution_the_node_runs_in,
+                ProcessExecution::Continuous { .. }
+            ) {
                 step_progress.note_it_finishes_every_step();
             }
 
