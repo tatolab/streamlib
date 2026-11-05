@@ -356,3 +356,39 @@ fn a_slot_the_pool_grew_crosses_the_first_time_a_frame_names_it() {
     assert!(!grown_row.row().is_claimed());
     assert!(!first_row.row().is_claimed());
 }
+
+/// A claim table request that gets no answer reads the frame through a
+/// checkout and leaves the pool's table to be asked for again on the next
+/// frame; only an answered refusal settles the pool on checkouts.
+#[test]
+fn a_claim_table_request_that_failed_is_asked_again_on_the_next_frame() {
+    let share = SurfaceShareUnderTest::start("claim-table-request-failed");
+    let mut claim_tables_of_the_pool =
+        GpuPoolClaimTablesOfOnePool::named("claim-table-request-failed");
+    let row_lease = claim_tables_of_the_pool
+        .lease_a_row_for_a_slot(
+            share.check_out_leases().gpu_pool_claim_tables(),
+            POOL_SLOT_KEY,
+        )
+        .expect("the pool leases its slot a row");
+    let exchange_client =
+        share.exchange_client_labelled_importing_on("claim-table-request-failed", Ok([0; 16]));
+    std::fs::remove_file(&share.socket_path).expect("the socket is removed");
+
+    for generation in 1..=2 {
+        row_lease.row().publish_generation(generation);
+        let read_claim = exchange_client
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(
+                &row_lease, generation,
+            ))
+            .expect("a failed hand-over request leaves the read to a checkout");
+        assert!(read_claim.is_none(), "no table, no claim");
+        assert!(
+            !exchange_client
+                .gpu_pool_claim_tables
+                .the_hand_over_was_refused(&row_lease.table().pool_uuid()),
+            "a request that got no answer never settles the pool on checkouts"
+        );
+    }
+    assert!(!row_lease.row().is_claimed());
+}
