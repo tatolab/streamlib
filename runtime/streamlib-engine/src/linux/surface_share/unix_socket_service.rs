@@ -28,6 +28,7 @@ use streamlib_surface_client::{
     split_pool_slot_and_frame_generation,
 };
 
+use super::gpu_pool_claimant_process::GpuPoolClaimantProcess;
 use crate::core::context::surface_share_wire_verbs::{
     SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
@@ -155,12 +156,15 @@ fn run_listener(
                     // connection is the only identity its leases can be
                     // charged to.
                     let lease_holder = state.check_out_leases().mint_holder_id();
+                    let mut claimant_process_handed_a_column: Option<GpuPoolClaimantProcess> = None;
                     let conn_result = handle_client_connection(
                         stream,
                         state.clone(),
                         &mut connection_runtime_id,
                         lease_holder,
+                        &mut claimant_process_handed_a_column,
                     );
+                    let the_service_dropped_the_connection = conn_result.is_err();
                     if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
                     }
@@ -178,6 +182,15 @@ fn run_listener(
                             .as_deref()
                             .map(|runtime_id| (&state as _, runtime_id)),
                     );
+                    // Every connection the service drops is its claimant's
+                    // fail-stop, and a column clears only once its process has
+                    // exited, never on a connection closing alone.
+                    if let Some(claimant_process) = claimant_process_handed_a_column {
+                        claimant_process.clear_its_columns_once_it_has_exited(
+                            state.check_out_leases().gpu_pool_claim_tables(),
+                            the_service_dropped_the_connection,
+                        );
+                    }
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -229,6 +242,7 @@ fn handle_client_connection(
     state: SurfaceShareState,
     observed_runtime_id: &mut Option<String>,
     lease_holder: SurfaceCheckOutLeaseHolderId,
+    claimant_process_handed_a_column: &mut Option<GpuPoolClaimantProcess>,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
     let mut pool_slot_keys_handed_memory = PoolSlotKeysHandedMemoryOnThisConnection::default();
@@ -284,6 +298,10 @@ fn handle_client_connection(
             ),
             "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
             SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP => {
+                if claimant_process_handed_a_column.is_none() {
+                    *claimant_process_handed_a_column =
+                        claimant.and_then(GpuPoolClaimantProcess::of_a_live_peer);
+                }
                 handle_claim_table_of_gpu_pool(&state, &request, claimant)
             }
             SURFACE_SHARE_IMPORT_POOL_SLOT_OP => {
@@ -2846,6 +2864,89 @@ mod tests {
         assert!(leased_rows[1].row().is_claimed());
 
         drop(stream);
+        service.stop();
+    }
+
+    /// A claimant process whose connection the service drops is stopped,
+    /// and only once it has exited is its column cleared, freeing the slot
+    /// it left claimed for a rehand.
+    #[test]
+    fn a_claimant_whose_connection_the_service_drops_is_stopped_and_its_column_cleared() {
+        use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+        use std::io::{BufRead as _, Write as _};
+        use streamlib_ipc_types::{
+            GPU_POOL_CLAIM_TABLE_ROW_BYTES, GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,
+            GpuPoolSlotRehandTest,
+        };
+
+        const CLAIMANT_THAT_SENDS_AN_OVERSIZED_MESSAGE: &str = r#"
+import json, mmap, socket, struct, sys, time
+path, pool, row, row_bytes, counts_offset = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
+connection = socket.socket(socket.AF_UNIX)
+connection.connect(path)
+request = json.dumps({"op": "claim_table_of_gpu_pool", "pool": pool}).encode()
+connection.sendall(struct.pack(">I", len(request)) + request)
+(reply_len,) = struct.unpack(">I", connection.recv(4))
+reply, fds, _, _ = socket.recv_fds(connection, reply_len, 1)
+column = json.loads(reply)["claimant_column"]
+table = mmap.mmap(fds[0], 0)
+count_at = row * row_bytes + counts_offset + 4 * column
+table[count_at:count_at + 4] = struct.pack("<I", 1)
+print("claimed", flush=True)
+sys.stdin.readline()
+connection.sendall(struct.pack(">I", 0xFFFFFFFF))
+time.sleep(30)
+"#;
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let mut claim_tables = GpuPoolClaimTablesOfOnePool::named("fail-stop");
+        let leased_row = claim_tables
+            .lease_a_row_for_a_slot(check_out_leases.gpu_pool_claim_tables(), "fail-stop-slot")
+            .unwrap();
+        leased_row.row().publish_generation(1);
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+
+        let Ok(mut claimant) = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(CLAIMANT_THAT_SENDS_AN_OVERSIZED_MESSAGE)
+            .arg(&socket_path)
+            .arg(gpu_pool_uuid_wire_name(&leased_row.table().pool_uuid()))
+            .arg(leased_row.row_index().to_string())
+            .arg(GPU_POOL_CLAIM_TABLE_ROW_BYTES.to_string())
+            .arg(GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET.to_string())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            tracing::warn!("skipping: no python3 to stand in for a claimant process");
+            service.stop();
+            return;
+        };
+        let mut claimant_says = String::new();
+        std::io::BufReader::new(claimant.stdout.take().unwrap())
+            .read_line(&mut claimant_says)
+            .unwrap();
+        assert_eq!(claimant_says.trim(), "claimed");
+        assert_eq!(
+            leased_row.row().retire_for_a_rehand(1),
+            GpuPoolSlotRehandTest::HeldByAClaim
+        );
+
+        writeln!(claimant.stdin.take().unwrap()).unwrap();
+        let exit = claimant.wait().unwrap();
+        assert!(
+            std::os::unix::process::ExitStatusExt::signal(&exit) == Some(libc::SIGKILL),
+            "the service stopped the claimant: {exit:?}"
+        );
+        let column_cleared_within = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while leased_row.row().is_claimed() && std::time::Instant::now() < column_cleared_within {
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            leased_row.row().retire_for_a_rehand(1),
+            GpuPoolSlotRehandTest::RetiredForTheRehand
+        );
+
         service.stop();
     }
 
