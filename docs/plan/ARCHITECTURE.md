@@ -980,7 +980,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, stream-clocks; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, stream-clocks, zero-copy-data-plane; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1331,7 +1331,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   per-pool claim table in shared memory replaces the per-frame socket check-out, its generation
   re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
   Linux import-once ships first and on its own (the entry below). Every descriptor, being a
-  cross-language ABI, carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
+  cross-language ABI, carries a layout regression test. Owner, 2026-11-03. [strict-port-families;
+  zero-copy-data-plane]
 - **DECIDED** — On Linux a helper imports each pool slot once. It keeps one import per pool
   slot key (the memory, and for a texture the rebuilt image and its joined timeline pair),
   and a `check_out` of a published frame id whose slot it holds says so
@@ -1352,7 +1353,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (review, not decided): each link gets its own borrow quota and the pool is sized for the
   producer's in-flight frames plus every link's quota, so a link past its quota drops only its
   own frames and no reader ever copies; memory grows with fan-out. Settled in the change that
-  builds the data plane. [strict-port-families]
+  builds the data plane. [zero-copy-data-plane]
 - **DECIDED** — The families migrate the whole tree in the same work: every built-in port, every
   cast type, the stream package, the scaffold and the first-party modules in `packages/`.
   Records carries a node not yet converted. Owner, 2026-11-03. [strict-port-families]
