@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.27](https://github.com/tatolab/streamlib/compare/v0.68.26...v0.68.27) (2026-11-05)
+
+
+### Features
+
+* **wheel:** a Linux helper imports each GPU pool slot once ([#3151](https://github.com/tatolab/streamlib/issues/3151)) ([efffc93](https://github.com/tatolab/streamlib/commit/efffc9307d02ff9bb50575bc2bc53f078f907d0d))
+
 ## [0.68.26](https://github.com/tatolab/streamlib/compare/v0.68.25...v0.68.26) (2026-11-04)
 
 
