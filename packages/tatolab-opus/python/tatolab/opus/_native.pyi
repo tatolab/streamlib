@@ -7,6 +7,7 @@ Hand-written and gated against the compiled module by stubtest. The engine
 never calls anything here.
 """
 
+from collections.abc import Buffer
 from typing import Any, Literal, final
 
 # pyo3 builds this from what the module registers, so the stub carries it too.
@@ -28,7 +29,7 @@ class AudioWindowToEncodedPacketEncoder:
 
     def encode_one_window(
         self,
-        interleaved_sample_bytes: bytes,
+        interleaved_sample_bytes: Buffer,
         sample_rate: int,
         channels: int,
         sample_count: int,
@@ -67,7 +68,7 @@ class EncodedPacketToAudioBlockDecoder:
     def __new__(cls) -> EncodedPacketToAudioBlockDecoder: ...
     def decode_one_arriving_message(
         self,
-        payload_bytes: bytes,
+        payload_bytes: Buffer,
         timestamp_ns: int,
         starts_group: bool,
         lost_since_last_read: int,
