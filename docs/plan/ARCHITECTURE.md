@@ -541,7 +541,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   extension wheel's native half as a named capsule from a node's context. It carries opening,
   writing, reading and waiting on a port Python handed to native code, from any thread and
   without the GIL; the port's catalog entry; log records into the helper's log ring; the
-  monotonic clock; the node's stop flag; and host capabilities, among them the audio device
+  monotonic clock and the stream time of one of its instants; the node's stop flag; and host capabilities, among them the audio device
   interface and the virtual camera output stream. Only data-plane verbs and plain, generation-checked handles cross it, never an
   RHI object, and the engine never calls module code through it. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
@@ -2438,9 +2438,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library; helper-process-placement-only — SHIPPED #1714]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, messages, audio ticks, `ctx.time` — is in the machine's monotonic
-  epoch (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple): a device stamp is the
-  machine clock itself, and `ctx.time` and the implicit write stamp are the stream clock
-  (§Processor model), which equals it in a real-time stream. It is the same epoch the V4L2
+  epoch (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple): a device's stamp is read
+  on the machine clock and mapped onto the stream clock (§Processor model) as it is written,
+  and `ctx.time` and the implicit write stamp are the stream clock, which equals the machine
+  clock in a real-time stream. It is the same epoch the V4L2
   and ALSA driver stamps carry on Linux and CoreAudio's `mHostTime` and AVFoundation's
   host-time-converted presentation stamps carry on Apple, comparable across every node on a host — and on that host
   alone, since the epoch is that machine's own boot: two stamps from two machines are
