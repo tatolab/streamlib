@@ -9,7 +9,7 @@ use pyo3::types::{PyCapsule, PyDict};
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
-use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_helper_stream_clock::{PythonStreamClockReading, helper_stream_clock_now_ns};
 use crate::python_module_host_table::module_host_table_capsule_lending;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -231,10 +231,16 @@ impl PythonRuntimeContextFullAccess {
         configuration_as_python_dict(python, &self.configuration)
     }
 
-    /// Current monotonic time in nanoseconds, on the engine's `MediaClock`.
+    /// Stream time now in nanoseconds, on the clock the node's stream runs on.
     #[getter]
     fn time(&self) -> u64 {
-        monotonic_clock_now_ns()
+        helper_stream_clock_now_ns().max(0) as u64
+    }
+
+    /// Which clock the node's stream runs on and where it stands.
+    #[getter]
+    fn stream_clock(&self) -> PythonStreamClockReading {
+        PythonStreamClockReading::now()
     }
 
     #[getter]
@@ -355,10 +361,16 @@ impl PythonRuntimeContextLimitedAccess {
         configuration_as_python_dict(python, &self.configuration)
     }
 
-    /// Current monotonic time in nanoseconds, on the engine's `MediaClock`.
+    /// Stream time now in nanoseconds, on the clock the node's stream runs on.
     #[getter]
     fn time(&self) -> u64 {
-        monotonic_clock_now_ns()
+        helper_stream_clock_now_ns().max(0) as u64
+    }
+
+    /// Which clock the node's stream runs on and where it stands.
+    #[getter]
+    fn stream_clock(&self) -> PythonStreamClockReading {
+        PythonStreamClockReading::now()
     }
 
     #[getter]

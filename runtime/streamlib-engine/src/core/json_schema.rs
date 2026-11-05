@@ -10,6 +10,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::core::context::StreamClockSpec;
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
 /// The processor-identity wire type. Defined in the engine-free
@@ -24,7 +25,7 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 // Graph Response Schema (/api/graph)
 // =============================================================================
 
-/// Response from the `/api/graph` endpoint: the graph's spec — `stream`,
+/// Response from the `/api/graph` endpoint: the graph's spec — `stream`, `clock`,
 /// `nodes[].name` / `type` / `config`, `links[].source` / `target` and
 /// `exposed` — with the live keys beside it, so it loads back as a
 /// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
@@ -33,6 +34,9 @@ pub struct GraphResponse {
     /// The stream id this graph was loaded under, its stream's address. Absent until a load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
+    /// The clock the stream runs on. Absent when it runs on real time.
+    #[serde(default, skip_serializing_if = "StreamClockSpec::is_real")]
+    pub clock: StreamClockSpec,
     /// All nodes in the graph.
     pub nodes: Vec<ProcessorNodeOutput>,
     /// All links between nodes' ports.
@@ -1208,7 +1212,10 @@ mod graph_response_top_level_key_rendering_tests {
             .keys()
             .collect();
         declared.sort();
-        assert_eq!(declared, ["exposed", "links", "machine", "nodes", "stream"]);
+        assert_eq!(
+            declared,
+            ["clock", "exposed", "links", "machine", "nodes", "stream"]
+        );
     }
 
     /// An address begins with the machine, so `graph` carries the machine's

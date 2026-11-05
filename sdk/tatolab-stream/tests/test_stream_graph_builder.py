@@ -1263,4 +1263,5 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_exposed_name_cast"),
                 (1, "_built_in_node"),
                 (1, "_node_declaration"),
+                (1, "_stream_clock_spec"),
             }, module_name

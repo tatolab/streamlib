@@ -15,7 +15,7 @@ tatolab graph --stream <stream id>
 # or every loaded stream at once:
 tatolab graph
 ```
-With `--stream`, the result is that stream's graph in the shape a load takes: `stream`, `nodes`, `links`, `exposed`, and `machine` (this machine's name). Without it, `{machine, streams: [...]}` holds every loaded stream's graph.
+With `--stream`, the result is that stream's graph in the shape a load takes: `stream`, `clock` (only when not real time), `nodes`, `links`, `exposed`, and `machine` (this machine's name). Without it, `{machine, streams: [...]}` holds every loaded stream's graph.
 
 ### 2. Read what you need out of it
 - **Node names** — each node's `name`, which instances the runtime actually stood up, and under which `type`. A name is cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`; a defaulted `CameraSource` is `camerasource`, a second one `camerasource-2`).

@@ -283,7 +283,7 @@ class HalftoneLensEffect:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         if frame is None:
             return
-        # `ctx.time` is the monotonic clock every node shares, in ns.
+        # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
         halftone_frame_record = self.halftone_lens_pixel_effect.apply_to_frame(
@@ -690,7 +690,7 @@ Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `O
 libopus linked statically into the wheel.
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
-model-input tensor kernel, and the monotonic clock every node shares.
+model-input tensor kernel, and the stream clock every node reads as `ctx.time`.
 
 **Platforms.** Two floors, the same API on both:
 

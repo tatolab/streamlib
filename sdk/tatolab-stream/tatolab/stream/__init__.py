@@ -72,7 +72,13 @@ from .claimed_surface_pixel_access import (
 from .claimed_surface_pixel_access import (
     PixelAccessToOneClaimedSurface as PixelAccessToOneClaimedSurface,
 )
+from .clock import DEFAULT_SCALED_STREAM_CLOCK_STEP_NS as DEFAULT_SCALED_STREAM_CLOCK_STEP_NS
 from .clock import MonotonicTimer as MonotonicTimer
+from .clock import RealTimeStreamClock as RealTimeStreamClock
+from .clock import ScaledStreamClock as ScaledStreamClock
+from .clock import SteppedStreamClock as SteppedStreamClock
+from .clock import StreamClock as StreamClock
+from .clock import StreamClockReading as StreamClockReading
 from .clock import monotonic_now_ns as monotonic_now_ns
 from .clock import start_monotonic_timer as start_monotonic_timer
 from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
@@ -101,6 +107,7 @@ __all__ = [
     "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
+    "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -137,11 +144,16 @@ __all__ = [
     "OpaqueFdAllocationExport",
     "PixelAccessToOneClaimedSurface",
     "RayTracingKernel",
+    "RealTimeStreamClock",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
+    "ScaledStreamClock",
+    "SteppedStreamClock",
     "StreamBuilder",
+    "StreamClock",
+    "StreamClockReading",
     "VideoFrame",
     "catalog",
     "clock",

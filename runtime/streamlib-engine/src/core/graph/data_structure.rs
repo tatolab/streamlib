@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::core::context::StreamClockSpec;
 use crate::core::processors::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
@@ -38,6 +39,9 @@ pub struct Graph {
     /// The id of the stream this graph was loaded as, until then `None`.
     loaded_stream_id: Option<String>,
 
+    /// The clock the stream this graph was loaded as runs on.
+    stream_clock_spec: StreamClockSpec,
+
     /// The node types this graph's stream resolves.
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
 
@@ -67,6 +71,7 @@ impl Graph {
         Self {
             digraph: DiGraph::new(),
             loaded_stream_id: None,
+            stream_clock_spec: StreamClockSpec::Real,
             node_types_this_stream_resolves,
             compiled_at: None,
             state: GraphState::Idle,
@@ -122,6 +127,16 @@ impl Graph {
         self.loaded_stream_id = Some(stream_id);
     }
 
+    /// The clock the stream this graph was loaded as runs on.
+    pub fn stream_clock_spec(&self) -> StreamClockSpec {
+        self.stream_clock_spec
+    }
+
+    /// Record the clock the stream this graph was loaded as runs on.
+    pub fn set_stream_clock_spec(&mut self, stream_clock_spec: StreamClockSpec) {
+        self.stream_clock_spec = stream_clock_spec;
+    }
+
     /// Get when the graph was compiled.
     pub fn compiled_at(&self) -> Option<Instant> {
         self.compiled_at
@@ -172,6 +187,7 @@ impl Graph {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
             stream: self.loaded_stream_id.clone(),
+            clock: self.stream_clock_spec,
             nodes: self
                 .digraph
                 .node_indices()

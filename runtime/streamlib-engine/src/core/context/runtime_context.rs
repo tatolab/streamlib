@@ -10,7 +10,7 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 
 use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
-    OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, TimeContext,
+    OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, StreamClock,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::logging::ProjectLogRouteEntry;
@@ -52,8 +52,8 @@ pub struct RuntimeContext {
     /// Runtime-internal code (shutdown, diagnostics) still uses this field
     /// directly for operations not mirrored on the capability types.
     pub(crate) gpu: GpuContext,
-    /// Shared timing context - monotonic clock starting at runtime creation.
-    pub time: Arc<TimeContext>,
+    /// The clock this context's stream runs on; `now_ns` is stream time.
+    pub stream_clock: Arc<StreamClock>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
@@ -101,7 +101,7 @@ pub struct RuntimeContext {
 impl RuntimeContext {
     pub(crate) fn new(
         gpu: GpuContext,
-        time: Arc<TimeContext>,
+        stream_clock: Arc<StreamClock>,
         runtime_id: Arc<RuntimeUniqueId>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
@@ -118,7 +118,7 @@ impl RuntimeContext {
     ) -> Self {
         Self {
             gpu,
-            time,
+            stream_clock,
             runtime_id,
             processor_id: None,
             one_off_acquisitions_of_the_node: None,
@@ -300,7 +300,7 @@ impl RuntimeContext {
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
             gpu: self.gpu.clone(),
-            time: Arc::clone(&self.time),
+            stream_clock: Arc::clone(&self.stream_clock),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
             one_off_acquisitions_of_the_node: Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
@@ -326,7 +326,7 @@ impl RuntimeContext {
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
-            time: Arc::clone(&self.time),
+            stream_clock: Arc::clone(&self.stream_clock),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
             one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),

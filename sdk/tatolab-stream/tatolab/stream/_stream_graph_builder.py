@@ -21,6 +21,12 @@ from types import FunctionType
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, TypeVar, overload
 
 from ._built_in_node import BuiltInNode, ConfigTypeOfTheBuiltInNode
+from ._stream_clock_spec import (
+    RealTimeStreamClock,
+    ScaledStreamClock,
+    SteppedStreamClock,
+    StreamClock,
+)
 from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     cast_exposed_name_to_url_safe,
@@ -264,6 +270,7 @@ class StreamBuilder:
         self._recorded_nodes_by_name: dict[str, _RecordedNode] = {}
         self._recorded_links: list[dict[str, dict[str, str]]] = []
         self._exposed_output_ports: dict[tuple[str, str], Exposure] = {}
+        self._stream_clock: StreamClock | None = None
 
     @property
     def name(self) -> str:
@@ -361,6 +368,26 @@ class StreamBuilder:
             )
         self._exposed_output_ports[exposed_output_port] = level
 
+    def run_on_clock(self, stream_clock: StreamClock) -> None:
+        """Run this stream on `stream_clock` instead of real time; called at most once.
+
+        The engine refuses a stepped clock, and a scaled clock above 1×, at load.
+        """
+        if not isinstance(
+            stream_clock, (RealTimeStreamClock, ScaledStreamClock, SteppedStreamClock)
+        ):
+            raise TypeError(
+                f"run_on_clock takes a `RealTimeStreamClock()`, a `ScaledStreamClock(scale=…)` "
+                f"or a `SteppedStreamClock(step_ns=…)`, imported from `tatolab.stream`. "
+                f"Got {stream_clock!r}."
+            )
+        if self._stream_clock is not None:
+            raise ValueError(
+                f"stream `{self._name}` already runs on {self._stream_clock!r}; a stream "
+                f"names its clock once"
+            )
+        self._stream_clock = stream_clock
+
     def _typed_name_unless_taken(self, typed_name: str) -> str:
         cast = _cast_name(typed_name, "node name")
         node_already_holding_the_cast_name = self._recorded_nodes_by_name.get(cast)
@@ -402,8 +429,14 @@ class StreamBuilder:
         return {"node": end.node_name, "port": end.port_name}
 
     def _compiled_graph(self) -> dict[str, Any]:
+        clock = (
+            {}
+            if self._stream_clock is None
+            else {"clock": self._stream_clock.to_graph_document()}
+        )
         return {
             "stream": self._name,
+            **clock,
             "nodes": [
                 {
                     "name": recorded_node.name,

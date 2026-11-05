@@ -764,9 +764,99 @@ pub struct OutputPortBagCountBoardEntry {
     pub written_bags: u64,
 }
 
+/// The key of the one entry on a stream's clock blackboard.
+///
+/// Pinned under its own iceoryx2 type name: the engine creates the board and
+/// every helper of the stream opens it, and both must present the same key type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ZeroCopySend)]
+#[type_name("StreamClockBoardKey")]
+#[repr(C)]
+pub struct StreamClockBoardKey {
+    entry_index: u32,
+}
+
+impl StreamClockBoardKey {
+    /// The key of the board's one entry, the stream clock.
+    pub const STREAM_CLOCK: Self = Self { entry_index: 0 };
+}
+
+/// [`StreamClockBoardEntry::mode`] for a stream on the machine's monotonic clock.
+pub const STREAM_CLOCK_BOARD_MODE_REAL: u32 = 0;
+
+/// [`StreamClockBoardEntry::mode`] for a stream whose time runs at a scale of
+/// the machine's monotonic clock.
+pub const STREAM_CLOCK_BOARD_MODE_SCALED: u32 = 1;
+
+/// [`StreamClockBoardEntry::mode`] for a stream whose time advances in steps.
+pub const STREAM_CLOCK_BOARD_MODE_STEPPED: u32 = 2;
+
+/// A stream's clock as its engine last wrote it, copied whole by every reader.
+///
+/// Stream time is `base_ns + scale × (machine monotonic now − anchor_ns)` when
+/// scaled, and `base_ns + step_index × step_ns` when stepped; both are in the
+/// machine's monotonic epoch. The two `f64` fields travel as their IEEE-754 bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("StreamClockBoardEntry")]
+#[repr(C)]
+pub struct StreamClockBoardEntry {
+    /// One of the `STREAM_CLOCK_BOARD_MODE_*` values.
+    pub mode: u32,
+    /// Always zero; keeps every later field 8-byte aligned.
+    pub reserved: u32,
+    /// The step open now; zero unless stepped.
+    pub step_index: u64,
+    /// Stream nanoseconds per step; zero unless the clock steps.
+    pub step_ns: u64,
+    /// Stream time at the anchor, in nanoseconds.
+    pub base_ns: i64,
+    /// The machine monotonic reading `base_ns` was taken at, in nanoseconds.
+    pub anchor_ns: i64,
+    /// Stream seconds per machine second, as `f64::to_bits`.
+    pub scale_f64_bits: u64,
+    /// Steps paced to this multiple of real time, as `f64::to_bits`; zero when unpaced.
+    pub pace_f64_bits: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stream_clock_board_key_is_one_u32_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<StreamClockBoardKey>(), 4);
+        assert_eq!(std::mem::align_of::<StreamClockBoardKey>(), 4);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardKey, entry_index), 0);
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <StreamClockBoardKey as ZeroCopySend>::type_name() },
+            "StreamClockBoardKey"
+        );
+    }
+
+    #[test]
+    fn a_stream_clock_board_entry_is_two_u32s_and_six_eight_byte_fields_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<StreamClockBoardEntry>(), 56);
+        assert_eq!(std::mem::align_of::<StreamClockBoardEntry>(), 8);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, mode), 0);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, reserved), 4);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, step_index), 8);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, step_ns), 16);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, base_ns), 24);
+        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, anchor_ns), 32);
+        assert_eq!(
+            std::mem::offset_of!(StreamClockBoardEntry, scale_f64_bits),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(StreamClockBoardEntry, pace_f64_bits),
+            48
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <StreamClockBoardEntry as ZeroCopySend>::type_name() },
+            "StreamClockBoardEntry"
+        );
+    }
 
     #[test]
     fn frame_header_round_trip_via_slice() {

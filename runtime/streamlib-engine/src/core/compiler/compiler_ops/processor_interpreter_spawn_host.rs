@@ -781,6 +781,11 @@ impl ProcessorInterpreterSpawnHostProcessor {
                     self.processor_display_name
                 ))
             })?;
+        let stream_clock = &ctx.host_base().stream_clock;
+        let stream_clock_named_to_the_helper = serde_json::json!({
+            "mode": stream_clock.spec().mode_name(),
+            "board_service_name": stream_clock.board_service_name_for_helpers(),
+        });
         let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
@@ -886,6 +891,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
                         "processor_id": self.processor_id,
                         "ports": ports,
                         "loss_count_board": loss_count_board,
+                        "stream_clock": stream_clock_named_to_the_helper,
                     }))
                 },
                 bridge.link_delivery_to_this_subprocess(&self.processor_display_name),
