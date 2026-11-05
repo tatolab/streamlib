@@ -46,7 +46,7 @@ class StreamTimeStampReporterSink:
         self.messages_read = 0
         self.reported = False
 
-    @node.input(delivery_profile="fifo")
+    @node.input(delivery_profile="ordered")
     def stream_times_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
