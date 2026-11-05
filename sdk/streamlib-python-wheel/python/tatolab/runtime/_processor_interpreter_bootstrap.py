@@ -1455,6 +1455,11 @@ class HelperProcessLifecycle:
     def _run_reactive(self) -> None:
         assert self._hosted is not None
         while self._running and not self._torn_down:
+            if self._paused and self._stepped_stream_clock_board_service_name is not None:
+                # The step ledger leaves a paused node's inbound links off the
+                # balance, so it takes nothing until it resumes.
+                self._park_until_a_command_arrives()
+                continue
             if self._link_data_access.any_input_port_has_data():
                 # Drained on every pass, not only when idle: a processor that
                 # runs slower than its upstream never reaches the wait below,

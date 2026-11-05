@@ -77,12 +77,14 @@ impl StepLedgerReading {
     ///
     /// A link into a continuous node or a paused one is left off: such a node
     /// takes what waits for it when it next runs, never within the step that
-    /// wrote it.
+    /// wrote it. So is a link into a windowed port, which takes its bags only
+    /// once they fill a window, however many steps that spans.
     pub(crate) fn read_off(graph: &Graph) -> Self {
         let mut reading = Self::default();
         let mut processor_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
+        let mut link_ids_into_a_windowed_port = std::collections::HashSet::new();
         for node in graph.traversal().v(()).iter() {
             let metrics = node.get::<ProcessorMetrics>();
             let step_progress_of_its_host = node
@@ -127,6 +129,8 @@ impl StepLedgerReading {
                     .or_default()
                     .0 = taken_bags;
             }
+            link_ids_into_a_windowed_port
+                .extend(loss_counts.discarded_samples_by_inbound_link.into_keys());
             for (link_id, dropped_bags) in loss_counts.dropped_bags_by_inbound_link {
                 taken_and_dropped_bags_by_link_id
                     .entry(link_id)
@@ -137,6 +141,7 @@ impl StepLedgerReading {
         for link in graph.traversal().e(()).iter() {
             if processor_ids_that_take_bags_on_their_own_pace
                 .contains(link.to_port().processor_id().as_str())
+                || link_ids_into_a_windowed_port.contains(link.id.as_str())
             {
                 continue;
             }
