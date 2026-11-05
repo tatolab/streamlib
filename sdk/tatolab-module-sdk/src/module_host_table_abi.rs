@@ -18,7 +18,8 @@
 //! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
 //! id minor 6 adds and the shared native service leases and node failure
 //! minor 7 adds and the host-memory read minor 9 adds. The virtual camera
-//! verbs minor 8 adds act in the helper itself.
+//! verbs minor 8 adds and the stream-time conversion minor 10 adds act in the
+//! helper itself.
 
 use std::ffi::{CStr, c_void};
 
@@ -27,7 +28,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 9;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 10;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -46,7 +47,7 @@ pub const MODULE_HOST_TABLE_STATUS_ENDED: ModuleHostTableStatus = 3;
 /// The verb was refused; the error message says why.
 pub const MODULE_HOST_TABLE_STATUS_REFUSED: ModuleHostTableStatus = -1;
 
-/// The timestamp a write passes to be stamped with the host's monotonic now.
+/// The timestamp a write passes to be stamped with its stream's clock now.
 pub const MODULE_HOST_TABLE_TIMESTAMP_NOW: i64 = i64::MIN;
 
 /// The [`ModuleHostTable::log`] level of a failure.
@@ -703,6 +704,12 @@ pub struct ModuleHostTable {
         host_memory_pixels_to_fill: *const ModuleHostTableHostMemoryPixelsToFill,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
+    /// Minor 10: the time on the node's stream clock at `machine_instant_ns`,
+    /// a reading of [`ModuleHostTable::monotonic_now_ns`]'s clock; the instant
+    /// itself in a real-time stream, and the open step's time while the
+    /// stream's clock steps.
+    pub stream_time_ns_of_a_machine_instant:
+        unsafe extern "C" fn(node_host: *mut c_void, machine_instant_ns: i64) -> i64,
 }
 
 impl ModuleHostTableUtf8 {
@@ -1150,7 +1157,16 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, surface_read_into_host_memory),
             16 + 41 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 42 * POINTER);
+    }
+
+    /// Minor 10 appends its stream-time conversion after the minor 9 read.
+    #[test]
+    fn the_v1_10_table_appends_its_stream_time_conversion_after_every_v1_9_field() {
+        assert_eq!(
+            offset_of!(ModuleHostTable, stream_time_ns_of_a_machine_instant),
+            16 + 42 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 43 * POINTER);
     }
 
     #[test]

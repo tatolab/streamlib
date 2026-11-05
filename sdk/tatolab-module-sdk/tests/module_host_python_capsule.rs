@@ -76,6 +76,10 @@ unsafe extern "C" fn never_stop(_: *mut c_void) -> u32 {
 unsafe extern "C" fn zero_clock(_: *mut c_void) -> i64 {
     0
 }
+
+unsafe extern "C" fn zero_stream_time(_: *mut c_void, _: i64) -> i64 {
+    0
+}
 unsafe extern "C" fn drop_log(
     _: *mut c_void,
     _: u32,
@@ -318,6 +322,7 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         virtual_camera_stream_liveness: refuse_virtual_camera_liveness,
         virtual_camera_stream_close: close_no_virtual_camera,
         surface_read_into_host_memory: refuse_host_memory_read,
+        stream_time_ns_of_a_machine_instant: zero_stream_time,
     }));
     NonNull::from(table).cast()
 }

@@ -712,7 +712,7 @@ impl AvFoundationFrameDelivery {
         &self,
         capture_progress: &mut AvFoundationCaptureProgress,
         sample_buffer: &CMSampleBuffer,
-        timestamp_ns: i64,
+        capture_instant_ns: i64,
     ) -> Result<(), String> {
         // SAFETY: a live sample buffer the output handed the delegate.
         let pixel_buffer =
@@ -764,6 +764,9 @@ impl AvFoundationFrameDelivery {
         if !self.is_delivering.load(Ordering::Acquire) {
             return Ok(());
         }
+        let timestamp_ns = self
+            .module_host
+            .stream_time_ns_of_a_machine_instant(capture_instant_ns);
         let record = PublishedVideoFrame {
             surface_id: converted_frame_texture.surface_id(),
             width: self.format.width,
