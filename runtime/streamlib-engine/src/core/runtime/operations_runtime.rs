@@ -12,11 +12,9 @@ use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
-use crate::core::context::StreamClockSpec;
-use crate::core::descriptors::ProcessorRuntime;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    PendingDeletionComponent, ProcessorUniqueId, StateComponent, node_named_or_refused,
+    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
+    ProcessorUniqueId, StateComponent, node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -89,29 +87,6 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 /// of the one `compiler.scope` that added the node, so a caller that needs the
 /// name never has to ask a second time — and never races a concurrent removal
 /// into being told its own successful add does not exist.
-/// Refuse a node that runs in a helper process when `graph`'s stream runs on a
-/// stepped clock: helpers do not join the step barrier yet.
-fn refuse_a_helper_process_node_in_a_stepped_stream(
-    graph: &Graph,
-    spec: &ProcessorSpec,
-) -> Result<()> {
-    let runs_in_a_helper_process = graph
-        .node_types_this_stream_resolves()
-        .descriptor(&spec.name)
-        .is_some_and(|descriptor| descriptor.runtime == ProcessorRuntime::Python);
-    if runs_in_a_helper_process
-        && matches!(graph.stream_clock_spec(), StreamClockSpec::Stepped { .. })
-    {
-        return Err(Error::GraphError(format!(
-            "the node `{}` of type `{}` runs in a helper process, which does not join the step \
-             barrier yet; a stream on a stepped clock holds native nodes only",
-            spec.display_name.as_deref().unwrap_or(spec.name.as_str()),
-            spec.name
-        )));
-    }
-    Ok(())
-}
-
 async fn add_processor_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
@@ -160,7 +135,6 @@ async fn add_processor_impl(
     let ident_for_err = spec.name.clone();
 
     let added = compiler.scope(|graph, tx| -> Result<NodeInTheGraph> {
-        refuse_a_helper_process_node_in_a_stepped_stream(graph, &spec)?;
         let (node_id, assigned_display_name) = graph
             .traversal_mut()
             .add_v(spec)?

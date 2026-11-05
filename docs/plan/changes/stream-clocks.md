@@ -232,9 +232,15 @@ says otherwise:
   its inbound bags would never close it. A link into a reactive node is balanced as above.
 - **A link wired mid-run is balanced from the moment it is wired.** Bags its producer wrote before
   its destination subscribed never reach it, so the ledger counts only bags written after.
-- **A native manual node fails at its start in a stepped stream**, naming it, rather than at load:
-  a native node's execution mode is known only once its instance exists. The stream then ends,
-  naming the node, as for any node that fails.
+- **A manual node fails at its start in a stepped stream**, naming it, rather than at load: a
+  native node's execution mode is known only once its instance exists, and a Python node's is
+  checked at the same point so both fail alike. The stream then ends, naming the node, as for any
+  node that fails.
+- **A helper's ledger entry rides its loss-count board.** The board a helper spawn already writes
+  its links' counts on carries its node's `{steps_finished, callbacks_in_flight}` as one more
+  entry and each inbound slot's taken bags, rather than a second per-stream board, so the ledger
+  reads a helper-placed node the way `graph` reads its counts. The step-opened event is the clock
+  board's own: every publish notifies it.
 - **A manual node blocks a live rescale above 1×.** `set_stream_clock_scale` above 1 is refused
   for a stream holding a manual node, naming it, as a stepped stream refuses one at load.
 

@@ -115,3 +115,99 @@ class ContinuousTickCounterSource:
             },
         )
         self.scales_reported.append(scale)
+
+
+#: Stream milliseconds per step of the stepped stream, and the source's interval.
+STEPPED_STREAM_STEP_MS = 1_000
+
+#: Steps the stepped stream runs before it stops itself.
+STEPPED_STREAM_STEPS = 12
+
+#: Machine milliseconds the slow relay holds each message before it writes it on.
+SLOW_RELAY_HOLD_MS = 20
+
+
+@node(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
+class StepTimeWriterSource:
+    """Writes, with no stamp, the step open and the stream time it wrote in."""
+
+    def __init__(self) -> None:
+        self.machine_time_ns_of_the_first_write: "int | None" = None
+
+    @node.output()
+    def step_times_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        machine_now_ns = monotonic_now_ns()
+        if self.machine_time_ns_of_the_first_write is None:
+            self.machine_time_ns_of_the_first_write = machine_now_ns
+        ctx.outputs.write(
+            "step_times_to_downstream",
+            pack(
+                {
+                    "step_index": ctx.stream_clock.step_index,
+                    "stream_time_ns": ctx.time,
+                    "first_write_machine_time_ns": self.machine_time_ns_of_the_first_write,
+                }
+            ),
+        )
+
+
+@node
+class SlowStepRelay:
+    """Holds each message for a while before writing it on, with no stamp."""
+
+    @node.input(delivery_profile="ordered")
+    def step_times_from_upstream(self) -> None: ...
+
+    @node.output()
+    def step_times_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        message = ctx.inputs.read_message("step_times_from_upstream")
+        if message is None:
+            return
+        held_until_ns = monotonic_now_ns() + SLOW_RELAY_HOLD_MS * 1_000_000
+        while monotonic_now_ns() < held_until_ns:
+            pass
+        relayed = unpack(message.payload)
+        relayed["stamp_the_relay_read_ns"] = message.timestamp_ns
+        relayed["relay_stream_time_ns"] = ctx.time
+        ctx.outputs.write("step_times_to_downstream", pack(relayed))
+
+
+@node
+class StepTimeReporterSink:
+    """Reports every step's message once it has read one per step of the run."""
+
+    def __init__(self) -> None:
+        self.seen: "list[dict[str, object]]" = []
+
+    @node.input(delivery_profile="ordered")
+    def step_times_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        message = ctx.inputs.read_message("step_times_from_upstream")
+        if message is None:
+            return
+        relayed = unpack(message.payload)
+        self.seen.append(
+            {
+                "step_index": relayed["step_index"],
+                "written_stream_time_ns": relayed["stream_time_ns"],
+                "stamp_the_relay_read_ns": relayed["stamp_the_relay_read_ns"],
+                "relay_stream_time_ns": relayed["relay_stream_time_ns"],
+                "stamp_ns": message.timestamp_ns,
+                "lost_since_last_read": message.lost_since_last_read,
+                "reader_step_index": ctx.stream_clock.step_index,
+            }
+        )
+        if len(self.seen) == STEPPED_STREAM_STEPS:
+            report(
+                "STEPPED_STREAM_RUN",
+                {
+                    "seen": self.seen,
+                    "machine_elapsed_ns": monotonic_now_ns()
+                    - relayed["first_write_machine_time_ns"],
+                },
+            )

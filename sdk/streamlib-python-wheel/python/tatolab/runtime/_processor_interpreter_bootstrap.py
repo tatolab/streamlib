@@ -1283,6 +1283,8 @@ class HelperProcessLifecycle:
         self._setup_raised_on_its_own = False
         self._running = False
         self._torn_down = False
+        self._stepped_stream_clock_board_service_name: "Optional[str]" = None
+        self._paused = False
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1375,13 +1377,16 @@ class HelperProcessLifecycle:
                 self._link_data_access.open_loss_count_board(
                     loss_count_board["service_name"], loss_count_board["output_ports"]
                 )
-            stream_clock_board_service_name = (command.get("stream_clock") or {}).get(
-                "board_service_name"
-            )
+            stream_clock = command.get("stream_clock") or {}
+            stream_clock_board_service_name = stream_clock.get("board_service_name")
             if stream_clock_board_service_name is not None:
                 self._link_data_access.adopt_the_stream_clock_board(
                     stream_clock_board_service_name
                 )
+                if stream_clock.get("mode") == "stepped":
+                    self._stepped_stream_clock_board_service_name = (
+                        stream_clock_board_service_name
+                    )
             wire_link_data_access(self._link_data_access, command.get("ports") or {})
             self._hosted = construct_hosted_processor(
                 self._processor_class,
@@ -1435,6 +1440,11 @@ class HelperProcessLifecycle:
         )
         if execution_mode == "reactive":
             self._run_reactive()
+        elif (
+            execution_mode == "continuous"
+            and self._stepped_stream_clock_board_service_name is not None
+        ):
+            self._run_continuous_on_steps(int(command.get("interval_ms") or 0))
         elif execution_mode == "continuous":
             self._run_continuous(int(command.get("interval_ms") or 0))
         elif execution_mode == "manual":
@@ -1451,7 +1461,7 @@ class HelperProcessLifecycle:
                 # so the wait it does reach wakes only for a bag this pass did
                 # not already answer.
                 self._link_data_access.drain_input_listener()
-                self._hosted.call_hook("process", self._hosted.limited_access_context)
+                self._call_process_on_the_step_ledger(finished_step_index=None)
                 self._drain_commands_arriving_mid_run()
                 continue
             # Re-read before every wait, never cached across one: the listener
@@ -1500,6 +1510,82 @@ class HelperProcessLifecycle:
                     limited_access_context.time,
                 )
             self._drain_commands_arriving_mid_run()
+
+    def _run_continuous_on_steps(self, interval_ms: int) -> None:
+        """Run `process` in each step of a stepped stream its deadline falls
+        in, noting every step finished on the board the step barrier reads."""
+        assert self._hosted is not None
+        interval_stream_ns = (
+            interval_ms * 1_000_000
+            if interval_ms > 0
+            else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+        )
+        assert self._stepped_stream_clock_board_service_name is not None
+        limited_access_context = self._hosted.limited_access_context
+        if self._link_data_access.stream_clock_board_publish_listener_fd() is None:
+            self._link_data_access.listen_for_each_stream_clock_board_publish(
+                self._stepped_stream_clock_board_service_name
+            )
+        publish_listener_fd = (
+            self._link_data_access.stream_clock_board_publish_listener_fd()
+        )
+        assert publish_listener_fd is not None
+        next_deadline_stream_ns: "Optional[int]" = None
+        last_step_handled: "Optional[int]" = None
+        while self._running:
+            step_index = limited_access_context.stream_clock.step_index
+            if step_index is None or (
+                last_step_handled is not None and step_index <= last_step_handled
+            ):
+                self._wait_for_a_step_or_a_command(publish_listener_fd)
+                self._drain_commands_arriving_mid_run()
+                continue
+            step_stream_ns: int = limited_access_context.time
+            deadline_stream_ns = (
+                step_stream_ns if next_deadline_stream_ns is None else next_deadline_stream_ns
+            )
+            next_deadline_stream_ns = deadline_stream_ns
+            if not self._paused and deadline_stream_ns <= step_stream_ns:
+                self._call_process_on_the_step_ledger(finished_step_index=step_index)
+                next_deadline_stream_ns = next_continuous_deadline_stream_ns(
+                    deadline_stream_ns, interval_stream_ns, step_stream_ns
+                )
+            else:
+                self._link_data_access.note_a_step_callback_started()
+                self._link_data_access.note_a_step_callback_returned(step_index)
+            last_step_handled = step_index
+            self._drain_commands_arriving_mid_run()
+
+    def _call_process_on_the_step_ledger(self, finished_step_index: "Optional[int]") -> None:
+        self._call_hook_on_the_step_ledger("process", finished_step_index)
+
+    def _call_hook_on_the_step_ledger(
+        self, hook_name: str, finished_step_index: "Optional[int]"
+    ) -> None:
+        """Call `hook_name`, counted in flight on the step ledger while it runs
+        when the stream steps."""
+        assert self._hosted is not None
+        if self._stepped_stream_clock_board_service_name is None:
+            self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+            return
+        self._link_data_access.note_a_step_callback_started()
+        try:
+            self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+        finally:
+            self._link_data_access.note_a_step_callback_returned(finished_step_index)
+
+    def _wait_for_a_step_or_a_command(self, publish_listener_fd: int) -> None:
+        """Park until the stream clock is published or the parent sends a
+        command; `poll`, for the reason the input wait gives."""
+        command_arrival_fd = self._bridge.lifecycle_command_arrival_fd()
+        poller = select.poll()
+        poller.register(publish_listener_fd, select.POLLIN)
+        poller.register(command_arrival_fd, select.POLLIN)
+        for ready_fd, _ in poller.poll(LIFECYCLE_POLL_INTERVAL_MILLISECONDS):
+            if ready_fd == publish_listener_fd:
+                self._link_data_access.take_every_stream_clock_board_publish_noted()
+            elif ready_fd == command_arrival_fd:
+                self._bridge.clear_lifecycle_command_arrivals()
 
     def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
         """Park until upstream notifies or the parent sends a command.
@@ -1575,11 +1661,12 @@ class HelperProcessLifecycle:
         self._bridge.send({"rpc": "done"})
 
     def _note_pause(self, verb: str) -> None:
+        self._paused = verb == "on_pause"
         if self._hosted is not None:
             note_pause_state_from_parent_on_runtime_context(
                 self._hosted.full_access_context, verb == "on_pause"
             )
-            self._hosted.call_hook(verb, self._hosted.limited_access_context)
+            self._call_hook_on_the_step_ledger(verb, finished_step_index=None)
         self._bridge.send({"rpc": "ok"})
 
     def _unwire_link(self, command: "dict[str, Any]") -> None:

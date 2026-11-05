@@ -695,8 +695,12 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_INBOUND_LINK_SLOT_SECTION: u32 = 0;
 /// The board section a [`HelperProcessLossCountBoardKey`] names an output port in.
 const HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION: u32 = 1;
 
+/// The board section holding the helper's one step-progress entry.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION: u32 = 2;
+
 /// The key of one entry on a helper process's loss-count blackboard: an
-/// inbound-link slot, or a declared output port by its index.
+/// inbound-link slot, a declared output port by its index, or the helper's step
+/// progress.
 ///
 /// The iceoryx2 type name is pinned for the reason
 /// [`DataChannelBagUserHeader`]'s is: the parent creates the board
@@ -725,6 +729,12 @@ impl HelperProcessLossCountBoardKey {
             index_within_section: output_port_index,
         }
     }
+
+    /// The key of the helper's step-progress entry.
+    pub const STEP_PROGRESS: Self = Self {
+        section: HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION,
+        index_within_section: 0,
+    };
 }
 
 /// One inbound link's loss counts as a helper process last wrote them, beside
@@ -743,6 +753,12 @@ pub struct InboundLinkLossCountBoardSlot {
     pub dropped_bags: u64,
     /// Samples a windowed port's flushes discarded on the link.
     pub discarded_samples: u64,
+    /// Bags that left the link's mailbox for its reader: read, passed over by
+    /// a `newest` read, or evicted from a port that may pass bags over.
+    pub bags_off_the_mailbox_for_its_reader: u64,
+    /// Of those, the bags the reader counted lost after taking them, which
+    /// `dropped_bags` already holds.
+    pub bags_its_reader_counted_lost_after_taking_them: u64,
 }
 
 /// One output port's counts of bags refused at its channel ceiling and bags
@@ -762,6 +778,21 @@ pub struct OutputPortBagCountBoardEntry {
     pub refused_bags: u64,
     /// Bags sent on the port's channel since it was opened.
     pub written_bags: u64,
+}
+
+/// A helper's callbacks in its stream's steps, as it last wrote them: what the
+/// step barrier reads before it closes a step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("HelperProcessStepProgressBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessStepProgressBoardEntry {
+    /// One past the last step the helper's node finished; step `k` is finished
+    /// once this exceeds `k`.
+    pub steps_finished: u64,
+    /// Callbacks of the node's started and not yet returned.
+    pub callbacks_in_flight: u32,
+    /// Always zero; keeps the entry a multiple of 8 bytes.
+    pub reserved: u32,
 }
 
 /// The key of the one entry on a stream's clock blackboard.
@@ -1048,6 +1079,11 @@ mod tests {
             HelperProcessLossCountBoardKey::output_port(3),
             "a slot and an output port at one index are two entries"
         );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::STEP_PROGRESS,
+            HelperProcessLossCountBoardKey::inbound_link_slot(0),
+            "the step-progress entry is in a section of its own"
+        );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessLossCountBoardKey as ZeroCopySend>::type_name() },
@@ -1056,8 +1092,8 @@ mod tests {
     }
 
     #[test]
-    fn an_inbound_link_slot_is_three_u64s_at_their_documented_offsets_under_its_pinned_name() {
-        assert_eq!(std::mem::size_of::<InboundLinkLossCountBoardSlot>(), 24);
+    fn an_inbound_link_slot_is_five_u64s_at_their_documented_offsets_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<InboundLinkLossCountBoardSlot>(), 40);
         assert_eq!(std::mem::align_of::<InboundLinkLossCountBoardSlot>(), 8);
         assert_eq!(
             std::mem::offset_of!(InboundLinkLossCountBoardSlot, wiring_generation),
@@ -1070,6 +1106,20 @@ mod tests {
         assert_eq!(
             std::mem::offset_of!(InboundLinkLossCountBoardSlot, discarded_samples),
             16
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                InboundLinkLossCountBoardSlot,
+                bags_off_the_mailbox_for_its_reader
+            ),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                InboundLinkLossCountBoardSlot,
+                bags_its_reader_counted_lost_after_taking_them
+            ),
+            32
         );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
@@ -1099,6 +1149,35 @@ mod tests {
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <OutputPortBagCountBoardEntry as ZeroCopySend>::type_name() },
             "OutputPortBagCountBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_helpers_step_progress_entry_is_a_u64_and_two_u32s_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessStepProgressBoardEntry>(),
+            16
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessStepProgressBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessStepProgressBoardEntry, steps_finished),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessStepProgressBoardEntry, callbacks_in_flight),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessStepProgressBoardEntry, reserved),
+            12
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <HelperProcessStepProgressBoardEntry as ZeroCopySend>::type_name() },
+            "HelperProcessStepProgressBoardEntry"
         );
     }
 

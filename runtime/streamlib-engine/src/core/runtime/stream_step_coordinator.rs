@@ -84,10 +84,18 @@ impl StepLedgerReading {
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
         for node in graph.traversal().v(()).iter() {
-            let step_progress = node
+            let metrics = node.get::<ProcessorMetrics>();
+            let step_progress_of_its_host = node
                 .get::<StepProgressOfOneNodeComponent>()
                 .map(|step_progress| step_progress.0.reading())
                 .unwrap_or_default();
+            let step_progress = match metrics
+                .and_then(|metrics| metrics.loss_counts.step_progress_its_helper_process_wrote())
+            {
+                Some(written_by_its_helper_process) => step_progress_of_its_host
+                    .with_what_its_helper_process_wrote(written_by_its_helper_process),
+                None => step_progress_of_its_host,
+            };
             if step_progress.finishes_every_step
                 || node
                     .get::<ProcessorPauseGateComponent>()
@@ -105,7 +113,7 @@ impl StepLedgerReading {
                         .is_some_and(|state| state.current() == ProcessorState::Error),
                 },
             );
-            let Some(metrics) = node.get::<ProcessorMetrics>() else {
+            let Some(metrics) = metrics else {
                 continue;
             };
             let loss_counts = metrics.loss_counts.loss_count_snapshot();
