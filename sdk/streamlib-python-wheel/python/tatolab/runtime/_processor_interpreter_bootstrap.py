@@ -155,6 +155,7 @@ from tatolab.runtime._engine import (
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
     limited_access_view_of_runtime_context_for_helper_process,
+    machine_nanoseconds_until_this_helpers_stream_clock_reaches,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
@@ -194,6 +195,16 @@ LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 # The interval a continuous processor declaring none runs at: the same 100 µs
 # the engine's native continuous runner waits between calls.
 CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
+
+
+def next_continuous_deadline_stream_ns(
+    previous_deadline_stream_ns: int, interval_stream_ns: int, stream_now_ns: int
+) -> int:
+    """The first deadline on the `previous + k·interval` grid after
+    `stream_now_ns`: a processor that overran fires once, never a backlog."""
+    intervals_passed = max(0, stream_now_ns - previous_deadline_stream_ns) // interval_stream_ns
+    return previous_deadline_stream_ns + (intervals_passed + 1) * interval_stream_ns
+
 
 # How long the engine-log forwarder parks waiting for a record before it looks
 # at its own stop flag again. It bounds nothing a user sees: a record arriving
@@ -1459,26 +1470,36 @@ class HelperProcessLifecycle:
 
     def _run_continuous(self, interval_ms: int) -> None:
         assert self._hosted is not None
-        interval_ns = (
+        interval_stream_ns = (
             interval_ms * 1_000_000
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
-        with start_monotonic_timer(interval_ns) as timer:
-            # Once at the start and then once per tick, as the native runner
-            # paces a continuous processor.
-            self._hosted.call_hook("process", self._hosted.limited_access_context)
+        limited_access_context = self._hosted.limited_access_context
+        next_deadline_stream_ns = limited_access_context.time
+        while self._running:
+            machine_ns_to_go = machine_nanoseconds_until_this_helpers_stream_clock_reaches(
+                next_deadline_stream_ns
+            )
+            if machine_ns_to_go > 0:
+                # Bounded so a live rescale reaches a wait already under way.
+                machine_wait_ns = min(
+                    machine_ns_to_go, LIFECYCLE_POLL_INTERVAL_MILLISECONDS * 1_000_000
+                )
+                with start_monotonic_timer(machine_wait_ns) as one_wait_timer:
+                    if one_wait_timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS) < 0:
+                        log.error(
+                            "the interval timer failed; leaving the continuous loop"
+                        )
+                        self._running = False
+            else:
+                self._hosted.call_hook("process", limited_access_context)
+                next_deadline_stream_ns = next_continuous_deadline_stream_ns(
+                    next_deadline_stream_ns,
+                    interval_stream_ns,
+                    limited_access_context.time,
+                )
             self._drain_commands_arriving_mid_run()
-            while self._running:
-                expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
-                if expirations < 0:
-                    log.error("the interval timer failed; leaving the continuous loop")
-                    self._running = False
-                elif expirations > 0:
-                    # Once per wake however many ticks it covered — drift-free
-                    # pacing, not backlog replay.
-                    self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._drain_commands_arriving_mid_run()
 
     def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
         """Park until upstream notifies or the parent sends a command.

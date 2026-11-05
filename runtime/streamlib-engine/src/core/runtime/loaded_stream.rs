@@ -24,7 +24,7 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::Loade
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{
     CaptureDeviceAccessPrompting, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
-    StreamClock, platform_audio_clock_for_one_stream,
+    StreamClock, StreamClockReading, platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
@@ -429,6 +429,29 @@ impl LoadedStreamInThisRuntime {
     #[cfg(test)]
     pub(crate) fn runtime_context_while_started(&self) -> Option<Arc<RuntimeContext>> {
         self.runtime_context.lock().clone()
+    }
+
+    /// Run this started stream's scaled clock at `scale` from now on and
+    /// publish it to the stream's helpers; its graph keeps the clock it
+    /// declared, which the next start runs.
+    ///
+    /// Refused naming the stream when it is not started, its clock is real or
+    /// stepped, or `scale` is one this runtime does not run.
+    pub fn set_stream_clock_scale(&self, scale: f64) -> Result<StreamClockReading> {
+        let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() else {
+            return Err(Error::Runtime(format!(
+                "the stream `{}` is not started, so it has no clock running to scale",
+                self.stream_id()
+            )));
+        };
+        let rescaled = this_streams_runtime_context
+            .stream_clock
+            .rescale(self.stream_id(), scale)?;
+        tracing::info!(
+            "the stream `{}` runs its clock at {scale}× from now on",
+            self.stream_id()
+        );
+        Ok(rescaled)
     }
 
     fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {

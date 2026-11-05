@@ -5,7 +5,11 @@
 
 from tatolab.stream import ScaledStreamClock, StreamBuilder, stream
 
-from stream_clock_processors import StreamTimeStampReporterSink, StreamTimeWriterSource
+from stream_clock_processors import (
+    ContinuousTickCounterSource,
+    StreamTimeStampReporterSink,
+    StreamTimeWriterSource,
+)
 
 #: The scale the slow-motion stream runs at.
 SLOW_MOTION_SCALE = 0.5
@@ -31,3 +35,10 @@ def stream_times_in_slow_motion(stream_builder: StreamBuilder) -> None:
 def stream_times_in_real_time(stream_builder: StreamBuilder) -> None:
     """A stream-time writer into a stamp reporter, on the machine clock."""
     _writer_into_reporter(stream_builder)
+
+
+@stream
+def continuous_ticks_in_slow_motion(stream_builder: StreamBuilder) -> None:
+    """A continuous tick counter alone, at half real time until the test rescales it."""
+    stream_builder.run_on_clock(ScaledStreamClock(scale=SLOW_MOTION_SCALE))
+    stream_builder.add(ContinuousTickCounterSource)

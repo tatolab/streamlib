@@ -339,6 +339,7 @@ tatolab rm [--dir DIR]
 tatolab cancel ACTION
 tatolab rename [STREAM] DISPLAY_NAME
 tatolab expose [STREAM] NODE PORT [--public | --remove]
+tatolab clock [STREAM] --scale SCALE
 
 tatolab relays
 tatolab relay add ADAPTER [--settings-file PATH]
@@ -382,7 +383,7 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in `stop`, `start`, `rename`, `expose` and `logs --stream`, is a stream id,
+- **`STREAM`**, in `stop`, `start`, `rename`, `expose`, `clock` and `logs --stream`, is a stream id,
   or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
@@ -406,6 +407,10 @@ tatolab enable-virtual-camera [--print]
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. The level is recorded and
   wins over what the stream function exposes, across restarts.
+- **`clock`** runs a started stream's scaled clock at another `--scale`, live: stream time carries
+  on from where it stands, and every node's time, write stamps and continuous pace follow it. A
+  stream on the real or a stepped clock is refused, as is a scale above 1. The stream's next load
+  runs the clock its stream function names.
 - **`relays`** lists the relays the runtime joins — the local relay's two listeners and each one
   added — with each one's adapter, connection state and settings, and each secret setting as set
   or unset, never its value. **`relay add`** joins a relay through an adapter, from a JSON file of

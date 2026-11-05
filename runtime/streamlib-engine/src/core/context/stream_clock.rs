@@ -142,13 +142,36 @@ pub fn stream_time_ns_on_a_published_clock(
     }
 }
 
+/// The machine monotonic time at which `published` reaches stream time
+/// `stream_deadline_ns`; `machine_now_ns` plus the stream time still to go when
+/// the clock is not scaled.
+pub fn machine_time_ns_a_published_clock_reaches(
+    published: &StreamClockBoardEntry,
+    stream_deadline_ns: i64,
+    machine_now_ns: i64,
+) -> i64 {
+    match published.mode {
+        STREAM_CLOCK_BOARD_MODE_SCALED => {
+            let scale = f64::from_bits(published.scale_f64_bits);
+            let stream_ns_from_base = stream_deadline_ns.saturating_sub(published.base_ns);
+            published
+                .anchor_ns
+                .saturating_add((stream_ns_from_base as f64 / scale).ceil() as i64)
+        }
+        _ => machine_now_ns.saturating_add(stream_deadline_ns.saturating_sub(
+            stream_time_ns_on_a_published_clock(published, machine_now_ns),
+        )),
+    }
+}
+
 /// The clock one loaded stream runs on, built at its start.
 ///
 /// Stream time is in the machine's monotonic epoch, derived from
 /// [`MediaClock`] readings and step counts alone. In a real-time stream it is
 /// [`MediaClock::now`] itself.
 pub struct StreamClock {
-    spec: StreamClockSpec,
+    spec: RwLock<StreamClockSpec>,
+    runs_on_the_machine_clock: bool,
     published: RwLock<StreamClockBoardEntry>,
     board_read_by_helpers: Option<StreamClockBoard>,
 }
@@ -156,7 +179,7 @@ pub struct StreamClock {
 impl std::fmt::Debug for StreamClock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamClock")
-            .field("spec", &self.spec)
+            .field("spec", &*self.spec.read())
             .field("published", &*self.published.read())
             .field(
                 "board_read_by_helpers",
@@ -205,7 +228,8 @@ impl StreamClock {
             },
         };
         Self {
-            spec,
+            spec: RwLock::new(spec),
+            runs_on_the_machine_clock: spec.is_real(),
             published: RwLock::new(published),
             board_read_by_helpers: None,
         }
@@ -230,13 +254,65 @@ impl StreamClock {
 
     /// The spec this clock runs.
     pub fn spec(&self) -> StreamClockSpec {
-        self.spec
+        *self.spec.read()
+    }
+
+    /// Run a scaled clock at `scale` from now on, publishing it to the
+    /// stream's helpers; stream time carries on from where it stands.
+    ///
+    /// Refuses a real or stepped clock and a scale this runtime does not run,
+    /// naming `stream_id`.
+    pub fn rescale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {
+        self.rescale_at(stream_id, scale, machine_monotonic_now_ns())
+    }
+
+    /// [`Self::rescale`] at machine monotonic `machine_now_ns`.
+    pub fn rescale_at(
+        &self,
+        stream_id: &str,
+        scale: f64,
+        machine_now_ns: i64,
+    ) -> Result<StreamClockReading> {
+        let mut spec = self.spec.write();
+        let StreamClockSpec::Scaled { step_ns, .. } = *spec else {
+            return Err(Error::GraphError(format!(
+                "the stream `{stream_id}` runs on a {} clock; only a scaled clock's scale \
+                 changes",
+                spec.mode_name()
+            )));
+        };
+        let rescaled_spec = StreamClockSpec::Scaled { scale, step_ns };
+        rescaled_spec.refusal_unless_this_runtime_runs_it(stream_id)?;
+        let mut published = self.published.write();
+        let rescaled = StreamClockBoardEntry {
+            base_ns: stream_time_ns_on_a_published_clock(&published, machine_now_ns),
+            anchor_ns: machine_now_ns,
+            scale_f64_bits: scale.to_bits(),
+            ..*published
+        };
+        if let Some(board) = &self.board_read_by_helpers {
+            board.publish(rescaled);
+        }
+        *published = rescaled;
+        *spec = rescaled_spec;
+        Ok(stream_clock_reading_of_a_published_clock(&rescaled))
+    }
+
+    /// The machine monotonic time at which this clock reaches stream time
+    /// `stream_deadline_ns`, as it runs now; at or before `machine_now_ns`
+    /// when it already has.
+    pub fn machine_time_ns_reaching(&self, stream_deadline_ns: i64, machine_now_ns: i64) -> i64 {
+        machine_time_ns_a_published_clock_reaches(
+            &self.published.read(),
+            stream_deadline_ns,
+            machine_now_ns,
+        )
     }
 
     /// Stream time now, in nanoseconds.
     #[inline]
     pub fn now_ns(&self) -> i64 {
-        if self.spec.is_real() {
+        if self.runs_on_the_machine_clock {
             return machine_monotonic_now_ns();
         }
         stream_time_ns_on_a_published_clock(&self.published.read(), machine_monotonic_now_ns())
@@ -440,5 +516,65 @@ mod tests {
         }
         .refusal_unless_this_runtime_runs_it("rig")
         .unwrap();
+    }
+
+    fn a_half_speed_clock_started_at(machine_now_ns: i64) -> StreamClock {
+        StreamClock::starting_at(
+            StreamClockSpec::Scaled {
+                scale: 0.5,
+                step_ns: DEFAULT_SCALED_STREAM_CLOCK_STEP_NS,
+            },
+            machine_now_ns,
+        )
+    }
+
+    #[test]
+    fn a_rescale_carries_stream_time_on_from_where_it_stands() {
+        let clock = a_half_speed_clock_started_at(1_000);
+        clock
+            .rescale_at("warped", 0.25, 5_000)
+            .expect("a scaled clock rescales");
+
+        assert_eq!(clock.stream_time_ns_at(5_000), 3_000);
+        assert_eq!(clock.stream_time_ns_at(9_000), 4_000);
+        assert_eq!(clock.reading().scale, 0.25);
+        assert_eq!(
+            clock.spec(),
+            StreamClockSpec::Scaled {
+                scale: 0.25,
+                step_ns: DEFAULT_SCALED_STREAM_CLOCK_STEP_NS
+            }
+        );
+    }
+
+    #[test]
+    fn a_rescale_is_refused_on_a_clock_that_does_not_scale_or_past_what_runs() {
+        let real = StreamClock::starting_at(StreamClockSpec::Real, 0);
+        let refusal = real.rescale_at("on-the-wall", 0.5, 10).unwrap_err();
+        assert!(
+            refusal
+                .to_string()
+                .contains("`on-the-wall` runs on a real clock")
+        );
+
+        let scaled = a_half_speed_clock_started_at(0);
+        for refused_scale in [0.0, -1.0, f64::NAN, 2.0] {
+            assert!(scaled.rescale_at("warped", refused_scale, 10).is_err());
+        }
+        assert_eq!(scaled.reading().scale, 0.5);
+        assert_eq!(scaled.stream_time_ns_at(10), 5);
+    }
+
+    #[test]
+    fn a_stream_deadline_converts_to_the_machine_time_the_clock_reaches_it() {
+        let clock = a_half_speed_clock_started_at(1_000);
+        assert_eq!(clock.machine_time_ns_reaching(1_500, 1_000), 2_000);
+        clock
+            .rescale_at("warped", 0.25, 2_000)
+            .expect("a scaled clock rescales");
+        assert_eq!(clock.machine_time_ns_reaching(1_750, 2_000), 3_000);
+
+        let real = StreamClock::starting_at(StreamClockSpec::Real, 0);
+        assert_eq!(real.machine_time_ns_reaching(700, 500), 700);
     }
 }

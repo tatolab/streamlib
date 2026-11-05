@@ -13,8 +13,8 @@ use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CancelStreamActionToolResult, CreateProjectToolResult, ExposePortLevel, ExposePortToolResult,
     ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
-    RenameStreamToolResult, RunProjectToolResult, StartStreamToolResult, StopStreamToolResult,
-    StreamActionStateOnTheWire,
+    RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
+    StartStreamToolResult, StopStreamToolResult, StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -45,6 +45,8 @@ pub(crate) enum StreamActionTool {
     ListStreams,
     /// Sets one output port's exposure level.
     ExposePort,
+    /// Runs a started stream's scaled clock at a new scale.
+    SetStreamClockScale,
 }
 
 impl StreamActionTool {
@@ -60,6 +62,7 @@ impl StreamActionTool {
             StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
+            StreamActionTool::SetStreamClockScale => "set_stream_clock_scale",
         }
     }
 }
@@ -523,6 +526,36 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         ));
     }
     rendered_table
+}
+
+/// `set_stream_clock_scale`'s arguments for `stream` at `scale`.
+fn set_stream_clock_scale_tool_arguments(
+    stream: &str,
+    scale: f64,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut set_stream_clock_scale_arguments = stream_tool_arguments(stream);
+    set_stream_clock_scale_arguments.insert("scale".to_owned(), scale.into());
+    set_stream_clock_scale_arguments
+}
+
+/// `tatolab clock [STREAM] --scale SCALE`: run the stream's scaled clock at `scale` from now on.
+pub(crate) fn set_stream_clock_scale(
+    stream_argument: Option<&str>,
+    scale: f64,
+) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let rescaled: SetStreamClockScaleToolResult = call_one_stream_action_tool(
+        StreamActionTool::SetStreamClockScale,
+        set_stream_clock_scale_tool_arguments(&stream, scale),
+    )?;
+    write_verb_standard_output(&rendered_stream_clock_scale_line(&rescaled))
+}
+
+fn rendered_stream_clock_scale_line(rescaled: &SetStreamClockScaleToolResult) -> String {
+    format!(
+        "{} runs its clock at {}× from now on.\n",
+        rescaled.stream, rescaled.scale
+    )
 }
 
 /// `expose_port`'s arguments for `stream`'s `node`/`port` at `requested_level`.
