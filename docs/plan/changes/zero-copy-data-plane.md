@@ -94,10 +94,19 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   loaned sample, with the buffer protocol and `__dlpack__`. The sample is published on a clean
   exit and given back unpublished when the block raises. `write(port, payload)` copies an
   existing buffer, and accepts any buffer-protocol object, not only `bytes`. [zero-copy-data-plane]
+  [NEEDS DECISION] Two loan edges. (a) An export of the loan (`memoryview`, DLPack capsule)
+  still alive when the block exits: refuse the exit with `BufferError` and give the sample back
+  unpublished (recommended — a published sample must never change under its readers), or
+  publish and leave the export writable. (b) `write` or a second `ctx.loan` on a port whose
+  loan is open: refuse it, naming the open loan (recommended — one sample in flight per port
+  keeps a port's order its write order, and the publisher loans one sample today,
+  `CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES = 1`), or raise the publisher's loan limit and allow it.
 - **ADDED (same entry, DECIDED):** The mailbox queues samples, not copies. Each queued entry
   holds the iceoryx2 `Sample` plus the per-link attribution it carries now. A link's subscriber
-  borrows up to `mailbox depth + the link's borrow quota` samples (`subscriber_max_borrowed_samples`).
-  Eviction drops the oldest sample and counts it against its link, as it does today. A relay's
+  borrows up to `mailbox depth + the link's borrow quota + 1` samples
+  (`subscriber_max_borrowed_samples`): the one is the frame being admitted, so a full mailbox
+  and a reader at quota can still receive it to drop and count it. Eviction drops the oldest
+  sample and counts it against its link, as it does today. A relay's
   network bytes (`RelayTrackSource`) are written into a loaned sample of the input's local
   channel, so every read is a borrow, whatever its origin. [zero-copy-data-plane]
 - **ADDED (same entry, DECIDED; settles the fan-out OPEN):** Each link has its own borrow quota:
@@ -106,7 +115,13 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   output. Past its quota, a link drops the newest frame and counts it in that link's
   `messages_dropped`, and no other link is affected. A producer's GPU pool holds
   `in-flight frames + Σ quota of every link on its output`. Wiring a link grows the pool by
-  that link's quota before the link's first frame, and unwiring it shrinks the pool lazily. No
+  that link's quota before the link's first frame, and unwiring it shrinks the pool lazily.
+  [NEEDS DECISION] A queued `GpuPoolSlotFrame` holds no claim until its cast, so a mailbox as
+  deep as the pool's spare slots can hold a frame whose slot is rehanded; the cast then refuses
+  it as recycled. Either size the pool by `in-flight + Σ (mailbox depth + quota)` per link
+  (recommended — the claim stays at the cast as decided, and a queued frame can no longer be
+  outwaited), or keep publish-to-claim transit riding pool depth, as the surface-id entry
+  states today, and count the refusal as that link's drop. No
   reader ever copies to escape the quota. Memory grows with fan-out, and that is accepted
   (owner, 2026-11-04). [zero-copy-data-plane]
   Rejected: one quota per output — a slow reader holding slots starves a timely one; and a copy
@@ -114,14 +129,15 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
 - **ADDED (same entry, DECIDED):** A pool's slot set crosses once per processor interpreter.
   The first time a helper reads or writes a frame of a pool, the surface-share service hands it
   the pool's slot set: each slot's memory, its timeline pair for a texture, and the pool's
-  claim table. A slot added by growth crosses on the next request, and a retired slot is listed
+  claim table. A descriptor naming a slot the reader has not imported makes one slot-set
+  request, which is how a slot added by growth crosses; a retired slot is listed
   under `retired_pool_slots` (the Linux rule of `linux-pool-slot-import-once`). macOS adopts the
   same notice and stops sending a port per frame. [zero-copy-data-plane]
 - **ADDED (same entry, DECIDED):** Each GPU pool has a claim table in shared memory: a memfd on
   Linux, and on macOS a Mach memory entry, crossing with the slot set. Each slot is one
   64-byte-aligned row: `published_generation: AtomicU64` and one `AtomicU32` claim count per
   claimant column, up to 64 columns. The service assigns a column to each interpreter at
-  hand-over and clears it when that interpreter's connection closes. The protocol is in §Claim
+  hand-over and clears it as §failure isolation below states. The protocol is in §Claim
   table, and it replaces the per-frame `check_out` and `release_check_out` for a
   `GpuPoolSlotFrame`. The retired-frame refusal becomes the generation re-check. The checkout
   socket path stays for non-pool surfaces (foreign adoptions, export stagings).
@@ -130,6 +146,13 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   with it. When the connection of an interpreter closes, including a helper restart under
   `helper-process-restart`, the engine zeroes its column in every claim table it was handed,
   then re-runs the ring's availability test for those pools. [zero-copy-data-plane]
+  [NEEDS DECISION] A closed connection does not prove the interpreter stopped reading: the
+  service drops a connection on an oversized or malformed message, and a live reader would keep
+  its imports while its column is zeroed and reassigned. Either clear a column only when the
+  interpreter's process is reaped, and make the service's every connection drop on a helper
+  fail-stop, so the engine kills that helper (recommended — a column is never reused while its
+  holder can still run), or keep clearing on connection close and have the helper drop every
+  import and claim the moment its connection fails.
 - **ADDED (§Processor model, DECIDED):** Every `#[repr(C)]` value this change puts in shared
   memory has a layout regression test (size, alignment and every field offset): the user header,
   the descriptor and each kind's body, and the claim table row. Python mirrors none of them. It
@@ -155,10 +178,14 @@ The protocol, written for the ADR's Consequences. All operations are `SeqCst`. O
   reader that refuses during a back-off loses a frame it was in time for. That is a count, never
   wrong pixels, and it costs one frame only when a claim races a rehand of the same slot.
 - **Crash:** a claimant that dies between `fetch_add` and `fetch_sub` leaves `C[i] > 0`. Its
-  column is zeroed when its connection closes, which is the only time a column is reused.
+  column is zeroed when its holder is gone (see §failure isolation), which is the only time a
+  column is reused.
 - **GPU ordering:** a claim says nothing about GPU work. The reader waits on the slot's
-  `produce_done` timeline at `timeline_value` before it reads, and signals `consume_done` at
-  release, as `HelperCheckedOutTextureSurface` does now (`linux/texture.rs`).
+  `produce_done` timeline at `timeline_value` before it reads. It releases its claim only once
+  its own GPU reads of the slot have completed, signalling `consume_done` host-side at that
+  release as `HelperCheckedOutTextureSurface` does now (`linux/texture.rs`). A zero claim count
+  therefore means no reader's GPU work still reads the slot, and the rehand needs no wait on a
+  value a peer signals (the macOS timeline entry's rule).
 
 ## MODIFIED
 
