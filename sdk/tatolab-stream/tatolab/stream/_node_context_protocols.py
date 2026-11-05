@@ -593,7 +593,8 @@ class LinkOutputDataWriter(Protocol):
         raised. A message naming a pooled GPU frame this node acquired or read
         passes the frame's id as `pooled_gpu_frame`, so it carries the frame's
         descriptor and every reader claims the frame with no request; an id
-        naming no such frame raises `ValueError`.
+        naming no such frame raises `ValueError`. Claim tables cross processes
+        only on Linux, so on macOS every `pooled_gpu_frame` raises `ValueError`.
         """
         ...
 

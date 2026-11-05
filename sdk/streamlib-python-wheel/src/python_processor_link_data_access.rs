@@ -343,6 +343,38 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
+    /// The next message's payload on `port_name` with its stamp, or
+    /// `(None, None)` when the mailbox is empty, offering
+    /// `offered_gpu_limited_access` the pooled frame the message carries.
+    pub(crate) fn read_from_input_port_with_timestamp_offering_gpu_access<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Ok((None, None));
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        match read {
+            Some(message) => Ok((
+                Some(payload_borrowed_into_the_read_target_when_named(
+                    python,
+                    port_name,
+                    message.payload,
+                    message.payload_descriptor,
+                    None,
+                    offered_gpu_limited_access,
+                )?),
+                Some(message.timestamp_ns),
+            )),
+            None => Ok((None, None)),
+        }
+    }
+
     /// The next message's payload on `port_name` with the inbound link it
     /// arrived on, or `None` when the mailbox is empty.
     ///
@@ -507,12 +539,20 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
     if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
         (payload_descriptor.known_kind(), offered_gpu_limited_access)
     {
-        gpu_limited_access
+        let noted = gpu_limited_access
             .get()
             .note_the_pooled_gpu_frame_a_read_carries(
                 python,
                 GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
-            )?;
+            );
+        match (noted, into) {
+            (Ok(()), _) => {}
+            (Err(refusal), Some(_)) => return Err(refusal),
+            (Err(refusal), None) => tracing::warn!(
+                "a read on {port_name:?} kept its payload, though the pooled GPU frame it \
+                 carries could not be claimed by its claim table: {refusal}"
+            ),
+        }
     }
     let payload_borrow = Bound::new(python, PythonPortPayloadBorrow::holding(payload))?.into_any();
     match into {
@@ -979,23 +1019,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'py>,
         port_name: &str,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
-            return Ok((None, None));
-        };
-        let read = python
-            .detach(|| input_mailboxes.read_raw(port_name))
-            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        match read {
-            Some(message) => Ok((
-                Some(
-                    Bound::new(python, PythonPortPayloadBorrow::holding(message.payload))?
-                        .into_any(),
-                ),
-                Some(message.timestamp_ns),
-            )),
-            None => Ok((None, None)),
-        }
+        self.read_from_input_port_with_timestamp_offering_gpu_access(python, port_name, None)
     }
 
     /// Whether a message is waiting on `port_name`, without consuming it.

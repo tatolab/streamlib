@@ -52,13 +52,14 @@ pub(in super::super) fn handle_convert_surface_into(
     });
     match converted {
         Ok(settled_destination) => {
-            publish_bound_surface_layouts_to_surface_share(
+            let texture_layouts_after_the_run = publish_bound_surface_layouts_to_surface_share(
                 sandbox.surface_store(),
                 std::slice::from_ref(&settled_destination),
             );
             EscalateResponse::Ok(EscalateResponseOk {
                 request_id,
                 handle_id: destination_surface_id,
+                texture_layouts_after_the_run: Some(texture_layouts_after_the_run),
                 ..Default::default()
             })
         }

@@ -775,7 +775,12 @@ impl HelperProcessGpuExchangeClient {
                 imported
             }
         };
-        let image_layout = claimed.claimed_frame().image_layout;
+        let image_layout = self
+            .gpu_pool_claim_tables
+            .descriptor_of_the_frame_named(surface_id)
+            .map_or(claimed.claimed_frame().image_layout, |frame| {
+                frame.image_layout
+            });
         self.frame_checked_out_over_a_pool_slot_import(
             surface_id,
             ProducerImageLayoutOfAFrame::StatedByItsDescriptor(VulkanLayout(image_layout)),

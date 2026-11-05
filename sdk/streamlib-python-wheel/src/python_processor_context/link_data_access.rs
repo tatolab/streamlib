@@ -60,7 +60,11 @@ impl PythonLinkInputDataReader {
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
         self.link_data_access
             .get()
-            .read_from_input_port_with_timestamp(python, port_name)
+            .read_from_input_port_with_timestamp_offering_gpu_access(
+                python,
+                port_name,
+                Some(self.gpu_limited_access_context.bind(python)),
+            )
     }
 
     /// The next message's payload on `port_name` with the link it arrived on,
@@ -205,7 +209,8 @@ impl PythonLinkOutputDataWriter {
     /// Publish one message carrying a copy of `payload`, any contiguous buffer,
     /// to every downstream link on `port_name`. A message naming a pooled GPU
     /// frame passes its published frame id as `pooled_gpu_frame`, and carries
-    /// the frame's descriptor for its readers to claim it by.
+    /// the frame's descriptor for its readers to claim it by; claim tables
+    /// cross processes only on Linux, so elsewhere it raises `ValueError`.
     #[pyo3(signature = (
         port_name,
         payload,

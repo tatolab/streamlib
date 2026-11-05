@@ -118,8 +118,9 @@ impl HelperGpuPoolClaimTables {
         Ok(())
     }
 
-    /// Remember `frame` as the newest of its slot, answering the slot's key;
-    /// `None` when this helper does not know the slot its row is leased to.
+    /// Remember `frame` as the newest of its slot unless a newer one is
+    /// known, answering the slot's key; `None` when this helper does not know
+    /// the slot its row is leased to.
     pub(crate) fn note_a_pooled_frame(
         &self,
         frame: GpuPoolSlotFrameDescriptorBody,
@@ -131,7 +132,13 @@ impl HelperGpuPoolClaimTables {
             .cloned()?;
         self.newest_frame_by_pool_slot_key
             .lock()
-            .insert(pool_slot_key.clone(), frame);
+            .entry(pool_slot_key.clone())
+            .and_modify(|newest| {
+                if frame.generation > newest.generation {
+                    *newest = frame;
+                }
+            })
+            .or_insert(frame);
         Some(pool_slot_key)
     }
 
@@ -343,5 +350,16 @@ mod tests {
             Some(1)
         );
         assert!(tables.descriptor_of_the_frame_named("slot-a#1").is_none());
+    }
+
+    #[test]
+    fn a_delayed_older_frame_of_a_slot_never_replaces_the_newer_one_read() {
+        let (tables, _engine_side, pool) = a_table_and_its_engine_side();
+        tables.note_a_pooled_frame(the_frame(pool, 3, 6));
+
+        tables.note_a_pooled_frame(the_frame(pool, 3, 5));
+
+        assert!(tables.descriptor_of_the_frame_named("slot-d#6").is_some());
+        assert!(tables.descriptor_of_the_frame_named("slot-d#5").is_none());
     }
 }

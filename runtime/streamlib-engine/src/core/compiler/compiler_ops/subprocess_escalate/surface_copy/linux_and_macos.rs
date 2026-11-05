@@ -24,13 +24,14 @@ pub(in super::super) fn handle_copy_surface_to_surface(
     } = request;
     match sandbox.copy_surface_to_surface(&source_surface_id, &destination_surface_id) {
         Ok(settled_destination_layout) => {
-            publish_bound_surface_layouts_to_surface_share(
+            let texture_layouts_after_the_run = publish_bound_surface_layouts_to_surface_share(
                 sandbox.surface_store(),
                 settled_destination_layout.as_slice(),
             );
             EscalateResponse::Ok(EscalateResponseOk {
                 request_id,
                 handle_id: destination_surface_id,
+                texture_layouts_after_the_run: Some(texture_layouts_after_the_run),
                 ..Default::default()
             })
         }
