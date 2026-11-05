@@ -646,6 +646,10 @@ fn generate_descriptor_from_schema(
         }
     });
 
+    let paced_by_real_time = schema
+        .paced_by_real_time
+        .then(|| quote! { .paced_by_real_time() });
+
     // `module_path!()` resolves here to `<author's module>::<authored type>`,
     // because this expansion lands inside the `pub mod` the macro names after
     // the author's struct — the generated module's own path *is* the type
@@ -662,6 +666,7 @@ fn generate_descriptor_from_schema(
                     .with_repository(#repository)
                     #config_schema
                     #scheduling
+                    #paced_by_real_time
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )
@@ -917,6 +922,7 @@ mod processor_struct_emit_tests {
             entrypoint: None,
             execution: Default::default(),
             scheduling: None,
+            paced_by_real_time: false,
             config: None,
             state: Vec::new(),
             inputs: Vec::new(),
@@ -1523,6 +1529,22 @@ mod processor_struct_emit_tests {
             "a probe",
             config_type,
         ))
+    }
+
+    #[test]
+    fn only_a_processor_paced_by_real_time_declares_it_on_its_descriptor() {
+        let rendered_for = |paced_by_real_time: bool| {
+            render_token_stream_without_whitespace(generate_descriptor_from_schema(
+                &ProcessorSchema {
+                    paced_by_real_time,
+                    ..minimal_schema()
+                },
+                "a probe",
+                &quote! { __streamlib_sdk::processors::EmptyConfig },
+            ))
+        };
+        assert!(rendered_for(true).contains(".paced_by_real_time()"));
+        assert!(!rendered_for(false).contains("paced_by_real_time"));
     }
 
     /// The whole `impl Processor` block, which is where the identity accessor

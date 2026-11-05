@@ -78,6 +78,13 @@ impl ProcessorInstance {
         self.0.execution_config()
     }
 
+    /// Whether the processor's type declares it paces itself on real time.
+    pub fn is_paced_by_real_time(&self) -> bool {
+        self.0
+            .descriptor()
+            .is_some_and(|descriptor| descriptor.paced_by_real_time)
+    }
+
     pub fn has_iceoryx2_outputs(&self) -> bool {
         self.0.has_iceoryx2_outputs()
     }

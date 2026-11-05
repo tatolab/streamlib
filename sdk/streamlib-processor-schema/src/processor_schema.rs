@@ -471,6 +471,10 @@ pub struct ProcessorSchema {
     #[serde(default)]
     pub scheduling: Option<ProcessorScheduling>,
 
+    /// Whether the processor paces itself on real time, as a live device does.
+    #[serde(default)]
+    pub paced_by_real_time: bool,
+
     /// Config schema reference.
     #[serde(default)]
     pub config: Option<ProcessorConfigSchema>,

@@ -22,6 +22,7 @@ const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
+const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
 const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
@@ -69,6 +70,9 @@ impl PythonProcessorDeclaration {
             priority: read_thread_priority(described_node_type)?,
         })
         .with_config_schema(read_config_schema_document(described_node_type)?);
+        if read_paced_by_real_time(described_node_type)? {
+            descriptor = descriptor.paced_by_real_time();
+        }
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
@@ -131,6 +135,14 @@ fn read_execution_config(
         }
     };
     Ok(ExecutionConfig::new(execution))
+}
+
+fn read_paced_by_real_time(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<bool, String> {
+    described_field(described_node_type, DESCRIBED_PACED_BY_REAL_TIME_KEY)?
+        .as_bool()
+        .ok_or_else(|| format!("{DESCRIBED_PACED_BY_REAL_TIME_KEY} must be a bool"))
 }
 
 fn read_thread_priority(
@@ -493,6 +505,7 @@ mod tests {
             "description": "consumes audio",
             "execution": {"mode": "continuous", "interval_ms": 20},
             "scheduling_priority": "high",
+            "paced_by_real_time": false,
             "config_schema": {"type": "object"},
             "input_ports": input_ports,
             "output_ports": [{"name": "levels", "description": "the levels it measured"}],
@@ -546,6 +559,26 @@ mod tests {
             "catalog_entry": catalog_entry,
         }]);
         described
+    }
+
+    #[test]
+    fn a_node_paced_by_real_time_reads_into_its_descriptor() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        assert!(
+            !read(&described)
+                .expect("reads")
+                .descriptor
+                .paced_by_real_time
+        );
+        described["paced_by_real_time"] = serde_json::json!(true);
+        assert!(
+            read(&described)
+                .expect("reads")
+                .descriptor
+                .paced_by_real_time
+        );
+        described["paced_by_real_time"] = serde_json::json!("yes");
+        assert!(read(&described).is_err());
     }
 
     #[test]

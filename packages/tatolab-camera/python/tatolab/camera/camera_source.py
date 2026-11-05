@@ -48,6 +48,7 @@ class CameraSourceConfig:
 
 @node(
     execution="manual",
+    paced_by_real_time=True,
     description=(
         "Captures a camera — V4L2 on Linux, AVFoundation on macOS — and converts each frame "
         "on the GPU, with no CPU copy. On macOS a stream someone loads or starts asks for camera "

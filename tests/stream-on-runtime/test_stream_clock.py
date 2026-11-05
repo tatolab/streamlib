@@ -18,12 +18,15 @@ from conftest import TatolabdUnderTest
 from engine_media_clock import engine_media_clock_now_ns
 from stream_clock_processors import (
     CONTINUOUS_TICK_COUNTER_INTERVAL_MS,
+    REAL_TIME_PACED_MESSAGES_REPORTED,
+    REAL_TIME_PACED_WRITER_INTERVAL_MS,
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,
 )
 from stream_clock_streams import (
     SLOW_MOTION_SCALE,
     continuous_ticks_in_slow_motion,
+    real_time_writes_beside_steps,
     step_times_through_a_slow_relay,
     stream_times_in_real_time,
     stream_times_in_slow_motion,
@@ -191,4 +194,41 @@ def test_a_stepped_stream_runs_each_step_through_helpers_faster_than_real_time(
     assert reported["machine_elapsed_ns"] < stream_elapsed_ns / 2, (
         f"{STEPPED_STREAM_STEPS} unpaced steps of {STEPPED_STREAM_STEP_MS} ms took "
         f"{reported['machine_elapsed_ns'] / 1e6:.0f} machine ms"
+    )
+
+
+def test_a_node_paced_by_real_time_writes_on_the_machine_clock_beside_steps_it_never_holds(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(real_time_writes_beside_steps)
+    real_time_writes = tatolabd.await_marker("REAL_TIME_PACED_WRITES", timeout=REPORT_TIMEOUT_SECONDS)
+    step_run = tatolabd.await_marker("STEPPED_STREAM_RUN", timeout=REPORT_TIMEOUT_SECONDS)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    seen = real_time_writes["seen"]
+    assert len(seen) == REAL_TIME_PACED_MESSAGES_REPORTED, seen
+    interval_ns = REAL_TIME_PACED_WRITER_INTERVAL_MS * 1_000_000
+    for earlier, later in zip(seen, seen[1:]):
+        assert later["stamp_ns"] >= later["written_stream_time_ns"], (
+            f"a write is stamped on stream time at the write, no earlier than the writer read it: {later}"
+        )
+        assert later["stamp_ns"] >= earlier["stamp_ns"], seen
+    machine_span_ns = seen[-1]["written_machine_time_ns"] - seen[0]["written_machine_time_ns"]
+    assert machine_span_ns >= (len(seen) - 1) * interval_ns * 0.9, (
+        f"the node paced by real time wrote over {machine_span_ns / 1e6:.1f} machine ms: {seen}"
+    )
+    stream_span_ns = seen[-1]["stamp_ns"] - seen[0]["stamp_ns"]
+    assert stream_span_ns > machine_span_ns, (
+        f"its writes are stamped on the unpaced stepped stream's time, which outruns the machine: "
+        f"{stream_span_ns / 1e6:.0f} stream ms over {machine_span_ns / 1e6:.0f} machine ms"
+    )
+
+    step_ns = STEPPED_STREAM_STEP_MS * 1_000_000
+    assert [message["step_index"] for message in step_run["seen"]] == list(
+        range(STEPPED_STREAM_STEPS)
+    ), step_run
+    assert step_run["machine_elapsed_ns"] < STEPPED_STREAM_STEPS * step_ns / 2, (
+        f"{STEPPED_STREAM_STEPS} unpaced steps took {step_run['machine_elapsed_ns'] / 1e6:.0f} "
+        f"machine ms beside a node paced by real time"
     )

@@ -184,6 +184,7 @@ class WhipPublisherConfig:
 
 
 @node(
+    paced_by_real_time=True,
     description=(
         "Publishes encoded video and audio to a WHIP endpoint, "
         "one RTP track per inbound link"

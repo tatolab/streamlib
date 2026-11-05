@@ -262,9 +262,15 @@ fn spawn_dedicated_thread(
                 "[{}] Attaching ProcessorInstanceComponent to graph",
                 proc_id_clone
             );
+            let paced_by_real_time = processor_arc_clone.lock().is_paced_by_real_time();
             {
                 let mut graph = graph_arc_clone.write();
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
+                    if paced_by_real_time
+                        && let Some(step_progress) = node.get::<StepProgressOfOneNodeComponent>()
+                    {
+                        step_progress.0.note_it_stands_outside_the_step_barrier();
+                    }
                     processor_to_attach.attach_to(node);
                 }
             }
@@ -375,6 +381,7 @@ fn spawn_dedicated_thread(
             }; // Lock released here
 
             if execution_the_node_runs_in == ProcessExecution::Manual
+                && !step_progress.stands_outside_the_step_barrier()
                 && runtime_ctx_clone.stream_clock.is_stepped()
             {
                 let refusal = format!(
@@ -389,7 +396,8 @@ fn spawn_dedicated_thread(
             if matches!(
                 execution_the_node_runs_in,
                 ProcessExecution::Continuous { .. }
-            ) {
+            ) && !step_progress.stands_outside_the_step_barrier()
+            {
                 step_progress.note_it_finishes_every_step();
             }
 

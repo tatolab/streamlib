@@ -349,6 +349,27 @@ def test_a_negative_interval_is_refused():
             def frames_to_downstream(self) -> None: ...
 
 
+@pytest.mark.parametrize("paced_by_real_time", [True, False])
+def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_time: bool):
+    @node(execution="manual", paced_by_real_time=paced_by_real_time)
+    class CameraSource:
+        @node.output()
+        def frames_to_downstream(self) -> None: ...
+
+    stamp = getattr(CameraSource, _node_declaration.NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP)
+    assert stamp is paced_by_real_time
+
+
+@pytest.mark.parametrize("not_a_bool", [1, "yes", None])
+def test_paced_by_real_time_other_than_a_bool_is_refused(not_a_bool: object):
+    with pytest.raises(TypeError, match="invalid paced_by_real_time"):
+
+        @node(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
+        class CameraSource:
+            @node.output()
+            def frames_to_downstream(self) -> None: ...
+
+
 def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
     @node
     class BaseFilter:

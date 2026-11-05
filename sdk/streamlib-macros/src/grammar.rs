@@ -13,6 +13,7 @@
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
 //!     built_in_node,                    // flag — type is `tatolab.stream:<struct name>`
+//!     paced_by_real_time,               // flag — paces itself on real time, as a live device does
 //!     config = crate::CameraConfig,     // typed Config alias; must derive `JsonSchema`
 //!     input("video_in", delivery_profile = "newest"),
 //!     output("video"),
@@ -111,6 +112,8 @@ pub struct ParsedProcessorAttr {
     /// Whether this is one of the runtime's built-in nodes, typed
     /// `tatolab.stream:<struct name>` rather than by its module path.
     pub built_in_node: bool,
+    /// Whether the processor paces itself on real time, as a live device does.
+    pub paced_by_real_time: bool,
     pub config_type: Option<Path>,
     pub config_field_name: String,
     pub inputs: Vec<ParsedPort>,
@@ -154,6 +157,7 @@ impl ParsedProcessorAttr {
             scheduling: self
                 .scheduling
                 .map(|priority| ProcessorScheduling { priority }),
+            paced_by_real_time: self.paced_by_real_time,
             config: None,
             state: Vec::new(),
             inputs: self.inputs.iter().map(to_port).collect(),
@@ -188,6 +192,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     let mut scheduling: Option<ThreadPriority> = None;
     let mut unsafe_send = false;
     let mut built_in_node = false;
+    let mut paced_by_real_time = false;
     let mut config_type: Option<Path> = None;
     let mut config_field_name: Option<String> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
@@ -201,6 +206,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         match key.to_string().as_str() {
             "unsafe_send" => unsafe_send = true,
             "built_in_node" => built_in_node = true,
+            "paced_by_real_time" => paced_by_real_time = true,
             "description" => {
                 input.parse::<Token![=]>()?;
                 let lit: LitStr = input.parse()?;
@@ -277,6 +283,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         scheduling,
         unsafe_send,
         built_in_node,
+        paced_by_real_time,
         config_type,
         config_field_name,
         inputs,
@@ -730,6 +737,7 @@ const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
     "scheduling",
     "unsafe_send",
     "built_in_node",
+    "paced_by_real_time",
     "config",
     "config_field",
     "description",
@@ -938,6 +946,17 @@ mod tests {
             unsafe_send,
         });
         assert!(parsed.unsafe_send);
+    }
+
+    #[test]
+    fn paced_by_real_time_flag_reaches_the_schema() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            paced_by_real_time,
+        });
+        assert!(parsed.paced_by_real_time);
+        assert!(parsed.to_processor_schema().paced_by_real_time);
+        assert!(!parse_ok(quote! { execution = manual }).paced_by_real_time);
     }
 
     #[test]

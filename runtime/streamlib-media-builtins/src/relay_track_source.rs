@@ -6,9 +6,9 @@
 //! The node is one MoQ client among any. It subscribes to a broadcast's track,
 //! each named as its publisher wrote it, and writes each object's payload to
 //! its one output as received, the first object of each group starting a
-//! group. Every stamp in a graph is this machine's, so an
-//! object is stamped from the track's own timestamp re-based onto this
-//! machine's clock by one offset, never by its arrival.
+//! group. Every stamp in a graph is on its stream's clock, so an
+//! object is stamped from the track's own timestamp re-based onto the
+//! stream's clock by one offset, never by its arrival.
 
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -21,7 +21,6 @@ use streamlib::sdk::descriptors::{
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
-use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib::sdk::serde_json::Value;
@@ -118,7 +117,7 @@ impl Default for RelayTrackSourceConfig {
                   never on a clock, until its stream is reset, or until the track ends; then it \
                   is given up and the next group read. The read joins at the live edge.\n\n\
                   The relay's object carries the writer's stamp, on the writer's clock. Every \
-                  stamp in a graph is this machine's, so `track` is stamped with the object's \
+                  stamp in a graph is on its stream's clock, so `track` is stamped with the object's \
                   own timestamp — the hang container's for a media track, the object's \
                   otherwise — plus one offset taken at the first object and lowered for an \
                   object that would run more than 100 ms ahead of its arrival, as the stack's \
@@ -130,6 +129,7 @@ impl Default for RelayTrackSourceConfig {
                   A relay that refuses, or a track not yet published or withdrawn, is retried \
                   with backoff and never ends the stream.",
     execution = manual,
+    paced_by_real_time,
     config = crate::relay_track_source::RelayTrackSourceConfig,
     output(
         "track",
@@ -344,7 +344,7 @@ async fn read_the_track_until_stopped(
 struct RelayTrackSourceSession {
     outputs: OutputWriter,
     max_age: Duration,
-    track_timestamp_rebasing: TrackTimestampRebasedOntoThisMachinesClock,
+    track_timestamp_rebasing: TrackTimestampRebasedOntoTheStreamClock,
     where_the_track_carries_its_timestamp: WhereATrackCarriesItsTimestamp,
     catalog_entry_set_on_the_output: Option<CatalogEntry>,
     objects_written: u64,
@@ -355,7 +355,7 @@ impl RelayTrackSourceSession {
         Self {
             outputs,
             max_age,
-            track_timestamp_rebasing: TrackTimestampRebasedOntoThisMachinesClock::default(),
+            track_timestamp_rebasing: TrackTimestampRebasedOntoTheStreamClock::default(),
             where_the_track_carries_its_timestamp: WhereATrackCarriesItsTimestamp::OnTheObject,
             catalog_entry_set_on_the_output: None,
             objects_written: 0,
@@ -526,13 +526,13 @@ impl RelayTrackSourceSession {
         object: &moq_net::frame::Frame,
         group_boundary: MessageGroupBoundary,
     ) {
-        let arrival_ns = MediaClock::now().as_nanos() as i64;
+        let arrival_ns = self.outputs.stream_time_now_ns();
         let object_timestamp_ns = self
             .where_the_track_carries_its_timestamp
             .the_timestamp_ns_of(object);
         let timestamp_ns = self
             .track_timestamp_rebasing
-            .stamp_on_this_machines_clock(object_timestamp_ns, arrival_ns);
+            .stamp_on_the_stream_clock(object_timestamp_ns, arrival_ns);
         match self.outputs.write_bytes_with_timestamp(
             TRACK_OUTPUT_PORT,
             &object.payload,
@@ -711,28 +711,28 @@ const A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST: Duration = Duration::from
 /// allowance at 100 ms where the player's `buffer` defaults to zero, so arrival
 /// jitter under it never shortens a step. The group a joining reader is handed
 /// in one burst is written at its arrival, and a track that leaps ahead never
-/// carries its stamps into this machine's future.
+/// carries its stamps into the stream's future.
 const A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST: Duration = Duration::from_millis(100);
 
 /// How far a track's timestamp may step back — a reordered frame — before the
 /// track is taken to have restarted and the offset is taken again.
 const A_TRACKS_TIMESTAMP_STEPS_BACK_BY_AT_MOST: Duration = Duration::from_millis(250);
 
-/// A track's own timestamps restated on this machine's clock: each plus one
+/// A track's own timestamps restated on the stream's clock: each plus one
 /// offset taken at the first object, lowered when an object arrives earlier
 /// than it allows, so the track's spacing is kept whatever jitter did to the
 /// objects' arrival.
 #[derive(Debug, Default)]
-struct TrackTimestampRebasedOntoThisMachinesClock {
+struct TrackTimestampRebasedOntoTheStreamClock {
     offset_ns: Option<i128>,
     latest_track_timestamp_ns: Option<i128>,
 }
 
-impl TrackTimestampRebasedOntoThisMachinesClock {
+impl TrackTimestampRebasedOntoTheStreamClock {
     /// The stamp of an object stamped `track_timestamp_ns` by its writer and
-    /// arriving at `arrival_ns` on this machine's clock; an object carrying no
+    /// arriving at `arrival_ns` on the stream's clock; an object carrying no
     /// timestamp is stamped at arrival.
-    fn stamp_on_this_machines_clock(
+    fn stamp_on_the_stream_clock(
         &mut self,
         track_timestamp_ns: Option<i128>,
         arrival_ns: i64,
@@ -803,12 +803,12 @@ mod tests {
 
     #[test]
     fn the_output_keeps_the_tracks_spacing_under_jittered_arrival() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
         let stamps: Vec<i64> = (0..120)
             .map(|object_index| {
                 let track_timestamp_ns =
                     1_000_000_000_000 + i128::from(object_index) * FRAME_SPACING_NS;
-                rebasing.stamp_on_this_machines_clock(
+                rebasing.stamp_on_the_stream_clock(
                     Some(track_timestamp_ns),
                     arrival_of(object_index, track_timestamp_ns - 1_000_000_000_000),
                 )
@@ -830,10 +830,10 @@ mod tests {
 
     #[test]
     fn a_track_that_restarts_its_timestamps_is_re_anchored_and_keeps_its_spacing_after() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
         let mut arrival_ns = 9_000_000_000_i64;
         for object_index in 0..30 {
-            rebasing.stamp_on_this_machines_clock(
+            rebasing.stamp_on_the_stream_clock(
                 Some(600_000_000 + i128::from(object_index) * FRAME_SPACING_NS),
                 arrival_ns,
             );
@@ -841,9 +841,9 @@ mod tests {
         }
         let restarted_arrival_ns = arrival_ns + 2_000_000;
         let first_after_the_restart =
-            rebasing.stamp_on_this_machines_clock(Some(0), restarted_arrival_ns);
+            rebasing.stamp_on_the_stream_clock(Some(0), restarted_arrival_ns);
         assert_eq!(first_after_the_restart, restarted_arrival_ns);
-        let second_after_the_restart = rebasing.stamp_on_this_machines_clock(
+        let second_after_the_restart = rebasing.stamp_on_the_stream_clock(
             Some(FRAME_SPACING_NS),
             restarted_arrival_ns + FRAME_SPACING_NS as i64 + 9_000_000,
         );
@@ -860,7 +860,7 @@ mod tests {
     #[test]
     fn a_group_handed_over_in_a_burst_on_joining_is_written_at_arrival_and_the_live_edge_keeps_its_spacing()
      {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
         let joined_at_ns = 50_000_000_000_i64;
         let cached_objects = 60_i64;
         let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
@@ -877,7 +877,7 @@ mod tests {
                         + (live_index * 7_919) % 16 * 1_000_000
                 };
                 (
-                    rebasing.stamp_on_this_machines_clock(Some(track_timestamp_ns), arrival_ns),
+                    rebasing.stamp_on_the_stream_clock(Some(track_timestamp_ns), arrival_ns),
                     arrival_ns,
                 )
             })
@@ -907,10 +907,10 @@ mod tests {
 
     #[test]
     fn a_track_that_falls_behind_its_arrival_by_more_than_a_second_is_re_anchored() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
-        rebasing.stamp_on_this_machines_clock(Some(0), 1_000_000_000);
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
+        rebasing.stamp_on_the_stream_clock(Some(0), 1_000_000_000);
         let after_the_stall =
-            rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 2_500_000_000);
+            rebasing.stamp_on_the_stream_clock(Some(FRAME_SPACING_NS), 2_500_000_000);
         assert_eq!(after_the_stall, 2_500_000_000);
     }
 
@@ -918,44 +918,43 @@ mod tests {
     fn a_track_that_leaps_ahead_of_its_arrival_is_stamped_within_the_allowance_of_arrival() {
         let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
         for leap_ns in [5_000_000_000_i128, 60_000_000_000] {
-            let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
-            rebasing.stamp_on_this_machines_clock(Some(0), 1_000_000_000);
-            rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
-            let after_the_leap =
-                rebasing.stamp_on_this_machines_clock(Some(leap_ns), 1_066_666_666);
+            let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
+            rebasing.stamp_on_the_stream_clock(Some(0), 1_000_000_000);
+            rebasing.stamp_on_the_stream_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
+            let after_the_leap = rebasing.stamp_on_the_stream_clock(Some(leap_ns), 1_066_666_666);
             assert_eq!(after_the_leap, 1_066_666_666 + largest_lead_ns);
-            let next = rebasing
-                .stamp_on_this_machines_clock(Some(leap_ns + FRAME_SPACING_NS), 1_099_999_999);
+            let next =
+                rebasing.stamp_on_the_stream_clock(Some(leap_ns + FRAME_SPACING_NS), 1_099_999_999);
             assert_eq!(i128::from(next - after_the_leap), FRAME_SPACING_NS);
         }
     }
 
     #[test]
     fn an_object_arriving_earlier_than_the_offset_allows_lowers_it() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
         let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
-        rebasing.stamp_on_this_machines_clock(Some(0), 1_400_000_000);
-        let early = rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
+        rebasing.stamp_on_the_stream_clock(Some(0), 1_400_000_000);
+        let early = rebasing.stamp_on_the_stream_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
         assert_eq!(early, 1_033_333_333 + largest_lead_ns);
     }
 
     #[test]
     fn a_frame_reordered_a_little_back_keeps_the_offset() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
-        let first = rebasing.stamp_on_this_machines_clock(Some(100_000_000), 2_000_000_000);
-        let reordered = rebasing.stamp_on_this_machines_clock(Some(33_333_333), 2_010_000_000);
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
+        let first = rebasing.stamp_on_the_stream_clock(Some(100_000_000), 2_000_000_000);
+        let reordered = rebasing.stamp_on_the_stream_clock(Some(33_333_333), 2_010_000_000);
         assert_eq!(i128::from(first - reordered), 66_666_667);
     }
 
     #[test]
     fn an_object_carrying_no_timestamp_is_stamped_at_arrival() {
-        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let mut rebasing = TrackTimestampRebasedOntoTheStreamClock::default();
         assert_eq!(
-            rebasing.stamp_on_this_machines_clock(None, 7_000_000_000),
+            rebasing.stamp_on_the_stream_clock(None, 7_000_000_000),
             7_000_000_000
         );
         assert_eq!(
-            rebasing.stamp_on_this_machines_clock(None, 7_123_000_000),
+            rebasing.stamp_on_the_stream_clock(None, 7_123_000_000),
             7_123_000_000
         );
     }

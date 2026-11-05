@@ -20,6 +20,7 @@ use crate::core::child_process_restart_backoff::{
 };
 use crate::core::context::{
     IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClock,
+    StreamClockSpec,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId, StepProgressOfOneNode};
@@ -54,6 +55,19 @@ pub fn run_processor_loop(
     );
 
     match exec_config.execution {
+        ProcessExecution::Continuous { interval_ms }
+            if step_progress.stands_outside_the_step_barrier() =>
+        {
+            run_continuous_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &pause_gate,
+                interval_ms,
+                &runtime_ctx,
+                &StreamClock::starting_now(StreamClockSpec::Real),
+            );
+        }
         ProcessExecution::Continuous { interval_ms } if runtime_ctx.stream_clock.is_stepped() => {
             run_continuous_mode_on_steps(
                 &id,
@@ -73,6 +87,7 @@ pub fn run_processor_loop(
                 &pause_gate,
                 interval_ms,
                 &runtime_ctx,
+                &runtime_ctx.stream_clock,
             );
         }
         ProcessExecution::Reactive => {
@@ -135,14 +150,14 @@ fn run_continuous_mode(
     pause_gate: &Arc<AtomicBool>,
     interval_ms: u32,
     runtime_ctx: &RuntimeContext,
+    clock_it_paces_on: &StreamClock,
 ) {
-    let stream_clock = &runtime_ctx.stream_clock;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
-    let mut next_deadline_stream_ns = stream_clock.now_ns();
+    let mut next_deadline_ns = clock_it_paces_on.now_ns();
     let mut was_paused = false;
 
     loop {
-        if wait_for_stream_time_or_shutdown(stream_clock, next_deadline_stream_ns, shutdown_rx)
+        if wait_for_stream_time_or_shutdown(clock_it_paces_on, next_deadline_ns, shutdown_rx)
             == ContinuousRunnerWaitOutcome::ShutdownRequested
         {
             tracing::info!("[{}] Received shutdown signal", id);
@@ -166,16 +181,16 @@ fn run_continuous_mode(
                 tracing::info!("[{}] Received shutdown signal", id);
                 break;
             }
-            next_deadline_stream_ns = stream_clock.now_ns();
+            next_deadline_ns = clock_it_paces_on.now_ns();
             continue;
         }
 
         dispatch_process(id, processor, runtime_ctx);
 
-        next_deadline_stream_ns = next_continuous_deadline_stream_ns(
-            next_deadline_stream_ns,
+        next_deadline_ns = next_continuous_deadline_stream_ns(
+            next_deadline_ns,
             interval_stream_ns,
-            stream_clock.now_ns(),
+            clock_it_paces_on.now_ns(),
         );
     }
 }

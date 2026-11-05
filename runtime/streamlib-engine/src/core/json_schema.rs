@@ -333,6 +333,10 @@ pub struct ProcessorDescriptorOutput {
     /// agent reads to learn which keys this processor's config takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
+    /// Whether the node paces itself on real time, as a live device does: in a
+    /// stepped stream it stands outside the step barrier.
+    #[serde(default)]
+    pub paced_by_real_time: bool,
     /// Input port descriptors.
     pub inputs: Vec<PortDescriptorOutput>,
     /// Output port descriptors.
@@ -590,6 +594,7 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
             runtime: ProcessorRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
             config_schema: desc.config_schema.clone(),
+            paced_by_real_time: desc.paced_by_real_time,
             inputs: desc.inputs.iter().map(PortDescriptorOutput::from).collect(),
             outputs: desc
                 .outputs

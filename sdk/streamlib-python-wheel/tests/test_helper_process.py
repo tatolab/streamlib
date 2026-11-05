@@ -1768,6 +1768,45 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
     )
 
 
+def test_a_paused_continuous_processor_is_not_called_until_it_resumes(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """The native runner skips a paused continuous processor's `process()`;
+    the helper's continuous loop does the same."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
+    time.sleep(0.2)
+
+    stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
+    assert stand_in_parent.receive() == {"rpc": "ok"}
+    calls_when_paused = len(when_the_pacing_probe_processed_ns)
+    time.sleep(0.3)
+    calls_while_paused = len(when_the_pacing_probe_processed_ns) - calls_when_paused
+
+    stand_in_parent.send({"cmd": "on_resume", "capability": "limited"})
+    assert stand_in_parent.receive() == {"rpc": "ok"}
+    calls_when_resumed = len(when_the_pacing_probe_processed_ns)
+    time.sleep(0.2)
+    calls_after_resuming = len(when_the_pacing_probe_processed_ns) - calls_when_resumed
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "stopped"
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+    assert calls_when_paused > 0, "process() never ran before the pause"
+    assert calls_while_paused == 0, f"process() ran {calls_while_paused} times while paused"
+    assert calls_after_resuming > 0, "process() never ran after the resume"
+
+
 def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):

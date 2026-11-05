@@ -42,7 +42,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Any, NoReturn, Optional
+from typing import Any, Callable, NoReturn, Optional
 
 OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 10)
 
@@ -138,6 +138,7 @@ from tatolab.stream import (
     NodeLinkDataAccess,
     RuntimeContextFullAccess,
     log,
+    monotonic_now_ns,
     start_monotonic_timer,
 )
 from tatolab.stream._node_declaration import (
@@ -147,6 +148,7 @@ from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+    NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP,
     NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP,
 )
 
@@ -853,6 +855,7 @@ DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("execution", NODE_DECLARATION_EXECUTION_STAMP),
     ("scheduling_priority", NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
+    ("paced_by_real_time", NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP),
     ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
@@ -1383,7 +1386,7 @@ class HelperProcessLifecycle:
                 self._link_data_access.adopt_the_stream_clock_board(
                     stream_clock_board_service_name
                 )
-                if stream_clock.get("mode") == "stepped":
+                if stream_clock.get("mode") == "stepped" and not self._paced_by_real_time():
                     self._stepped_stream_clock_board_service_name = (
                         stream_clock_board_service_name
                     )
@@ -1445,8 +1448,18 @@ class HelperProcessLifecycle:
             and self._stepped_stream_clock_board_service_name is not None
         ):
             self._run_continuous_on_steps(int(command.get("interval_ms") or 0))
+        elif execution_mode == "continuous" and self._paced_by_real_time():
+            self._run_continuous(
+                int(command.get("interval_ms") or 0),
+                time_ns_the_loop_paces_on=monotonic_now_ns,
+                machine_ns_until=lambda deadline_ns: deadline_ns - monotonic_now_ns(),
+            )
         elif execution_mode == "continuous":
-            self._run_continuous(int(command.get("interval_ms") or 0))
+            self._run_continuous(
+                int(command.get("interval_ms") or 0),
+                time_ns_the_loop_paces_on=self._hosted_limited_access_context_time,
+                machine_ns_until=machine_nanoseconds_until_this_helpers_stream_clock_reaches,
+            )
         elif execution_mode == "manual":
             self._hosted.call_hook("start", self._hosted.full_access_context)
         else:
@@ -1483,19 +1496,32 @@ class HelperProcessLifecycle:
                 self._park_until_a_command_arrives()
             self._drain_commands_arriving_mid_run()
 
-    def _run_continuous(self, interval_ms: int) -> None:
+    def _paced_by_real_time(self) -> bool:
+        return getattr(self._processor_class, NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP, False) is True
+
+    def _hosted_limited_access_context_time(self) -> int:
         assert self._hosted is not None
-        interval_stream_ns = (
+        return self._hosted.limited_access_context.time
+
+    def _run_continuous(
+        self,
+        interval_ms: int,
+        time_ns_the_loop_paces_on: "Callable[[], int]",
+        machine_ns_until: "Callable[[int], int]",
+    ) -> None:
+        """Call `process` on each deadline of the interval grid on the time
+        `time_ns_the_loop_paces_on` reads: stream time, or the machine's for a
+        node paced by real time."""
+        assert self._hosted is not None
+        interval_ns = (
             interval_ms * 1_000_000
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
         limited_access_context = self._hosted.limited_access_context
-        next_deadline_stream_ns = limited_access_context.time
+        next_deadline_ns = time_ns_the_loop_paces_on()
         while self._running:
-            machine_ns_to_go = machine_nanoseconds_until_this_helpers_stream_clock_reaches(
-                next_deadline_stream_ns
-            )
+            machine_ns_to_go = machine_ns_until(next_deadline_ns)
             if machine_ns_to_go > 0:
                 # Bounded so a live rescale reaches a wait already under way.
                 machine_wait_ns = min(
@@ -1508,11 +1534,12 @@ class HelperProcessLifecycle:
                         )
                         self._running = False
             else:
-                self._hosted.call_hook("process", limited_access_context)
-                next_deadline_stream_ns = next_continuous_deadline_stream_ns(
-                    next_deadline_stream_ns,
-                    interval_stream_ns,
-                    limited_access_context.time,
+                if not self._paused:
+                    self._hosted.call_hook("process", limited_access_context)
+                next_deadline_ns = next_continuous_deadline_stream_ns(
+                    next_deadline_ns,
+                    interval_ns,
+                    time_ns_the_loop_paces_on(),
                 )
             self._drain_commands_arriving_mid_run()
 
