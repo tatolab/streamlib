@@ -102,7 +102,7 @@ DECIDED and SHIPPED.
 - **ADDED (§Processor model & scheduling, DECIDED):** Each non-real stream has one **stream clock
   board**, an iceoryx2 blackboard the engine creates at the stream's start and every one of its
   helpers opens read-only by the service name its `setup` command carries, beside the loss-count
-  board. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode, step_index, step_ns,
+  board. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode, a_step_is_open, step_index, step_ns,
   base_ns, anchor_ns, scale_f64_bits, pace_f64_bits }` in `streamlib-ipc-types`, with a layout
   regression test. A reader copies that one entry whole, which iceoryx2's blackboard keeps
   consistent against a concurrent write, so it always reads one published clock. A real-time stream creates no

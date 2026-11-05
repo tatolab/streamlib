@@ -832,9 +832,9 @@ pub const STREAM_CLOCK_BOARD_MODE_STEPPED: u32 = 2;
 pub struct StreamClockBoardEntry {
     /// One of the `STREAM_CLOCK_BOARD_MODE_*` values.
     pub mode: u32,
-    /// Always zero; keeps every later field 8-byte aligned.
-    pub reserved: u32,
-    /// The step open now; zero unless stepped.
+    /// One once a stepped clock opened its first step, zero before and unless stepped.
+    pub a_step_is_open: u32,
+    /// The step open now; zero unless a step is open.
     pub step_index: u64,
     /// Stream nanoseconds per step; zero unless the clock steps.
     pub step_ns: u64,
@@ -869,7 +869,10 @@ mod tests {
         assert_eq!(std::mem::size_of::<StreamClockBoardEntry>(), 56);
         assert_eq!(std::mem::align_of::<StreamClockBoardEntry>(), 8);
         assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, mode), 0);
-        assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, reserved), 4);
+        assert_eq!(
+            std::mem::offset_of!(StreamClockBoardEntry, a_step_is_open),
+            4
+        );
         assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, step_index), 8);
         assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, step_ns), 16);
         assert_eq!(std::mem::offset_of!(StreamClockBoardEntry, base_ns), 24);
