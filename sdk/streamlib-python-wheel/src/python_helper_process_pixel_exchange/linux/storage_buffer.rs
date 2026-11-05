@@ -54,6 +54,16 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
+#[cfg(test)]
+impl HelperCheckedOutStorageBuffer {
+    /// The slot's shared import this frame reads through.
+    pub(crate) fn storage_buffer_pool_slot_import(
+        &self,
+    ) -> &Arc<HelperStorageBufferPoolSlotImport> {
+        &self.storage_buffer_pool_slot_import
+    }
+}
+
 impl HelperCheckedOutStorageBuffer {
     /// CUDA's linear-memory import of this tensor, made on first ask. CUDA
     /// maps the tensor's exact byte size, never the allocation's rounded one.

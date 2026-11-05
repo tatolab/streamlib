@@ -264,6 +264,14 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
+#[cfg(test)]
+impl HelperCheckedOutTextureSurface {
+    /// The slot's shared import this frame reads through.
+    pub(crate) fn texture_pool_slot_import(&self) -> &Arc<HelperTexturePoolSlotImport> {
+        &self.texture_pool_slot_import
+    }
+}
+
 impl HelperCheckedOutTextureSurface {
     /// A DMA-BUF fd for the texture's first plane and the allocation's
     /// byte size — the handle itself, not a linear view of it.

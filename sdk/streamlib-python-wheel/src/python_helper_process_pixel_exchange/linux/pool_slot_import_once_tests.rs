@@ -177,3 +177,183 @@ fn five_frames_over_a_two_slot_pool_import_each_slot_once() {
         "no import outlives the connection the service would retire it on"
     );
 }
+
+/// Check out `frames` published frames round-robin over `slot_ids` and keep
+/// each slot's first import, asserting every later frame over the slot reads
+/// through that same import.
+fn check_out_frames_round_robin<SlotImport>(
+    share: &SurfaceShareUnderTest,
+    exchange_client: &Arc<HelperProcessGpuExchangeClient>,
+    slot_ids: &[&str],
+    frames: u64,
+    pool_slot_import_of: impl Fn(&HelperCheckedOutSurface) -> Arc<SlotImport>,
+) -> Vec<Arc<SlotImport>> {
+    let mut first_import_of_each_slot: Vec<Option<Arc<SlotImport>>> =
+        slot_ids.iter().map(|_| None).collect();
+    for frame_index in 0..frames {
+        let slot_index = (frame_index as usize) % slot_ids.len();
+        let frame_generation = frame_index / slot_ids.len() as u64 + 1;
+        share.publish_frame_generation_over_a_registered_pool_slot(
+            slot_ids[slot_index],
+            frame_generation,
+        );
+        let frame_id = format!("{}#{frame_generation}", slot_ids[slot_index]);
+        let checked_out = exchange_client
+            .check_out_and_import(&frame_id)
+            .unwrap_or_else(|refusal| panic!("frame {frame_id} checks out: {refusal}"));
+        let import = pool_slot_import_of(&checked_out);
+        match &first_import_of_each_slot[slot_index] {
+            Some(first_import) => assert!(
+                Arc::ptr_eq(first_import, &import),
+                "frame {frame_id} must reuse its slot's first import"
+            ),
+            None => first_import_of_each_slot[slot_index] = Some(import),
+        }
+    }
+    first_import_of_each_slot
+        .into_iter()
+        .map(|import| import.expect("every slot carried a frame"))
+        .collect()
+}
+
+/// Five frames over a two-slot pool of OPAQUE_FD textures import each slot's
+/// image once, and each frame still runs its own layout acquire and release.
+/// Needs a device that exports an OPAQUE_FD image; skips where none does.
+#[test]
+fn five_texture_frames_over_a_two_slot_pool_import_each_slot_once() {
+    use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
+    use streamlib::sdk::engine::{HostSurfaceStoreExt as _, HostTextureExt as _};
+    use streamlib::sdk::rhi::{
+        Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout,
+    };
+
+    let host_device = match HostVulkanDevice::new() {
+        Ok(host_device) => host_device,
+        Err(unavailable) => {
+            tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+            return;
+        }
+    };
+    let descriptor = TextureDescriptor::new(64, 16, TextureFormat::Rgba8Unorm)
+        .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC);
+    let mut textures = Vec::new();
+    for _ in 0..2 {
+        match HostVulkanTexture::new_opaque_fd_export(&host_device, &descriptor) {
+            Ok(exported) => textures.push(Texture::from_vulkan(exported)),
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no OPAQUE_FD image export on this device ({unavailable})"
+                );
+                return;
+            }
+        }
+    }
+    let share = SurfaceShareUnderTest::start("texture-import-once");
+    let engine_surface_store = SurfaceStore::new(
+        share.socket_path.to_string_lossy().into_owned(),
+        "engine:texture-import-once-under-test".to_string(),
+    );
+    engine_surface_store
+        .connect()
+        .expect("the engine's store connects");
+    let slot_ids = ["texture-import-once-slot-a", "texture-import-once-slot-b"];
+    for (slot_id, texture) in slot_ids.iter().zip(&textures) {
+        engine_surface_store
+            .register_texture(slot_id, texture, None, None, VulkanLayout::UNDEFINED)
+            .expect("the engine registers the texture pool slot");
+    }
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "texture-import-once-under-test",
+        Ok(host_device.physical_device_uuid()),
+    );
+
+    let imports =
+        check_out_frames_round_robin(&share, &exchange_client, &slot_ids, 5, |checked_out| {
+            let HelperCheckedOutSurface::Texture(texture_surface) = checked_out else {
+                panic!("a texture registration must check out as a texture");
+            };
+            Arc::clone(texture_surface.texture_pool_slot_import())
+        });
+    assert!(!Arc::ptr_eq(&imports[0], &imports[1]));
+    assert_eq!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
+        2,
+        "five texture frames over two slots import twice"
+    );
+}
+
+/// Five frames over a two-slot pool of tensor storage buffers import each
+/// slot once and keep its memory for CUDA to adopt on first use. Needs a
+/// device that exports DEVICE_LOCAL OPAQUE_FD memory; skips where none does.
+#[test]
+fn five_storage_buffer_frames_over_a_two_slot_pool_import_each_slot_once() {
+    use streamlib::sdk::engine::HostSurfaceStoreExt as _;
+    use streamlib::sdk::rhi::{StorageBuffer, TensorElementType, TensorStorageBufferLayout};
+
+    let host_device = match HostVulkanDevice::new() {
+        Ok(host_device) => host_device,
+        Err(unavailable) => {
+            tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+            return;
+        }
+    };
+    let tensor_layout = TensorStorageBufferLayout::new(vec![4, 16, 16], TensorElementType::Float32)
+        .expect("a valid tensor layout");
+    let mut storage_buffers = Vec::new();
+    for _ in 0..2 {
+        match HostVulkanBuffer::new_opaque_fd_export_device_local(
+            &host_device,
+            tensor_layout.byte_size(),
+        ) {
+            Ok(exported) => {
+                storage_buffers.push(StorageBuffer::from_host_vulkan_buffer(Arc::new(exported)))
+            }
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no DEVICE_LOCAL OPAQUE_FD export on this device ({unavailable})"
+                );
+                return;
+            }
+        }
+    }
+    let share = SurfaceShareUnderTest::start("storage-buffer-import-once");
+    let engine_surface_store = SurfaceStore::new(
+        share.socket_path.to_string_lossy().into_owned(),
+        "engine:storage-buffer-import-once-under-test".to_string(),
+    );
+    engine_surface_store
+        .connect()
+        .expect("the engine's store connects");
+    let slot_ids = [
+        "storage-buffer-import-once-slot-a",
+        "storage-buffer-import-once-slot-b",
+    ];
+    for (slot_id, storage_buffer) in slot_ids.iter().zip(&storage_buffers) {
+        engine_surface_store
+            .register_storage_buffer(slot_id, storage_buffer, &tensor_layout)
+            .expect("the engine registers the storage buffer pool slot");
+    }
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "storage-buffer-import-once-under-test",
+        Ok(host_device.physical_device_uuid()),
+    );
+
+    let imports =
+        check_out_frames_round_robin(&share, &exchange_client, &slot_ids, 5, |checked_out| {
+            let HelperCheckedOutSurface::StorageBuffer(storage_buffer) = checked_out else {
+                panic!("a storage_buffer registration must check out as a storage buffer");
+            };
+            assert_eq!(storage_buffer.tensor_layout, tensor_layout);
+            Arc::clone(storage_buffer.storage_buffer_pool_slot_import())
+        });
+    assert!(!Arc::ptr_eq(&imports[0], &imports[1]));
+    assert_eq!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
+        2,
+        "five storage buffer frames over two slots import twice"
+    );
+}
