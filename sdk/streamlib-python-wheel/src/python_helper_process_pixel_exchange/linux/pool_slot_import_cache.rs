@@ -70,14 +70,8 @@ impl HelperPoolSlotImportsByPoolSlot {
     /// helper no longer holds is ignored; a frame still reading a dropped
     /// import keeps it alive until that frame drops.
     pub(crate) fn drop_the_pool_slots_a_reply_lists_as_retired(&self, reply: &serde_json::Value) {
-        let Some(retired_pool_slots) = reply
-            .get(SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD)
-            .and_then(|value| value.as_array())
-        else {
-            return;
-        };
         let mut reservations_by_pool_slot_key = self.reservations_by_pool_slot_key.lock();
-        for retired_pool_slot_key in retired_pool_slots.iter().filter_map(|key| key.as_str()) {
+        for retired_pool_slot_key in pool_slots_a_reply_lists_as_retired(reply) {
             reservations_by_pool_slot_key.remove(retired_pool_slot_key);
         }
     }
@@ -97,6 +91,18 @@ impl HelperPoolSlotImportsByPoolSlot {
             .filter(|reservation| reservation.get().is_some())
             .count()
     }
+}
+
+/// The pool slot keys a surface-share reply lists as retired.
+pub(crate) fn pool_slots_a_reply_lists_as_retired(
+    reply: &serde_json::Value,
+) -> impl Iterator<Item = &str> {
+    reply
+        .get(SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD)
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|key| key.as_str())
 }
 
 /// The pool slot a published frame id (`<slot>#<generation>`) names; `None`

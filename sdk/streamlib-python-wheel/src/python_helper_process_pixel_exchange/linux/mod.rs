@@ -35,7 +35,9 @@ pub(crate) use foreign_dma_buf::{
     HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
 };
 pub(crate) use pool_slot_import_cache::HelperPoolSlotImportsByPoolSlot;
-use pool_slot_import_cache::{HelperPoolSlotImport, pool_slot_of_a_published_frame_id};
+use pool_slot_import_cache::{
+    HelperPoolSlotImport, pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
+};
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
 
@@ -530,7 +532,9 @@ impl HelperProcessGpuExchangeClient {
             |response| match published_pool_slot {
                 Some(published_pool_slot)
                     if !holds_pool_slot_import
-                        && refusal_the_surface_share_service_answered(response).is_none() =>
+                        && refusal_the_surface_share_service_answered(response).is_none()
+                        && !pool_slots_a_reply_lists_as_retired(response)
+                            .any(|retired_pool_slot| retired_pool_slot == published_pool_slot) =>
                 {
                     Some(
                         self.pool_slot_imports_by_pool_slot
