@@ -82,7 +82,10 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   `#[repr(C)]` value: `kind: u32` and a 60-byte body, for 64 bytes in all. In this change the
   kinds are `Bytes` (the payload is the sample's bytes, and the body is zero) and
   `GpuPoolSlotFrame`, whose body is `pool: [u8; 16]` (the pool's UUID),
-  `slot: u32`, `generation: u64` and `timeline_value: u64`, with the rest reserved and zero.
+  `slot: u32`, `generation: u64`, `timeline_value: u64` and `image_layout: i32` (the raw
+  `VkImageLayout` the producer left the image in, 0 for a buffer slot), with the rest reserved
+  and zero. The layout travels in the descriptor, never through a surface-share request or a
+  claim table cell.
   `strict-port-families` adds a kind per family and gives each family's layout its body. A
   descriptor a reader does not know is refused by kind, never guessed at. [zero-copy-data-plane]
 - **ADDED (same entry, DECIDED):** A read borrows. `ctx.read(port)` returns a

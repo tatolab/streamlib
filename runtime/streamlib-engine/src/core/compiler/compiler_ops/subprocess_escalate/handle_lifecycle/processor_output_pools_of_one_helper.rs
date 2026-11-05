@@ -165,6 +165,7 @@ impl ProcessorOutputFramePublished {
                     slot: claim_table_row.row_index(),
                     generation: slot.published_frame_generation(),
                     timeline_value: 0,
+                    image_layout: 0,
                 }
             }),
         }
