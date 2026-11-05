@@ -30,6 +30,10 @@ REPORT_TIMEOUT_SECONDS = 30.0
 #: reads of the two clocks are a few microseconds apart over half a second.
 RATE_TOLERANCE = 0.02
 
+#: How far, in stream nanoseconds, the reader's clock may run ahead of a stamp:
+#: one second of delivery at half speed.
+READER_AHEAD_OF_STAMP_BOUND_NS = 500_000_000
+
 
 def the_stamps_reported_by(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
@@ -61,8 +65,8 @@ def test_a_slow_motion_streams_nodes_read_and_stamp_half_real_time(
             f"a write with no stamp is stamped with stream time between the writer's read and "
             f"the reader's: {seen}"
         )
-        assert seen["stamp_ns"] < seen["written_machine_time_ns"], (
-            f"a half-speed clock started at the machine clock falls behind it: {seen}"
+        assert seen["reader_stream_time_ns"] - seen["stamp_ns"] < READER_AHEAD_OF_STAMP_BOUND_NS, (
+            f"the reader's stream time runs no further ahead of the stamp than delivery takes: {seen}"
         )
 
     rate = stream_seconds_per_machine_second(first, last)

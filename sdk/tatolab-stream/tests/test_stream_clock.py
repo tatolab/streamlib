@@ -119,3 +119,22 @@ def test_a_clock_is_a_frozen_value() -> None:
     with pytest.raises(AttributeError):
         clock.scale = 2.0  # type: ignore[misc]
     assert clock == ScaledStreamClock(scale=0.5)
+
+
+@pytest.mark.parametrize("pace", [0, -1.0, math.inf, math.nan])
+def test_a_pace_is_a_finite_number_greater_than_zero(pace: float) -> None:
+    with pytest.raises(ValueError, match="greater than zero"):
+        SteppedStreamClock(step_ns=1_000_000, pace=pace)
+
+
+@pytest.mark.parametrize("stop_after_steps", [0, -3])
+def test_stop_after_steps_is_greater_than_zero(stop_after_steps: int) -> None:
+    with pytest.raises(ValueError, match="greater than zero"):
+        SteppedStreamClock(step_ns=1_000_000, stop_after_steps=stop_after_steps)
+
+
+def test_an_integer_the_engine_cannot_read_as_u64_is_refused() -> None:
+    with pytest.raises(ValueError, match="at most"):
+        SteppedStreamClock(step_ns=2**64)
+    with pytest.raises(ValueError, match="at most"):
+        SteppedStreamClock(step_ns=1_000_000, stop_after_steps=2**64)

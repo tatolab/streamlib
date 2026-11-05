@@ -22,6 +22,10 @@ DEFAULT_SCALED_STREAM_CLOCK_STEP_NS = 16_666_667
 """Stream nanoseconds per step a scaled clock takes when none is given: one 60 Hz frame."""
 
 
+_LARGEST_INTEGER_THE_ENGINE_READS = 2**64 - 1
+"""The engine reads `step_ns` and `stop_after_steps` as `u64`."""
+
+
 def _refuse_unless_a_positive_finite_number(value: float, what_it_is: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{what_it_is} is a number, and {value!r} is not one")
@@ -31,9 +35,11 @@ def _refuse_unless_a_positive_finite_number(value: float, what_it_is: str) -> No
 
 def _refuse_unless_a_positive_integer(value: int, what_it_is: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{what_it_is} is an integer number of nanoseconds, not {value!r}")
+        raise TypeError(f"{what_it_is} is an integer, not {value!r}")
     if value <= 0:
         raise ValueError(f"{what_it_is} is greater than zero, not {value!r}")
+    if value > _LARGEST_INTEGER_THE_ENGINE_READS:
+        raise ValueError(f"{what_it_is} is at most 2**64 - 1, not {value!r}")
 
 
 @dataclass(frozen=True)

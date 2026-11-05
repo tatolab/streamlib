@@ -52,6 +52,7 @@ use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateCh
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
 
@@ -408,7 +409,7 @@ unsafe extern "C" fn output_port_write(
         return MODULE_HOST_TABLE_STATUS_OK;
     }
     let timestamp_ns = if timestamp_ns == MODULE_HOST_TABLE_TIMESTAMP_NOW {
-        monotonic_clock_now_ns() as i64
+        helper_stream_clock_now_ns()
     } else {
         timestamp_ns
     };
