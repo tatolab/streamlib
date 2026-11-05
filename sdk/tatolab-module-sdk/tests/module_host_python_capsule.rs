@@ -11,9 +11,10 @@ use std::ptr::NonNull;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_STATUS_REFUSED, ModuleHostTableAudioBlockRequestedByDeviceCallback,
-    ModuleHostTableAudioCaptureStreamRequest, ModuleHostTableAudioPlaybackStreamRequest,
-    ModuleHostTableAudioStreamFormat, ModuleHostTableAudioStreamHandle, ModuleHostTableBytes,
+    MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_STATUS_REFUSED,
+    ModuleHostTableAudioBlockRequestedByDeviceCallback, ModuleHostTableAudioCaptureStreamRequest,
+    ModuleHostTableAudioPlaybackStreamRequest, ModuleHostTableAudioStreamFormat,
+    ModuleHostTableAudioStreamHandle, ModuleHostTableBytes,
     ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableErrorMessage,
     ModuleHostTableIOSurfaceImport, ModuleHostTableOpenedAudioPlaybackStream,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
@@ -327,14 +328,17 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
         let capsule = unsafe {
             PyCapsule::new_with_pointer(
                 python,
-                leaked_table_of_minor(8),
+                leaked_table_of_minor(MODULE_HOST_TABLE_ABI_MINOR),
                 MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
             )
         }
         .unwrap();
         let module_host =
             ModuleHost::from_python_module_host_table_capsule(capsule.as_any()).unwrap();
-        assert_eq!(module_host.module_host_table_version(), (1, 8));
+        assert_eq!(
+            module_host.module_host_table_version(),
+            (1, MODULE_HOST_TABLE_ABI_MINOR)
+        );
     });
 }
 
@@ -342,7 +346,11 @@ fn the_capsule_a_context_hands_over_reads_as_its_table() {
 fn a_capsule_of_another_name_is_refused_naming_the_capsule_it_wanted() {
     Python::attach(|python| {
         let capsule = unsafe {
-            PyCapsule::new_with_pointer(python, leaked_table_of_minor(8), c"numpy.core._ARRAY_API")
+            PyCapsule::new_with_pointer(
+                python,
+                leaked_table_of_minor(MODULE_HOST_TABLE_ABI_MINOR),
+                c"numpy.core._ARRAY_API",
+            )
         }
         .unwrap();
         let refusal =

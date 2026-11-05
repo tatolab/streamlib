@@ -422,7 +422,7 @@ def assert_a_pipewiresrc_consumer_reads_frames_from_the_camera() -> None:
     assert consumer.returncode == 0, consumer.stdout + consumer.stderr
 
 
-@pytest.mark.linux_only_capability(reason="VirtualCameraSink is Linux's")
+@pytest.mark.linux_only_capability(reason="PipeWire is Linux")
 @pytest.mark.requires_gpu
 def test_the_pipewire_door_opens_where_a_daemon_answers_and_is_refused_by_name_elsewhere(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",

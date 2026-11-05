@@ -22,6 +22,10 @@ use crate::core::rhi::{
     VulkanLayout,
 };
 use crate::core::test_support::LiveSurfaceShareServiceForATest;
+#[cfg(target_os = "linux")]
+use crate::core::test_support::rig_only_capability_skip::{
+    RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+};
 use crate::host_rhi::{VulkanAccess, VulkanStage};
 use crate::vulkan::rhi::ImageCopyRegion;
 
@@ -710,14 +714,20 @@ fn a_texture_registered_with_a_tiled_modifier_converts_into_an_rgba_texture() {
     ) {
         Ok(source) => source,
         Err(refusal) if refusal.to_string().contains("no RT-capable DRM modifier") => {
-            println!("the driver offers no render-target DRM modifier ({refusal}) — skipping");
+            skip_because_this_machine_lacks_naming_the_refusal(
+                RigOnlyCapability::DmaBufModifiers,
+                format!("the driver offers no render-target DRM modifier: {refusal}"),
+            );
             service.stop();
             return;
         }
         Err(refusal) => panic!("a render-target DMA-BUF image: {refusal}"),
     };
     if source.vulkan_inner().chosen_drm_format_modifier() == 0 {
-        println!("the driver chose the linear modifier, so nothing here is tiled — skipping");
+        skip_because_this_machine_lacks_naming_the_refusal(
+            RigOnlyCapability::DmaBufModifiers,
+            "the driver chose the linear modifier, so nothing here is tiled",
+        );
         service.stop();
         return;
     }
