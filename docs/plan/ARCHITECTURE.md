@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, stream-clocks; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -97,7 +97,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `nodes/` — the `HalftoneLensEffect` over `GlslPixelEffect`, a drifting lens that turns what
   it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
   effect's output that reads the frame through `frame.cpu()` and logs its mean once a
-  second, paced on `ctx.time` — with dependencies `tatolab-stream`, `tatolab-h264`,
+  second, paced on `ctx.time`, the stream's clock — with dependencies `tatolab-stream`, `tatolab-h264`,
   `tatolab-testpattern` and `numpy>=2.1`, nothing more, the same on both floors, each
   resolved from PyPI by the project's own `uv sync`. `tatolab new` takes no `--camera` and no
   `--test-pattern`, and no template holds a camera: camera projects live in the docs' sample
@@ -116,7 +116,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The lead demo is an agent building a live visual system while the person
   watches. Its first form is a stream overlay an agent assembles over the MCP tools from the
   browser source, Rive and the compositor, served to a browser by URL; its second is
-  data-driven motion graphics, scrubbable and exportable, once stream clocks land (§Processor
+  data-driven motion graphics, scrubbable and exportable, on stream clocks (§Processor
   model). A release, the docs and the samples lead with it; camera and microphone capture
   stay modules, never the headline. Owner, 2026-11-03. [lead-demo-agent-built-live-visuals]
   Rejected: a Kerbal-style parts garage as the lead — it needs all three engine milestones and
@@ -980,7 +980,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, stream-clocks, zero-copy-data-plane; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, zero-copy-data-plane; unbuilt: the five port families and their zero-copy data plane, subgraphs; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1361,21 +1361,78 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
   (setup/teardown vs process). [execution-model; reopened by one-runtime-per-machine: scheduling across streams]
-- **DECIDED** — Each stream runs on one stream clock over `MediaClock`: real time, the default;
-  scaled, `base + scale × elapsed`; or stepped. Stepped and faster than real time run behind a
-  cross-process step barrier — the clock advances only once every node of the stream finished
-  the step, FMI co-simulation's barrier. Device sources and live output stay on real time; a
-  stepped stream renders to a file or a simulation view. A nested `@stream` may carry its own
-  clock. Every stamp is still read from the machine's monotonic clock. Rendering to a file
-  also needs a file source and an MP4 file sink. Owner, 2026-11-03. [stream-clocks]
+- **DECIDED** — Each stream runs on one stream clock over `MediaClock`, named once in its stream
+  function: `stream_builder.run_on_clock(RealTimeStreamClock() | ScaledStreamClock(scale,
+  step_ns=16_666_667) | SteppedStreamClock(step_ns, pace=None, stop_after_steps=None))`, frozen
+  dataclasses from `tatolab.stream` that refuse a non-positive scale or step. The graph document
+  carries it as the spec key `clock` — `{"mode": "real"}`, `{"mode": "scaled", "scale",
+  "step_ns"}` or `{"mode": "stepped", "step_ns", "pace", "stop_after_steps"}`, absent meaning
+  real — so `graph` renders it and a loaded graph keeps it; a stream's mode is fixed for its
+  load. The engine builds one `StreamClock` per stream at its start,
+  `RuntimeContext.stream_clock`. Stream time is in the machine's monotonic epoch, derived from
+  `MediaClock` readings and step counts alone, never a wall clock or a sleep:
+  - **real:** `MediaClock::now()` itself;
+  - **scaled at or under 1×:** `base + scale × (MediaClock::now() − anchor)`; a scale change
+    reads the machine clock once and re-anchors, so time never jumps or runs backwards;
+  - **stepped, or scaled above 1×:** `base + k × step_ns` for the open step *k*. A scaled clock
+    above 1× runs behind the step barrier paced at its scale, in steps of its `step_ns`, and a
+    live rescale across 1× moves it in or out of the barrier at the stream time it had.
+  A node reads stream time as `ctx.time` and the clock as `ctx.stream_clock` (`mode`, `scale`,
+  and `step_ns` and `step_index`, set only while the clock steps); a write without
+  `timestamp_ns` is stamped with stream time, and an explicit `timestamp_ns` is kept as
+  written. `monotonic_now_ns()` and `start_monotonic_timer` stay the machine's clock, so a node
+  measures latency outside a real-time stream with two `monotonic_now_ns()` readings. A nested
+  `@stream` may carry its own clock once subgraphs land; until then a stream has one. Rendering
+  to a file also needs a file source and an MP4 file sink. Owner, 2026-11-03; barrier above 1×,
+  free at or under, owner, 2026-11-04. [stream-clocks — SHIPPED #3158, #3166, #3167, #3169,
+  #3171, #3175]
   Rejected: a clock per node — nodes of one stream would disagree on time (owner, 2026-11-03).
+- **DECIDED** — A non-real stream's clock reaches its helpers on one **stream clock board**, an
+  iceoryx2 blackboard the engine creates at the stream's start and each helper opens read-only
+  by the service name its `setup` command carries as `stream_clock: {mode,
+  board_service_name}`. One key holds one `#[repr(C)]` `StreamClockBoardEntry { mode,
+  a_step_is_open, step_index, step_ns, base_ns, anchor_ns, scale_f64_bits, pace_f64_bits }`,
+  layout-tested; a reader copies it whole, so it always reads one published clock, and engine
+  and helpers run one arithmetic over it. Every publish notifies the board's event, which a
+  helper waiting for a step listens on. A real-time stream creates no board, and its helpers
+  read `MediaClock` directly. [stream-clocks — SHIPPED #3158, #3169]
+- **DECIDED** — The step barrier. One coordinator thread per non-real stream opens and closes
+  each step, idling while a scaled clock runs free. A step closes when two consecutive readings
+  of the stream's step ledger agree and show every node idle, every continuous node finished
+  it, and every balanced link's taken plus dropped bags equal to its producer's written ones. A
+  node's ledger entry, `{steps_finished, callbacks_in_flight}`, is kept in the engine for a
+  native node and on its helper's loss-count board for a helper-placed one, beside each inbound
+  link's taken bags. A link into a continuous, paused or windowed port's node is left off the
+  balance, since that node takes its bags at its own pace, and a link wired mid-run is balanced
+  from when it is wired. A continuous node runs `process()` in a step whose time reached its
+  next deadline, and finishes every step it sees open either way. Steps count from 0. The next
+  step opens at once when unpaced, or no earlier than `anchor + k × step_ns / pace` on
+  `MediaClock`; a scaled clock that falls behind its pace re-paces from the late step rather
+  than bursting. `stop_after_steps = n` stops the stream after step *n−1*. A stream whose clock
+  steps from its start opens its first step once every node runs. A manual node, which runs its
+  own callbacks, fails at its start in a stream whose clock steps, and a rescale above 1× is
+  refused naming one. Owner, 2026-11-03. [stream-clocks — SHIPPED #3167, #3169, #3175]
+- **DECIDED** — A node that paces itself on real time declares it — `paced_by_real_time=True` on
+  `@node`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
+  loads in any stream: it paces on the machine clock, its writes carry stream time, and it
+  stands outside the step barrier, which neither waits on it nor balances its links; what a
+  step reads from it follows the reading port's delivery setting. `RelayTrackSource` and the
+  camera, microphone, audio-output and WHIP-publish nodes in `packages/` declare it; a display
+  does not, being a view that presents what arrives. Owner, 2026-11-04. [stream-clocks —
+  SHIPPED #3171]
+  Rejected: refusing a device node in a scaled or stepped stream — it breaks streams that mix
+  devices with a warped clock (owner, 2026-11-04).
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
   processor waits on one readiness queue — epoll on Linux, kqueue `EVFILT_READ` on macOS,
   level-triggered on both, with one 500 ms bound — holding its inbound listener and its
   shutdown wake (an `eventfd` on Linux, a close-on-exec pipe written once on macOS), so a message
   or a shutdown wakes it on arrival. The 100 ms channel-poll loop survives only as the
   fallback for a platform with neither queue or a waiter whose setup failed, and a wake that
-  cannot be created leaves channel-only shutdown rather than a panic. `MonotonicTimer`, which
+  cannot be created leaves channel-only shutdown rather than a panic. A continuous processor
+  fires at absolute deadlines `first + k·interval` on stream time, never by sleeping: in steps
+  while its stream's clock steps, otherwise on a wait converted to `MediaClock` and re-read at
+  least every 100 ms of machine time so a live rescale reaches it, natively and in a helper
+  alike. `MonotonicTimer`, which
   a node starts with `start_monotonic_timer(interval_ns)`, runs on both floors: `timerfd` on
   Linux; on macOS a one-shot
   kqueue `EVFILT_TIMER` with `NOTE_MACHTIME | NOTE_ABSOLUTE | NOTE_CRITICAL`, re-armed after
@@ -2188,7 +2245,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ stream-clocks; unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2380,8 +2437,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never enters Python — a deadline Python cannot meet, not a GIL argument.
   [importable-python-library; helper-process-placement-only — SHIPPED #1714]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
-  or compares — frames, messages, audio ticks, `ctx.time` — is the machine's monotonic clock
-  (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
+  or compares — frames, messages, audio ticks, `ctx.time` — is in the machine's monotonic
+  epoch (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple): a device stamp is the
+  machine clock itself, and `ctx.time` and the implicit write stamp are the stream clock
+  (§Processor model), which equals it in a real-time stream. It is the same epoch the V4L2
   and ALSA driver stamps carry on Linux and CoreAudio's `mHostTime` and AVFoundation's
   host-time-converted presentation stamps carry on Apple, comparable across every node on a host — and on that host
   alone, since the epoch is that machine's own boot: two stamps from two machines are
@@ -2406,7 +2465,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
   unique name comes from the engine's unique-name primitive, never from reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873]
+  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
   once, no configuration dial and no environment override. On Linux, PipeWire-native,
   reached by runtime dlopen — the MIT-licensed PipeWire/SPA headers are vendored, the
@@ -3762,7 +3821,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime]
   Rejected: running the runtime from inside the app bundle through an `SMAppService` agent — launchd keeps running the copy that registered first, and replacing the bundle leaves the old runtime running (owner, 2026-10-31).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart, stream-clocks)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3817,8 +3876,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009; amended by stream-clocks: `set_stream_clock_scale` joins the served tool
-  set]
+  #2998, #3006, #3009; stream-clocks — SHIPPED #3166]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
