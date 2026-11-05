@@ -94,13 +94,13 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   loaned sample, with the buffer protocol and `__dlpack__`. The sample is published on a clean
   exit and given back unpublished when the block raises. `write(port, payload)` copies an
   existing buffer, and accepts any buffer-protocol object, not only `bytes`. [zero-copy-data-plane]
-  [NEEDS DECISION] Two loan edges. (a) An export of the loan (`memoryview`, DLPack capsule)
-  still alive when the block exits: refuse the exit with `BufferError` and give the sample back
-  unpublished (recommended — a published sample must never change under its readers), or
-  publish and leave the export writable. (b) `write` or a second `ctx.loan` on a port whose
-  loan is open: refuse it, naming the open loan (recommended — one sample in flight per port
-  keeps a port's order its write order, and the publisher loans one sample today,
-  `CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES = 1`), or raise the publisher's loan limit and allow it.
+  A loan is refused at its edges (owner, 2026-11-05). Leaving the block while an export of the
+  loan (`memoryview`, DLPack capsule) lives raises `BufferError` and gives the sample back
+  unpublished, because a published sample never changes under its readers. A `write` or a
+  second `ctx.loan` on a port whose loan is open is refused, naming the open loan, so a port's
+  order is its write order and the publisher keeps one loaned sample
+  (`CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES = 1`). Rejected: publishing with a live export, and
+  several loans per port.
 - **ADDED (same entry, DECIDED):** The mailbox queues samples, not copies. Each queued entry
   holds the iceoryx2 `Sample` plus the per-link attribution it carries now. A link's subscriber
   borrows up to `mailbox depth + the link's borrow quota + 1` samples
