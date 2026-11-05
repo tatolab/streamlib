@@ -15,6 +15,9 @@ use super::graph_change_listener::GraphChangeListener;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
 use super::stream_actions_of_this_runtime::LoadedStreamHolding;
+use super::stream_step_coordinator::{
+    StepLedgerReading, SteppedClockTheCoordinatorRuns, StreamStepCoordinatorOfOneStream,
+};
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
     ShutdownEscalationOfOneStream, StreamEnvironment, StreamLocation,
@@ -24,7 +27,7 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::Loade
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{
     CaptureDeviceAccessPrompting, GpuContext, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
-    StreamClock, StreamClockReading, platform_audio_clock_for_one_stream,
+    StreamClock, StreamClockReading, StreamClockSpec, platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
@@ -112,6 +115,8 @@ pub struct LoadedStreamInThisRuntime {
     one_start_or_stop_at_a_time: Mutex<()>,
     /// Set by the one request that starts this stream's shutdown thread.
     shutdown_thread_started: AtomicBool,
+    /// The step barrier while a stepped stream runs.
+    step_coordinator: Mutex<Option<StreamStepCoordinatorOfOneStream>>,
     /// Set by whichever of the shutdown thread and the watchdog ends this
     /// stream first.
     end_claimed: AtomicBool,
@@ -297,6 +302,7 @@ impl LoadedStreamInThisRuntime {
             teardown_watchdog_budget,
             one_start_or_stop_at_a_time: Mutex::new(()),
             shutdown_thread_started: AtomicBool::new(false),
+            step_coordinator: Mutex::new(None),
             end_claimed: AtomicBool::new(false),
             the_end_of_this_stream: Arc::default(),
             this_stream: this_stream.clone(),
@@ -454,6 +460,12 @@ impl LoadedStreamInThisRuntime {
         Ok(rescaled)
     }
 
+    /// This stream's step ledger as it stands: each node's step progress and
+    /// each link's bags.
+    pub(crate) fn step_ledger_reading(&self) -> StepLedgerReading {
+        self.compiler.scope_reading(StepLedgerReading::read_off)
+    }
+
     fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {
         self.loaded_stream_identity()
             .publish_on_this_streams_topic(event);
@@ -525,6 +537,17 @@ impl LoadedStreamInThisRuntime {
         tracing::info!("[start] Committing pending graph operations");
         self.compiler.commit(&this_streams_runtime_context)?;
 
+        if let Some(stepped_clock) =
+            SteppedClockTheCoordinatorRuns::of(this_streams_runtime_context.stream_clock.spec())
+        {
+            *self.step_coordinator.lock() = Some(StreamStepCoordinatorOfOneStream::start(
+                Weak::clone(&self.this_stream),
+                self.stream_id(),
+                Arc::clone(&this_streams_runtime_context.stream_clock),
+                stepped_clock,
+            )?);
+        }
+
         tracing::info!("[start] The stream `{}` started", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarted);
         Ok(())
@@ -584,6 +607,13 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[stop] Stopping the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopping);
+
+        let step_coordinator = self.step_coordinator.lock().take();
+        if let Some(step_coordinator) = step_coordinator {
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on("the step coordinator");
+            step_coordinator.stop();
+        }
 
         let this_streams_runtime_context_while_started = self.runtime_context.lock().clone();
         let processor_count = self.compiler.scope(|graph, tx| {
@@ -1218,6 +1248,21 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         graph.validate(&self.node_types_this_stream_resolves)?;
+        if let StreamClockSpec::Stepped { .. } = graph.clock
+            && let Some(python_node) = graph.nodes.iter().find(|node| {
+                !self
+                    .node_types_this_stream_resolves
+                    .is_a_natively_compiled_node_type(&node.processor_type)
+            })
+        {
+            return Err(Error::GraphError(format!(
+                "the stream `{}` names a stepped clock, and its node `{}` runs in a helper \
+                 process, which does not join the step barrier yet; a stepped stream holds \
+                 native nodes only",
+                self.stream_id(),
+                python_node.name
+            )));
+        }
         self.compiler
             .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 

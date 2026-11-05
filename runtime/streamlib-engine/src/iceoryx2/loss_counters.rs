@@ -139,6 +139,12 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 #[derive(Default)]
 struct InboundLinkDroppedBagCount {
     dropped_bags: CumulativeCount,
+    /// Bags that left the mailbox for its reader: read, passed over by a
+    /// `newest` read, or evicted from a port that may pass bags over.
+    bags_off_the_mailbox_for_its_reader: CumulativeCount,
+    /// Of those, the bags the reader counted lost after taking them, which
+    /// `dropped_bags` already holds.
+    bags_its_reader_counted_lost_after_taking_them: CumulativeCount,
     lost_before_reaching_the_mailbox: AtomicU64,
     lost_ahead_of_every_bag_still_queued: AtomicU64,
     lost_ahead_of_the_latest_bag_taken_off_the_mailbox: AtomicU64,
@@ -148,6 +154,14 @@ struct InboundLinkDroppedBagCount {
 impl CountWithACumulativeTotal for InboundLinkDroppedBagCount {
     fn total(&self) -> u64 {
         self.dropped_bags.total()
+    }
+}
+
+impl InboundLinkDroppedBagCount {
+    fn taken_bag_count(&self) -> u64 {
+        self.bags_off_the_mailbox_for_its_reader
+            .total()
+            .saturating_sub(self.bags_its_reader_counted_lost_after_taking_them.total())
     }
 }
 
@@ -200,7 +214,22 @@ impl InboundLinkDroppedBagCounter {
     /// Record one bag of this link's that its reader took and then counted
     /// lost, because what the bag named was gone by the time it was read.
     pub(super) fn record_one_bag_its_reader_counted_lost_after_taking_it(&self) {
+        self.0.bags_its_reader_counted_lost_after_taking_them.add(1);
         self.record_one_bag_lost_ahead_of_every_bag_still_queued();
+    }
+
+    /// Record one bag of this link's that a port which may pass bags over
+    /// evicted to make room: its reader's to skip, never a loss.
+    pub(super) fn record_one_bag_passed_over_on_eviction(&self) {
+        self.0.bags_off_the_mailbox_for_its_reader.add(1);
+    }
+
+    /// How many of this link's bags its reader took without counting them lost:
+    /// read, or passed over by a port that reads only the newest. With the
+    /// dropped count, every bag the link's producer wrote once none is in
+    /// flight.
+    pub fn taken_bag_count(&self) -> u64 {
+        self.0.taken_bag_count()
     }
 
     fn record_one_bag_lost_ahead_of_every_bag_still_queued(&self) {
@@ -239,6 +268,7 @@ impl InboundLinkDroppedBagCounter {
         self.0
             .lost_ahead_of_the_latest_bag_taken_off_the_mailbox
             .fetch_max(lost_ahead_of_it, Ordering::Relaxed);
+        self.0.bags_off_the_mailbox_for_its_reader.add(1);
     }
 
     /// The messages lost ahead of the latest bag taken off the mailbox that no
@@ -296,6 +326,13 @@ impl DroppedBagCountsByInboundLink {
     /// themselves stay the record.
     pub fn dropped_bag_count_snapshot_by_inbound_link(&self) -> BTreeMap<String, u64> {
         self.per_inbound_link.snapshot_by_name()
+    }
+
+    /// Every live inbound link's taken bags as they stand right now, ordered by
+    /// link id.
+    pub fn taken_bag_count_snapshot_by_inbound_link(&self) -> BTreeMap<String, u64> {
+        self.per_inbound_link
+            .snapshot_by_name_of(InboundLinkDroppedBagCount::taken_bag_count)
     }
 
     /// Every live inbound link's counts summed — what a reader means by "this

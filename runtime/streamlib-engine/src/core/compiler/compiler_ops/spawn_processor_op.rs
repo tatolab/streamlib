@@ -16,12 +16,12 @@ use crate::core::context::{
 };
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
-use crate::core::execution::run_processor_loop;
+use crate::core::execution::{ProcessExecution, run_processor_loop};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ObservableProcessorState,
     ProcessorInstanceWithItsOutOfProcessLinkWiring, ProcessorPauseGateComponent,
     ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
-    ThreadHandleComponent,
+    StepProgressOfOneNodeComponent, ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 
@@ -292,6 +292,7 @@ fn spawn_dedicated_thread(
                 shutdown_rx,
                 shutdown_wake_fd,
                 pause_gate_inner,
+                step_progress,
                 exec_config,
                 processor_display_name,
             ) = {
@@ -343,6 +344,11 @@ fn spawn_dedicated_thread(
                     }
                 };
 
+                let step_progress = node
+                    .get::<StepProgressOfOneNodeComponent>()
+                    .map(|step_progress| Arc::clone(&step_progress.0))
+                    .unwrap_or_default();
+
                 let exec_config = processor_arc_clone.lock().execution_config();
 
                 (
@@ -350,10 +356,28 @@ fn spawn_dedicated_thread(
                     shutdown_rx,
                     shutdown_wake_fd,
                     pause_gate_inner,
+                    step_progress,
                     exec_config,
                     processor_display_name,
                 )
             }; // Lock released here
+
+            if runtime == ProcessorRuntime::Rust
+                && exec_config.execution == ProcessExecution::Manual
+                && runtime_ctx_clone.stream_clock.is_stepped()
+            {
+                let refusal = format!(
+                    "the node `{processor_display_name}` paces itself (execution = manual), so it \
+                     cannot run in a stepped stream, whose steps every node runs on"
+                );
+                tracing::error!("[{}] {refusal}", proc_id_clone);
+                state_arc.fail_with(refusal);
+                return;
+            }
+
+            if matches!(exec_config.execution, ProcessExecution::Continuous { .. }) {
+                step_progress.note_it_finishes_every_step();
+            }
 
             // === PHASE 4: Setup ===
             // Create processor-specific context with both processor ID and pause gate
@@ -440,6 +464,7 @@ fn spawn_dedicated_thread(
                 shutdown_wake_fd,
                 state_arc,
                 pause_gate_inner,
+                step_progress,
                 exec_config,
                 processor_context,
                 isolation_tier,

@@ -545,6 +545,9 @@ impl std::fmt::Debug for HelperPlacedProcessorLossCounts {
 pub struct ProcessorLossCountSnapshot {
     /// Bags lost per inbound link.
     pub dropped_bags_by_inbound_link: BTreeMap<String, u64>,
+    /// Bags taken per inbound link without being counted lost: read, or passed
+    /// over by a port that reads only the newest.
+    pub taken_bags_by_inbound_link: BTreeMap<String, u64>,
     /// Samples discarded per inbound link into a windowed port, and no other.
     pub discarded_samples_by_inbound_link: BTreeMap<String, u64>,
     /// Bags refused at the ceiling per output port with a channel.
@@ -571,6 +574,10 @@ impl ProcessorLossCountSnapshot {
         add_each(
             &mut self.dropped_bags_by_inbound_link,
             &counts_to_add.dropped_bags_by_inbound_link,
+        );
+        add_each(
+            &mut self.taken_bags_by_inbound_link,
+            &counts_to_add.taken_bags_by_inbound_link,
         );
         add_each(
             &mut self.discarded_samples_by_inbound_link,
@@ -606,6 +613,8 @@ impl ProcessorLossCountSnapshot {
                 .contains_key(output_port)
         };
         self.dropped_bags_by_inbound_link
+            .retain(|link_id, _| inbound_link_is_wired(link_id));
+        self.taken_bags_by_inbound_link
             .retain(|link_id, _| inbound_link_is_wired(link_id));
         self.discarded_samples_by_inbound_link
             .retain(|link_id, _| inbound_link_is_wired(link_id));

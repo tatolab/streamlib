@@ -3,7 +3,9 @@
 
 //! The clock one stream runs on, and the spec a graph names it by.
 
-use parking_lot::RwLock;
+use std::time::Duration;
+
+use parking_lot::{Condvar, Mutex, RwLock};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use streamlib_ipc_types::{
@@ -95,10 +97,33 @@ impl StreamClockSpec {
                 }
                 Ok(())
             }
-            Self::Stepped { .. } => Err(Error::GraphError(format!(
-                "the stream `{stream_id}` names a stepped clock, which this runtime does not run \
-                 yet; use a real or scaled clock"
-            ))),
+            Self::Stepped {
+                step_ns,
+                pace,
+                stop_after_steps,
+            } => {
+                if step_ns == 0 {
+                    return Err(Error::GraphError(format!(
+                        "the stream `{stream_id}` names a stepped clock with a step of 0 ns; a \
+                         step is greater than zero"
+                    )));
+                }
+                if let Some(pace) = pace
+                    && !(pace.is_finite() && pace > 0.0)
+                {
+                    return Err(Error::GraphError(format!(
+                        "the stream `{stream_id}` names a stepped clock paced at {pace}; a pace \
+                         is a finite number greater than zero, or absent to run unpaced"
+                    )));
+                }
+                if stop_after_steps == Some(0) {
+                    return Err(Error::GraphError(format!(
+                        "the stream `{stream_id}` names a stepped clock that stops after 0 steps; \
+                         a stream runs at least one step"
+                    )));
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -174,6 +199,13 @@ pub struct StreamClock {
     runs_on_the_machine_clock: bool,
     published: RwLock<StreamClockBoardEntry>,
     board_read_by_helpers: Option<StreamClockBoard>,
+    /// How many steps have opened; step `k` is open once this is `k + 1`.
+    steps_opened: Mutex<u64>,
+    a_step_opened: Condvar,
+    /// How many times a node noted progress on its step, so the step
+    /// coordinator wakes for it.
+    step_progress_notes: Mutex<u64>,
+    a_node_noted_step_progress: Condvar,
 }
 
 impl std::fmt::Debug for StreamClock {
@@ -232,6 +264,10 @@ impl StreamClock {
             runs_on_the_machine_clock: spec.is_real(),
             published: RwLock::new(published),
             board_read_by_helpers: None,
+            steps_opened: Mutex::new(0),
+            a_step_opened: Condvar::new(),
+            step_progress_notes: Mutex::new(0),
+            a_node_noted_step_progress: Condvar::new(),
         }
     }
 
@@ -331,6 +367,72 @@ impl StreamClock {
     /// The clock as its board carries it to the stream's helpers.
     pub fn published(&self) -> StreamClockBoardEntry {
         *self.published.read()
+    }
+
+    /// Whether this clock advances in steps.
+    pub fn is_stepped(&self) -> bool {
+        matches!(*self.spec.read(), StreamClockSpec::Stepped { .. })
+    }
+
+    /// Open step `step_index` of a stepped clock: stream time moves to
+    /// `base + step_index × step_ns`, the stream's helpers read it off the
+    /// board, and every runner waiting on a step wakes.
+    pub fn open_step(&self, step_index: u64) {
+        {
+            let mut published = self.published.write();
+            published.step_index = step_index;
+            if let Some(board) = &self.board_read_by_helpers {
+                board.publish(*published);
+            }
+        }
+        *self.steps_opened.lock() = step_index.saturating_add(1);
+        self.a_step_opened.notify_all();
+    }
+
+    /// The step open now; `None` before the first opens.
+    pub fn step_open_now(&self) -> Option<u64> {
+        self.steps_opened.lock().checked_sub(1)
+    }
+
+    /// The step open once one later than `after` is, waiting up to
+    /// `longest_wait` for it; `None` when none opened in that time. With
+    /// `after` absent, any open step will do.
+    pub fn wait_for_a_step_opened_after(
+        &self,
+        after: Option<u64>,
+        longest_wait: Duration,
+    ) -> Option<u64> {
+        let steps_opened_before_the_wait = after.map_or(0, |after| after.saturating_add(1));
+        let mut steps_opened = self.steps_opened.lock();
+        if *steps_opened <= steps_opened_before_the_wait {
+            let _ = self.a_step_opened.wait_while_for(
+                &mut steps_opened,
+                |steps_opened| *steps_opened <= steps_opened_before_the_wait,
+                longest_wait,
+            );
+        }
+        (*steps_opened > steps_opened_before_the_wait).then(|| *steps_opened - 1)
+    }
+
+    /// Wake the step coordinator: a node's callback started or finished, or it
+    /// finished a step.
+    pub fn note_step_progress(&self) {
+        *self.step_progress_notes.lock() += 1;
+        self.a_node_noted_step_progress.notify_all();
+    }
+
+    /// How many step-progress notes there have been, once there are more than
+    /// `notes_seen` or `longest_wait` passed.
+    pub fn wait_for_step_progress_after(&self, notes_seen: u64, longest_wait: Duration) -> u64 {
+        let mut step_progress_notes = self.step_progress_notes.lock();
+        if *step_progress_notes <= notes_seen {
+            let _ = self.a_node_noted_step_progress.wait_while_for(
+                &mut step_progress_notes,
+                |step_progress_notes| *step_progress_notes <= notes_seen,
+                longest_wait,
+            );
+        }
+        *step_progress_notes
     }
 }
 
@@ -501,12 +603,35 @@ mod tests {
         );
         assert!(
             refusal(StreamClockSpec::Stepped {
-                step_ns: 1,
+                step_ns: 0,
                 pace: None,
                 stop_after_steps: None
             })
-            .contains("stepped")
+            .contains("a step of 0 ns")
         );
+        assert!(
+            refusal(StreamClockSpec::Stepped {
+                step_ns: 1,
+                pace: Some(-1.0),
+                stop_after_steps: None
+            })
+            .contains("paced at -1")
+        );
+        assert!(
+            refusal(StreamClockSpec::Stepped {
+                step_ns: 1,
+                pace: None,
+                stop_after_steps: Some(0)
+            })
+            .contains("after 0 steps")
+        );
+        StreamClockSpec::Stepped {
+            step_ns: 1,
+            pace: Some(2.0),
+            stop_after_steps: Some(1),
+        }
+        .refusal_unless_this_runtime_runs_it("rig")
+        .unwrap();
         StreamClockSpec::Real
             .refusal_unless_this_runtime_runs_it("rig")
             .unwrap();

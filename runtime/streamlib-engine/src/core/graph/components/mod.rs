@@ -21,6 +21,7 @@ mod processor_ready_barrier_component;
 mod shutdown_channel_component;
 mod source_side_held_open_for_a_reader_outside_its_stream;
 mod state_component;
+mod step_progress_of_one_node_component;
 mod thread_handle_component;
 
 pub use component_map::*;
@@ -43,4 +44,5 @@ pub use processor_ready_barrier_component::*;
 pub use shutdown_channel_component::*;
 pub(crate) use source_side_held_open_for_a_reader_outside_its_stream::*;
 pub use state_component::*;
+pub use step_progress_of_one_node_component::*;
 pub use thread_handle_component::*;

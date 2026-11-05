@@ -70,6 +70,9 @@ impl ProcessorLossCounts {
                 dropped_bags_by_inbound_link: counted_here
                     .dropped_bag_counts_by_inbound_link
                     .dropped_bag_count_snapshot_by_inbound_link(),
+                taken_bags_by_inbound_link: counted_here
+                    .dropped_bag_counts_by_inbound_link
+                    .taken_bag_count_snapshot_by_inbound_link(),
                 discarded_samples_by_inbound_link: counted_here
                     .discarded_sample_counts_by_inbound_link
                     .discarded_sample_count_snapshot_by_inbound_link(),
@@ -125,6 +128,7 @@ impl JsonSerializableComponent for ProcessorMetrics {
         // the sum of.
         let ProcessorLossCountSnapshot {
             dropped_bags_by_inbound_link,
+            taken_bags_by_inbound_link: _,
             discarded_samples_by_inbound_link,
             refused_bags_by_output_port,
             written_bags_by_output_port,

@@ -609,7 +609,7 @@ fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     for clock in [
-        serde_json::json!({"mode": "stepped", "step_ns": 1000}),
+        serde_json::json!({"mode": "stepped", "step_ns": 0}),
         serde_json::json!({"mode": "scaled", "scale": 4.0}),
         serde_json::json!({"mode": "scaled", "scale": 0.0}),
     ] {

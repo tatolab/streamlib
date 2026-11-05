@@ -5,7 +5,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, GraphState, ProcessorPauseGateComponent,
     ProcessorReadyBarrierComponent, ProcessorReadyBarrierHandle, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent,
+    ShutdownChannelComponent, StateComponent, StepProgressOfOneNodeComponent,
 };
 use crate::core::processors::ProcessorState;
 
@@ -32,6 +32,7 @@ pub(crate) fn prepare_processor(
     let pause_gate = ProcessorPauseGateComponent::new();
     pause_gate.set_paused(paused_with_its_stream);
     node_mut.insert(pause_gate);
+    node_mut.insert_component_without_rendering_it(StepProgressOfOneNodeComponent::default());
 
     // Transitioned, never re-inserted: `add_v` attached the state when the node
     // was added, and a fresh component would strand every waiter already
