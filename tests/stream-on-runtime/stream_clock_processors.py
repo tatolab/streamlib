@@ -211,3 +211,50 @@ class StepTimeReporterSink:
                     - relayed["first_write_machine_time_ns"],
                 },
             )
+
+
+#: The machine milliseconds between the writes of the node paced by real time.
+REAL_TIME_PACED_WRITER_INTERVAL_MS = 50
+
+#: Messages the real-time reporter reads before it reports them.
+REAL_TIME_PACED_MESSAGES_REPORTED = 10
+
+
+@node(execution="continuous", interval_ms=REAL_TIME_PACED_WRITER_INTERVAL_MS, paced_by_real_time=True)
+class RealTimePacedWriterSource:
+    """Writes, with no stamp, the stream time and the machine time it wrote at, paced on the machine."""
+
+    @node.output()
+    def real_time_writes_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        ctx.outputs.write(
+            "real_time_writes_to_downstream",
+            pack({"stream_time_ns": ctx.time, "machine_time_ns": monotonic_now_ns()}),
+        )
+
+
+@node
+class RealTimePacedReporterSink:
+    """Reports a run of the real-time writer's messages: stamps, writer stream and machine times."""
+
+    def __init__(self) -> None:
+        self.seen: "list[dict[str, object]]" = []
+
+    @node.input(delivery_profile="ordered")
+    def real_time_writes_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        message = ctx.inputs.read_message("real_time_writes_from_upstream")
+        if message is None or len(self.seen) >= REAL_TIME_PACED_MESSAGES_REPORTED:
+            return
+        written = unpack(message.payload)
+        self.seen.append(
+            {
+                "stamp_ns": message.timestamp_ns,
+                "written_stream_time_ns": written["stream_time_ns"],
+                "written_machine_time_ns": written["machine_time_ns"],
+            }
+        )
+        if len(self.seen) == REAL_TIME_PACED_MESSAGES_REPORTED:
+            report("REAL_TIME_PACED_WRITES", {"seen": self.seen})

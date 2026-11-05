@@ -11,6 +11,7 @@ use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
 #[derive(Debug, Default)]
 pub struct StepProgressOfOneNode {
     finishes_every_step: AtomicBool,
+    stands_outside_the_step_barrier: AtomicBool,
     panicked_mid_callback: AtomicBool,
     steps_finished: AtomicU64,
     callbacks_in_flight: AtomicU32,
@@ -22,6 +23,9 @@ pub struct StepProgressReadingOfOneNode {
     /// Whether the node paces itself on stream time, and so must finish every
     /// step before it closes.
     pub finishes_every_step: bool,
+    /// Whether the node paces itself on real time, so no step waits for it
+    /// or for what it writes or reads.
+    pub stands_outside_the_step_barrier: bool,
     /// How many steps the node finished; step `k` is finished once this
     /// exceeds `k`.
     pub steps_finished: u64,
@@ -36,8 +40,9 @@ impl StepProgressReadingOfOneNode {
     /// Whether this node lets step `step_index` close: idle, and finished with
     /// the step when it must finish every one.
     pub fn lets_the_step_close(&self, step_index: u64) -> bool {
-        self.callbacks_in_flight == 0
-            && (!self.finishes_every_step || self.steps_finished > step_index)
+        self.stands_outside_the_step_barrier
+            || (self.callbacks_in_flight == 0
+                && (!self.finishes_every_step || self.steps_finished > step_index))
     }
 
     /// This reading with what the node's helper process wrote of its callbacks
@@ -63,6 +68,17 @@ impl StepProgressOfOneNode {
     /// once it finished it.
     pub fn note_it_finishes_every_step(&self) {
         self.finishes_every_step.store(true, Ordering::Release);
+    }
+
+    /// Note that this node paces itself on real time, so no step waits for it.
+    pub fn note_it_stands_outside_the_step_barrier(&self) {
+        self.stands_outside_the_step_barrier
+            .store(true, Ordering::Release);
+    }
+
+    /// Whether this node paces itself on real time, outside the step barrier.
+    pub fn stands_outside_the_step_barrier(&self) -> bool {
+        self.stands_outside_the_step_barrier.load(Ordering::Acquire)
     }
 
     /// Note a callback started, until the returned guard drops; a step cannot
@@ -96,6 +112,7 @@ impl StepProgressOfOneNode {
     pub fn reading(&self) -> StepProgressReadingOfOneNode {
         StepProgressReadingOfOneNode {
             finishes_every_step: self.finishes_every_step.load(Ordering::Acquire),
+            stands_outside_the_step_barrier: self.stands_outside_the_step_barrier(),
             steps_finished: self.steps_finished.load(Ordering::Acquire),
             callbacks_in_flight: self.callbacks_in_flight.load(Ordering::Acquire),
             panicked_mid_callback: self.panicked_mid_callback.load(Ordering::Acquire),
@@ -172,6 +189,14 @@ mod tests {
         );
         assert!(returned.lets_the_step_close(2));
         assert!(!returned.lets_the_step_close(3));
+    }
+
+    #[test]
+    fn a_node_paced_by_real_time_never_holds_a_step_open() {
+        let progress = StepProgressOfOneNode::default();
+        progress.note_it_stands_outside_the_step_barrier();
+        let _callback = progress.callback_in_flight();
+        assert!(progress.reading().lets_the_step_close(0));
     }
 
     #[test]

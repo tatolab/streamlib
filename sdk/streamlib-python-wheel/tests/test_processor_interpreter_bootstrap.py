@@ -70,6 +70,12 @@ class Ticker:
     def process(self, ctx) -> None: ...
 
 
+@node(execution="manual", paced_by_real_time=True, description="captures on its own")
+class LiveCapture:
+    @node.output()
+    def frames_to_downstream(self) -> None: ...
+
+
 class Unstamped:
     def process(self, ctx) -> None: ...
 
@@ -174,6 +180,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                 "description": "Relays each audio window as a frame.",
                 "execution": {"mode": "reactive", "interval_ms": 0},
                 "scheduling_priority": "high",
+                "paced_by_real_time": False,
                 "config_schema": json_schema_for_a_node_declaring_no_config(),
                 "input_ports": [
                     {
@@ -208,6 +215,15 @@ def test_a_continuous_node_carries_its_interval_and_no_priority(project_director
     assert ticker["scheduling_priority"] is None
     assert ticker["description"] == "ticks on its own"
     assert ticker["input_ports"] == []
+    assert ticker["paced_by_real_time"] is False
+
+
+def test_a_node_paced_by_real_time_is_described_as_one(project_directory: Path):
+    described = describe(project_directory, "described_nodes:LiveCapture")
+
+    assert described.returncode == 0, described.stderr
+    (live_capture,) = described_document(described)["described_node_types"]
+    assert live_capture["paced_by_real_time"] is True
 
 
 def test_a_module_that_will_not_import_is_refused_carrying_the_import_error(

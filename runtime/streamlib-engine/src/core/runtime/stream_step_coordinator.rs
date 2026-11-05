@@ -80,13 +80,15 @@ impl StepLedgerReading {
     /// A link into a continuous node or a paused one is left off: such a node
     /// takes what waits for it when it next runs, never within the step that
     /// wrote it. So is a link into a windowed port, which takes its bags only
-    /// once they fill a window, however many steps that spans.
+    /// once they fill a window, however many steps that spans, and a link to
+    /// or from a node paced by real time, which stands outside the barrier.
     pub(crate) fn read_off(graph: &Graph) -> Self {
         let mut reading = Self::default();
         let mut processor_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
         let mut link_ids_into_a_windowed_port = std::collections::HashSet::new();
+        let mut processor_ids_paced_by_real_time = std::collections::HashSet::new();
         for node in graph.traversal().v(()).iter() {
             let metrics = node.get::<ProcessorMetrics>();
             let step_progress_of_its_host = node
@@ -100,6 +102,9 @@ impl StepLedgerReading {
                     .with_what_its_helper_process_wrote(written_by_its_helper_process),
                 None => step_progress_of_its_host,
             };
+            if step_progress.stands_outside_the_step_barrier {
+                processor_ids_paced_by_real_time.insert(node.id().to_string());
+            }
             if step_progress.finishes_every_step
                 || node
                     .get::<ProcessorPauseGateComponent>()
@@ -144,6 +149,8 @@ impl StepLedgerReading {
             if processor_ids_that_take_bags_on_their_own_pace
                 .contains(link.to_port().processor_id().as_str())
                 || link_ids_into_a_windowed_port.contains(link.id.as_str())
+                || processor_ids_paced_by_real_time.contains(link.source().processor_id().as_str())
+                || processor_ids_paced_by_real_time.contains(link.to_port().processor_id().as_str())
             {
                 reading.link_ids_off_the_balance.insert(link.id.to_string());
                 continue;
@@ -468,6 +475,7 @@ mod tests {
             steps_finished: 1,
             callbacks_in_flight: 0,
             panicked_mid_callback: false,
+            stands_outside_the_step_barrier: false,
         };
 
     const A_REACTIVE_NODE_IN_A_CALLBACK: StepProgressReadingOfOneNode =
@@ -476,6 +484,7 @@ mod tests {
             steps_finished: 0,
             callbacks_in_flight: 1,
             panicked_mid_callback: false,
+            stands_outside_the_step_barrier: false,
         };
 
     const AN_IDLE_REACTIVE_NODE: StepProgressReadingOfOneNode = StepProgressReadingOfOneNode {
@@ -483,6 +492,7 @@ mod tests {
         steps_finished: 0,
         callbacks_in_flight: 0,
         panicked_mid_callback: false,
+        stands_outside_the_step_barrier: false,
     };
 
     fn a_link(written_bags: u64, taken_bags: u64, dropped_bags: u64) -> StepLedgerEntryOfOneLink {
@@ -539,6 +549,7 @@ mod tests {
                 steps_finished: 0,
                 callbacks_in_flight: 0,
                 panicked_mid_callback: false,
+                stands_outside_the_step_barrier: false,
             }],
             [],
         );

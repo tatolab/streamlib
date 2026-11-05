@@ -130,6 +130,7 @@ impl Default for RelayTrackSourceConfig {
                   A relay that refuses, or a track not yet published or withdrawn, is retried \
                   with backoff and never ends the stream.",
     execution = manual,
+    paced_by_real_time,
     config = crate::relay_track_source::RelayTrackSourceConfig,
     output(
         "track",

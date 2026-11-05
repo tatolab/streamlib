@@ -48,6 +48,7 @@ NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
 NODE_DECLARATION_EXECUTION_STAMP = "__tatolab_node_execution__"
 NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority__"
+NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
 NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
 
@@ -286,6 +287,7 @@ class NodeDeclarationDecorator:
         execution: Optional[str] = None,
         interval_ms: int = 0,
         scheduling: Optional[str] = None,
+        paced_by_real_time: bool = False,
         description: str = "",
     ) -> Any:
         """Mark a class as a streamlib node.
@@ -316,6 +318,11 @@ class NodeDeclarationDecorator:
         Decorating registers nothing: it stamps the declaration on the class, and
         the class reaches the node catalog when a stream that uses it loads.
         `description` falls back to the class's docstring when it is not given.
+
+        `paced_by_real_time=True` declares a node that paces itself on real time,
+        as a live device does. It loads in a stream on any clock: what it writes
+        is stamped with stream time, and in a stepped stream it stands outside
+        the step barrier, which never waits for it.
         """
 
         def apply_to_class(class_under_decoration: NodeClassUnderDeclaration) -> NodeClassUnderDeclaration:
@@ -324,6 +331,7 @@ class NodeDeclarationDecorator:
                 execution=execution,
                 interval_ms=interval_ms,
                 scheduling=scheduling,
+                paced_by_real_time=paced_by_real_time,
                 description=description,
             )
 
@@ -337,6 +345,7 @@ class NodeDeclarationDecorator:
                 f"of the class it is — `my_app.filters:BlurEffect` — derived from "
                 f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
                 f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+                f"`paced_by_real_time`, "
                 f"`description`)."
             )
 
@@ -444,6 +453,7 @@ def _declare_node(
     execution: Optional[str],
     interval_ms: int,
     scheduling: Optional[str],
+    paced_by_real_time: bool,
     description: str,
 ) -> NodeClassUnderDeclaration:
     input_ports, output_ports = _collect_declared_ports(node_class)
@@ -474,6 +484,11 @@ def _declare_node(
         node_class,
         NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP,
         _validate_scheduling(scheduling),
+    )
+    setattr(
+        node_class,
+        NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP,
+        _validate_paced_by_real_time(paced_by_real_time),
     )
     setattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
     setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
@@ -685,6 +700,14 @@ def _resolve_execution(
             f"invalid interval_ms {interval_ms!r}: must be a non-negative int"
         )
     return {"mode": "continuous", "interval_ms": interval_ms}
+
+
+def _validate_paced_by_real_time(paced_by_real_time: bool) -> bool:
+    if not isinstance(paced_by_real_time, bool):
+        raise TypeError(
+            f"invalid paced_by_real_time {paced_by_real_time!r}: must be True or False"
+        )
+    return paced_by_real_time
 
 
 def _validate_scheduling(scheduling: Optional[str]) -> Optional[str]:

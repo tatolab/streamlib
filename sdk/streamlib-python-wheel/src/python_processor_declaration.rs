@@ -59,6 +59,7 @@ mod tests {
             "description": stamp("__tatolab_node_description__")?,
             "execution": stamp("__tatolab_node_execution__")?,
             "scheduling_priority": stamp("__tatolab_node_scheduling_priority__")?,
+            "paced_by_real_time": stamp("__tatolab_node_paced_by_real_time__")?,
             "config_schema": stamp("__tatolab_node_config_schema__")?,
             "input_ports": stamp("__tatolab_node_input_ports__")?,
             "output_ports": stamp("__tatolab_node_output_ports__")?,

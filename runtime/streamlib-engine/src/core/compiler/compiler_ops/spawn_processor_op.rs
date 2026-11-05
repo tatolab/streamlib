@@ -350,17 +350,21 @@ fn spawn_dedicated_thread(
                     .map(|step_progress| Arc::clone(&step_progress.0))
                     .unwrap_or_default();
 
-                let (exec_config, execution_the_node_runs_in) = {
+                let (exec_config, execution_the_node_runs_in, paced_by_real_time) = {
                     let processor = processor_arc_clone.lock();
                     let exec_config = processor.execution_config();
+                    let paced_by_real_time = processor.is_paced_by_real_time();
                     let execution_the_node_runs_in = processor.out_of_process_link_wiring().map_or(
                         exec_config.execution,
                         |out_of_process_link_wiring| {
                             out_of_process_link_wiring.far_side_process_execution()
                         },
                     );
-                    (exec_config, execution_the_node_runs_in)
+                    (exec_config, execution_the_node_runs_in, paced_by_real_time)
                 };
+                if paced_by_real_time {
+                    step_progress.note_it_stands_outside_the_step_barrier();
+                }
 
                 (
                     state,
@@ -375,6 +379,7 @@ fn spawn_dedicated_thread(
             }; // Lock released here
 
             if execution_the_node_runs_in == ProcessExecution::Manual
+                && !step_progress.stands_outside_the_step_barrier()
                 && runtime_ctx_clone.stream_clock.is_stepped()
             {
                 let refusal = format!(
@@ -389,7 +394,8 @@ fn spawn_dedicated_thread(
             if matches!(
                 execution_the_node_runs_in,
                 ProcessExecution::Continuous { .. }
-            ) {
+            ) && !step_progress.stands_outside_the_step_barrier()
+            {
                 step_progress.note_it_finishes_every_step();
             }
 

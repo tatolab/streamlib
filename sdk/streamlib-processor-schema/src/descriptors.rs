@@ -121,6 +121,10 @@ pub struct ProcessorDescriptor {
     /// Read at thread-spawn time; defaults to `Normal` priority.
     #[serde(default)]
     pub scheduling: ProcessorScheduling,
+    /// Whether the processor paces itself on real time, as a live device does:
+    /// in a stepped stream it stands outside the step barrier.
+    #[serde(default)]
+    pub paced_by_real_time: bool,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -141,6 +145,7 @@ impl ProcessorDescriptor {
             entrypoint: None,
             config_schema: None,
             scheduling: ProcessorScheduling::default(),
+            paced_by_real_time: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -169,6 +174,12 @@ impl ProcessorDescriptor {
 
     pub fn with_scheduling(mut self, scheduling: ProcessorScheduling) -> Self {
         self.scheduling = scheduling;
+        self
+    }
+
+    /// Declare the processor paced by real time.
+    pub fn paced_by_real_time(mut self) -> Self {
+        self.paced_by_real_time = true;
         self
     }
 

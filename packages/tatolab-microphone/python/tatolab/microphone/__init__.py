@@ -43,6 +43,7 @@ class MicrophoneSourceConfig:
 @node(
     execution="manual",
     scheduling="realtime",
+    paced_by_real_time=True,
     description=(
         "Captures audio from the machine's audio backend as timestamped sample blocks "
         "(silence where no backend exists)."

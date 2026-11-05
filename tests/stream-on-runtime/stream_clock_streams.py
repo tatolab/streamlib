@@ -9,6 +9,8 @@ from stream_clock_processors import (
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,
     ContinuousTickCounterSource,
+    RealTimePacedReporterSink,
+    RealTimePacedWriterSource,
     SlowStepRelay,
     StepTimeReporterSink,
     StepTimeWriterSource,
@@ -49,15 +51,7 @@ def continuous_ticks_in_slow_motion(stream_builder: StreamBuilder) -> None:
     stream_builder.add(ContinuousTickCounterSource)
 
 
-@stream
-def step_times_through_a_slow_relay(stream_builder: StreamBuilder) -> None:
-    """A step-time writer through a slow relay into a reporter, on an unpaced stepped clock."""
-    stream_builder.run_on_clock(
-        SteppedStreamClock(
-            step_ns=STEPPED_STREAM_STEP_MS * 1_000_000,
-            stop_after_steps=STEPPED_STREAM_STEPS,
-        )
-    )
+def _step_writer_through_a_slow_relay_into_a_reporter(stream_builder: StreamBuilder) -> None:
     writer = stream_builder.add(StepTimeWriterSource)
     relay = stream_builder.add(SlowStepRelay)
     reporter = stream_builder.add(StepTimeReporterSink)
@@ -68,4 +62,29 @@ def step_times_through_a_slow_relay(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(
         relay.output("step_times_to_downstream"),
         reporter.input("step_times_from_upstream"),
+    )
+
+
+@stream
+def step_times_through_a_slow_relay(stream_builder: StreamBuilder) -> None:
+    """A step-time writer through a slow relay into a reporter, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(
+        SteppedStreamClock(
+            step_ns=STEPPED_STREAM_STEP_MS * 1_000_000,
+            stop_after_steps=STEPPED_STREAM_STEPS,
+        )
+    )
+    _step_writer_through_a_slow_relay_into_a_reporter(stream_builder)
+
+
+@stream
+def real_time_writes_beside_steps(stream_builder: StreamBuilder) -> None:
+    """A node paced by real time into a reporter, beside the step chain, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(SteppedStreamClock(step_ns=STEPPED_STREAM_STEP_MS * 1_000_000))
+    _step_writer_through_a_slow_relay_into_a_reporter(stream_builder)
+    real_time_writer = stream_builder.add(RealTimePacedWriterSource)
+    real_time_reporter = stream_builder.add(RealTimePacedReporterSink)
+    stream_builder.connect(
+        real_time_writer.output("real_time_writes_to_downstream"),
+        real_time_reporter.input("real_time_writes_from_upstream"),
     )

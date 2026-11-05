@@ -63,6 +63,7 @@ class SpeakerSinkConfig:
 @node(
     execution="manual",
     scheduling="realtime",
+    paced_by_real_time=True,
     description=(
         "Plays timestamped blocks of interleaved samples on the machine's audio backend "
         "(discarding where no backend exists)."
