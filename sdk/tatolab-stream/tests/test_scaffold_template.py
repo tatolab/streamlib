@@ -276,10 +276,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
     )
 
     assert finished.returncode == 0, finished.stdout + finished.stderr
-    if sys.version_info >= (3, 11):
-        assert finished.stderr == "", "the scaffold binds to no floor, so the compile says nothing"
-    else:
-        assert "the cross-floor check found nothing" in finished.stderr, finished.stderr
+    assert finished.stderr == "", "the scaffold binds to no floor, so the compile says nothing"
     document = json.loads(finished.stdout)
     assert set(document) == {"project_directory", "streams"}, document
     assert document["project_directory"] == str(app_directory)

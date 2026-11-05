@@ -3,7 +3,8 @@
 
 //! The data plane a Python node reads and writes through.
 //!
-//! A message's payload crosses as `bytes` in both directions; nothing here
+//! A read hands out a borrow of the sample a payload arrived in and a write
+//! copies any contiguous buffer, or loans its sample to fill; nothing here
 //! encodes or decodes it. This is where the GIL-release contract is kept for
 //! the per-message path: the iceoryx2 call that can block runs detached, since
 //! holding the GIL across it would stall the interpreter's other threads for
@@ -22,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyBytes, PyDict, PyType};
+use pyo3::types::{PyDict, PyType};
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
@@ -30,14 +31,16 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner, ReadMode,
-    ResolvedAudioWindowContract, StreamClockBoardPublishListener,
+    InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
+    ReadMode, ResolvedAudioWindowContract, StreamClockBoardPublishListener,
+    input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
 use crate::python_bag_conversion::{
-    cast_payload_bytes_into_read_target, python_type_name_for_error_message,
+    cast_payload_into_read_target, python_type_name_for_error_message,
 };
+use crate::python_port_payload::{PythonPortPayloadBorrow, PythonPortPayloadLoan};
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
@@ -326,10 +329,10 @@ impl PythonProcessorLinkDataAccess {
             .detach(|| input_mailboxes.read_raw(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
-            Some(message) => payload_bytes_cast_into_the_read_target_when_named(
+            Some(message) => payload_borrowed_into_the_read_target_when_named(
                 python,
                 port_name,
-                &message.payload_bytes,
+                message.payload,
                 into,
                 offered_gpu_limited_access,
             )
@@ -425,7 +428,7 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// The one fan-in read body: the next message on `port_name`, its payload
-    /// as `bytes` or cast by `into`, and the inbound link it arrived on.
+    /// borrowed or cast by `into`, and the inbound link it arrived on.
     fn read_message_naming_its_inbound_link_with_its_payload_cast<'py>(
         &self,
         python: Python<'py>,
@@ -440,13 +443,13 @@ impl PythonProcessorLinkDataAccess {
         let read = python
             .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        let Some((message, inbound_link_name)) = read else {
+        let Some((mut message, inbound_link_name)) = read else {
             return Ok(None);
         };
-        let payload = payload_bytes_cast_into_the_read_target_when_named(
+        let payload = payload_borrowed_into_the_read_target_when_named(
             python,
             port_name,
-            &message.payload_bytes,
+            std::mem::take(&mut message.payload),
             into,
             offered_gpu_limited_access,
         )?;
@@ -487,25 +490,25 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
-/// One message's payload as `bytes`, or what `into.from_bytes` builds from it
-/// when `into` names a target — the half every read shares once the payload
-/// is in hand.
-fn payload_bytes_cast_into_the_read_target_when_named<'py>(
+/// One message's payload as a `PortPayloadBorrow`, or what `into.from_bytes`
+/// builds from that borrow when `into` names a target — the half every read
+/// shares once the payload is in hand.
+fn payload_borrowed_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,
-    payload_bytes: &[u8],
+    payload: InputPortMessagePayload,
     into: Option<&Bound<'py, PyAny>>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let payload_bytes = PyBytes::new(python, payload_bytes);
+    let payload_borrow = Bound::new(python, PythonPortPayloadBorrow::holding(payload))?.into_any();
     match into {
-        Some(read_target) => cast_payload_bytes_into_read_target(
+        Some(read_target) => cast_payload_into_read_target(
             port_name,
-            &payload_bytes,
+            &payload_borrow,
             read_target,
             offered_gpu_limited_access,
         ),
-        None => Ok(payload_bytes.into_any()),
+        None => Ok(payload_borrow),
     }
 }
 
@@ -769,6 +772,7 @@ impl PythonProcessorLinkDataAccess {
         audio_window = None,
         loss_count_slot = None,
         wiring_generation = None,
+        input_port_borrow_quota = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn wire_input_link(
@@ -787,8 +791,12 @@ impl PythonProcessorLinkDataAccess {
         audio_window: Option<&Bound<'_, PyAny>>,
         loss_count_slot: Option<usize>,
         wiring_generation: Option<u64>,
+        input_port_borrow_quota: Option<usize>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
+        let input_port_borrow_quota =
+            resolve_input_port_borrow_quota(port_name, input_port_borrow_quota)
+                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
         let read_mode = match read_mode {
             "skip_to_latest" => ReadMode::SkipToLatest,
             "read_next_in_order" => ReadMode::ReadNextInOrder,
@@ -828,6 +836,7 @@ impl PythonProcessorLinkDataAccess {
                         }
                     }
                 }
+                input_mailboxes.set_input_port_borrow_quota(port_name, input_port_borrow_quota)?;
                 let channel = node.open_or_create_service(
                     channel_service_name,
                     max_subscribers,
@@ -932,9 +941,9 @@ impl PythonProcessorLinkDataAccess {
     /// The next message's payload on `port_name`, or `None` when the mailbox is
     /// empty.
     ///
-    /// Without `into` the payload arrives as `bytes`; with it the read returns
-    /// `into.from_bytes(payload)`, so a mismatch surfaces here, at the
-    /// consuming read, and nowhere else.
+    /// Without `into` the payload arrives as a `PortPayloadBorrow`; with it the
+    /// read returns `into.from_bytes(payload)`, so a mismatch surfaces here, at
+    /// the consuming read, and nowhere else.
     ///
     /// This is the plumbing a helper process wires by hand; it holds no
     /// context, so a target's `from_bytes` is offered no GPU capability. The
@@ -965,7 +974,10 @@ impl PythonProcessorLinkDataAccess {
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
             Some(message) => Ok((
-                Some(PyBytes::new(python, &message.payload_bytes).into_any()),
+                Some(
+                    Bound::new(python, PythonPortPayloadBorrow::holding(message.payload))?
+                        .into_any(),
+                ),
                 Some(message.timestamp_ns),
             )),
             None => Ok((None, None)),
@@ -1003,8 +1015,9 @@ impl PythonProcessorLinkDataAccess {
     /// Publish one message carrying `payload` to every downstream link on
     /// `port_name`.
     ///
-    /// `payload` is `bytes` and nothing else, refused by name otherwise.
-    /// Omitting `timestamp_ns` stamps the monotonic now; `starts_group` lands
+    /// `payload` is any contiguous buffer, copied; anything else is refused
+    /// by name.
+    /// Omitting `timestamp_ns` stamps stream time now; `starts_group` lands
     /// in the frame header's group flag. An over-ceiling message is refused
     /// and counted on the port, reaches `graph` through this helper's
     /// loss-count board, and is warned about through the helper's log — never
@@ -1019,7 +1032,8 @@ impl PythonProcessorLinkDataAccess {
         starts_group: bool,
     ) -> PyResult<()> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let payload_bytes = payload_bytes_the_write_was_handed(port_name, payload)?;
+        let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
+        let payload_bytes = payload_buffer.bytes();
         let Some(output_writer) = self.output_writer_reaching(port_name)? else {
             return Ok(());
         };
@@ -1058,24 +1072,96 @@ impl PythonProcessorLinkDataAccess {
             Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
         }
     }
+
+    /// Loan `payload_byte_len` bytes on `port_name` for its writer to fill in
+    /// place, published when the loan's `with` block exits cleanly.
+    ///
+    /// Refused while the port's previous loan is open, so a port's order is
+    /// its write order. A declared port no link has reached, or a payload past
+    /// the port's ceiling, loans scratch bytes that publish nowhere.
+    #[pyo3(signature = (port_name, payload_byte_len, timestamp_ns = None, starts_group = true))]
+    pub(crate) fn loan_on_output_port(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        payload_byte_len: usize,
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+    ) -> PyResult<PythonPortPayloadLoan> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let output_writer = self.output_writer_reaching(port_name)?;
+        let group_boundary = if starts_group {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        };
+        PythonPortPayloadLoan::loaning(
+            python,
+            output_writer,
+            port_name,
+            payload_byte_len,
+            timestamp_ns,
+            group_boundary,
+        )
+    }
 }
 
-/// The bytes a write was handed, or the refusal of anything that is not
-/// `bytes`, naming what it got.
-fn payload_bytes_the_write_was_handed<'payload>(
-    port_name: &str,
-    payload: &'payload Bound<'_, PyAny>,
-) -> PyResult<&'payload [u8]> {
-    payload
-        .cast::<PyBytes>()
-        .map(|payload_bytes| payload_bytes.as_bytes())
-        .map_err(|_| {
-            PyTypeError::new_err(format!(
-                "write() on output port {port_name:?} takes the message's payload as bytes; got \
-                 a {}. Encode a record with `tatolab.stream.msgpack.pack(record)`.",
+/// The contiguous buffer a write was handed, held for as long as its bytes are
+/// copied out.
+struct PythonBufferHeldForOneWrite {
+    view: Box<pyo3::ffi::Py_buffer>,
+}
+
+// SAFETY: the view is read only while its write holds it, and released through
+// the GIL its `Drop` attaches.
+unsafe impl Send for PythonBufferHeldForOneWrite {}
+// SAFETY: the bytes behind the view are only read.
+unsafe impl Sync for PythonBufferHeldForOneWrite {}
+
+impl PythonBufferHeldForOneWrite {
+    /// Hold `payload`'s buffer, or refuse anything that exports no contiguous
+    /// one, naming what it got.
+    fn of(port_name: &str, payload: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut view = Box::new(std::mem::MaybeUninit::<pyo3::ffi::Py_buffer>::zeroed());
+        // SAFETY: `view` is writable storage for one `Py_buffer`, which
+        // `PyObject_GetBuffer` fills on success and leaves unowned on failure.
+        let got = unsafe {
+            pyo3::ffi::PyObject_GetBuffer(
+                payload.as_ptr(),
+                view.as_mut_ptr(),
+                pyo3::ffi::PyBUF_SIMPLE,
+            )
+        };
+        if got != 0 {
+            let refusal = PyErr::fetch(payload.py());
+            return Err(PyTypeError::new_err(format!(
+                "write() on output port {port_name:?} takes the message's payload as a \
+                 contiguous buffer such as bytes, a memoryview or a numpy array; got a {} \
+                 ({refusal}). Encode a record with `tatolab.stream.msgpack.pack(record)`.",
                 python_type_name_for_error_message(payload, "value")
-            ))
-        })
+            )));
+        }
+        // SAFETY: `PyObject_GetBuffer` succeeded, so the view is filled.
+        let view = unsafe { Box::from_raw(Box::into_raw(view).cast::<pyo3::ffi::Py_buffer>()) };
+        Ok(Self { view })
+    }
+
+    fn bytes(&self) -> &[u8] {
+        if self.view.len == 0 {
+            return &[];
+        }
+        // SAFETY: a `PyBUF_SIMPLE` view is `len` contiguous bytes at `buf`,
+        // valid until the view is released.
+        unsafe { std::slice::from_raw_parts(self.view.buf.cast::<u8>(), self.view.len as usize) }
+    }
+}
+
+impl Drop for PythonBufferHeldForOneWrite {
+    fn drop(&mut self) {
+        // SAFETY: the view was filled by `PyObject_GetBuffer` and is released
+        // once, attached.
+        Python::attach(|_| unsafe { pyo3::ffi::PyBuffer_Release(&mut *self.view) });
+    }
 }
 
 /// Read the window contract the parent wired this input port with.
@@ -1177,7 +1263,7 @@ fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::{PyByteArray, PyDict, PyString};
+    use pyo3::types::{PyBytes, PyDict, PyString};
 
     /// Unique per test: every test in this process shares one iceoryx2 domain,
     /// so a fixed name would let one test's channel meet the next one's.
@@ -1220,6 +1306,7 @@ mod tests {
                 2,
                 1,
                 "link-1",
+                None,
                 None,
                 None,
                 None,
@@ -1270,10 +1357,7 @@ mod tests {
                 .unwrap()
                 .expect("the wired input received nothing");
             assert_eq!(
-                received
-                    .cast::<PyBytes>()
-                    .expect("a read without `into` hands back bytes")
-                    .as_bytes(),
+                PythonPortPayloadBorrow::bytes_the_read_borrowed(&received),
                 payload_that_is_not_msgpack
             );
         });
@@ -1348,18 +1432,19 @@ mod tests {
                     .read_raw("frames_from_upstream")
                     .unwrap()
                     .expect("the wired input received nothing");
-                assert_eq!(message.payload_bytes, b"access unit");
+                assert_eq!(message.payload, b"access unit");
                 assert_eq!(message.timestamp_ns, timestamp_ns);
                 assert_eq!(message.group_boundary, group_boundary);
             }
         });
     }
 
-    /// A payload that is not `bytes` is refused at the write, naming `bytes`
-    /// and the type it got — and refused on a declared port no link has
-    /// reached, too, so an author learns before the first link arrives.
+    /// A payload that exports no buffer is refused at the write, naming the
+    /// buffer it wants and the type it got — and refused on a declared port no
+    /// link has reached, too, so an author learns before the first link
+    /// arrives.
     #[test]
-    fn a_write_refuses_a_payload_that_is_not_bytes_by_name() {
+    fn a_write_refuses_a_payload_that_is_not_a_buffer_by_name() {
         Python::initialize();
         Python::attach(|python| {
             let (source, destination) = one_wired_link(python, "refusal");
@@ -1369,22 +1454,22 @@ mod tests {
             let not_bytes = [
                 ("dict", record.into_any()),
                 ("str", PyString::new(python, "frame").into_any()),
-                ("bytearray", PyByteArray::new(python, b"frame").into_any()),
+                ("int", 7i64.into_pyobject(python).unwrap().into_any()),
             ];
             for port_name in ["frames_to_downstream", "unlinked_output"] {
                 for (type_name, payload) in &not_bytes {
                     let refusal = source
                         .write_to_output_port(python, port_name, payload, None, true)
-                        .expect_err("a payload that is not bytes must be refused");
+                        .expect_err("a payload that is not a buffer must be refused");
                     assert!(
                         refusal.is_instance_of::<PyTypeError>(python),
                         "got: {refusal}"
                     );
                     let refusal_text = refusal.to_string();
                     assert!(
-                        refusal_text.contains("as bytes")
+                        refusal_text.contains("contiguous buffer")
                             && refusal_text.contains(&format!("got a {type_name}")),
-                        "the refusal names bytes and what it got: {refusal_text}"
+                        "the refusal names the buffer and what it got: {refusal_text}"
                     );
                 }
             }
@@ -1566,6 +1651,7 @@ mod tests {
                     None,
                     Some(4),
                     Some(21),
+                    None,
                 )
                 .unwrap();
             destination
@@ -1616,10 +1702,7 @@ mod tests {
                     .unwrap()
                     .expect("the port holds a message");
                 i64::from_le_bytes(
-                    payload
-                        .cast::<PyBytes>()
-                        .unwrap()
-                        .as_bytes()
+                    PythonPortPayloadBorrow::bytes_the_read_borrowed(&payload)
                         .try_into()
                         .expect("an eight-byte frame index"),
                 )
@@ -1703,6 +1786,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .expect_err("a helper with a board open is told where every link's counts go");
             assert!(
@@ -1779,6 +1863,7 @@ mod tests {
                     Some(contract.as_any()),
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
             source
@@ -1829,9 +1914,10 @@ mod tests {
                 .read_from_input_port(python, "audio_from_upstream", None)
                 .unwrap()
                 .expect("the windowed input received nothing");
-            let window: streamlib_media_builtins::AudioBlock =
-                rmp_serde::from_slice(window_payload.cast::<PyBytes>().unwrap().as_bytes())
-                    .expect("the stage emits a msgpack AudioBlock");
+            let window: streamlib_media_builtins::AudioBlock = rmp_serde::from_slice(
+                &PythonPortPayloadBorrow::bytes_the_read_borrowed(&window_payload),
+            )
+            .expect("the stage emits a msgpack AudioBlock");
             assert_eq!(
                 window.sample_count, 512,
                 "the child's stage owes exactly what the contract declared"
@@ -1938,12 +2024,219 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .unwrap_err();
             assert!(
                 refusal.to_string().contains("whenever"),
                 "the refusal must name what it got: {refusal}"
             );
+        });
+    }
+
+    /// A source and a destination plane joined by one link, as the Python
+    /// objects a helper's code holds.
+    fn one_wired_link_as_python_objects<'py>(
+        python: Python<'py>,
+        label: &str,
+    ) -> Bound<'py, PyDict> {
+        let (source, destination) = one_wired_link(python, label);
+        let planes = PyDict::new(python);
+        planes
+            .set_item("source", Bound::new(python, source).unwrap())
+            .unwrap();
+        planes
+            .set_item("destination", Bound::new(python, destination).unwrap())
+            .unwrap();
+        planes
+    }
+
+    /// A read hands out the sample it arrived in: a `memoryview` of it and a
+    /// DLPack tensor over it both start at the sample's own bytes, read-only,
+    /// and `bytes()` is the copy.
+    #[test]
+    fn a_borrowed_read_shares_the_samples_memory_through_memoryview_and_dlpack() {
+        Python::initialize();
+        Python::attach(|python| {
+            let planes = one_wired_link_as_python_objects(python, "borrowshares");
+            let source = planes.get_item("source").unwrap().unwrap();
+            let destination = planes.get_item("destination").unwrap().unwrap();
+            source
+                .call_method1(
+                    "write_to_output_port",
+                    (
+                        "frames_to_downstream",
+                        PyBytes::new(python, b"one shared sample"),
+                    ),
+                )
+                .unwrap();
+            let received = destination
+                .call_method1("read_from_input_port", ("frames_from_upstream",))
+                .unwrap();
+            let (sample_address, is_a_channel_sample) = received
+                .cast::<PythonPortPayloadBorrow>()
+                .expect("a read hands back a PortPayloadBorrow")
+                .get()
+                .borrowed_payload_address_and_whether_it_is_a_channel_sample();
+            assert!(is_a_channel_sample, "the read borrows the channel sample");
+
+            let memoryview = python
+                .import("builtins")
+                .unwrap()
+                .getattr("memoryview")
+                .unwrap()
+                .call1((&received,))
+                .unwrap();
+            let memoryview_buffer =
+                PythonBufferHeldForOneWrite::of("frames_from_upstream", &memoryview).unwrap();
+            assert_eq!(
+                memoryview_buffer.bytes().as_ptr() as usize,
+                sample_address,
+                "memoryview(read) must be the sample's bytes, not a copy"
+            );
+            drop(memoryview_buffer);
+            assert!(
+                memoryview
+                    .getattr("readonly")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap()
+            );
+
+            let capsule = received.call_method0("__dlpack__").unwrap();
+            // SAFETY: an unconsumed `__dlpack__` capsule carries a
+            // `ManagedTensor` under the name `dltensor`.
+            let tensor_data_address = unsafe {
+                let managed_tensor =
+                    pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
+                        as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
+                (*managed_tensor).dl_tensor.data as usize
+            };
+            assert_eq!(tensor_data_address, sample_address);
+            assert_eq!(
+                received
+                    .call_method0("__dlpack_device__")
+                    .unwrap()
+                    .extract::<(i32, i32)>()
+                    .unwrap(),
+                (1, 0)
+            );
+
+            let copied = python
+                .import("builtins")
+                .unwrap()
+                .getattr("bytes")
+                .unwrap()
+                .call1((&received,))
+                .unwrap();
+            assert_eq!(
+                copied.cast::<PyBytes>().unwrap().as_bytes(),
+                b"one shared sample"
+            );
+        });
+    }
+
+    /// `ctx.loan` publishes what its block wrote on a clean exit, gives the
+    /// sample back unpublished when the block raised, and a write takes any
+    /// contiguous buffer.
+    #[test]
+    fn a_loan_publishes_on_a_clean_exit_and_gives_the_sample_back_when_its_block_raised() {
+        Python::initialize();
+        Python::attach(|python| {
+            let planes = one_wired_link_as_python_objects(python, "loanexit");
+            python
+                .run(
+                    cr#"
+with source.loan_on_output_port("frames_to_downstream", 5, timestamp_ns=77) as out:
+    assert len(out) == 5
+    with memoryview(out) as view:
+        view[:] = b"hello"
+published, timestamp_ns = destination.read_from_input_port_with_timestamp("frames_from_upstream")
+assert bytes(published) == b"hello", bytes(published)
+assert timestamp_ns == 77, timestamp_ns
+
+class TheBlockFailed(Exception):
+    pass
+
+try:
+    with source.loan_on_output_port("frames_to_downstream", 4) as out:
+        with memoryview(out) as view:
+            view[:] = b"lost"
+        raise TheBlockFailed()
+except TheBlockFailed:
+    pass
+else:
+    raise AssertionError("the block's exception must propagate")
+assert destination.read_from_input_port("frames_from_upstream") is None
+
+source.write_to_output_port("frames_to_downstream", bytearray(b"from a bytearray"))
+source.write_to_output_port("frames_to_downstream", memoryview(b"xx from a view")[3:])
+assert bytes(destination.read_from_input_port("frames_from_upstream")) == b"from a bytearray"
+assert bytes(destination.read_from_input_port("frames_from_upstream")) == b"from a view"
+"#,
+                    Some(&planes),
+                    Some(&planes),
+                )
+                .unwrap();
+        });
+    }
+
+    /// Leaving a loan's block while an export of it lives publishes nothing
+    /// and raises `BufferError`; the port stays loaned, refusing a second loan
+    /// and a write, until the export goes.
+    #[test]
+    fn a_loan_left_exported_publishes_nothing_and_holds_its_port_until_the_export_goes() {
+        Python::initialize();
+        Python::attach(|python| {
+            let planes = one_wired_link_as_python_objects(python, "loanexported");
+            python
+                .run(
+                    cr#"
+def refused(call, refusal_type):
+    try:
+        call()
+    except refusal_type as refusal:
+        return str(refusal)
+    raise AssertionError(f"{call} must raise {refusal_type.__name__}")
+
+view = None
+def leave_the_block_with_an_export_alive():
+    global view
+    with source.loan_on_output_port("frames_to_downstream", 4) as out:
+        view = memoryview(out)
+        view[:] = b"kept"
+
+assert "live export" in refused(leave_the_block_with_an_export_alive, BufferError)
+assert "has a loan open" in refused(
+    lambda: source.loan_on_output_port("frames_to_downstream", 4), RuntimeError
+)
+assert "has a loan open" in refused(
+    lambda: source.write_to_output_port("frames_to_downstream", b"x"), RuntimeError
+)
+assert destination.read_from_input_port("frames_from_upstream") is None
+
+view.release()
+with source.loan_on_output_port("frames_to_downstream", 2) as out:
+    tensor = out.__dlpack__()
+    del tensor
+    with memoryview(out) as view:
+        view[:] = b"ok"
+assert bytes(destination.read_from_input_port("frames_from_upstream")) == b"ok"
+
+def leave_the_block_with_a_tensor_alive():
+    global tensor
+    with source.loan_on_output_port("frames_to_downstream", 2) as out:
+        tensor = out.__dlpack__()
+
+assert "live export" in refused(leave_the_block_with_a_tensor_alive, BufferError)
+del tensor
+source.write_to_output_port("frames_to_downstream", b"after")
+assert bytes(destination.read_from_input_port("frames_from_upstream")) == b"after"
+"#,
+                    Some(&planes),
+                    Some(&planes),
+                )
+                .unwrap();
         });
     }
 }

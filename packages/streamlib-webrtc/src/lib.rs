@@ -9,6 +9,8 @@
 //! and the player's runs on a thread of its own, writing its node's ports
 //! through the module host table.
 
+use pyo3::buffer::PyBuffer;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
@@ -127,11 +129,14 @@ impl WhipSession {
     fn write_video_media_frame(
         &self,
         python: Python<'_>,
-        media_frame: &[u8],
+        media_frame: PyBuffer<u8>,
         timestamp_ns: i64,
     ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
+        let media_frame = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
+            &media_frame,
+            "media_frame",
+        )?);
 
         python.detach(|| {
             let mut publishing = self.locked_state()?;
@@ -156,9 +161,16 @@ impl WhipSession {
     /// Send the Opus packet one media frame carries after its varint
     /// timestamp, its RTP advance taken from the packet's own TOC rather than
     /// from an assumed 20 ms frame.
-    fn write_audio_media_frame(&self, python: Python<'_>, media_frame: &[u8]) -> PyResult<()> {
+    fn write_audio_media_frame(
+        &self,
+        python: Python<'_>,
+        media_frame: PyBuffer<u8>,
+    ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
+        let media_frame = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
+            &media_frame,
+            "media_frame",
+        )?);
 
         python.detach(|| {
             let publishing = self.locked_state()?;
@@ -401,4 +413,20 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<WhipSession>()?;
     module.add_class::<WhepPlayerThread>()?;
     Ok(())
+}
+
+/// The bytes of a C-contiguous buffer — `bytes`, a read's `PortPayloadBorrow`,
+/// a `memoryview` — borrowed while `buffer` lives.
+fn bytes_of_a_contiguous_buffer<'buffer>(
+    buffer: &'buffer PyBuffer<u8>,
+    argument_name: &str,
+) -> PyResult<&'buffer [u8]> {
+    if !buffer.is_c_contiguous() {
+        return Err(PyValueError::new_err(format!(
+            "{argument_name} must be a C-contiguous buffer"
+        )));
+    }
+    // SAFETY: a C-contiguous buffer spans `len_bytes` bytes from `buf_ptr`,
+    // and its exporter keeps them alive and unmoved while `buffer` lives.
+    Ok(unsafe { std::slice::from_raw_parts(buffer.buf_ptr() as *const u8, buffer.len_bytes()) })
 }

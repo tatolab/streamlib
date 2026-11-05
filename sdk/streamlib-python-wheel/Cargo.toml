@@ -32,10 +32,10 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 # 0.29 is the first release with the `attach`/`detach` naming; 0.28 and earlier
 # spell these `Python::with_gil` / `py.allow_threads`, which were REMOVED rather
-# than deprecated. `abi3-py310` builds one wheel for CPython 3.10 and every
+# than deprecated. `abi3-py312` builds one wheel for CPython 3.12 and every
 # later GIL-enabled release — free-threaded builds wait for a stable ABI to
 # exist for them.
-pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
+pyo3 = { version = "0.29.0", features = ["abi3-py312"] }
 
 streamlib = { path = "../streamlib-sdk", version = "0.68.27" }
 

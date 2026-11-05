@@ -9,6 +9,7 @@ processor extension's per-frame work is its own package's Rust, reached from
 its own Python.
 """
 
+from collections.abc import Buffer
 from typing import final
 
 # pyo3 builds this from what the module registers, so the stub has to carry it
@@ -46,7 +47,7 @@ class WhipSession:
         for every Opus stream, mono included.
         """
 
-    def write_video_media_frame(self, media_frame: bytes, timestamp_ns: int) -> None:
+    def write_video_media_frame(self, media_frame: Buffer, timestamp_ns: int) -> None:
         """Send the Annex-B access unit `media_frame` carries after its varint
         timestamp, on the RTP clock `timestamp_ns` places it.
 
@@ -61,7 +62,7 @@ class WhipSession:
         33 ms at 30 fps. Bytes that are not a media frame raise `ValueError`.
         """
 
-    def write_audio_media_frame(self, media_frame: bytes) -> None:
+    def write_audio_media_frame(self, media_frame: Buffer) -> None:
         """Send the Opus packet `media_frame` carries after its varint
         timestamp, its RTP advance taken from the packet's own TOC."""
 

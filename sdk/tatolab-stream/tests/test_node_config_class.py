@@ -10,16 +10,10 @@ runtime's, and is tested beside it.
 """
 
 import dataclasses
-from typing import Annotated, Any, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, Optional, Required, TypedDict
 
 import pydantic
 import pytest
-
-# The 3.10 floor spells per-key requiredness from here, and it is what the
-# stream suite's test group installs; `typing.Required` arrives only at 3.11,
-# and until then only this `TypedDict` reads it into the required keys.
-from typing_extensions import NotRequired, Required
-from typing_extensions import TypedDict as TypedDictReadingRequiredness
 
 from tatolab.stream import node
 
@@ -157,9 +151,6 @@ def test_an_unannotated_config_parameter_is_refused():
 def test_a_config_annotated_as_a_parameterized_generic_is_refused():
     """`dict[str, Any]` is a mapping, not a class the helper can construct.
 
-    The guard is on the annotation's origin rather than on `isinstance(_, type)`
-    because on Python 3.10 — the package's floor — `isinstance(dict[str, Any],
-    type)` is still True.
     """
     with pytest.raises(TypeError, match="is not a class"):
 
@@ -388,9 +379,9 @@ def test_the_document_is_2020_12_with_no_meta_schema_key():
 def test_a_typing_extensions_typed_dict_is_recognised_as_one():
     """`typing.is_typeddict` sees `typing.TypedDict` alone.
 
-    On the 3.10 floor `Required` / `NotRequired` come from `typing_extensions`,
-    so its spelling is the one an author reaches for — and unrecognised it
-    would fall through to an open object with no keys and no refusal to say so.
+    An author may still spell a config with `typing_extensions`, and
+    unrecognised it would fall through to an open object with no keys and no
+    refusal to say so.
     """
     typing_extensions = pytest.importorskip("typing_extensions")
 
@@ -404,8 +395,8 @@ def test_a_typing_extensions_typed_dict_is_recognised_as_one():
 
 
 def test_a_config_annotated_as_any_is_refused_the_same_on_every_version():
-    """`isinstance(typing.Any, type)` is False on 3.10 and True on 3.11+, so
-    without naming `Any` the rule would differ across the package's own range."""
+    """`isinstance(typing.Any, type)` is True from 3.11, so only naming `Any`
+    refuses it."""
     with pytest.raises(TypeError, match="`Any`"):
 
         @node(execution="manual")
@@ -423,7 +414,7 @@ def test_a_requiredness_qualifier_does_not_hide_the_type_it_wraps():
     """`get_type_hints` keeps `Required` / `NotRequired`, and unrecognised they
     swallow the key's type — the one thing the catalog exists to publish."""
 
-    class QualifiedConfig(TypedDictReadingRequiredness, total=False):
+    class QualifiedConfig(TypedDict, total=False):
         width: Required[Annotated[int, "How wide."]]
         label: NotRequired[str]
 

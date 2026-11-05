@@ -22,8 +22,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::mem::MaybeUninit;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use iceoryx2::port::SendError;
 use iceoryx2::port::notifier::Notifier;
@@ -34,8 +34,9 @@ use serde::Serialize;
 use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
 use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
-    ChannelDataServicePublisher, ChannelTrustTier, DataChannelBagUserHeader, FRAME_HEADER_SIZE,
-    FrameHeader, MessageGroupBoundary,
+    ChannelDataServiceLoanedSample, ChannelDataServicePublisher, ChannelTrustTier,
+    DataChannelPayloadDescriptor, DataChannelSampleUserHeader, MessageGroupBoundary,
+    data_channel_payload_cache_lines_for,
 };
 use crate::core::context::StreamClock;
 use crate::core::descriptors::CatalogEntry;
@@ -90,16 +91,23 @@ fn sequence_number_following_a_send(sent_sequence_number: u64, may_have_delivere
     }
 }
 
-/// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
-/// sample — what [`SampleMutUninit::write_from_slice`] does internally, exposed
-/// here so header and payload can fill one loan without a staging copy.
-///
-/// [`SampleMutUninit::write_from_slice`]: iceoryx2::sample_mut_uninit::SampleMutUninit::write_from_slice
-fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
-    // SAFETY: `MaybeUninit<u8>` is `repr(transparent)` over `u8`, so the
-    // reference transmute is layout-preserving, and wrapping initialized bytes
-    // in `MaybeUninit` asserts nothing — only the reverse direction would.
-    unsafe { std::mem::transmute::<&[u8], &[MaybeUninit<u8>]>(bytes) }
+/// Every egress ever installed is numbered from this, so a loan published after
+/// its port was unwired and wired again is not sent on the new publisher's
+/// numbering.
+static NEXT_CHANNEL_EGRESS_INSTALLATION: AtomicU64 = AtomicU64::new(0);
+
+/// The loaned sample's payload area as bytes.
+fn payload_area_bytes_mut(loaned_sample: &mut ChannelDataServiceLoanedSample) -> &mut [u8] {
+    let cache_lines = loaned_sample.payload_mut();
+    // SAFETY: `DataChannelPayloadCacheLine` is `repr(C)` over a byte array and
+    // has no padding, so its lines are that many contiguous bytes, borrowed
+    // mutably for as long as the sample is.
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            cache_lines.as_mut_ptr().cast::<u8>(),
+            std::mem::size_of_val(cache_lines),
+        )
+    }
 }
 
 /// One source output port's channel egress: the single channel publisher
@@ -148,6 +156,12 @@ struct ChannelEgress {
     current_slot_capacity_bytes: usize,
     /// This port's share of the writer's refused-bag and written-bag counts.
     bag_counters: OutputPortBagCounters,
+    /// Set while a loan of this port's publisher is out, so a second loan or a
+    /// write on the port is refused by name rather than by iceoryx2's loan
+    /// limit.
+    a_loan_is_open: Arc<AtomicBool>,
+    /// Which installation of the port's publisher this is.
+    installation: u64,
 }
 
 /// One outbound `connect()` link from a source output port, and the notifier
@@ -159,7 +173,7 @@ struct ChannelEgress {
 /// a source feeding N destinations must keep the other N-1 alive.
 struct ChannelEgressLink {
     link_id: String,
-    notifier: Notifier<ipc::Service>,
+    notifier: Notifier<ipc_threadsafe::Service>,
 }
 
 /// The channel-egress primitives that prime an output port's channel
@@ -203,12 +217,161 @@ pub struct OutputWriterInner {
     stream_clock: std::sync::OnceLock<Arc<StreamClock>>,
 }
 
-// SAFETY: `Publisher` and `Notifier` are not `Send`, so the `Mutex` alone does
-// not make this type shareable. It is sound because every port and every loaned
-// sample is touched only while `channels` is held, and no sample outlives that
-// guard.
-unsafe impl Send for OutputWriterInner {}
-unsafe impl Sync for OutputWriterInner {}
+impl ChannelEgress {
+    /// Admit a `payload_byte_len`-byte message against this channel's ceiling
+    /// and loan the sample that carries it, refused and counted over the
+    /// ceiling.
+    fn admit_and_loan(
+        &mut self,
+        payload_byte_len: usize,
+    ) -> Result<ChannelDataServiceLoanedSample> {
+        let admission = streamlib_ipc_types::decide_channel_egress_admission(
+            payload_byte_len,
+            self.chunk_ceiling_bytes,
+            &mut self.current_slot_capacity_bytes,
+            || self.bag_counters.record_one_refused_bag(),
+        );
+        streamlib_ipc_types::emit_channel_egress_admission_tracing(
+            None,
+            self.trust_tier,
+            &self.channel_service_name,
+            self.chunk_ceiling_bytes,
+            payload_byte_len,
+            &admission,
+        );
+        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } =
+            admission
+        {
+            return Err(Error::PayloadExceedsChannelCeiling {
+                channel: self.channel_service_name.clone(),
+                payload_bytes: payload_byte_len,
+                largest_admitted_frame_bytes: self.largest_admitted_frame_bytes,
+                chunk_ceiling_bytes: self.chunk_ceiling_bytes,
+                tier: trust_tier_label(self.trust_tier),
+                refused_bags_on_the_output_port: refused_count,
+            });
+        }
+        let loaned_sample = self
+            .publisher
+            .loan_slice_uninit(data_channel_payload_cache_lines_for(payload_byte_len))
+            .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
+        // SAFETY: the payload area is a chunk of the publisher's shared-memory
+        // data segment, mapped from the operating system, so its bytes are
+        // initialized: they hold whatever this publisher last wrote to the
+        // chunk, or the zeroes the mapping started as. Every writer overwrites
+        // the stamped length before the send, and a reader reads no further.
+        Ok(unsafe { loaned_sample.assume_init() })
+    }
+
+    /// Send `loaned_sample` under `user_header`, numbered as this port's next
+    /// send, then wake every destination.
+    fn send_loaned_sample(
+        &mut self,
+        port: &str,
+        mut loaned_sample: ChannelDataServiceLoanedSample,
+        user_header: DataChannelSampleUserHeader,
+    ) -> Result<()> {
+        *loaned_sample.user_header_mut() = DataChannelSampleUserHeader {
+            sequence_number: self.next_sequence_number,
+            messages_lost_upstream_before_this_one: self
+                .messages_lost_upstream_before_the_next_send,
+            ..user_header
+        };
+        let send_outcome = loaned_sample.send();
+        let may_have_delivered = a_send_may_have_delivered(&send_outcome);
+        self.next_sequence_number =
+            sequence_number_following_a_send(self.next_sequence_number, may_have_delivered);
+        if may_have_delivered {
+            self.messages_lost_upstream_before_the_next_send = 0;
+        }
+        send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
+        self.bag_counters.record_one_written_bag();
+
+        // Wake every downstream listener fd. notify() may transiently fail
+        // (e.g. a listener not yet created) — log and continue rather than
+        // failing the publish; the data is already in shared memory and the
+        // next send() will wake the listener anyway.
+        for link in &self.links {
+            if let Err(e) = link.notifier.notify() {
+                tracing::trace!("OutputWriter: notify() failed for port '{}': {:?}", port, e);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The refusal for `what` on `port` while a loan of it is open.
+fn the_open_loan_refuses(port: &str, what: &str) -> Error {
+    Error::Link(format!(
+        "output port '{port}' has a loan open, so {what} on it is refused: publish the loan or \
+         give it back first"
+    ))
+}
+
+/// Clears its port's open-loan flag when the loan it marks ends, published or
+/// not.
+struct OutputPortOpenLoanMarker(Arc<AtomicBool>);
+
+impl Drop for OutputPortOpenLoanMarker {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Where an [`OutputPortPayloadLoan`]'s bytes live.
+enum OutputPortPayloadLoanTarget {
+    /// A sample loaned from the port's publisher.
+    LoanedSample {
+        loaned_sample: ChannelDataServiceLoanedSample,
+        egress_installation: u64,
+        _loan_marker: OutputPortOpenLoanMarker,
+    },
+    /// Scratch bytes for a declared port no link has reached; publishing them
+    /// sends nothing.
+    NoLinkYet { scratch_bytes: Vec<u8> },
+}
+
+/// A sample loaned on one output port, filled in place by its writer and then
+/// published with [`OutputWriterInner::publish_output_port_payload_loan`] or
+/// dropped, which gives it back unpublished.
+pub struct OutputPortPayloadLoan {
+    output_port: String,
+    payload_byte_len: usize,
+    loaned_to: OutputPortPayloadLoanTarget,
+}
+
+impl OutputPortPayloadLoan {
+    /// The output port the loan was taken on.
+    pub fn output_port(&self) -> &str {
+        &self.output_port
+    }
+
+    /// The payload bytes the loan was taken for.
+    pub fn payload_byte_len(&self) -> usize {
+        self.payload_byte_len
+    }
+
+    /// The loan's payload bytes, for its writer to fill. They start as
+    /// whatever the sample last carried.
+    pub fn payload_bytes_mut(&mut self) -> &mut [u8] {
+        let payload_byte_len = self.payload_byte_len;
+        match &mut self.loaned_to {
+            OutputPortPayloadLoanTarget::LoanedSample { loaned_sample, .. } => {
+                &mut payload_area_bytes_mut(loaned_sample)[..payload_byte_len]
+            }
+            OutputPortPayloadLoanTarget::NoLinkYet { scratch_bytes } => scratch_bytes,
+        }
+    }
+}
+
+impl std::fmt::Debug for OutputPortPayloadLoan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutputPortPayloadLoan")
+            .field("output_port", &self.output_port)
+            .field("payload_byte_len", &self.payload_byte_len)
+            .finish_non_exhaustive()
+    }
+}
 
 impl OutputWriterInner {
     /// Create a new inner with no channels (populated during wiring).
@@ -315,9 +478,11 @@ impl OutputWriterInner {
                     ),
                 current_slot_capacity_bytes:
                     streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
-                        expected_payload_bytes + FRAME_HEADER_SIZE,
+                        expected_payload_bytes,
                     ),
                 bag_counters: self.bag_counts.counters_for_output_port(output_port),
+                a_loan_is_open: Arc::new(AtomicBool::new(false)),
+                installation: NEXT_CHANNEL_EGRESS_INSTALLATION.fetch_add(1, Ordering::Relaxed),
             },
         );
     }
@@ -378,7 +543,7 @@ impl OutputWriterInner {
         &self,
         output_port: &str,
         link_id: &str,
-        notifier: Notifier<ipc::Service>,
+        notifier: Notifier<ipc_threadsafe::Service>,
     ) {
         if let Some(egress) = self.channels.lock().get_mut(output_port) {
             egress.links.push(ChannelEgressLink {
@@ -426,12 +591,13 @@ impl OutputWriterInner {
     /// Publish one message — `payload_bytes` as given, stamped `timestamp_ns` and
     /// `group_boundary` in its header — on `port`.
     ///
-    /// One zero-copy loan reaches every channel subscriber; the frame is built
-    /// and sent once, then every destination notifier is signalled.
+    /// The bytes are copied into one loaned sample that reaches every channel
+    /// subscriber; it is sent once, then every destination notifier is
+    /// signalled. Refused while a loan of the port is open.
     ///
     /// Every send that may deliver carries the port's next sequence number; a
-    /// refusal, a header failure, a failed loan and a send that failed before
-    /// reaching anyone consume none.
+    /// refusal, a failed loan and a send that failed before reaching anyone
+    /// consume none.
     pub fn write_bytes_with_timestamp(
         &self,
         port: &str,
@@ -443,86 +609,106 @@ impl OutputWriterInner {
         let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
             return Ok(());
         };
-
-        let total_len = FRAME_HEADER_SIZE + payload_bytes.len();
-
-        let admission = streamlib_ipc_types::decide_channel_egress_admission(
-            total_len,
-            egress.chunk_ceiling_bytes,
-            &mut egress.current_slot_capacity_bytes,
-            || egress.bag_counters.record_one_refused_bag(),
-        );
-        streamlib_ipc_types::emit_channel_egress_admission_tracing(
-            None,
-            egress.trust_tier,
-            &egress.channel_service_name,
-            egress.chunk_ceiling_bytes,
-            total_len,
-            &admission,
-        );
-        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } =
-            admission
-        {
-            return Err(Error::PayloadExceedsChannelCeiling {
-                channel: egress.channel_service_name.clone(),
-                payload_bytes: total_len,
-                largest_admitted_frame_bytes: egress.largest_admitted_frame_bytes,
-                chunk_ceiling_bytes: egress.chunk_ceiling_bytes,
-                tier: trust_tier_label(egress.trust_tier),
-                refused_bags_on_the_output_port: refused_count,
-            });
+        if egress.a_loan_is_open.load(Ordering::Acquire) {
+            return Err(the_open_loan_refuses(port, "a write"));
         }
-
-        // Header on the stack before the loan: a port key that overflows the
-        // wire capacity must never cost a loan slot.
-        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new(
+        let mut loaned_sample = egress.admit_and_loan(payload_bytes.len())?;
+        payload_area_bytes_mut(&mut loaned_sample)[..payload_bytes.len()]
+            .copy_from_slice(payload_bytes);
+        egress.send_loaned_sample(
             port,
-            timestamp_ns,
-            payload_bytes.len() as u32,
-            group_boundary,
+            loaned_sample,
+            DataChannelSampleUserHeader::new(
+                timestamp_ns,
+                payload_bytes.len() as u32,
+                group_boundary,
+                DataChannelPayloadDescriptor::bytes(),
+            ),
         )
-        .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
-        .write_to_slice(&mut header_bytes);
+    }
 
-        let mut sample = egress
-            .publisher
-            .loan_slice_uninit(total_len)
-            .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        *sample.user_header_mut() = DataChannelBagUserHeader {
-            sequence_number: egress.next_sequence_number,
-            messages_lost_upstream_before_this_one: egress
-                .messages_lost_upstream_before_the_next_send,
+    /// Loan a sample of `payload_byte_len` bytes on `port` for its writer to
+    /// fill in place, refused while another loan of the port is open.
+    ///
+    /// The loan is taken under the port lock and held outside it. A declared
+    /// port no link has reached hands out scratch bytes its publish discards,
+    /// as a write to it sends nothing.
+    pub fn loan_output_port_payload(
+        &self,
+        port: &str,
+        payload_byte_len: usize,
+    ) -> Result<OutputPortPayloadLoan> {
+        let mut channels = self.channels.lock();
+        let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
+            return Ok(OutputPortPayloadLoan {
+                output_port: port.to_string(),
+                payload_byte_len,
+                loaned_to: OutputPortPayloadLoanTarget::NoLinkYet {
+                    scratch_bytes: vec![0u8; payload_byte_len],
+                },
+            });
         };
-        let (loaned_header_bytes, loaned_payload_bytes) =
-            sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
-        loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
-        loaned_payload_bytes.copy_from_slice(as_maybe_uninit_bytes(payload_bytes));
-        // SAFETY: the two `copy_from_slice` calls above initialized
-        // `FRAME_HEADER_SIZE + payload_bytes.len()` bytes — exactly the `total_len` the
-        // loan was taken for — or panicked on a length mismatch.
-        let sample = unsafe { sample.assume_init() };
-        let send_outcome = sample.send();
-        let may_have_delivered = a_send_may_have_delivered(&send_outcome);
-        egress.next_sequence_number =
-            sequence_number_following_a_send(egress.next_sequence_number, may_have_delivered);
-        if may_have_delivered {
-            egress.messages_lost_upstream_before_the_next_send = 0;
+        if egress
+            .a_loan_is_open
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(the_open_loan_refuses(port, "a second loan"));
         }
-        send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
-        egress.bag_counters.record_one_written_bag();
+        let loan_marker = OutputPortOpenLoanMarker(Arc::clone(&egress.a_loan_is_open));
+        let loaned_sample = egress.admit_and_loan(payload_byte_len)?;
+        Ok(OutputPortPayloadLoan {
+            output_port: port.to_string(),
+            payload_byte_len,
+            loaned_to: OutputPortPayloadLoanTarget::LoanedSample {
+                loaned_sample,
+                egress_installation: egress.installation,
+                _loan_marker: loan_marker,
+            },
+        })
+    }
 
-        // Wake every downstream listener fd. notify() may transiently fail
-        // (e.g. a listener not yet created) — log and continue rather than
-        // failing the publish; the data is already in shared memory and the
-        // next send() will wake the listener anyway.
-        for link in &egress.links {
-            if let Err(e) = link.notifier.notify() {
-                tracing::trace!("OutputWriter: notify() failed for port '{}': {:?}", port, e);
-            }
-        }
-
-        Ok(())
+    /// Publish `loan`, stamped `timestamp_ns` and `group_boundary`, on the port
+    /// it was loaned from.
+    ///
+    /// A loan whose port was unwired since, or never linked, is given back
+    /// unpublished, as a write to such a port sends nothing.
+    pub fn publish_output_port_payload_loan(
+        &self,
+        loan: OutputPortPayloadLoan,
+        timestamp_ns: i64,
+        group_boundary: MessageGroupBoundary,
+    ) -> Result<()> {
+        let OutputPortPayloadLoan {
+            output_port,
+            payload_byte_len,
+            loaned_to,
+        } = loan;
+        let OutputPortPayloadLoanTarget::LoanedSample {
+            loaned_sample,
+            egress_installation,
+            _loan_marker,
+        } = loaned_to
+        else {
+            return Ok(());
+        };
+        let mut channels = self.channels.lock();
+        let Some(egress) = channels
+            .get_mut(&output_port)
+            .filter(|egress| egress.installation == egress_installation)
+        else {
+            return Ok(());
+        };
+        egress.send_loaned_sample(
+            &output_port,
+            loaned_sample,
+            DataChannelSampleUserHeader::new(
+                timestamp_ns,
+                payload_byte_len as u32,
+                group_boundary,
+                DataChannelPayloadDescriptor::bytes(),
+            ),
+        )
     }
 
     /// `port`'s egress, or `None` for a declared port no link has reached — a
@@ -809,6 +995,7 @@ impl Drop for OutputWriter {
 mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+    use crate::iceoryx2::channel_sample_test_support::stamped_payload_of;
     use crate::iceoryx2::{Iceoryx2Node, Iceoryx2Service};
 
     /// Each test gets a unique service-name prefix so parallel invocations
@@ -859,6 +1046,149 @@ mod tests {
         Iceoryx2Node::for_this_test_process()
             .open_or_create_service(&unique_suffix(tag), max_subscribers, 4)
             .expect("open the channel data service")
+    }
+
+    /// A loan is filled in place and published as one sample carrying its
+    /// stamp; a loan dropped unpublished sends nothing.
+    #[test]
+    fn a_loan_is_published_in_place_and_a_dropped_loan_sends_nothing() {
+        let pubsub = open_channel_data_service("loan/publish", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = output_writer_with_one_channel(
+            &pubsub,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+
+        let mut loan = inner.loan_output_port_payload("out", 5).unwrap();
+        assert_eq!(loan.payload_bytes_mut().len(), 5);
+        assert_eq!(loan.payload_bytes_mut().as_ptr() as usize % 64, 0);
+        loan.payload_bytes_mut().copy_from_slice(b"hello");
+        inner
+            .publish_output_port_payload_loan(loan, 99, MessageGroupBoundary::ContinuesGroup)
+            .unwrap();
+        let sample = subscriber.receive().unwrap().expect("the published loan");
+        assert_eq!(stamped_payload_of(&sample), b"hello");
+        assert_eq!(sample.user_header().timestamp_ns, 99);
+        assert_eq!(
+            sample.user_header().group_boundary(),
+            MessageGroupBoundary::ContinuesGroup
+        );
+        assert_eq!(written_bag_count_of(&inner, "out"), 1);
+
+        let mut given_back = inner.loan_output_port_payload("out", 3).unwrap();
+        given_back.payload_bytes_mut().copy_from_slice(b"bye");
+        drop(given_back);
+        assert!(subscriber.receive().unwrap().is_none());
+        assert_eq!(written_bag_count_of(&inner, "out"), 1);
+
+        inner
+            .write_bytes_with_timestamp("out", b"after", 1, MessageGroupBoundary::StartsGroup)
+            .expect("a given-back loan leaves the port free to write");
+        assert_eq!(
+            stamped_payload_of(&subscriber.receive().unwrap().unwrap()),
+            b"after"
+        );
+    }
+
+    /// While a loan of a port is open, a second loan and a write on it are
+    /// each refused naming the open loan, and the loan still publishes.
+    #[test]
+    fn an_open_loan_refuses_a_second_loan_and_a_write_on_its_port() {
+        let pubsub = open_channel_data_service("loan/refusals", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = output_writer_with_one_channel(
+            &pubsub,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+
+        let mut loan = inner.loan_output_port_payload("out", 1).unwrap();
+        let second_loan = inner
+            .loan_output_port_payload("out", 1)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            second_loan.contains("'out'") && second_loan.contains("loan open"),
+            "{second_loan}"
+        );
+        let write = inner
+            .write_bytes_with_timestamp("out", b"x", 0, MessageGroupBoundary::StartsGroup)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            write.contains("'out'") && write.contains("loan open"),
+            "{write}"
+        );
+
+        loan.payload_bytes_mut()[0] = 7;
+        inner
+            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert_eq!(
+            stamped_payload_of(&subscriber.receive().unwrap().unwrap()),
+            [7]
+        );
+    }
+
+    /// A loan on a declared port no link has reached hands out scratch bytes,
+    /// and publishing them sends nothing, as a write to such a port does.
+    #[test]
+    fn a_loan_on_an_unlinked_declared_port_publishes_nothing() {
+        let inner = OutputWriterInner::new();
+        inner.declare_output_ports(["out".to_string()]);
+        let mut loan = inner.loan_output_port_payload("out", 4).unwrap();
+        loan.payload_bytes_mut().copy_from_slice(b"none");
+        inner
+            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert!(inner.loan_output_port_payload("undeclared", 4).is_err());
+    }
+
+    /// A loan taken before its port was unwired and wired again is given back
+    /// rather than sent on the new publisher's numbering.
+    #[test]
+    fn a_loan_outliving_its_ports_publisher_is_given_back() {
+        let first = open_channel_data_service("loan/rewired-first", 2);
+        let inner = output_writer_with_one_channel(
+            &first,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+        let loan = inner.loan_output_port_payload("out", 1).unwrap();
+
+        let second = open_channel_data_service("loan/rewired-second", 2);
+        let second_subscriber = second.create_subscriber(4).unwrap();
+        inner.set_channel_publisher(
+            "out",
+            second.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        inner
+            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert!(second_subscriber.receive().unwrap().is_none());
+        assert_eq!(written_bag_count_of(&inner, "out"), 0);
+    }
+
+    /// An empty payload is a real message: it loans no cache line and reads
+    /// back empty.
+    #[test]
+    fn an_empty_payload_is_written_and_read_back_empty() {
+        let pubsub = open_channel_data_service("loan/empty", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = output_writer_with_one_channel(
+            &pubsub,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+        inner
+            .write_bytes_with_timestamp("out", b"", 5, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        let sample = subscriber.receive().unwrap().expect("the empty message");
+        assert_eq!(sample.payload().len(), 0);
+        assert_eq!(stamped_payload_of(&sample), b"");
     }
 
     #[test]
@@ -1007,7 +1337,7 @@ mod tests {
             .receive()
             .unwrap()
             .expect("the write was published");
-        let stamp_ns = FrameHeader::read_from_slice(sample.payload()).timestamp_ns;
+        let stamp_ns = sample.user_header().timestamp_ns;
         assert!(
             half_speed_since_a_second_ago.stream_time_ns_at(machine_before_ns) <= stamp_ns
                 && stamp_ns <= half_speed_since_a_second_ago.stream_time_ns_at(machine_after_ns),
@@ -1092,8 +1422,7 @@ mod tests {
         for (i, subscriber) in subscribers.iter().enumerate() {
             let mut received: Vec<Vec<u8>> = Vec::new();
             while let Ok(Some(sample)) = subscriber.receive() {
-                let slice: &[u8] = sample.payload();
-                received.push(slice[FRAME_HEADER_SIZE..].to_vec());
+                received.push(stamped_payload_of(&sample).to_vec());
             }
             assert_eq!(
                 received.len(),
@@ -1231,7 +1560,7 @@ mod tests {
             .receive()
             .unwrap()
             .expect("the write reached the channel");
-        assert_eq!(&sample.payload()[FRAME_HEADER_SIZE..], b"bag");
+        assert_eq!(stamped_payload_of(&sample), b"bag");
 
         let refusal = writer
             .write_bytes_with_timestamp("%%", b"bag", 0, MessageGroupBoundary::StartsGroup)
@@ -1325,8 +1654,7 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("grown in-bounds frame must be delivered");
-        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + within.len());
-        // A channel subscriber borrows one sample at a time.
+        assert_eq!(stamped_payload_of(&got).len(), within.len());
         drop(got);
 
         // Above ceiling — refused with the named error + counted, never a panic.
@@ -1344,7 +1672,7 @@ mod tests {
                 refused_bags_on_the_output_port,
             } => {
                 assert_eq!(channel, "test/ceiling/out");
-                assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
+                assert_eq!(payload_bytes, over.len());
                 // Both numbers, because they are not the same one: the producer
                 // fits inside the frame ceiling, the operator raises the chunk
                 // ceiling, and the refusal has to name each as itself.
@@ -1378,10 +1706,7 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("post-refusal frame must be delivered");
-        assert_eq!(
-            got.payload().len(),
-            FRAME_HEADER_SIZE + b"still-alive".len()
-        );
+        assert_eq!(stamped_payload_of(&got), b"still-alive");
     }
 
     /// A helper's refusals and sends reach its board as they are counted, and a
@@ -1563,23 +1888,15 @@ mod tests {
             .write_bytes_with_timestamp("out", b"second", 3, MessageGroupBoundary::StartsGroup)
             .unwrap();
 
-        let mut channel_user_headers = Vec::new();
+        let mut numbering = Vec::new();
         while let Some(sample) = subscriber.receive().unwrap() {
-            channel_user_headers.push(*sample.user_header());
+            let user_header = *sample.user_header();
+            numbering.push((
+                user_header.sequence_number,
+                user_header.messages_lost_upstream_before_this_one,
+            ));
         }
-        assert_eq!(
-            channel_user_headers,
-            vec![
-                DataChannelBagUserHeader {
-                    sequence_number: 0,
-                    messages_lost_upstream_before_this_one: 2,
-                },
-                DataChannelBagUserHeader {
-                    sequence_number: 1,
-                    messages_lost_upstream_before_this_one: 0,
-                },
-            ]
-        );
+        assert_eq!(numbering, vec![(0, 2), (1, 0)]);
     }
 
     /// A declaration on a port no link has reached counts nothing and sends
@@ -1750,16 +2067,14 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("fresh frame must deliver");
-        let slice: &[u8] = got.payload();
         assert_eq!(
-            slice.len(),
-            FRAME_HEADER_SIZE + payload.len(),
-            "the loan must be sized to exactly header + payload"
+            got.payload().len(),
+            data_channel_payload_cache_lines_for(payload.len()),
+            "the loan must be sized to exactly the payload's cache lines"
         );
-        let header = FrameHeader::read_from_slice(slice);
-        assert_eq!(header.port(), "out");
-        assert_eq!(header.timestamp_ns, 4242);
-        assert_eq!(header.len as usize, payload.len());
-        assert_eq!(&slice[FRAME_HEADER_SIZE..], payload);
+        let user_header = got.user_header();
+        assert_eq!(user_header.timestamp_ns, 4242);
+        assert_eq!(user_header.payload_byte_len as usize, payload.len());
+        assert_eq!(stamped_payload_of(&got), payload);
     }
 }

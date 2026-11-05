@@ -16,6 +16,7 @@ use crate::core::descriptors::{
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
+use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -213,6 +214,29 @@ fn read_port_descriptors(
                 )
             })?;
             port = port.with_delivery_profile(delivery_profile);
+        }
+        if let Some(borrow_quota) = declaration
+            .get("borrow_quota")
+            .filter(|declared| !declared.is_null())
+        {
+            if matches!(direction, PortDirection::Output) {
+                return Err(format!(
+                    "output port {:?} declares a borrow_quota — each link's reader holds its \
+                     own, so the quota is declared by the consuming input port",
+                    port.name
+                ));
+            }
+            let borrow_quota = borrow_quota
+                .as_u64()
+                .and_then(|quota| usize::try_from(quota).ok())
+                .filter(|quota| *quota <= MAX_INPUT_PORT_BORROW_QUOTA)
+                .ok_or_else(|| {
+                    format!(
+                        "port {:?}: borrow_quota must be a whole number from 0 to {}, got {}",
+                        port.name, MAX_INPUT_PORT_BORROW_QUOTA, borrow_quota
+                    )
+                })?;
+            port = port.with_borrow_quota(borrow_quota);
         }
         if let Some(audio_window) = declaration
             .get("audio_window")
@@ -614,6 +638,29 @@ mod tests {
             "entry": {},
         })));
         assert!(unknown_section.contains("levels"), "got {unknown_section}");
+    }
+
+    #[test]
+    fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refused() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames",
+            "description": "",
+            "delivery_profile": "ordered",
+            "borrow_quota": 5,
+        }])))
+        .unwrap_or_else(|refusal| panic!("a quota within the most reads: {refusal}"));
+        assert_eq!(declaration.descriptor.inputs[0].borrow_quota, Some(5));
+
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames",
+            "description": "",
+            "delivery_profile": "ordered",
+            "borrow_quota": MAX_INPUT_PORT_BORROW_QUOTA + 1,
+        }])));
+        assert!(
+            refusal.contains("\"frames\"") && refusal.contains("borrow_quota"),
+            "got {refusal}"
+        );
     }
 
     #[test]

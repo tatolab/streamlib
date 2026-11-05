@@ -186,6 +186,22 @@ impl crate::core::ReactiveProcessor for MockWindowedAudioConsumerProcessor::Proc
     }
 }
 
+/// Mock consumer whose input port declares a borrow quota past the default.
+#[crate::processor(
+    execution = reactive,
+    input("frames", delivery_profile = "ordered", borrow_quota = 5),
+)]
+pub(crate) struct MockBorrowingConsumerProcessor;
+
+impl crate::core::ReactiveProcessor for MockBorrowingConsumerProcessor::Processor {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mock consumer whose audio input port declares the `match_device` sentinel.
 /// Nothing resolves it on this rung, which is what makes it a wiring error
 /// rather than a default.
@@ -300,6 +316,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockOutputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockWindowedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockDeviceMatchedAudioConsumerProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockBorrowingConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();

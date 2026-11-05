@@ -5,6 +5,7 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use crate::python_port_payload::PythonPortPayloadLoan;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -26,8 +27,8 @@ pub(crate) struct PythonLinkInputDataReader {
 
 #[pymethods]
 impl PythonLinkInputDataReader {
-    /// The next message's payload on `port_name` as `bytes`, or `None` when the
-    /// mailbox is empty.
+    /// The next message's payload on `port_name` as a `PortPayloadBorrow` of
+    /// the sample it arrived in, or `None` when the mailbox is empty.
     ///
     /// With `into`, the read returns `into.from_bytes(payload)`, so a payload
     /// that does not fit raises here rather than travelling on. `from_bytes` is
@@ -198,8 +199,8 @@ pub(crate) struct PythonLinkOutputDataWriter {
 
 #[pymethods]
 impl PythonLinkOutputDataWriter {
-    /// Publish one message carrying `payload`, which must be `bytes`, to every
-    /// downstream link on `port_name`.
+    /// Publish one message carrying a copy of `payload`, any contiguous buffer,
+    /// to every downstream link on `port_name`.
     #[pyo3(signature = (port_name, payload, timestamp_ns = None, starts_group = true))]
     fn write(
         &self,
@@ -213,6 +214,27 @@ impl PythonLinkOutputDataWriter {
             python,
             port_name,
             payload,
+            timestamp_ns,
+            starts_group,
+        )
+    }
+
+    /// Loan `payload_byte_len` bytes on `port_name` to fill in place, as
+    /// `with ctx.outputs.loan(port, n) as out:`; the sample is published when
+    /// the block exits cleanly and given back when it raises.
+    #[pyo3(signature = (port_name, payload_byte_len, timestamp_ns = None, starts_group = true))]
+    fn loan(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        payload_byte_len: usize,
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+    ) -> PyResult<PythonPortPayloadLoan> {
+        self.link_data_access.get().loan_on_output_port(
+            python,
+            port_name,
+            payload_byte_len,
             timestamp_ns,
             starts_group,
         )

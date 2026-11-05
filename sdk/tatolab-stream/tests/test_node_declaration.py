@@ -128,6 +128,27 @@ def test_a_declared_port_carries_no_type_key_under_any_spelling():
             assert key not in port, f"port {port['name']!r} carries a type key {key!r}"
 
 
+def test_a_declared_borrow_quota_rides_the_port_and_an_undeclared_one_is_absent():
+    @node
+    class HoldsFrames:
+        @node.input(delivery_profile="ordered", borrow_quota=4)
+        def frames(self) -> None: ...
+
+        @node.input(delivery_profile="newest")
+        def audio(self) -> None: ...
+
+    assert HoldsFrames.__tatolab_node_input_ports__ == [
+        {"name": "frames", "description": "", "delivery_profile": "ordered", "borrow_quota": 4},
+        {"name": "audio", "description": "", "delivery_profile": "newest"},
+    ]
+
+
+@pytest.mark.parametrize("borrow_quota", [-1, 1.5, True])
+def test_a_borrow_quota_that_is_not_a_whole_count_is_refused_at_decoration(borrow_quota: object):
+    with pytest.raises(ValueError, match="invalid borrow_quota"):
+        node.input(delivery_profile="ordered", borrow_quota=borrow_quota)  # type: ignore[arg-type]
+
+
 def test_an_unknown_delivery_profile_is_refused_at_decoration():
     with pytest.raises(ValueError, match="invalid delivery_profile"):
         node.input(delivery_profile="eventually")

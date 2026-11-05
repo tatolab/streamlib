@@ -40,7 +40,8 @@ pub use exposed_name_cast::{
 pub use processor_class_import_path::{BUILT_IN_NODE_CLASS_MODULE, ProcessorClassImportPath};
 pub use processor_class_short_name::ProcessorClassShortName;
 pub use processor_schema::{
-    DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorConfigSchema, ProcessorLanguage,
-    ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
-    ProcessorStateField, RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
+    DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,
+    MAX_INPUT_PORT_BORROW_QUOTA, ProcessorConfigSchema, ProcessorLanguage, ProcessorPortSchema,
+    ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution, ProcessorStateField,
+    RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
 };

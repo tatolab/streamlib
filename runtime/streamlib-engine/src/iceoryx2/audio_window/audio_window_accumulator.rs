@@ -442,7 +442,7 @@ impl AudioWindowAccumulator {
 
         Ok(Some(BagBodyForTheReader {
             message: MessageReadFromInputPort {
-                payload_bytes: bag,
+                payload: bag.into(),
                 timestamp_ns: first_sample_timestamp_ns,
                 group_boundary: MessageGroupBoundary::StartsGroup,
                 lost_since_last_read: 0,

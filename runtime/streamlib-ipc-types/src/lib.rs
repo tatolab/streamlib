@@ -3,10 +3,12 @@
 
 //! Shared iceoryx2 payload types for cross-process IPC communication.
 //!
-//! A [`FrameHeader`] carries routing and framing only — port key, timestamp,
-//! payload length, and the group flag. Nothing on this wire names a type, so no read path can
-//! compare one: a consumer handed a payload it cannot read discovers that as
-//! a decode failure of the payload itself, at its own read.
+//! A [`DataChannelSampleUserHeader`] rides every channel sample in its
+//! iceoryx2 user header — numbering, stamp, length, group flag and a
+//! [`DataChannelPayloadDescriptor`] — and the payload area carries nothing but
+//! payload. Nothing on this wire names a message type, so a consumer handed a
+//! payload it cannot read discovers that as a decode failure of the payload
+//! itself, at its own read.
 //!
 //! Alongside the payload types, this crate owns the channel rules the host
 //! and every language native must agree on byte-for-byte or silently drift:
@@ -50,28 +52,35 @@ pub const UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES: usize = 16 * 1024 * 102
 
 /// Bytes iceoryx2 lays out ahead of a channel frame in the shared-memory sample
 /// that carries it: its own publish-subscribe header, this crate's
-/// [`DataChannelBagUserHeader`], and the padding aligning them.
+/// [`DataChannelSampleUserHeader`], and the padding that starts the payload at
+/// the alignment of a [`DataChannelPayloadCacheLine`].
 ///
 /// Mirrors `MessageTypeDetails::all_headers_len`, which is crate-private
 /// upstream: the header, then the user header at its alignment, then the
-/// payload at its — `1` for a `[u8]` slice. Composed from the real types rather
-/// than written out, so a size change upstream moves this with it.
+/// payload at its. Composed from the real types rather than written out, so a
+/// size change upstream moves this with it.
 const ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME: usize =
     (size_of::<iceoryx2::service::header::publish_subscribe::Header>()
-        .next_multiple_of(align_of::<DataChannelBagUserHeader>())
-        + size_of::<DataChannelBagUserHeader>())
-    .next_multiple_of(align_of::<u8>());
+        .next_multiple_of(align_of::<DataChannelSampleUserHeader>())
+        + size_of::<DataChannelSampleUserHeader>())
+    .next_multiple_of(align_of::<DataChannelPayloadCacheLine>());
 
 /// The alignment iceoryx2 rounds a whole channel sample up to. Mirrors
 /// `MessageTypeDetails::chunk_layout`, which takes the largest of the header's,
-/// the user header's and the payload's; a `[u8]` payload's is `1`.
+/// the user header's and the payload's.
 const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize = {
     let header_alignment = align_of::<iceoryx2::service::header::publish_subscribe::Header>();
-    let user_header_alignment = align_of::<DataChannelBagUserHeader>();
-    if header_alignment > user_header_alignment {
+    let user_header_alignment = align_of::<DataChannelSampleUserHeader>();
+    let largest_header_alignment = if header_alignment > user_header_alignment {
         header_alignment
     } else {
         user_header_alignment
+    };
+    let payload_alignment = align_of::<DataChannelPayloadCacheLine>();
+    if largest_header_alignment > payload_alignment {
+        largest_header_alignment
+    } else {
+        payload_alignment
     }
 };
 
@@ -83,7 +92,9 @@ const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize = {
 /// `next_power_of_two` of THIS, so a frame sized to a power-of-two ceiling
 /// exactly would take a bucket twice that size.
 pub const fn iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes: usize) -> usize {
-    let unaligned = ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME + frame_total_bytes;
+    let unaligned = ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME
+        + data_channel_payload_cache_lines_for(frame_total_bytes)
+            * DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES;
     unaligned.next_multiple_of(ICEORYX2_SAMPLE_ALIGNMENT_BYTES)
 }
 
@@ -94,8 +105,7 @@ pub const fn iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes: usize)
 /// act on "your bag must be at most N bytes", where the chunk ceiling itself
 /// would leave it wondering why a bag of exactly that size was refused. The `0`
 /// arm is reachable only through a per-tier env override set below the sample
-/// headers, and it refuses everything anyway: a frame always carries a
-/// [`FRAME_HEADER_SIZE`] header, so none is ever `0` bytes.
+/// headers, and it admits only an empty frame.
 pub const fn largest_channel_frame_bytes_under_a_chunk_ceiling(
     chunk_ceiling_bytes: usize,
 ) -> usize {
@@ -344,39 +354,8 @@ pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 32;
 /// that already exists.
 pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 256;
 
-/// Size of the frame header in the `[u8]` slice wire format.
-pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE
-    + FRAME_HEADER_TIMESTAMP_NS_SIZE
-    + FRAME_HEADER_PAYLOAD_LEN_SIZE
-    + FRAME_HEADER_FLAGS_SIZE;
-
-/// Size of the frame header's `timestamp_ns` field, little-endian on the wire.
-pub const FRAME_HEADER_TIMESTAMP_NS_SIZE: usize = std::mem::size_of::<i64>();
-
-/// Size of the frame header's payload-length field, little-endian on the wire.
-pub const FRAME_HEADER_PAYLOAD_LEN_SIZE: usize = std::mem::size_of::<u32>();
-
-/// Size of the frame header's flags field, little-endian on the wire.
-pub const FRAME_HEADER_FLAGS_SIZE: usize = std::mem::size_of::<u32>();
-
-/// Byte offset of the frame header's `timestamp_ns` field, right after the port key.
-pub const FRAME_HEADER_TIMESTAMP_NS_OFFSET: usize = MAX_PORT_KEY_SIZE;
-
-/// Byte offset of the frame header's payload-length field.
-pub const FRAME_HEADER_PAYLOAD_LEN_OFFSET: usize =
-    FRAME_HEADER_TIMESTAMP_NS_OFFSET + FRAME_HEADER_TIMESTAMP_NS_SIZE;
-
-/// Byte offset of the frame header's flags field.
-pub const FRAME_HEADER_FLAGS_OFFSET: usize =
-    FRAME_HEADER_PAYLOAD_LEN_OFFSET + FRAME_HEADER_PAYLOAD_LEN_SIZE;
-
-/// The [`FrameHeader::flags`] bit set when the message opens a group — a point a
-/// relay or a late joiner can start from. Bits 1..31 are reserved: a writer
-/// writes them zero and a reader ignores them.
-pub const FRAME_HEADER_FLAG_STARTS_GROUP: u32 = 1 << 0;
-
 /// Whether a message opens a group or continues the one before it, carried in
-/// [`FRAME_HEADER_FLAG_STARTS_GROUP`].
+/// [`DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageGroupBoundary {
     /// The message opens a group — a point a relay or a late joiner can start from.
@@ -431,19 +410,6 @@ impl PortKey {
     /// (the fixed `name` field is [`MAX_PORT_KEY_SIZE`] `- 1` bytes).
     pub const MAX_NAME_BYTES: usize = MAX_PORT_KEY_SIZE - 1;
 
-    /// The wire name-length prefix, or `None` when it exceeds the capacity of
-    /// the fixed `name` field it indexes.
-    ///
-    /// Rejecting rather than saturating. A clamp is safe to *slice* but not safe
-    /// to *route*: it reconstructs exactly [`PortKey::MAX_NAME_BYTES`] bytes of
-    /// name, which is the name of a port declared at the full width — so a
-    /// corrupt frame aimed at one would land in its mailbox rather than miss.
-    /// A prefix past capacity cannot have come from [`PortKey::new`], so the
-    /// frame is malformed and its port is not recoverable.
-    fn wire_name_len_prefix_within_capacity(len_prefix: u8) -> Option<u8> {
-        (usize::from(len_prefix) <= Self::MAX_NAME_BYTES).then_some(len_prefix)
-    }
-
     /// Construct a [`PortKey`], rejecting an over-length name.
     ///
     /// A name past [`PortKey::MAX_NAME_BYTES`] is a [`PortKeyError::TooLong`]
@@ -478,215 +444,313 @@ impl Default for PortKey {
     }
 }
 
-/// Header for slice-based iceoryx2 frame transport.
+/// The alignment every channel sample's payload starts at, offset 0 of the
+/// sample's payload area: a cache line, and what a SIMD load or a DLPack
+/// consumer asks of a CPU tensor.
+pub const DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES: usize = 64;
+
+/// One cache line of a channel sample's payload, the element type of every
+/// channel data service's slice.
 ///
-/// Wire format in a `[u8]` slice (little-endian for multi-byte fields):
-/// `[port_key: 64][timestamp_ns: 8][len: 4][flags: 4][data: len]`
-///
-/// Routing and framing only — the header names no type, so a subscriber can
-/// route a frame and bound its payload without knowing what is in it.
-pub struct FrameHeader {
-    pub port_key: PortKey,
-    pub timestamp_ns: i64,
-    pub len: u32,
-    /// [`FRAME_HEADER_FLAG_STARTS_GROUP`]; every other bit is reserved zero.
-    pub flags: u32,
-}
-
-impl FrameHeader {
-    /// Create a new frame header for `port`, every reserved flag bit zero.
-    ///
-    /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
-    /// see [`PortKey::new`].
-    pub fn new(
-        port: &str,
-        timestamp_ns: i64,
-        data_len: u32,
-        group_boundary: MessageGroupBoundary,
-    ) -> Result<Self, PortKeyError> {
-        let flags = match group_boundary {
-            MessageGroupBoundary::StartsGroup => FRAME_HEADER_FLAG_STARTS_GROUP,
-            MessageGroupBoundary::ContinuesGroup => 0,
-        };
-        Ok(Self {
-            port_key: PortKey::new(port)?,
-            timestamp_ns,
-            len: data_len,
-            flags,
-        })
-    }
-
-    /// Whether the message opens a group, read from [`FRAME_HEADER_FLAG_STARTS_GROUP`].
-    pub fn group_boundary(&self) -> MessageGroupBoundary {
-        if self.flags & FRAME_HEADER_FLAG_STARTS_GROUP != 0 {
-            MessageGroupBoundary::StartsGroup
-        } else {
-            MessageGroupBoundary::ContinuesGroup
-        }
-    }
-
-    /// Write the header to the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
-    pub fn write_to_slice(&self, buf: &mut [u8]) {
-        debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
-        // port_key: [len: 1][name: 63] = 64 bytes
-        buf[0] = self.port_key.len;
-        buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
-        buf[FRAME_HEADER_TIMESTAMP_NS_OFFSET..FRAME_HEADER_PAYLOAD_LEN_OFFSET]
-            .copy_from_slice(&self.timestamp_ns.to_le_bytes());
-        buf[FRAME_HEADER_PAYLOAD_LEN_OFFSET..FRAME_HEADER_FLAGS_OFFSET]
-            .copy_from_slice(&self.len.to_le_bytes());
-        buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
-            .copy_from_slice(&self.flags.to_le_bytes());
-    }
-
-    /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
-    ///
-    /// A name-length prefix past [`PortKey::MAX_NAME_BYTES`] reads as the empty
-    /// port, which matches no mailbox.
-    pub fn read_from_slice(buf: &[u8]) -> Self {
-        debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
-        let mut port_key = PortKey {
-            len: PortKey::wire_name_len_prefix_within_capacity(buf[0]).unwrap_or(0),
-            ..Default::default()
-        };
-        port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
-
-        Self {
-            port_key,
-            timestamp_ns: i64::from_le_bytes(Self::fixed_width_field_bytes(
-                buf,
-                FRAME_HEADER_TIMESTAMP_NS_OFFSET,
-            )),
-            len: u32::from_le_bytes(Self::fixed_width_field_bytes(
-                buf,
-                FRAME_HEADER_PAYLOAD_LEN_OFFSET,
-            )),
-            flags: u32::from_le_bytes(Self::fixed_width_field_bytes(
-                buf,
-                FRAME_HEADER_FLAGS_OFFSET,
-            )),
-        }
-    }
-
-    /// The `FIELD_WIDTH` bytes of `buf` starting at `offset`.
-    fn fixed_width_field_bytes<const FIELD_WIDTH: usize>(
-        buf: &[u8],
-        offset: usize,
-    ) -> [u8; FIELD_WIDTH] {
-        let mut field_bytes = [0u8; FIELD_WIDTH];
-        field_bytes.copy_from_slice(&buf[offset..offset + FIELD_WIDTH]);
-        field_bytes
-    }
-
-    /// Read the port key string from a raw slice without parsing the full header.
-    ///
-    /// Checked on both wire-derived lengths — the prefix against
-    /// [`PortKey::MAX_NAME_BYTES`], the resulting span against `buf` — so a
-    /// malformed frame reads as the empty port, which matches no mailbox,
-    /// instead of panicking or naming a port it was not stamped for.
-    pub fn read_port_from_slice(buf: &[u8]) -> &str {
-        let Some(&len_prefix) = buf.first() else {
-            return "";
-        };
-        let Some(len) = PortKey::wire_name_len_prefix_within_capacity(len_prefix) else {
-            return "";
-        };
-        buf.get(1..1 + usize::from(len))
-            .and_then(|name| std::str::from_utf8(name).ok())
-            .unwrap_or("")
-    }
-
-    /// [`Self::payload_bounded_by_its_header`], `None` for either refusal.
-    pub fn read_payload_from_slice(buf: &[u8]) -> Option<&[u8]> {
-        Self::payload_bounded_by_its_header(buf).ok()
-    }
-
-    /// The payload a frame stamps, read without trusting either length, or why the bytes hold
-    /// none.
-    ///
-    /// Refused for a slice too short to hold a header at all, and for one whose stamped length
-    /// runs past what actually followed it. The second is the dangerous case: the leading bytes
-    /// of a truncated frame are a well-formed shorter message in every self-describing wire
-    /// format, so a reader that sliced to the end of the buffer would hand back a payload the
-    /// sender never wrote, silently.
-    ///
-    /// The stamped length bounds the read rather than being trusted by it: it is a `u32` off the
-    /// wire. `frame_bytes` may be longer than the frame, because a caller hands over whatever
-    /// buffer it received the frame in — the transport itself sends a slice of exactly the
-    /// stamped size.
-    pub fn payload_bounded_by_its_header(frame_bytes: &[u8]) -> Result<&[u8], FramePayloadRefusal> {
-        let Some(followed_payload_bytes) = frame_bytes.get(FRAME_HEADER_SIZE..) else {
-            return Err(FramePayloadRefusal::ShorterThanTheFrameHeader {
-                frame_byte_len: frame_bytes.len(),
-            });
-        };
-        let stamped_payload_byte_len = Self::read_from_slice(frame_bytes).len;
-        followed_payload_bytes
-            .get(..stamped_payload_byte_len as usize)
-            .ok_or(FramePayloadRefusal::PayloadTruncated {
-                stamped_payload_byte_len,
-                followed_payload_byte_len: followed_payload_bytes.len(),
-            })
-    }
-
-    /// Get the port key as a string.
-    pub fn port(&self) -> &str {
-        self.port_key.as_str()
-    }
-}
-
-/// Why a frame's bytes hold no payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FramePayloadRefusal {
-    /// Fewer bytes than a [`FrameHeader`].
-    ShorterThanTheFrameHeader { frame_byte_len: usize },
-    /// The header stamps a longer payload than followed it.
-    PayloadTruncated {
-        stamped_payload_byte_len: u32,
-        followed_payload_byte_len: usize,
-    },
-}
-
-impl std::fmt::Display for FramePayloadRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ShorterThanTheFrameHeader { frame_byte_len } => write!(
-                f,
-                "{frame_byte_len} bytes cannot hold an {FRAME_HEADER_SIZE}-byte frame header"
-            ),
-            Self::PayloadTruncated {
-                stamped_payload_byte_len,
-                followed_payload_byte_len,
-            } => write!(
-                f,
-                "the frame header declares a {stamped_payload_byte_len}-byte payload but only \
-                 {followed_payload_byte_len} bytes followed it"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for FramePayloadRefusal {}
-
-/// The iceoryx2 user header every channel data sample carries: the bag's place
-/// in its publisher's sends, so a subscriber can count the bags its ring
-/// overwrote from the numbers a jump skips, and the messages its writer
-/// declared lost upstream ahead of it.
-///
-/// Engine-internal and outside the payload, so [`FrameHeader`] and every tap
-/// client reading payload bytes are untouched. The iceoryx2 type name is
-/// pinned because the default one carries the module path, and every opener of
-/// a data service must present the same name or be refused `IncompatibleTypes`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
-#[type_name("DataChannelBagUserHeader")]
+/// The slice is of these rather than of `u8` under iceoryx2's
+/// `payload_alignment`, because iceoryx2 strides every slice element at its
+/// aligned size, which for a 64-byte-aligned `u8` would be 64 bytes a byte. A
+/// payload of `n` bytes takes `n.div_ceil(64)` lines, and the user header's
+/// [`DataChannelSampleUserHeader::payload_byte_len`] says where it ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ZeroCopySend)]
+#[type_name("DataChannelPayloadCacheLine")]
 #[repr(C)]
-pub struct DataChannelBagUserHeader {
+#[repr(align(64))]
+pub struct DataChannelPayloadCacheLine {
+    /// The line's bytes.
+    pub bytes: [u8; DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES],
+}
+
+/// The cache lines a `payload_byte_len`-byte payload takes.
+pub const fn data_channel_payload_cache_lines_for(payload_byte_len: usize) -> usize {
+    payload_byte_len.div_ceil(DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES)
+}
+
+/// Every byte of `cache_lines`, in order.
+pub fn data_channel_payload_bytes_of(cache_lines: &[DataChannelPayloadCacheLine]) -> &[u8] {
+    // SAFETY: `DataChannelPayloadCacheLine` is `repr(C)` over a byte array with
+    // no padding (its size is its alignment), so a slice of them is that many
+    // contiguous initialized bytes.
+    unsafe {
+        std::slice::from_raw_parts(
+            cache_lines.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(cache_lines),
+        )
+    }
+}
+
+/// The [`DataChannelSampleUserHeader::flags`] bit set when the message opens a
+/// group — a point a relay or a late joiner can start from. Bits 1..31 are
+/// reserved: a writer writes them zero and a reader ignores them.
+pub const DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP: u32 = 1 << 0;
+
+/// Bytes in a [`DataChannelPayloadDescriptor`]'s kind-specific body.
+pub const DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES: usize = 60;
+
+/// The iceoryx2 user header every channel data sample carries: the sample's
+/// place in its publisher's sends, what its writer declared lost upstream, its
+/// stamp, its payload's length and group flag, and what the payload is.
+///
+/// The payload area carries nothing but payload. The iceoryx2 type name is
+/// pinned because the default one carries the module path, and every opener
+/// of a data service must present the same name or be refused
+/// `IncompatibleTypes`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("DataChannelSampleUserHeader")]
+#[repr(C)]
+pub struct DataChannelSampleUserHeader {
     /// Counted from zero per publisher; consumed by every send that may have
     /// delivered.
     pub sequence_number: u64,
     /// Messages the writer declared lost upstream of it since its previous send
     /// that may have delivered — a loss no link of this channel caused.
     pub messages_lost_upstream_before_this_one: u64,
+    /// The publish stamp, monotonic nanoseconds.
+    pub timestamp_ns: i64,
+    /// Bytes of payload the writer wrote; a reader never reads past it or past
+    /// the sample's own slice.
+    pub payload_byte_len: u32,
+    /// [`DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP`]; every other bit is reserved zero.
+    pub flags: u32,
+    /// What the payload is.
+    pub payload_descriptor: DataChannelPayloadDescriptor,
+}
+
+impl DataChannelSampleUserHeader {
+    /// A header for a `payload_byte_len`-byte message of `payload_descriptor`,
+    /// stamped `timestamp_ns` and `group_boundary`, before its numbering is set.
+    pub fn new(
+        timestamp_ns: i64,
+        payload_byte_len: u32,
+        group_boundary: MessageGroupBoundary,
+        payload_descriptor: DataChannelPayloadDescriptor,
+    ) -> Self {
+        let flags = match group_boundary {
+            MessageGroupBoundary::StartsGroup => DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP,
+            MessageGroupBoundary::ContinuesGroup => 0,
+        };
+        Self {
+            sequence_number: 0,
+            messages_lost_upstream_before_this_one: 0,
+            timestamp_ns,
+            payload_byte_len,
+            flags,
+            payload_descriptor,
+        }
+    }
+
+    /// Whether the message opens a group, read from
+    /// [`DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP`].
+    pub fn group_boundary(&self) -> MessageGroupBoundary {
+        if self.flags & DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP != 0 {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        }
+    }
+
+    /// The payload this header stamps, out of the sample's `sample_payload`
+    /// slice, refused where the stamped length runs past it.
+    ///
+    /// The stamped length is a `u32` off the wire, so it bounds the read rather
+    /// than being trusted by it.
+    pub fn payload_within<'sample>(
+        &self,
+        sample_payload: &'sample [u8],
+    ) -> Result<&'sample [u8], DataChannelSamplePayloadRefusal> {
+        sample_payload.get(..self.payload_byte_len as usize).ok_or(
+            DataChannelSamplePayloadRefusal::StampedLengthPastTheSample {
+                stamped_payload_byte_len: self.payload_byte_len,
+                sample_payload_byte_len: sample_payload.len(),
+            },
+        )
+    }
+}
+
+/// Why a channel sample holds no payload a reader may take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataChannelSamplePayloadRefusal {
+    /// The user header stamps a longer payload than the sample carries.
+    StampedLengthPastTheSample {
+        stamped_payload_byte_len: u32,
+        sample_payload_byte_len: usize,
+    },
+    /// The descriptor names a kind this reader does not know.
+    UnknownPayloadDescriptorKind { kind: u32 },
+}
+
+impl std::fmt::Display for DataChannelSamplePayloadRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StampedLengthPastTheSample {
+                stamped_payload_byte_len,
+                sample_payload_byte_len,
+            } => write!(
+                f,
+                "the sample's user header declares a {stamped_payload_byte_len}-byte payload but \
+                 the sample carries only {sample_payload_byte_len} bytes"
+            ),
+            Self::UnknownPayloadDescriptorKind { kind } => write!(
+                f,
+                "the sample's payload descriptor names kind {kind}, which this reader does not \
+                 know"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DataChannelSamplePayloadRefusal {}
+
+/// The kinds a [`DataChannelPayloadDescriptor`] names, by their wire value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum DataChannelPayloadDescriptorKind {
+    /// The payload is the sample's bytes; the body is zero.
+    Bytes = 0,
+    /// The payload names a slot of a GPU pool; the body is a
+    /// [`GpuPoolSlotFrameDescriptorBody`].
+    GpuPoolSlotFrame = 1,
+}
+
+impl DataChannelPayloadDescriptorKind {
+    /// The kind `wire_kind` names, or `None` for one this build does not know.
+    pub fn from_wire(wire_kind: u32) -> Option<Self> {
+        match wire_kind {
+            0 => Some(Self::Bytes),
+            1 => Some(Self::GpuPoolSlotFrame),
+            _ => None,
+        }
+    }
+}
+
+/// What a channel sample's payload is: a kind and a fixed-size body the kind
+/// gives a layout to. A reader refuses a kind it does not know, by kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ZeroCopySend)]
+#[type_name("DataChannelPayloadDescriptor")]
+#[repr(C)]
+pub struct DataChannelPayloadDescriptor {
+    /// A [`DataChannelPayloadDescriptorKind`] wire value.
+    pub kind: u32,
+    /// The kind's body, little-endian; reserved bytes are zero.
+    pub body: [u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+}
+
+impl DataChannelPayloadDescriptor {
+    /// The descriptor of a payload that is the sample's bytes.
+    pub const fn bytes() -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::Bytes as u32,
+            body: [0u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+        }
+    }
+
+    /// The descriptor of a payload naming one GPU pool slot.
+    pub fn gpu_pool_slot_frame(body: GpuPoolSlotFrameDescriptorBody) -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::GpuPoolSlotFrame as u32,
+            body: body.to_descriptor_body(),
+        }
+    }
+
+    /// The kind this descriptor names, refused by kind when this build does not
+    /// know it.
+    pub fn known_kind(
+        &self,
+    ) -> Result<DataChannelPayloadDescriptorKind, DataChannelSamplePayloadRefusal> {
+        DataChannelPayloadDescriptorKind::from_wire(self.kind).ok_or(
+            DataChannelSamplePayloadRefusal::UnknownPayloadDescriptorKind { kind: self.kind },
+        )
+    }
+}
+
+impl Default for DataChannelPayloadDescriptor {
+    fn default() -> Self {
+        Self::bytes()
+    }
+}
+
+/// Byte offset of [`GpuPoolSlotFrameDescriptorBody::pool`] in a descriptor body.
+pub const GPU_POOL_SLOT_FRAME_BODY_POOL_OFFSET: usize = 0;
+/// Byte offset of [`GpuPoolSlotFrameDescriptorBody::slot`] in a descriptor body.
+pub const GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET: usize = 16;
+/// Byte offset of [`GpuPoolSlotFrameDescriptorBody::generation`] in a descriptor body.
+pub const GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET: usize = 20;
+/// Byte offset of [`GpuPoolSlotFrameDescriptorBody::timeline_value`] in a descriptor body.
+pub const GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET: usize = 28;
+/// Bytes of a descriptor body the GPU pool slot frame uses; the rest are
+/// reserved zero.
+pub const GPU_POOL_SLOT_FRAME_BODY_USED_BYTES: usize = 36;
+
+/// The body of a [`DataChannelPayloadDescriptorKind::GpuPoolSlotFrame`]
+/// descriptor: which pool, which slot, which hand-out of it, and the timeline
+/// value its writes signal. Packed little-endian into the descriptor body at
+/// the `GPU_POOL_SLOT_FRAME_BODY_*_OFFSET` offsets, because the body is a byte
+/// array at a 4-byte offset and cannot hold an 8-byte-aligned field in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GpuPoolSlotFrameDescriptorBody {
+    /// The pool's UUID.
+    pub pool: [u8; 16],
+    /// The slot's index in the pool.
+    pub slot: u32,
+    /// Which hand-out of the slot the frame is.
+    pub generation: u64,
+    /// The timeline semaphore value the frame's writes signal.
+    pub timeline_value: u64,
+}
+
+impl GpuPoolSlotFrameDescriptorBody {
+    /// This body as descriptor body bytes, the reserved tail zero.
+    pub fn to_descriptor_body(&self) -> [u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES] {
+        let mut body = [0u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES];
+        body[GPU_POOL_SLOT_FRAME_BODY_POOL_OFFSET..GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET]
+            .copy_from_slice(&self.pool);
+        body[GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET..GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET]
+            .copy_from_slice(&self.slot.to_le_bytes());
+        body[GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET
+            ..GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET]
+            .copy_from_slice(&self.generation.to_le_bytes());
+        body[GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET..GPU_POOL_SLOT_FRAME_BODY_USED_BYTES]
+            .copy_from_slice(&self.timeline_value.to_le_bytes());
+        body
+    }
+
+    /// The body `descriptor_body` packs.
+    pub fn from_descriptor_body(
+        descriptor_body: &[u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+    ) -> Self {
+        let field = |start: usize, end: usize| &descriptor_body[start..end];
+        let mut pool = [0u8; 16];
+        pool.copy_from_slice(field(
+            GPU_POOL_SLOT_FRAME_BODY_POOL_OFFSET,
+            GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET,
+        ));
+        let mut slot = [0u8; 4];
+        slot.copy_from_slice(field(
+            GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET,
+            GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET,
+        ));
+        let mut generation = [0u8; 8];
+        generation.copy_from_slice(field(
+            GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET,
+            GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET,
+        ));
+        let mut timeline_value = [0u8; 8];
+        timeline_value.copy_from_slice(field(
+            GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET,
+            GPU_POOL_SLOT_FRAME_BODY_USED_BYTES,
+        ));
+        Self {
+            pool,
+            slot: u32::from_le_bytes(slot),
+            generation: u64::from_le_bytes(generation),
+            timeline_value: u64::from_le_bytes(timeline_value),
+        }
+    }
 }
 
 /// The board section a [`HelperProcessLossCountBoardKey`] names an inbound-link slot in.
@@ -703,7 +767,7 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION: u32 = 2;
 /// progress.
 ///
 /// The iceoryx2 type name is pinned for the reason
-/// [`DataChannelBagUserHeader`]'s is: the parent creates the board
+/// [`DataChannelSampleUserHeader`]'s is: the parent creates the board
 /// and the helper opens it, and both must present the same key type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ZeroCopySend)]
 #[type_name("HelperProcessLossCountBoardKey")]
@@ -893,175 +957,139 @@ mod tests {
     }
 
     #[test]
-    fn frame_header_round_trip_via_slice() {
-        let header =
-            FrameHeader::new("dest_port", 42, 1024, MessageGroupBoundary::StartsGroup).unwrap();
-        let mut buf = [0u8; FRAME_HEADER_SIZE];
-        header.write_to_slice(&mut buf);
-        let back = FrameHeader::read_from_slice(&buf);
-        assert_eq!(back.port(), "dest_port");
-        assert_eq!(back.timestamp_ns, 42);
-        assert_eq!(back.len, 1024);
-        assert_eq!(back.group_boundary(), MessageGroupBoundary::StartsGroup);
-    }
-
-    #[test]
-    fn frame_header_round_trips_the_extremes_of_every_field() {
-        // A negative timestamp is representable and must survive: the data
-        // plane stamps CLOCK_MONOTONIC, and a reader comparing two stamps can
-        // legitimately carry a value below its own epoch.
-        let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
-        for (port, timestamp_ns, len, group_boundary) in [
-            ("", i64::MIN, 0u32, MessageGroupBoundary::ContinuesGroup),
-            ("p", -1, 1, MessageGroupBoundary::StartsGroup),
-            (
-                longest_port.as_str(),
-                i64::MAX,
-                u32::MAX,
-                MessageGroupBoundary::ContinuesGroup,
-            ),
-        ] {
-            let mut buf = [0u8; FRAME_HEADER_SIZE];
-            FrameHeader::new(port, timestamp_ns, len, group_boundary)
-                .expect("port fits the wire capacity")
-                .write_to_slice(&mut buf);
-            let back = FrameHeader::read_from_slice(&buf);
-            assert_eq!(back.port(), port);
-            assert_eq!(back.timestamp_ns, timestamp_ns);
-            assert_eq!(back.len, len);
-            assert_eq!(back.group_boundary(), group_boundary);
-        }
-    }
-
-    #[test]
-    fn frame_header_size_matches_constant() {
-        // [PortKey: 64][i64: 8][u32: 4][u32: 4] = 80 bytes.
-        assert_eq!(FRAME_HEADER_SIZE, 64 + 8 + 4 + 4);
-        assert_eq!(FRAME_HEADER_SIZE, 80);
-    }
-
-    #[test]
-    fn frame_header_starts_group_flag_is_bit_zero_and_every_other_bit_is_written_zero() {
-        assert_eq!(FRAME_HEADER_FLAG_STARTS_GROUP, 0x0000_0001);
-
-        for (group_boundary, expected_flags) in [
-            (MessageGroupBoundary::StartsGroup, 0x0000_0001u32),
-            (MessageGroupBoundary::ContinuesGroup, 0),
-        ] {
-            let mut buf = [0xFFu8; FRAME_HEADER_SIZE];
-            FrameHeader::new("cam", 0, 0, group_boundary)
-                .unwrap()
-                .write_to_slice(&mut buf);
-            assert_eq!(
-                u32::from_le_bytes(
-                    buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
-                        .try_into()
-                        .unwrap()
+    fn the_channel_sample_user_header_sits_at_its_documented_offsets_under_its_pinned_name() {
+        assert_eq!(size_of::<DataChannelSampleUserHeader>(), 96);
+        assert_eq!(align_of::<DataChannelSampleUserHeader>(), 8);
+        assert_eq!(
+            [
+                std::mem::offset_of!(DataChannelSampleUserHeader, sequence_number),
+                std::mem::offset_of!(
+                    DataChannelSampleUserHeader,
+                    messages_lost_upstream_before_this_one
                 ),
-                expected_flags,
-                "a writer sets only the starts-group bit and writes every reserved bit zero"
-            );
-        }
-
-        let mut buf = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new("cam", 0, 0, MessageGroupBoundary::ContinuesGroup)
-            .unwrap()
-            .write_to_slice(&mut buf);
-        buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
-            .copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+                std::mem::offset_of!(DataChannelSampleUserHeader, timestamp_ns),
+                std::mem::offset_of!(DataChannelSampleUserHeader, payload_byte_len),
+                std::mem::offset_of!(DataChannelSampleUserHeader, flags),
+                std::mem::offset_of!(DataChannelSampleUserHeader, payload_descriptor),
+            ],
+            [0, 8, 16, 24, 28, 32]
+        );
         assert_eq!(
-            FrameHeader::read_from_slice(&buf).group_boundary(),
-            MessageGroupBoundary::ContinuesGroup,
-            "a reader ignores the reserved bits"
+            unsafe { <DataChannelSampleUserHeader as ZeroCopySend>::type_name() },
+            "DataChannelSampleUserHeader",
         );
     }
 
     #[test]
-    fn frame_header_fields_sit_at_their_documented_wire_offsets() {
-        // The layout regression test engine doctrine requires of anything
-        // crossing the IPC wire. `FrameHeader` is not `#[repr(C)]` — it is
-        // packed field by field by `write_to_slice` — so the contract is the
-        // byte offsets in the serialized slice, not the Rust struct layout.
-        // Every publisher and subscriber in the graph agrees on these offsets
-        // and there is no version field to negotiate a disagreement on: a
-        // shift here is silent cross-process corruption, not a compile error.
-        let mut buf = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new(
-            "cam",
-            0x0102_0304_0506_0708,
-            0x0A0B_0C0D,
+    fn the_payload_descriptor_is_a_kind_and_a_sixty_byte_body_under_its_pinned_name() {
+        assert_eq!(size_of::<DataChannelPayloadDescriptor>(), 64);
+        assert_eq!(align_of::<DataChannelPayloadDescriptor>(), 4);
+        assert_eq!(std::mem::offset_of!(DataChannelPayloadDescriptor, kind), 0);
+        assert_eq!(std::mem::offset_of!(DataChannelPayloadDescriptor, body), 4);
+        assert_eq!(
+            unsafe { <DataChannelPayloadDescriptor as ZeroCopySend>::type_name() },
+            "DataChannelPayloadDescriptor",
+        );
+        assert_eq!(DataChannelPayloadDescriptorKind::Bytes as u32, 0);
+        assert_eq!(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame as u32, 1);
+        assert_eq!(DataChannelPayloadDescriptor::bytes().body, [0u8; 60]);
+    }
+
+    #[test]
+    fn a_payload_cache_line_is_sixty_four_bytes_at_sixty_four_byte_alignment() {
+        assert_eq!(size_of::<DataChannelPayloadCacheLine>(), 64);
+        assert_eq!(align_of::<DataChannelPayloadCacheLine>(), 64);
+        assert_eq!(
+            unsafe { <DataChannelPayloadCacheLine as ZeroCopySend>::type_name() },
+            "DataChannelPayloadCacheLine",
+        );
+        assert_eq!(data_channel_payload_cache_lines_for(0), 0);
+        assert_eq!(data_channel_payload_cache_lines_for(1), 1);
+        assert_eq!(data_channel_payload_cache_lines_for(64), 1);
+        assert_eq!(data_channel_payload_cache_lines_for(65), 2);
+    }
+
+    #[test]
+    fn the_gpu_pool_slot_frame_body_packs_every_field_at_its_documented_offset() {
+        assert_eq!(
+            [
+                GPU_POOL_SLOT_FRAME_BODY_POOL_OFFSET,
+                GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET,
+                GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET,
+                GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET,
+                GPU_POOL_SLOT_FRAME_BODY_USED_BYTES,
+            ],
+            [0, 16, 20, 28, 36]
+        );
+        let frame = GpuPoolSlotFrameDescriptorBody {
+            pool: *b"0123456789abcdef",
+            slot: 0x0403_0201,
+            generation: 0x0c0b_0a09_0807_0605,
+            timeline_value: u64::MAX - 1,
+        };
+        let descriptor = DataChannelPayloadDescriptor::gpu_pool_slot_frame(frame);
+        assert_eq!(
+            descriptor.known_kind(),
+            Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame)
+        );
+        assert_eq!(&descriptor.body[0..16], b"0123456789abcdef");
+        assert_eq!(&descriptor.body[16..20], &[1, 2, 3, 4]);
+        assert_eq!(&descriptor.body[20..28], &[5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(&descriptor.body[28..36], &(u64::MAX - 1).to_le_bytes());
+        assert!(descriptor.body[36..].iter().all(|&reserved| reserved == 0));
+        assert_eq!(
+            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&descriptor.body),
+            frame
+        );
+    }
+
+    #[test]
+    fn a_descriptor_of_an_unknown_kind_is_refused_by_kind() {
+        let unknown = DataChannelPayloadDescriptor {
+            kind: 7,
+            body: [0u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+        };
+        assert_eq!(
+            unknown.known_kind(),
+            Err(DataChannelSamplePayloadRefusal::UnknownPayloadDescriptorKind { kind: 7 })
+        );
+    }
+
+    #[test]
+    fn the_starts_group_flag_is_bit_zero_and_round_trips_through_the_header() {
+        assert_eq!(DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP, 0x0000_0001);
+        for group_boundary in [
             MessageGroupBoundary::StartsGroup,
-        )
-        .unwrap()
-        .write_to_slice(&mut buf);
-
-        assert_eq!(buf[0], 3, "port_key len prefix at offset 0");
-        assert_eq!(&buf[1..4], b"cam", "port_key name bytes start at offset 1");
-        assert!(
-            buf[4..FRAME_HEADER_TIMESTAMP_NS_OFFSET]
-                .iter()
-                .all(|&b| b == 0),
-            "the port_key name field is zero-padded up to the timestamp"
-        );
-        assert_eq!(
-            (
-                FRAME_HEADER_TIMESTAMP_NS_OFFSET,
-                FRAME_HEADER_PAYLOAD_LEN_OFFSET,
-                FRAME_HEADER_FLAGS_OFFSET,
-                FRAME_HEADER_SIZE,
-            ),
-            (64, 72, 76, 80),
-            "timestamp_ns at 64, len at 72, flags at 76, payload at 80"
-        );
-        assert_eq!(
-            i64::from_le_bytes(
-                buf[FRAME_HEADER_TIMESTAMP_NS_OFFSET..FRAME_HEADER_PAYLOAD_LEN_OFFSET]
-                    .try_into()
-                    .unwrap()
-            ),
-            0x0102_0304_0506_0708,
-            "timestamp_ns is 8 bytes little-endian"
-        );
-        assert_eq!(
-            u32::from_le_bytes(
-                buf[FRAME_HEADER_PAYLOAD_LEN_OFFSET..FRAME_HEADER_FLAGS_OFFSET]
-                    .try_into()
-                    .unwrap()
-            ),
-            0x0A0B_0C0D,
-            "len is 4 bytes little-endian"
-        );
-        assert_eq!(
-            u32::from_le_bytes(
-                buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
-                    .try_into()
-                    .unwrap()
-            ),
-            FRAME_HEADER_FLAG_STARTS_GROUP,
-            "flags is 4 bytes little-endian"
-        );
+            MessageGroupBoundary::ContinuesGroup,
+        ] {
+            let header = DataChannelSampleUserHeader::new(
+                -5,
+                3,
+                group_boundary,
+                DataChannelPayloadDescriptor::bytes(),
+            );
+            assert_eq!(header.flags & !DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP, 0);
+            assert_eq!(header.group_boundary(), group_boundary);
+        }
     }
 
     #[test]
-    fn the_channel_user_header_is_two_u64s_under_its_pinned_name() {
-        assert_eq!(std::mem::size_of::<DataChannelBagUserHeader>(), 16);
-        assert_eq!(std::mem::align_of::<DataChannelBagUserHeader>(), 8);
-        assert_eq!(
-            std::mem::offset_of!(DataChannelBagUserHeader, sequence_number),
-            0
+    fn a_header_bounds_its_payload_and_refuses_a_stamp_past_the_sample() {
+        let header = DataChannelSampleUserHeader::new(
+            0,
+            3,
+            MessageGroupBoundary::StartsGroup,
+            DataChannelPayloadDescriptor::bytes(),
         );
+        assert_eq!(header.payload_within(b"abcdef"), Ok(&b"abc"[..]));
         assert_eq!(
-            std::mem::offset_of!(
-                DataChannelBagUserHeader,
-                messages_lost_upstream_before_this_one
-            ),
-            8
-        );
-        assert_eq!(
-            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
-            unsafe { <DataChannelBagUserHeader as ZeroCopySend>::type_name() },
-            "DataChannelBagUserHeader",
-            "the iceoryx2 type name every opener must present, independent of the module path"
+            header.payload_within(b"ab"),
+            Err(
+                DataChannelSamplePayloadRefusal::StampedLengthPastTheSample {
+                    stamped_payload_byte_len: 3,
+                    sample_payload_byte_len: 2,
+                }
+            )
         );
     }
 
@@ -1229,177 +1257,6 @@ mod tests {
         );
     }
 
-    /// A header-sized frame carrying `payload_bytes` of a recognizable filler,
-    /// stamped for `port` — the shape every read site is handed off the wire.
-    fn frame_with_payload_filler(port: &str, payload_bytes: usize, filler: u8) -> Vec<u8> {
-        let mut frame = vec![filler; FRAME_HEADER_SIZE + payload_bytes];
-        FrameHeader::new(
-            port,
-            7,
-            payload_bytes as u32,
-            MessageGroupBoundary::StartsGroup,
-        )
-        .expect("port fits the wire capacity")
-        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame
-    }
-
-    #[test]
-    fn read_payload_from_slice_stops_at_the_stamped_length() {
-        // A caller's buffer, longer than the frame it received. The two fillers
-        // discriminate: reading to the end of the buffer would return both.
-        let mut frame = frame_with_payload_filler("cam", 8, 0xAB);
-        frame.resize(FRAME_HEADER_SIZE + 64, 0xCD);
-
-        assert_eq!(
-            FrameHeader::read_payload_from_slice(&frame),
-            Some(&[0xABu8; 8][..]),
-            "the stamp bounds the payload, not the length of the buffer it arrived in"
-        );
-    }
-
-    #[test]
-    fn read_payload_from_slice_refuses_a_frame_cut_short() {
-        let frame = frame_with_payload_filler("cam", 32, 0xAB);
-
-        assert_eq!(
-            FrameHeader::read_payload_from_slice(&frame[..frame.len() - 1]),
-            None,
-            "a stamped length past the bytes that followed it is a truncated frame, \
-             never a shorter one"
-        );
-    }
-
-    #[test]
-    fn read_payload_from_slice_refuses_bytes_that_cannot_hold_a_header() {
-        assert_eq!(FrameHeader::read_payload_from_slice(&[0u8; 8]), None);
-        assert_eq!(FrameHeader::read_payload_from_slice(&[]), None);
-    }
-
-    /// A zero-length payload is a real frame, not an absent one — `None` is
-    /// reserved for a slice that cannot answer the question.
-    #[test]
-    fn read_payload_from_slice_reads_an_empty_payload_as_empty() {
-        let frame = frame_with_payload_filler("cam", 0, 0);
-
-        assert_eq!(FrameHeader::read_payload_from_slice(&frame), Some(&[][..]));
-    }
-
-    #[test]
-    fn a_frame_yields_the_payload_its_stamp_bounds() {
-        let mut frame = frame_with_payload_filler("cam", 8, 0xAB);
-        frame.resize(FRAME_HEADER_SIZE + 64, 0xCD);
-
-        assert_eq!(
-            FrameHeader::payload_bounded_by_its_header(&frame),
-            Ok(&[0xABu8; 8][..])
-        );
-    }
-
-    #[test]
-    fn a_frame_shorter_than_a_header_is_refused_naming_its_length() {
-        let refusal = FrameHeader::payload_bounded_by_its_header(&[0u8; 8]).unwrap_err();
-
-        assert_eq!(
-            refusal,
-            FramePayloadRefusal::ShorterThanTheFrameHeader { frame_byte_len: 8 }
-        );
-        assert_eq!(
-            refusal.to_string(),
-            "8 bytes cannot hold an 80-byte frame header"
-        );
-    }
-
-    /// Decoding the prefix of a cut-short frame would hand back a bag missing
-    /// its later fields.
-    #[test]
-    fn a_frame_cut_short_is_refused_naming_both_lengths() {
-        let frame = frame_with_payload_filler("cam", 32, 0xAB);
-
-        let refusal =
-            FrameHeader::payload_bounded_by_its_header(&frame[..frame.len() - 5]).unwrap_err();
-
-        assert_eq!(
-            refusal,
-            FramePayloadRefusal::PayloadTruncated {
-                stamped_payload_byte_len: 32,
-                followed_payload_byte_len: 27,
-            }
-        );
-        assert_eq!(
-            refusal.to_string(),
-            "the frame header declares a 32-byte payload but only 27 bytes followed it"
-        );
-    }
-
-    #[test]
-    fn read_from_slice_rejects_an_over_capacity_port_key_len_prefix() {
-        // The length prefix is one untrusted byte indexing a 63-byte field, so
-        // it reaches 255 while the field cannot. Unclamped it lands in
-        // `PortKey::len` and `as_str` slices past the field: "range end index
-        // 255 out of range for slice of length 63".
-        let mut frame = frame_with_payload_filler("cam", 0, 0);
-        frame[0] = 0xFF;
-
-        let header = FrameHeader::read_from_slice(&frame);
-        assert_eq!(
-            header.port(),
-            "",
-            "an over-capacity prefix names no port at all — clamping it to the \
-             field width would reconstruct the name of a max-width port"
-        );
-
-        // Same path, well-formed prefix: routing is untouched.
-        let well_formed = frame_with_payload_filler("cam", 0, 0);
-        assert_eq!(FrameHeader::read_from_slice(&well_formed).port(), "cam");
-    }
-
-    #[test]
-    fn read_port_from_slice_rejects_an_over_capacity_len_prefix() {
-        // Same prefix, the peek path: on a header-sized frame the unclamped
-        // slice runs off the buffer itself — "range end index 256 out of range
-        // for slice of length 80".
-        let mut frame = frame_with_payload_filler("cam", 0, 0);
-        assert_eq!(frame.len(), FRAME_HEADER_SIZE);
-        frame[0] = 0xFF;
-
-        assert_eq!(
-            FrameHeader::read_port_from_slice(&frame),
-            "",
-            "the peek path must reject the prefix too"
-        );
-
-        let well_formed = frame_with_payload_filler("cam", 0, 0);
-        assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
-    }
-
-    #[test]
-    fn read_port_from_slice_never_reads_payload_bytes_as_the_port_name() {
-        // The harder half of the same defect. Give the over-long prefix a frame
-        // big enough to absorb it and there is no panic to notice — the read
-        // walks past the 63-byte name field into the payload and returns those
-        // bytes as the port name. That is silent misrouting: a frame delivered
-        // to a mailbox its header never named.
-        //
-        // The spanned bytes must stay valid UTF-8 or `unwrap_or("")` masks the
-        // defect and this passes vacuously — hence an ASCII filler, a prefix the
-        // frame is long enough to absorb, and a payload length whose
-        // little-endian header bytes all sit below 0x80.
-        const FILLER: u8 = b'X';
-        let mut frame = frame_with_payload_filler("cam", 100, FILLER);
-        frame[0] = 150;
-
-        let port = FrameHeader::read_port_from_slice(&frame);
-        assert!(
-            !port.as_bytes().contains(&FILLER),
-            "the port name must never be read out of the payload, got {port:?}"
-        );
-        assert_eq!(port, "", "an over-capacity prefix names no port at all");
-
-        let well_formed = frame_with_payload_filler("cam", 100, FILLER);
-        assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
-    }
-
     /// The shape of `MessageTypeDetails::chunk_layout`, spelled out here so a
     /// one-sided edit of the constants reddens. Both sides read the same upstream
     /// types, so this deliberately does NOT catch an upstream size change — that
@@ -1411,17 +1268,24 @@ mod tests {
     #[test]
     fn a_channel_samples_layout_is_iceoryx2s_own_over_the_two_headers_and_the_payload() {
         type Iceoryx2PublishSubscribeHeader = iceoryx2::service::header::publish_subscribe::Header;
+        type Line = DataChannelPayloadCacheLine;
         let all_headers_len = (size_of::<Iceoryx2PublishSubscribeHeader>()
-            .next_multiple_of(align_of::<DataChannelBagUserHeader>())
-            + size_of::<DataChannelBagUserHeader>())
-        .next_multiple_of(align_of::<u8>());
+            .next_multiple_of(align_of::<DataChannelSampleUserHeader>())
+            + size_of::<DataChannelSampleUserHeader>())
+        .next_multiple_of(align_of::<Line>());
         let max_alignment = align_of::<Iceoryx2PublishSubscribeHeader>()
-            .max(align_of::<DataChannelBagUserHeader>())
-            .max(align_of::<u8>());
-        for frame_total_bytes in [0usize, 1, 7, 8, 9, 4096, 65_536, 1_000_003] {
+            .max(align_of::<DataChannelSampleUserHeader>())
+            .max(align_of::<Line>());
+        assert_eq!(
+            all_headers_len % 64,
+            0,
+            "the payload must start 64-byte aligned"
+        );
+        for frame_total_bytes in [0usize, 1, 7, 8, 9, 64, 65, 4096, 65_536, 1_000_003] {
             let upstream_formula = (all_headers_len
-                + size_of::<u8>().next_multiple_of(align_of::<u8>()) * frame_total_bytes)
-                .next_multiple_of(max_alignment);
+                + size_of::<Line>().next_multiple_of(align_of::<Line>())
+                    * frame_total_bytes.div_ceil(size_of::<Line>()))
+            .next_multiple_of(max_alignment);
             assert_eq!(
                 iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes),
                 upstream_formula,
@@ -1451,9 +1315,9 @@ mod tests {
             let largest_admitted_frame_bytes =
                 largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
             if largest_admitted_frame_bytes == 0 {
-                // The degenerate arm: a ceiling under the sample headers admits
-                // nothing, since no frame is smaller than its own header.
-                assert!(chunk_ceiling_bytes < FRAME_HEADER_SIZE);
+                // The degenerate arm: a ceiling under the sample headers and
+                // one payload line admits no byte of payload.
+                assert!(iceoryx2_sample_bytes_for_a_channel_frame(1) > chunk_ceiling_bytes);
                 continue;
             }
             assert!(
@@ -1682,16 +1546,5 @@ mod tests {
             "an in-slot frame leaves the tracked slot as-is"
         );
         assert_eq!(refused, 0, "an admitted frame records no refusal");
-    }
-
-    #[test]
-    fn frame_header_rejects_over_length_port() {
-        // Over-length must propagate from `FrameHeader::new` as the typed error,
-        // never build a header with a clipped port key.
-        let over = "c".repeat(PortKey::MAX_NAME_BYTES + 1);
-        assert!(matches!(
-            FrameHeader::new(&over, 0, 0, MessageGroupBoundary::StartsGroup),
-            Err(PortKeyError::TooLong { .. })
-        ));
     }
 }

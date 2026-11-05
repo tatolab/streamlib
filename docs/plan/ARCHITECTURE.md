@@ -758,7 +758,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `sys.platform` guard is flagged, in either branch.
   The compile entry `tatolab` runs in the project's interpreter prints the block on stderr
   before it compiles — nothing when clean, a failure of the check itself reported, a start
-  never blocked; on Python 3.10 the dependency rule is skipped and the block says so. CI
+  never blocked. CI
   gates the stream package's and the runtime's own Python and both scaffold variants on
   both lanes. [portable-gpu-interop — SHIPPED #2421; package-split-and-lend — SHIPPED #2693]
 - **DECIDED** — streamlib offers an extension point for an external control client, and runs
@@ -784,7 +784,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   older stream recorded. Compiling happens in the project's interpreter, never in the
   runtime process. Owner, 2026-10-02. [one-runtime-per-machine; package-split-and-lend —
   SHIPPED #2671, #2673, #2686, #2689, #2693, #2697; authoring-names — SHIPPED #2682]
-- **DECIDED** — `tatolab-stream` as built. A pure build backend, `requires-python >=3.10`,
+- **DECIDED** — `tatolab-stream` as built. A pure build backend, `requires-python >=3.12`,
   depending on what its own modules import and never on the runtime. A module belongs in it
   exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
   `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
@@ -1684,7 +1684,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never `-m` or `-c`; `PYTHONPATH` is the lend directory, then the project directory; every
   other `PYTHON*` variable is removed; the working directory is the project; the `STREAMLIB_*` variables
   are unchanged. The bootstrap first drops its own directory from `sys.path`, then imports
-  `tatolab.runtime` — an interpreter that cannot load it (not CPython, below 3.10,
+  `tatolab.runtime` — an interpreter that cannot load it (not CPython, below 3.12,
   free-threaded, a foreign architecture) writes a refusal to raw stderr naming its path,
   implementation, version, free-threading, architecture and the import error, and exits —
   then checks the build id, then runs its node. `tatolabd` finds the lend relative to its own
@@ -3096,7 +3096,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [extension-model]
 - **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
   `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
-  `pyo3` on `abi3-py310`, `webrtc 0.17`, `tokio`, `hyper` + `hyper-util` + `hyper-rustls`,
+  `pyo3` on `abi3-py312`, `webrtc 0.17`, `tokio`, `hyper` + `hyper-util` + `hyper-rustls`,
   `rustls`, `bytes`; no engine crate), own lockfile, `pyproject.toml` naming `tatolab-webrtc`
   and depending on `tatolab-stream` by a minimum version, `python/tatolab/webrtc/` with
   `_native.pyi` and `py.typed`. `src/` carries the WHIP and WHEP sessions (`whip_session.rs`,

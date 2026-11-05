@@ -15,15 +15,10 @@ from __future__ import annotations
 import ast
 import os
 import re
-import sys
+import tomllib
 import warnings
 from pathlib import Path
 from typing import NamedTuple, Optional
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    tomllib = None
 
 __all__ = [
     "CrossFloorFinding",
@@ -37,11 +32,6 @@ __all__ = [
 PROJECT_MANIFEST_FILE_NAME = "pyproject.toml"
 VIRTUAL_ENVIRONMENT_DIRECTORY_NAMES = frozenset({".venv", "venv"})
 VIRTUAL_ENVIRONMENT_MARKER_FILE_NAME = "pyvenv.cfg"
-
-DEPENDENCY_RULE_SKIPPED_WITHOUT_TOMLLIB = (
-    "the dependency rule was skipped: this Python has no `tomllib` (it arrived in 3.11), "
-    "so `pyproject.toml` was not read"
-)
 
 PORTABLE_GPU_COPY_OR_TORCH = (
     "land a frame in a texture with `ctx.gpu_limited_access.copy_surface_to_surface(...)`, "
@@ -107,10 +97,9 @@ class CrossFloorFinding(NamedTuple):
 
 
 class CrossFloorCheckReport(NamedTuple):
-    """Every finding over an app directory, and the reason a rule was skipped, if one was."""
+    """Every finding over an app directory."""
 
     findings: "list[CrossFloorFinding]"
-    skipped_rule_reason: Optional[str]
 
 
 def _is_sys_platform(node: ast.expr) -> bool:
@@ -366,9 +355,7 @@ def _line_declaring(manifest_text: str, declared: _DeclaredRequirement) -> int:
 def find_floor_bindings_in_project_manifest(
     manifest_text: str, file: Path
 ) -> "list[CrossFloorFinding]":
-    """Every floor-bound dependency with no platform marker; needs `tomllib` (Python 3.11+)."""
-    if tomllib is None:
-        raise RuntimeError(DEPENDENCY_RULE_SKIPPED_WITHOUT_TOMLLIB)
+    """Every floor-bound dependency with no platform marker."""
     findings = []
     for declared in _declared_requirements(tomllib.loads(manifest_text)):
         requirement = declared.requirement
@@ -429,38 +416,30 @@ def check_app_directory_for_floor_bindings(app_directory: Path) -> CrossFloorChe
         except (OSError, SyntaxError, ValueError, RecursionError):
             continue
 
-    skipped_rule_reason = None
     project_manifest = app_directory / PROJECT_MANIFEST_FILE_NAME
     if project_manifest.is_file():
-        if tomllib is None:
-            skipped_rule_reason = DEPENDENCY_RULE_SKIPPED_WITHOUT_TOMLLIB
-        else:
-            try:
-                findings.extend(
-                    find_floor_bindings_in_project_manifest(
-                        project_manifest.read_text(encoding="utf-8"), project_manifest
-                    )
+        try:
+            findings.extend(
+                find_floor_bindings_in_project_manifest(
+                    project_manifest.read_text(encoding="utf-8"), project_manifest
                 )
-            except (OSError, ValueError):
-                # An unreadable or malformed manifest is the installer's to report.
-                pass
-    return CrossFloorCheckReport(findings, skipped_rule_reason)
+            )
+        except (OSError, ValueError):
+            # An unreadable or malformed manifest is the installer's to report.
+            pass
+    return CrossFloorCheckReport(findings)
 
 
 def render_cross_floor_warning_block(report: CrossFloorCheckReport, app_directory: Path) -> str:
     """The warning block `run` and `dev` print; empty when there is nothing to say."""
-    if not report.findings and report.skipped_rule_reason is None:
+    if not report.findings:
         return ""
-    lines = []
-    if report.findings:
-        count = len(report.findings)
-        lines.append(
-            f"tatolab: the cross-floor check found {count} "
-            f"{'thing' if count == 1 else 'things'} binding this app to one floor "
-            f"(Linux or macOS). The app starts anyway."
-        )
-    else:
-        lines.append("tatolab: the cross-floor check found nothing binding this app to one floor.")
+    count = len(report.findings)
+    lines = [
+        f"tatolab: the cross-floor check found {count} "
+        f"{'thing' if count == 1 else 'things'} binding this app to one floor "
+        f"(Linux or macOS). The app starts anyway."
+    ]
     for finding in report.findings:
         try:
             shown_path = finding.file.relative_to(app_directory)
@@ -468,6 +447,4 @@ def render_cross_floor_warning_block(report: CrossFloorCheckReport, app_director
             shown_path = finding.file
         lines.append(f"  {shown_path}:{finding.line}: {finding.what_binds_it}")
         lines.append(f"      portable: {finding.portable_spelling}")
-    if report.skipped_rule_reason is not None:
-        lines.append(f"  note: {report.skipped_rule_reason}")
     return "\n".join(lines) + "\n"

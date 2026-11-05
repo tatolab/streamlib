@@ -17,9 +17,9 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
-# CPython 3.10 and every later GIL-enabled release.
-pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+# abi3-py312 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.12 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
 # libopus, statically linked through `opusic-sys`'s bundled copy (cmake, no
 # bindgen at build). The static link is load-bearing:
 # `tests/test_wheel_portability.py` fails if `DT_NEEDED` grows.

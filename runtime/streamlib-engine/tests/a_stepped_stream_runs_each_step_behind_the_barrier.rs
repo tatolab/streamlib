@@ -59,7 +59,7 @@ impl streamlib_engine::ReactiveProcessor for SlowSteppedRelay::Processor {
             return Ok(());
         };
         std::thread::sleep(MIDDLE_NODE_MACHINE_TIME_PER_MESSAGE);
-        let tick: u64 = rmp_serde::from_slice(&message.payload_bytes)
+        let tick: u64 = rmp_serde::from_slice(&message.payload)
             .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?;
         self.outputs.write_msgpack("relayed", &tick)
     }
@@ -71,7 +71,7 @@ pub struct SteppedTickSink;
 impl streamlib_engine::ReactiveProcessor for SteppedTickSink::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw("relayed")? {
-            let tick: u64 = rmp_serde::from_slice(&message.payload_bytes)
+            let tick: u64 = rmp_serde::from_slice(&message.payload)
                 .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?;
             TICKS_THE_SINK_TOOK
                 .lock()
@@ -94,10 +94,10 @@ impl streamlib_engine::ContinuousProcessor for EveryThirdStepTickSink::Processor
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let mut batch = Vec::new();
         while let Some(message) = self.inputs.read_raw("ticks")? {
-            batch.push(
-                rmp_serde::from_slice(&message.payload_bytes)
-                    .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?,
-            );
+            batch
+                .push(rmp_serde::from_slice(&message.payload).map_err(|decode| {
+                    streamlib_engine::core::Error::Runtime(decode.to_string())
+                })?);
         }
         TICK_BATCHES_THE_SLOW_SINK_TOOK.lock().push(batch);
         Ok(())

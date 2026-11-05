@@ -12,6 +12,7 @@ use tatolab_module_sdk::ModuleHost;
 use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStreamHandle;
 
 use super::*;
+use crate::python_port_payload::PythonPortPayloadBorrow;
 use crate::python_processor_context::{
     PythonRuntimeContextFullAccess, note_execution_mode_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
@@ -53,6 +54,7 @@ fn one_wired_link(
             2,
             1,
             "link-1",
+            None,
             None,
             None,
             None,
@@ -160,10 +162,9 @@ fn a_native_thread_writes_a_lent_output_with_no_python_attached_and_python_reads
             let (payload, timestamp_ns) = destination
                 .read_from_input_port_with_timestamp(python, DESTINATION_INPUT_PORT)
                 .unwrap();
-            let payload: Vec<u8> = payload
-                .unwrap_or_else(|| panic!("message {message} arrived"))
-                .extract()
-                .unwrap();
+            let payload = PythonPortPayloadBorrow::bytes_the_read_borrowed(
+                &payload.unwrap_or_else(|| panic!("message {message} arrived")),
+            );
             assert_eq!(payload, format!("native {message}").into_bytes());
             assert_eq!(timestamp_ns, Some(1_000 + message as i64));
         }

@@ -73,7 +73,10 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   `sequence_number: u64`, `messages_lost_upstream_before_this_one: u64`, `timestamp_ns: i64`,
   `payload_byte_len: u32`, `flags: u32` (`starts_group`), then
   `payload_descriptor: DataChannelPayloadDescriptor`. The payload starts at offset 0 of the
-  sample, 64-byte aligned (iceoryx2 `payload_alignment(64)`), and carries nothing but payload.
+  sample, 64-byte aligned, and carries nothing but payload. The alignment rides the payload's
+  element type, `DataChannelPayloadCacheLine` (`#[repr(C, align(64))]`, 64 bytes), and not
+  iceoryx2's `payload_alignment(64)`, which strides every element of a `[u8]` slice at 64 bytes;
+  a payload of n bytes takes `n.div_ceil(64)` lines, bounded by `payload_byte_len`.
   [zero-copy-data-plane]
 - **ADDED (same entry, DECIDED):** `DataChannelPayloadDescriptor` is a fixed-size
   `#[repr(C)]` value: `kind: u32` and a 60-byte body, for 64 bytes in all. In this change the
@@ -207,8 +210,9 @@ The protocol, written for the ADR's Consequences. All operations are `SeqCst`. O
 - **MODIFIED (engine code):**
   - `streamlib-ipc-types`: `DataChannelBagUserHeader` becomes `DataChannelSampleUserHeader`,
     with `DataChannelPayloadDescriptor` and its bodies, and the layout tests.
-  - `iceoryx2/node.rs`: `payload_alignment(64)`, and `subscriber_max_borrowed_samples` per link
-    from its mailbox depth and quota.
+  - `iceoryx2/node.rs`: the `DataChannelPayloadCacheLine` payload element, and
+    `subscriber_max_borrowed_samples` from the service's creation depth and the largest quota a
+    port may state, because iceoryx2 fixes a service's borrow limit when it is created.
   - `iceoryx2/output.rs`: a loan door that the Rust `LinkOutputDataWriter` and Python's
     `ctx.loan` both call. The copy-in becomes the `write` convenience over it.
   - `iceoryx2/mailbox.rs`, `input.rs`: queue `Sample`s, and hand a read the sample.

@@ -10,9 +10,9 @@ name = "streamlib"
 # maturin reads it from the crate, which takes [workspace.package].version.
 dynamic = ["version"]
 description = "StreamLib — a realtime streaming engine with Python authoring"
-# abi3-py310 in Cargo.toml is the binding half of this floor; the two move
+# abi3-py312 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "BUSL-1.1" }
 # PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
 # discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
@@ -29,8 +29,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
@@ -50,8 +48,6 @@ dev = [
     # The second consumer of the Metal capsule; Apple silicon only.
     "mlx>=0.32; sys_platform == 'darwin'",
     "pydantic>=2.0",
-    # `assert_type` at the 3.10 floor.
-    "typing_extensions>=4.6",
 ]
 
 [tool.pytest.ini_options]
@@ -104,7 +100,7 @@ include = ["python", "tests", "tests_against_the_runtime_unit_lend"]
 # not run `maturin develop` reports every such import unresolved — which is
 # precisely the state the no-build job runs in.
 extraPaths = ["python", "../tatolab-stream"]
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 # Standard rather than strict: strict turns on `reportPrivateUsage`, which
 # fights the private `_engine` names this package is built on, and
 # demands annotations on every pytest fixture parameter.

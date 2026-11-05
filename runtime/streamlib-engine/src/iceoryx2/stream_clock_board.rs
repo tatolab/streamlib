@@ -23,10 +23,11 @@ use streamlib_ipc_types::{StreamClockBoardEntry, StreamClockBoardKey};
 use crate::core::error::{Error, Result};
 
 /// The blackboard service a stream clock board is.
-pub(crate) type StreamClockBoardService = BlackboardPortFactory<ipc::Service, StreamClockBoardKey>;
+pub(crate) type StreamClockBoardService =
+    BlackboardPortFactory<ipc_threadsafe::Service, StreamClockBoardKey>;
 
 /// The event service each publish on a stream clock board notifies.
-pub(crate) type StreamClockBoardPublishEventService = EventPortFactory<ipc::Service>;
+pub(crate) type StreamClockBoardPublishEventService = EventPortFactory<ipc_threadsafe::Service>;
 
 /// The name of the event service each publish on the board named
 /// `board_service_name` notifies.
@@ -51,9 +52,9 @@ pub struct StreamClockBoard {
 /// Fields drop in declaration order: the handle, the writer it came from, the
 /// notifier, then the services.
 struct StreamClockBoardWriteHandles {
-    entry: EntryHandleMut<ipc::Service, StreamClockBoardKey, StreamClockBoardEntry>,
-    _writer: Writer<ipc::Service, StreamClockBoardKey>,
-    each_publish_notifier: Notifier<ipc::Service>,
+    entry: EntryHandleMut<ipc_threadsafe::Service, StreamClockBoardKey, StreamClockBoardEntry>,
+    _writer: Writer<ipc_threadsafe::Service, StreamClockBoardKey>,
+    each_publish_notifier: Notifier<ipc_threadsafe::Service>,
     _service: StreamClockBoardService,
     _publish_event_service: StreamClockBoardPublishEventService,
 }
@@ -143,8 +144,8 @@ pub struct StreamClockBoardReader {
 
 /// The reader and its entry handle, dropped together.
 struct StreamClockBoardReadHandles {
-    entry: EntryHandle<ipc::Service, StreamClockBoardKey, StreamClockBoardEntry>,
-    _reader: Reader<ipc::Service, StreamClockBoardKey>,
+    entry: EntryHandle<ipc_threadsafe::Service, StreamClockBoardKey, StreamClockBoardEntry>,
+    _reader: Reader<ipc_threadsafe::Service, StreamClockBoardKey>,
     _service: StreamClockBoardService,
 }
 
@@ -205,20 +206,14 @@ pub struct StreamClockBoardPublishListener {
 
 /// The listener and the service it came from, dropped together.
 struct StreamClockBoardPublishListenerAndService {
-    listener: Listener<ipc::Service>,
+    listener: Listener<ipc_threadsafe::Service>,
     _publish_event_service: StreamClockBoardPublishEventService,
 }
-
-// SAFETY: as for the input mailboxes' listener: `Listener` is `!Send` only for
-// the `SingleThreaded` `Rc` of `ipc::Service`, made here and dropped here, and
-// every use of it is under the surrounding `Mutex`. Re-check on any iceoryx2
-// upgrade.
-unsafe impl Send for StreamClockBoardPublishListenerAndService {}
 
 impl StreamClockBoardPublishListener {
     /// Listen on `publish_event_service` through `listener`.
     pub(crate) fn listening(
-        listener: Listener<ipc::Service>,
+        listener: Listener<ipc_threadsafe::Service>,
         publish_event_service: StreamClockBoardPublishEventService,
     ) -> Self {
         // SAFETY: the descriptor is the listener's own, and lives as long as

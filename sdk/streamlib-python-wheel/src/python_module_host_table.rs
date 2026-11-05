@@ -531,8 +531,8 @@ unsafe extern "C" fn input_port_read(
         Ok(Some(message)) => {
             let message = Box::new(message);
             *read_message = ModuleHostTableReadMessage {
-                payload: message.payload_bytes.as_ptr(),
-                payload_length: message.payload_bytes.len(),
+                payload: message.payload.as_ptr(),
+                payload_length: message.payload.len(),
                 timestamp_ns: message.timestamp_ns,
                 starts_group: u32::from(matches!(
                     message.group_boundary,

@@ -352,7 +352,7 @@ fn render_config_typed_dict(
     if required_fields.is_empty() {
         write!(text, "\n\nclass {config_name}(TypedDict, total=False):\n")?;
     } else {
-        // `Required` is 3.11+; a total base is how the 3.10 floor spells it.
+        // The required keys ride a total base, the optional ones its `total=False` subclass.
         let required_keys_name = format!("_{config_name}RequiredKeys");
         write!(text, "\n\nclass {required_keys_name}(TypedDict):\n")?;
         text.push_str(&render_docstring(

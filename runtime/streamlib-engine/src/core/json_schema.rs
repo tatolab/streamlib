@@ -108,6 +108,10 @@ pub struct PortInfoOutput {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
+    /// The samples each link into this input port may hold beyond its mailbox,
+    /// declared; absent from the rendering on a port that takes the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrow_quota: Option<usize>,
     /// Window contract declared by this audio input port. Absent from the
     /// rendering on a port that declares none — the contract is opt-in, and a
     /// port without one renders exactly what it always did.
@@ -357,6 +361,10 @@ pub struct PortDescriptorOutput {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
+    /// The samples each link into this input port may hold beyond its mailbox,
+    /// declared; absent from the rendering on a port that takes the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrow_quota: Option<usize>,
     /// Window contract declared by this audio input port. Absent from the
     /// rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -469,6 +477,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             description: port.description.clone(),
             port_kind: PortKindOutput::from(port.port_kind),
             delivery_profile: port.delivery_profile.clone(),
+            borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
         }
@@ -622,6 +631,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             description: port.description.clone(),
             required: port.required,
             delivery_profile: port.delivery_profile.clone(),
+            borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
         }
@@ -814,6 +824,7 @@ mod port_rendering_tests {
             description: "Frames to convert".to_string(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("newest".to_string()),
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         };
@@ -848,6 +859,7 @@ mod port_rendering_tests {
                 description: "Frames".to_string(),
                 port_kind: crate::core::graph::PortKind::Data,
                 delivery_profile: None,
+                borrow_quota: None,
                 audio_window: None,
                 catalog_entry,
             }],
@@ -937,6 +949,7 @@ mod port_rendering_tests {
             description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         };
@@ -976,6 +989,7 @@ mod port_rendering_tests {
             description: "Samples to frame".to_string(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
+            borrow_quota: None,
             audio_window: Some(declared_window_contract()),
             catalog_entry: None,
         };
@@ -1006,6 +1020,7 @@ mod port_rendering_tests {
             description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
+            borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::Declaration(
                 crate::core::descriptors::AudioWindowContractDeclaredValues {
                     sample_rate: 48_000,
@@ -1040,6 +1055,7 @@ mod port_rendering_tests {
             description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
+            borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             catalog_entry: None,
         };
@@ -1068,6 +1084,7 @@ mod port_rendering_tests {
                 description: "Blocks to play".to_string(),
                 port_kind: crate::core::graph::PortKind::Data,
                 delivery_profile: Some("ordered".to_string()),
+                borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
                 catalog_entry: None,
             }],

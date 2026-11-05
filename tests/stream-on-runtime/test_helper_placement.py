@@ -169,7 +169,7 @@ def test_a_payload_one_helper_writes_reaches_a_reader_in_another_helper_unchange
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """A message's payload is bytes end to end: what a Python node writes is
-    what a Python node in another helper reads, byte for byte, with nothing
+    what a Python node in another helper borrows, byte for byte, with nothing
     encoding or decoding it on the way. The payload is not msgpack, so any
     hidden decode would refuse it rather than pass it through."""
     tatolabd = start_tatolabd_running_stream(raw_message_payload_source_into_sink)
@@ -184,8 +184,9 @@ def test_a_payload_one_helper_writes_reaches_a_reader_in_another_helper_unchange
     assert source_pid != sink_pid, (
         f"the writer and the reader shared one process ({sink_pid}) — one processor, one helper"
     )
-    assert payload_read["payload_type"] == "bytes", (
-        f"an untyped read hands back bytes; got {payload_read['payload_type']}"
+    assert payload_read["payload_type"] == "PortPayloadBorrow", (
+        "an untyped read borrows the sample rather than copying it into bytes; "
+        f"got {payload_read['payload_type']}"
     )
     assert bytes.fromhex(payload_read["payload_hex"]) == RAW_MESSAGE_PAYLOAD_BYTES, (
         f"the reader saw {payload_read['payload_hex']}, not the "

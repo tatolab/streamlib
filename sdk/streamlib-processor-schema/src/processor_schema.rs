@@ -57,7 +57,7 @@ pub struct RuntimeOptions {
     /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
     #[serde(default)]
     pub unsafe_send: bool,
-    /// [Python] Required Python version spec (e.g., ">=3.10"). Python runtime only.
+    /// [Python] Required Python version spec (e.g., ">=3.12"). Python runtime only.
     #[serde(default)]
     pub python_version: Option<String>,
 }
@@ -364,6 +364,14 @@ impl JsonSchema for ProcessorSchemaExecution {
     }
 }
 
+/// The borrow quota an input port takes when it states none.
+pub const DEFAULT_INPUT_PORT_BORROW_QUOTA: usize = 2;
+
+/// The largest borrow quota an input port may state. Every channel data
+/// service is created to admit it, because iceoryx2 fixes a service's borrow
+/// limit when the first opener creates it.
+pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
+
 /// The values an input port's `delivery_profile` declaration may take.
 ///
 /// The single Rust-side list: the `#[processor]` grammar, the engine's
@@ -387,6 +395,11 @@ pub struct ProcessorPortSchema {
     /// output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+    /// The samples each link into this input port may hold beyond its mailbox,
+    /// or `None` for the engine's default. Absent from the rendering on a port
+    /// that declares none, and always `None` on an output port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrow_quota: Option<usize>,
     /// Window contract declared by this audio input port, or `None`. Absent
     /// from the rendering entirely on a port that declares none, and always
     /// `None` on an output port: a producer publishes what it has, and only a

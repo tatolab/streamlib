@@ -73,7 +73,7 @@ pub fn effective_channel_chunk_ceiling_bytes(trust_tier: ChannelTrustTier) -> us
 /// the largest frame it admits lands exactly on it. Both tier defaults do. The
 /// test is that equality and not `is_power_of_two`, which passes a ceiling too
 /// small to hold one sample's headers — `32` is a power of two, admits a
-/// zero-byte frame, and still takes a 64-byte chunk.
+/// zero-byte frame, and still takes a 256-byte chunk.
 fn warn_when_an_override_cannot_bound_the_shared_memory_chunk(
     env_key: &str,
     trust_tier: ChannelTrustTier,
@@ -105,7 +105,7 @@ mod tests {
     /// A ceiling that cannot be the size of the chunk behind it is worth saying
     /// out loud to an operator tuning shared memory. Being a power of two is not
     /// the test: `1` and `32` are, and each admits a zero-byte frame while still
-    /// taking a 64-byte chunk. The extremes go through the same door, because a
+    /// taking a 256-byte chunk. The extremes go through the same door, because a
     /// diagnostic that panics the engine is worse than the misconfiguration it
     /// describes.
     #[test]
@@ -113,7 +113,7 @@ mod tests {
         for its_own_chunk_size in [
             ChannelTrustTier::Trusted.default_chunk_ceiling_bytes(),
             ChannelTrustTier::UntrustedSession.default_chunk_ceiling_bytes(),
-            64,
+            256,
             4096,
         ] {
             assert!(
@@ -125,7 +125,7 @@ mod tests {
                 "{its_own_chunk_size} is its own chunk size, so there is nothing to say"
             );
         }
-        for takes_a_larger_chunk in [1usize, 3, 32, 100_000_000, usize::MAX] {
+        for takes_a_larger_chunk in [1usize, 3, 32, 64, 100_000_000, usize::MAX] {
             assert!(
                 warn_when_an_override_cannot_bound_the_shared_memory_chunk(
                     "STREAMLIB_TEST",

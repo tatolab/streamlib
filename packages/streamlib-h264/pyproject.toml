@@ -7,7 +7,7 @@ name = "tatolab-h264"
 version = "0.68.27"
 description = "H.264 encode and decode for Tatolab streams, on a Vulkan device the module owns."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "BUSL-1.1" }
 # PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
 # discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
@@ -61,7 +61,7 @@ include = ["python", "tests"]
 extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
 # Checked at the version floor rather than whatever interpreter the venv happens
 # to be — `requires-python` is the promise.
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 # Standard rather than strict, matching the engine wheel: strict turns on
 # `reportPrivateUsage`, which fights the `_native` shape this package is built
 # on, and demands annotations on every pytest fixture parameter.

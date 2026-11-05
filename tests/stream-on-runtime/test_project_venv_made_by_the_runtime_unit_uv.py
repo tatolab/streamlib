@@ -52,7 +52,7 @@ def a_project_with_no_venv(project_directory: Path) -> Path:
         "[project]\n"
         'name = "venv-made-by-the-runtime-unit-uv"\n'
         'version = "0"\n'
-        'requires-python = ">=3.10"\n'
+        'requires-python = ">=3.12"\n'
         'dependencies = ["tatolab-stream"]\n'
         "\n"
         "[tool.uv]\n"
@@ -243,7 +243,7 @@ def a_project_whose_sync_waits_on(index: PackageIndexThatNeverAnswers, project_d
         "[project]\n"
         'name = "venv-sync-cancelled"\n'
         'version = "0"\n'
-        'requires-python = ">=3.10"\n'
+        'requires-python = ">=3.12"\n'
         'dependencies = ["a-package-only-the-index-that-never-answers-has"]\n'
         "\n"
         "[tool.uv]\n"

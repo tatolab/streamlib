@@ -33,6 +33,11 @@ pub struct PortDescriptor {
     /// port and always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+    /// The samples each link into this *input* port may hold beyond its
+    /// mailbox at once; `None` takes the engine's default. Always `None` on an
+    /// output port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrow_quota: Option<usize>,
     /// Window contract declared by an audio *input* port — the rate, channels,
     /// dtype, window size and hop it wants, or the sentinel that resolves them
     /// from the device. `None` on a port that declares none and on every
@@ -52,6 +57,7 @@ impl PortDescriptor {
             description: description.into(),
             required,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         }
@@ -61,6 +67,13 @@ impl PortDescriptor {
     /// input ports; engine-side derivation ignores this on output ports.
     pub fn with_delivery_profile(mut self, delivery_profile: impl Into<String>) -> Self {
         self.delivery_profile = Some(delivery_profile.into());
+        self
+    }
+
+    /// Builder-style override for the borrow quota. Meaningful only on an
+    /// input port.
+    pub fn with_borrow_quota(mut self, borrow_quota: usize) -> Self {
+        self.borrow_quota = Some(borrow_quota);
         self
     }
 

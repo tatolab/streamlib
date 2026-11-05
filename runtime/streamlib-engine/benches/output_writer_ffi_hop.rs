@@ -126,7 +126,7 @@ fn output_writer_inner_publishing_to(publisher: ChannelDataServicePublisher) -> 
 struct BenchFixture {
     inner: Arc<OutputWriterInner>,
     subscriber: ChannelDataServiceSubscriber,
-    listener: iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>,
+    listener: iceoryx2::port::listener::Listener<iceoryx2::service::ipc_threadsafe::Service>,
     // Keep the node alive for the bench's lifetime so the publisher inside
     // the inner doesn't observe a torn-down service mid-iteration.
     _node: Iceoryx2Node,
@@ -259,7 +259,7 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
 struct FanoutFixture {
     inner: Arc<OutputWriterInner>,
     subscribers: Vec<ChannelDataServiceSubscriber>,
-    listeners: Vec<iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>>,
+    listeners: Vec<iceoryx2::port::listener::Listener<iceoryx2::service::ipc_threadsafe::Service>>,
     _node: Iceoryx2Node,
 }
 
@@ -408,7 +408,7 @@ fn bench_channel_round_trip(c: &mut Criterion) {
                         .read_raw(black_box("in"))
                         .unwrap()
                         .expect("every write is read back in-line");
-                    black_box(message.payload_bytes);
+                    black_box(message.payload);
                 });
             },
         );

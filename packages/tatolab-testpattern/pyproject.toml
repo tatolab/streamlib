@@ -7,7 +7,7 @@ name = "tatolab-testpattern"
 version = "0.68.27"
 description = "A test-pattern video source for Tatolab streams: SMPTE bars and a bouncing potato, rendered on the GPU."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "BUSL-1.1"
 license-files = ["LICENSE"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
@@ -53,7 +53,7 @@ testpaths = ["tests"]
 [tool.pyright]
 include = ["python", "tests"]
 extraPaths = ["python"]
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"

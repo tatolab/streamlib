@@ -33,8 +33,8 @@ pub fn spawn_outside_every_iceoryx2_listener_bind(
 /// Bind a listener on `notify_service` while no child process is being
 /// started in this process.
 pub(crate) fn bind_an_iceoryx2_listener_outside_every_child_process_start(
-    notify_service: &EventServicePortFactory<ipc::Service>,
-) -> Result<Listener<ipc::Service>, ListenerCreateError> {
+    notify_service: &EventServicePortFactory<ipc_threadsafe::Service>,
+) -> Result<Listener<ipc_threadsafe::Service>, ListenerCreateError> {
     let _no_child_process_is_starting = ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START.lock();
     notify_service.listener_builder().create()
 }

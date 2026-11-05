@@ -7,6 +7,7 @@
 //! The engine never calls anything here: libopus runs in each node's own
 //! processor interpreter, reached directly from the node's Python.
 
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
@@ -77,7 +78,7 @@ impl AudioWindowToEncodedPacketEncoderForPython {
     fn encode_one_window<'py>(
         &mut self,
         python: Python<'py>,
-        interleaved_sample_bytes: &[u8],
+        interleaved_sample_bytes: PyBuffer<u8>,
         sample_rate: u32,
         channels: u32,
         sample_count: u32,
@@ -85,7 +86,10 @@ impl AudioWindowToEncodedPacketEncoderForPython {
         first_sample_timestamp_ns: i64,
     ) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let window = AudioWindowToEncode {
-            interleaved_sample_bytes,
+            interleaved_sample_bytes: bytes_of_a_contiguous_buffer(
+                &interleaved_sample_bytes,
+                "interleaved_sample_bytes",
+            )?,
             sample_rate,
             channels,
             sample_count,
@@ -170,7 +174,7 @@ impl EncodedPacketToAudioBlockDecoderForPython {
     ))]
     fn decode_one_arriving_message(
         &mut self,
-        payload_bytes: &[u8],
+        payload_bytes: PyBuffer<u8>,
         timestamp_ns: i64,
         starts_group: bool,
         lost_since_last_read: u64,
@@ -181,7 +185,7 @@ impl EncodedPacketToAudioBlockDecoderForPython {
             .transpose()?;
         let decoded = self.decoder.decode_one_arriving_message(
             &ArrivingEncodedAudioMessage {
-                payload_bytes,
+                payload_bytes: bytes_of_a_contiguous_buffer(&payload_bytes, "payload_bytes")?,
                 timestamp_ns,
                 starts_group,
                 lost_since_last_read,
@@ -289,4 +293,20 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<EncodedPacketToAudioBlockDecoderForPython>()?;
     module.add_class::<DecodedAudioBlockForPython>()?;
     Ok(())
+}
+
+/// The bytes of a C-contiguous buffer — `bytes`, a read's `PortPayloadBorrow`,
+/// a `memoryview` — borrowed while `buffer` lives.
+fn bytes_of_a_contiguous_buffer<'buffer>(
+    buffer: &'buffer PyBuffer<u8>,
+    argument_name: &str,
+) -> PyResult<&'buffer [u8]> {
+    if !buffer.is_c_contiguous() {
+        return Err(PyValueError::new_err(format!(
+            "{argument_name} must be a C-contiguous buffer"
+        )));
+    }
+    // SAFETY: a C-contiguous buffer spans `len_bytes` bytes from `buf_ptr`,
+    // and its exporter keeps them alive and unmoved while `buffer` lives.
+    Ok(unsafe { std::slice::from_raw_parts(buffer.buf_ptr() as *const u8, buffer.len_bytes()) })
 }

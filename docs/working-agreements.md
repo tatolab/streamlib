@@ -57,8 +57,8 @@ topic; `CLAUDE.md` holds only what every session must load.
   change (owner, 2026-10-06).
 - **Upgrades take the new version's way.** Adopt upstream's changed mechanism and retire our old
   workaround. A test the upgrade breaks is fixed upstream's way in the same PR (owner, 2026-09-29).
-- **The wheel's abi3-py310 floor is held partly for NVIDIA Isaac Sim** (owner, 2026-08-03). Weigh
-  that before proposing a higher Python floor.
+- **CPython 3.12 is the floor for everything we ship** (owner, 2026-11-05): the engine wheel's
+  `abi3-py312`, every package's extension, `tatolab-stream` and the scaffold.
 - **The control plane serving config verbatim is intentional.** `graph` returns every processor's
   config, secret-bearing keys included, inside a trusted boundary. Do not file it or redact a key to
   work around it (owner, 2026-09-05).

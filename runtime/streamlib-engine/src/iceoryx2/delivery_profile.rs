@@ -10,8 +10,10 @@
 //! port declares one and nothing is inferred — an input port without a profile
 //! is a wiring error.
 
-use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
 use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_processor_schema::{
+    DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,
+};
 
 use super::read_mode::ReadMode;
 use crate::core::error::{Error, Result};
@@ -40,7 +42,8 @@ pub enum DeliveryProfile {
     Ordered,
 }
 
-/// The resolved transport pair a [`DeliveryProfile`] expands to at wire time.
+/// How one input port's deliveries are handled, resolved at wire time from the
+/// [`DeliveryProfile`] and borrow quota it declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeliveryResolution {
     /// Consumer-side drain order applied by the destination's mailbox.
@@ -50,6 +53,8 @@ pub struct DeliveryResolution {
     /// subscriber takes the engine's fixed windowed ring and its mailbox is
     /// sized from its contract.
     pub depth: usize,
+    /// The samples each inbound link's reader may hold beyond the mailbox.
+    pub borrow_quota: usize,
 }
 
 impl DeliveryProfile {
@@ -58,16 +63,19 @@ impl DeliveryProfile {
     /// Ring depth for [`DeliveryProfile::Ordered`].
     pub const ORDERED_DEPTH: usize = 16;
 
-    /// Expand this profile into its fixed (drain order, depth) pair.
+    /// Expand this profile into its fixed drain order and depth, under the
+    /// default borrow quota.
     pub fn resolve(self) -> DeliveryResolution {
         match self {
             DeliveryProfile::Newest => DeliveryResolution {
                 drain_order: ReadMode::SkipToLatest,
                 depth: Self::NEWEST_DEPTH,
+                borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
             DeliveryProfile::Ordered => DeliveryResolution {
                 drain_order: ReadMode::ReadNextInOrder,
                 depth: Self::ORDERED_DEPTH,
+                borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
         }
     }
