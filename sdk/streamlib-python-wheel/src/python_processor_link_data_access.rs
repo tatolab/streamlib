@@ -23,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyBytes, PyDict, PyType};
+use pyo3::types::{PyDict, PyType};
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
@@ -1187,7 +1187,7 @@ fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::{PyDict, PyString};
+    use pyo3::types::{PyBytes, PyDict, PyString};
 
     /// Unique per test: every test in this process shares one iceoryx2 domain,
     /// so a fixed name would let one test's channel meet the next one's.
