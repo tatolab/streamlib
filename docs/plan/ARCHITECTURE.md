@@ -980,7 +980,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, linux-pool-slot-import-once, stream-clocks; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, stream-clocks; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1330,8 +1330,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pool's slot set to each processor interpreter once, which imports every slot once, and a
   per-pool claim table in shared memory replaces the per-frame socket check-out, its generation
   re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
-  Linux import-once ships first and on its own [linux-pool-slot-import-once — IN-FLIGHT]. Every descriptor, being a cross-language ABI,
-  carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
+  Linux import-once ships first and on its own (the entry below). Every descriptor, being a
+  cross-language ABI, carries a layout regression test. Owner, 2026-11-03. [strict-port-families]
+- **DECIDED** — On Linux a helper imports each pool slot once. It keeps one import per pool
+  slot key (the memory, and for a texture the rebuilt image and its joined timeline pair),
+  and a `check_out` of a published frame id whose slot it holds says so
+  (`holds_pool_slot_import: true`); the service records the lease and answers the frame's
+  metadata, `current_image_layout` included, with no fds. Every frame still takes and
+  releases its checkout lease, and the retired-frame refusal answers first, cached or not.
+  Only a published frame id (`<slot>#<generation>`) is cached; any other surface is imported
+  per check-out. Each connection remembers the pool slot keys it handed memory for, and the
+  next reply after one is unregistered lists it in `retired_pool_slots`; the helper drops
+  that import, and drops every import when its connection is replaced. A cached import is
+  never a claim: it pins nothing on the engine's side, dies with the helper, and the engine
+  rehands a slot by its leases alone. Rejected: a bounded helper cache, whose bound is a
+  guess, and never evicting, which leaks a pool's memory per rebuild (owner, 2026-11-03).
+  Measured on an RTX 3090 at 1080p: a frame's check-out to release fell from about 940 µs to
+  36 µs. [linux-pool-slot-import-once — SHIPPED #3151]
 - **OPEN** — Fan-out under zero copy: a borrow pins the producer's own slot, so readers of one
   output share its pool, and a slow reader that holds slots can starve a timely one. Direction
   (review, not decided): each link gets its own borrow quota and the pool is sized for the
@@ -1419,9 +1434,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   64 at once, and is then refused and given no port. **A killed holder's in-use answer clears
   promptly but asynchronously** — 100–400 µs after the reap under load — so a slot is skipped
   for one more acquire, never rehanded early. **A cached `IOSurfaceRef` does not pin a
-  slot**: the helper caches one import per pool slot, raises the use count only while it holds
-  a frame, and empties the cache when the service dies. **A Mach request has no response
-  timeout** (the Linux socket has 10 s); a pending request wakes when the service dies, never
+  slot**: the helper caches one import per pool slot, as a Linux helper does, raises the use
+  count only while it holds a frame, and empties the cache when the service dies. **A Mach
+  request has no response timeout** (the Linux socket has 10 s); a pending request wakes when the service dies, never
   on a timer. The capability-secure rendezvous, an unlisted `mach_ports_register` stash,
   needs helpers spawned by `posix_spawn`, which the spawn host's `pre_exec` closures prevent;
   that move is #2368, its own change with its own Linux proof.
