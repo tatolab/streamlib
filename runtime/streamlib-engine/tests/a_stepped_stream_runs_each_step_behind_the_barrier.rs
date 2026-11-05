@@ -4,7 +4,9 @@
 //! A stepped stream of native nodes runs behind its step barrier: a continuous
 //! source, a slow reactive middle and a sink run exactly the steps the clock
 //! names, faster than real time, every message stamped with its step's time and
-//! none dropped. A manual node is refused in a stepped stream unless it is
+//! none dropped. A scaled clock faster than real time runs behind the same
+//! barrier, paced at its scale, from its load or from a live rescale across
+//! 1×. A manual node is refused in a stream whose clock steps unless it is
 //! paced by real time, and a node paced by real time never holds a step.
 
 use std::path::Path;
@@ -180,6 +182,34 @@ fn load(
     )
 }
 
+fn wait_for_the_sink_to_take(ticks: usize, budget: Duration) {
+    let taken_by = Instant::now() + budget;
+    while TICKS_THE_SINK_TOOK.lock().len() < ticks {
+        assert!(
+            Instant::now() < taken_by,
+            "the sink took {} of {ticks} ticks within {budget:?}",
+            TICKS_THE_SINK_TOOK.lock().len()
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn a_tick_chain_on(clock: StreamClockSpec, stream: &str) -> serde_json::Value {
+    serde_json::json!({
+        "stream": stream,
+        "clock": serde_json::to_value(clock).expect("a clock spec serializes"),
+        "nodes": [
+            {"name": "source", "type": SteppedTickSource::processor_class_import_path().as_str()},
+            {"name": "relay", "type": SlowSteppedRelay::processor_class_import_path().as_str()},
+            {"name": "sink", "type": SteppedTickSink::processor_class_import_path().as_str()},
+        ],
+        "links": [
+            {"source": {"node": "source", "port": "ticks"}, "target": {"node": "relay", "port": "ticks"}},
+            {"source": {"node": "relay", "port": "relayed"}, "target": {"node": "sink", "port": "relayed"}},
+        ],
+    })
+}
+
 fn wait_for_the_stream_to_end(stream: &LoadedStreamInThisRuntime, budget: Duration) {
     let ends_by = Instant::now() + budget;
     while !stream.has_ended() {
@@ -325,7 +355,7 @@ fn a_node_that_paces_itself_fails_a_stepped_stream_naming_it() {
         .expect_err("a self-paced node never runs in a stepped stream")
         .to_string();
     assert!(
-        refusal.contains("`camera`") && refusal.contains("stepped stream"),
+        refusal.contains("`camera`") && refusal.contains("clock steps"),
         "the refusal names the node and why: {refusal}"
     );
     wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
@@ -438,4 +468,216 @@ fn nodes_paced_by_real_time_load_in_a_stepped_stream_and_never_hold_its_steps() 
         TICKS_THE_REAL_TIME_SINK_TOOK.load(Ordering::Relaxed) >= 1,
         "the tick of the node paced by real time reaches its sink"
     );
+}
+
+#[test]
+#[serial]
+fn a_stream_scaled_above_real_time_runs_its_steps_at_the_scale_stamped_on_each_step() {
+    register_the_test_nodes();
+    TICKS_THE_SINK_TOOK.lock().clear();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    const TICKS_TAKEN: usize = 24;
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        a_tick_chain_on(
+            StreamClockSpec::Scaled {
+                scale: 4.0,
+                step_ns: STEP_NS,
+            },
+            "four-times-real-time",
+        ),
+    )
+    .expect("a stream scaled above real time loads");
+    stream.start().expect("the stream starts");
+    let started = Instant::now();
+    wait_for_the_sink_to_take(TICKS_TAKEN, Duration::from_secs(30));
+    let ran_for = started.elapsed();
+    stream.stop().expect("the stream stops");
+
+    let ticks_the_sink_took = TICKS_THE_SINK_TOOK.lock().clone();
+    let first_stamp = ticks_the_sink_took[0].1;
+    for (index, (tick, stamp)) in ticks_the_sink_took.iter().enumerate() {
+        assert_eq!(
+            *tick, index as u64,
+            "every tick in order: {ticks_the_sink_took:?}"
+        );
+        assert_eq!(
+            stamp - first_stamp,
+            *tick as i64 * STEP_NS as i64,
+            "tick {tick} carries its step's time: {ticks_the_sink_took:?}"
+        );
+    }
+    let the_steps_at_four_times_real_time =
+        Duration::from_nanos(STEP_NS * (TICKS_TAKEN as u64 - 1) / 4);
+    let the_steps_in_real_time = Duration::from_nanos(STEP_NS * TICKS_TAKEN as u64);
+    assert!(
+        the_steps_at_four_times_real_time <= ran_for && ran_for < the_steps_in_real_time,
+        "{TICKS_TAKEN} steps at 4× took {ran_for:?}, outside \
+         {the_steps_at_four_times_real_time:?}..{the_steps_in_real_time:?}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_live_rescale_across_real_time_moves_a_running_stream_into_its_steps_and_out() {
+    register_the_test_nodes();
+    TICKS_THE_SINK_TOOK.lock().clear();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        a_tick_chain_on(
+            StreamClockSpec::Scaled {
+                scale: 0.5,
+                step_ns: STEP_NS,
+            },
+            "crosses-real-time",
+        ),
+    )
+    .expect("a stream at half real time loads");
+    stream.start().expect("the stream starts");
+    wait_for_the_sink_to_take(3, Duration::from_secs(30));
+
+    let stepping = stream
+        .set_stream_clock_scale(4.0)
+        .expect("a running scaled stream rescales above real time");
+    assert_eq!((stepping.mode, stepping.step_ns), ("scaled", Some(STEP_NS)));
+    let ticks_before_the_steps = TICKS_THE_SINK_TOOK.lock().len();
+    let stepping_from = Instant::now();
+    wait_for_the_sink_to_take(ticks_before_the_steps + 16, Duration::from_secs(30));
+    let sixteen_steps_took = stepping_from.elapsed();
+
+    let free = stream
+        .set_stream_clock_scale(0.5)
+        .expect("a stream in steps rescales back under real time");
+    assert_eq!((free.step_ns, free.step_index), (None, None));
+    let ticks_before_running_free = TICKS_THE_SINK_TOOK.lock().len();
+    wait_for_the_sink_to_take(ticks_before_running_free + 3, Duration::from_secs(30));
+    stream.stop().expect("the stream stops");
+
+    let ticks_the_sink_took = TICKS_THE_SINK_TOOK.lock().clone();
+    for (index, (tick, _)) in ticks_the_sink_took.iter().enumerate() {
+        assert_eq!(
+            *tick, index as u64,
+            "every tick in order: {ticks_the_sink_took:?}"
+        );
+    }
+    for pair in ticks_the_sink_took.windows(2) {
+        assert!(
+            pair[1].1 > pair[0].1,
+            "stream time never steps back across a rescale: {ticks_the_sink_took:?}"
+        );
+    }
+    for pair in
+        ticks_the_sink_took[ticks_before_the_steps + 1..ticks_before_running_free - 1].windows(2)
+    {
+        assert_eq!(
+            pair[1].1 - pair[0].1,
+            STEP_NS as i64,
+            "in steps every tick lands one step after the last: {ticks_the_sink_took:?}"
+        );
+    }
+    assert!(
+        sixteen_steps_took < Duration::from_nanos(STEP_NS * 16),
+        "16 steps at 4× took {sixteen_steps_took:?}, no faster than real time"
+    );
+}
+
+#[test]
+#[serial]
+fn a_scale_above_real_time_is_refused_naming_a_node_that_paces_itself() {
+    register_the_test_nodes();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "scaled-with-devices",
+            "clock": {"mode": "scaled", "scale": 0.5},
+            "nodes": [
+                {"name": "camera", "type": SelfPacedSource::processor_class_import_path().as_str()},
+                {"name": "live-camera", "type": RealTimePacedManualSource::processor_class_import_path().as_str()},
+            ],
+        }),
+    )
+    .expect("the stream loads");
+    stream.start().expect("the stream starts");
+    stream
+        .wait_until_every_processor_is_running(Duration::from_secs(10))
+        .expect("manual nodes run in a stream under real time");
+
+    let refusal = stream
+        .set_stream_clock_scale(2.0)
+        .expect_err("a node that paces itself keeps its stream under real time")
+        .to_string();
+    assert!(
+        refusal.contains("`camera`") && !refusal.contains("live-camera"),
+        "the refusal names the node that paces itself: {refusal}"
+    );
+    assert_eq!(stream.set_stream_clock_scale(0.75).unwrap().scale, 0.75);
+    stream.stop().expect("the stream stops");
+
+    let beside_real_time_only = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "scaled-beside-real-time",
+            "clock": {"mode": "scaled", "scale": 0.5},
+            "nodes": [
+                {"name": "live-camera", "type": RealTimePacedManualSource::processor_class_import_path().as_str()},
+            ],
+        }),
+    )
+    .expect("the stream loads");
+    beside_real_time_only.start().expect("the stream starts");
+    beside_real_time_only
+        .wait_until_every_processor_is_running(Duration::from_secs(10))
+        .expect("a manual node paced by real time runs");
+    assert_eq!(
+        beside_real_time_only
+            .set_stream_clock_scale(2.0)
+            .expect("a node paced by real time never holds a step")
+            .step_ns,
+        Some(16_666_667)
+    );
+    beside_real_time_only.stop().expect("the stream stops");
+}
+
+#[test]
+#[serial]
+fn a_node_that_paces_itself_fails_a_stream_scaled_above_real_time_naming_it() {
+    register_the_test_nodes();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "fast-with-a-device",
+            "clock": {"mode": "scaled", "scale": 2.0},
+            "nodes": [
+                {"name": "camera", "type": SelfPacedSource::processor_class_import_path().as_str()},
+            ],
+        }),
+    )
+    .expect("the stream loads");
+    stream.start().expect("the stream starts");
+
+    let refusal = stream
+        .wait_until_every_processor_is_running(Duration::from_secs(10))
+        .expect_err("a self-paced node never runs in a stream whose clock steps")
+        .to_string();
+    assert!(
+        refusal.contains("`camera`") && refusal.contains("clock steps"),
+        "the refusal names the node and why: {refusal}"
+    );
+    wait_for_the_stream_to_end(&stream, Duration::from_secs(30));
 }

@@ -1,14 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The step barrier of a stepped stream: one thread opens each step and
-//! closes it once every node finished it and nothing written in it is still in
-//! flight.
+//! The step barrier of a stream whose clock steps: one thread opens each step
+//! and closes it once every node finished it and nothing written in it is
+//! still in flight. A scaled clock is behind the barrier only while it runs
+//! faster than real time; the thread idles while it runs free.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::core::context::{StreamClock, StreamClockSpec};
 use crate::core::graph::{
@@ -16,6 +17,7 @@ use crate::core::graph::{
     LinkStateComponent, ProcessorMetrics, ProcessorPauseGateComponent, StateComponent,
     StepProgressOfOneNodeComponent, StepProgressReadingOfOneNode,
 };
+use crate::core::media_clock::MediaClock;
 use crate::core::processors::ProcessorState;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::{Error, Result};
@@ -27,6 +29,10 @@ const STEP_COORDINATOR_LEDGER_RECHECK: Duration = Duration::from_millis(5);
 /// Longest the coordinator waits for the stream's nodes to start before it
 /// looks for a stop or a failed node again.
 const STEP_COORDINATOR_START_RECHECK: Duration = Duration::from_millis(100);
+
+/// Longest the coordinator waits, while its clock runs free of the barrier or
+/// a paced step is not due, before it looks at the clock and for a stop again.
+const STEP_COORDINATOR_CLOCK_RECHECK: Duration = Duration::from_millis(50);
 
 /// One node's entry on a stream's step ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,40 +253,7 @@ impl StepLedgerLinkBaselines {
     }
 }
 
-/// The stepped clock a coordinator runs: how to pace its steps and when to stop.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct SteppedClockTheCoordinatorRuns {
-    pub(crate) step_ns: u64,
-    pub(crate) pace: Option<f64>,
-    pub(crate) stop_after_steps: Option<u64>,
-}
-
-impl SteppedClockTheCoordinatorRuns {
-    /// The stepped clock `spec` names; `None` for any other.
-    pub(crate) fn of(spec: StreamClockSpec) -> Option<Self> {
-        match spec {
-            StreamClockSpec::Stepped {
-                step_ns,
-                pace,
-                stop_after_steps,
-            } => Some(Self {
-                step_ns,
-                pace,
-                stop_after_steps,
-            }),
-            _ => None,
-        }
-    }
-
-    /// Machine nanoseconds after the first step opened that step
-    /// `step_index` opens, no earlier; `None` when unpaced.
-    pub(crate) fn machine_ns_from_the_first_step_to(&self, step_index: u64) -> Option<u64> {
-        let pace = self.pace?;
-        Some(((step_index as f64) * (self.step_ns as f64) / pace) as u64)
-    }
-}
-
-/// The thread running one stepped stream's step barrier.
+/// The thread running the step barrier of one stream whose clock is not real.
 pub(crate) struct StreamStepCoordinatorOfOneStream {
     stop_requested: crossbeam_channel::Sender<()>,
     thread: Option<JoinHandle<()>>,
@@ -298,14 +271,11 @@ impl StreamStepCoordinatorOfOneStream {
         stream: Weak<LoadedStreamInThisRuntime>,
         stream_id: &str,
         stream_clock: Arc<StreamClock>,
-        stepped_clock: SteppedClockTheCoordinatorRuns,
     ) -> Result<Self> {
         let (stop_requested, stop_request_arrival) = crossbeam_channel::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name(format!("stream-steps-{stream_id}"))
-            .spawn(move || {
-                run_the_step_barrier(&stream, &stream_clock, stepped_clock, &stop_request_arrival)
-            })
+            .spawn(move || run_the_step_barrier(&stream, &stream_clock, &stop_request_arrival))
             .map_err(|spawn_failure| {
                 Error::Runtime(format!(
                     "the step coordinator of the stream `{stream_id}` could not start: \
@@ -329,10 +299,17 @@ impl StreamStepCoordinatorOfOneStream {
     }
 }
 
+/// How the coordinator's watch over one open step ended.
+enum OpenStepWatchOutcome {
+    Closed,
+    /// The clock left the barrier, or the step is no longer the one open.
+    NoLongerOpen,
+    StopTheCoordinator,
+}
+
 fn run_the_step_barrier(
     stream: &Weak<LoadedStreamInThisRuntime>,
     stream_clock: &StreamClock,
-    stepped_clock: SteppedClockTheCoordinatorRuns,
     stop_request_arrival: &crossbeam_channel::Receiver<()>,
 ) {
     let a_stop_was_requested = || {
@@ -341,12 +318,13 @@ fn run_the_step_barrier(
             Err(crossbeam_channel::TryRecvError::Empty)
         )
     };
-    let read_the_ledger = || stream.upgrade().map(|stream| stream.step_ledger_reading());
     let ask_for_the_streams_shutdown = |reason: &str| {
         if let Some(stream) = stream.upgrade() {
             stream.ask_for_this_streams_shutdown(reason);
         }
     };
+    let mut baselines = StepLedgerLinkBaselines::default();
+    let mut progress_notes_seen = 0;
 
     loop {
         if a_stop_was_requested() {
@@ -355,65 +333,52 @@ fn run_the_step_barrier(
         let Some(stream_now) = stream.upgrade() else {
             return;
         };
-        if let Some(failed_node) = stream_now.step_ledger_reading().a_failed_node() {
-            ask_for_the_streams_shutdown(&format!(
-                "the node `{failed_node}` failed before the stream's first step opened"
-            ));
-            return;
-        }
-        if stream_now
-            .wait_until_every_processor_is_running(STEP_COORDINATOR_START_RECHECK)
-            .is_ok()
-        {
-            break;
-        }
-    }
-
-    let Some(first_reading) = read_the_ledger() else {
-        return;
-    };
-    let mut baselines = StepLedgerLinkBaselines::default();
-    baselines.follow_the_links_in(&first_reading);
-    let first_step_opened_at = Instant::now();
-    let mut step_index: u64 = 0;
-
-    loop {
-        stream_clock.open_step(step_index);
-        tracing::trace!("step {step_index} opened");
-
-        let mut progress_notes_seen = 0;
-        let mut previous_reading: Option<StepLedgerReading> = None;
-        loop {
-            if a_stop_was_requested() {
-                return;
+        let Some(step_index) = stream_clock.step_open_behind_the_barrier() else {
+            if !stream_clock.runs_behind_the_step_barrier() {
+                progress_notes_seen = stream_clock.wait_for_step_progress_after(
+                    progress_notes_seen,
+                    STEP_COORDINATOR_CLOCK_RECHECK,
+                );
+                continue;
             }
-            let Some(reading) = read_the_ledger() else {
-                return;
-            };
+            let reading = stream_now.step_ledger_reading();
             if let Some(failed_node) = reading.a_failed_node() {
                 ask_for_the_streams_shutdown(&format!(
-                    "the node `{failed_node}` failed while step {step_index} was open"
+                    "the node `{failed_node}` failed before the stream's next step opened"
                 ));
                 return;
             }
-            baselines.follow_the_links_in(&reading);
-            let closes = reading.lets_the_step_close(step_index, &baselines);
-            if closes && previous_reading.as_ref() == Some(&reading) {
-                break;
+            if stream_now
+                .wait_until_every_processor_is_running(STEP_COORDINATOR_START_RECHECK)
+                .is_ok()
+            {
+                baselines.follow_the_links_in(&stream_now.step_ledger_reading());
+                if let Some(opened) = stream_clock.open_the_waiting_step() {
+                    tracing::trace!("step {opened} opened");
+                }
             }
-            previous_reading = closes.then_some(reading);
-            if !closes {
-                progress_notes_seen = stream_clock.wait_for_step_progress_after(
-                    progress_notes_seen,
-                    STEP_COORDINATOR_LEDGER_RECHECK,
-                );
-            }
+            continue;
+        };
+        drop(stream_now);
+
+        match watch_the_open_step_until_it_closes(
+            stream,
+            stream_clock,
+            step_index,
+            &mut baselines,
+            &a_stop_was_requested,
+        ) {
+            OpenStepWatchOutcome::StopTheCoordinator => return,
+            OpenStepWatchOutcome::NoLongerOpen => continue,
+            OpenStepWatchOutcome::Closed => {}
         }
         tracing::trace!("step {step_index} closed");
 
-        if stepped_clock
-            .stop_after_steps
-            .is_some_and(|stop_after_steps| step_index.saturating_add(1) >= stop_after_steps)
+        if let StreamClockSpec::Stepped {
+            stop_after_steps: Some(stop_after_steps),
+            ..
+        } = stream_clock.spec()
+            && step_index.saturating_add(1) >= stop_after_steps
         {
             ask_for_the_streams_shutdown(&format!(
                 "its stepped clock stops after {} steps",
@@ -422,18 +387,72 @@ fn run_the_step_barrier(
             return;
         }
 
-        step_index = step_index.saturating_add(1);
-        if let Some(machine_ns_from_the_first_step) =
-            stepped_clock.machine_ns_from_the_first_step_to(step_index)
-        {
-            let opens_at =
-                first_step_opened_at + Duration::from_nanos(machine_ns_from_the_first_step);
+        loop {
+            if stream_clock.step_open_behind_the_barrier() != Some(step_index) {
+                break;
+            }
+            let Some(opens_at_ns) =
+                stream_clock.machine_time_ns_the_step_opens(step_index.saturating_add(1))
+            else {
+                break;
+            };
+            let machine_ns_to_go = opens_at_ns.saturating_sub(MediaClock::now().as_nanos() as i64);
+            if machine_ns_to_go <= 0 {
+                break;
+            }
+            let wait =
+                Duration::from_nanos(machine_ns_to_go as u64).min(STEP_COORDINATOR_CLOCK_RECHECK);
             if !matches!(
-                stop_request_arrival.recv_deadline(opens_at),
+                stop_request_arrival.recv_timeout(wait),
                 Err(crossbeam_channel::RecvTimeoutError::Timeout)
             ) {
                 return;
             }
+        }
+        if stream_clock.open_the_step_after(step_index) {
+            tracing::trace!("step {} opened", step_index.saturating_add(1));
+        }
+    }
+}
+
+/// Read the ledger until step `step_index` closes on two equal readings in a
+/// row, a node fails, or the step is no longer the one open.
+fn watch_the_open_step_until_it_closes(
+    stream: &Weak<LoadedStreamInThisRuntime>,
+    stream_clock: &StreamClock,
+    step_index: u64,
+    baselines: &mut StepLedgerLinkBaselines,
+    a_stop_was_requested: &impl Fn() -> bool,
+) -> OpenStepWatchOutcome {
+    let mut progress_notes_seen = 0;
+    let mut previous_reading: Option<StepLedgerReading> = None;
+    loop {
+        if a_stop_was_requested() {
+            return OpenStepWatchOutcome::StopTheCoordinator;
+        }
+        if stream_clock.step_open_behind_the_barrier() != Some(step_index) {
+            return OpenStepWatchOutcome::NoLongerOpen;
+        }
+        let Some(stream) = stream.upgrade() else {
+            return OpenStepWatchOutcome::StopTheCoordinator;
+        };
+        let reading = stream.step_ledger_reading();
+        if let Some(failed_node) = reading.a_failed_node() {
+            stream.ask_for_this_streams_shutdown(&format!(
+                "the node `{failed_node}` failed while step {step_index} was open"
+            ));
+            return OpenStepWatchOutcome::StopTheCoordinator;
+        }
+        drop(stream);
+        baselines.follow_the_links_in(&reading);
+        let closes = reading.lets_the_step_close(step_index, baselines);
+        if closes && previous_reading.as_ref() == Some(&reading) {
+            return OpenStepWatchOutcome::Closed;
+        }
+        previous_reading = closes.then_some(reading);
+        if !closes {
+            progress_notes_seen = stream_clock
+                .wait_for_step_progress_after(progress_notes_seen, STEP_COORDINATOR_LEDGER_RECHECK);
         }
     }
 }
@@ -624,23 +643,5 @@ mod tests {
             node.has_failed = true;
         }
         assert_eq!(reading.a_failed_node(), Some("node"));
-    }
-
-    #[test]
-    fn a_paced_step_opens_no_earlier_than_its_share_of_real_time() {
-        let paced_at_twice_real_time = SteppedClockTheCoordinatorRuns {
-            step_ns: 10_000_000,
-            pace: Some(2.0),
-            stop_after_steps: None,
-        };
-        assert_eq!(
-            paced_at_twice_real_time.machine_ns_from_the_first_step_to(4),
-            Some(20_000_000)
-        );
-        let unpaced = SteppedClockTheCoordinatorRuns {
-            pace: None,
-            ..paced_at_twice_real_time
-        };
-        assert_eq!(unpaced.machine_ns_from_the_first_step_to(4), None);
     }
 }

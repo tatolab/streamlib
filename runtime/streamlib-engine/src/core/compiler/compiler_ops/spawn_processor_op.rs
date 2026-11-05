@@ -382,15 +382,21 @@ fn spawn_dedicated_thread(
 
             if execution_the_node_runs_in == ProcessExecution::Manual
                 && !step_progress.stands_outside_the_step_barrier()
-                && runtime_ctx_clone.stream_clock.is_stepped()
             {
-                let refusal = format!(
-                    "the node `{processor_display_name}` paces itself (execution = manual), so it \
-                     cannot run in a stepped stream, whose steps every node runs on"
-                );
-                tracing::error!("[{}] {refusal}", proc_id_clone);
-                state_arc.fail_with(refusal);
-                return;
+                if runtime_ctx_clone
+                    .stream_clock
+                    .runs_behind_the_step_barrier()
+                {
+                    let refusal = format!(
+                        "the node `{processor_display_name}` paces itself (execution = manual), \
+                         so it cannot run in a stream whose clock steps (stepped, or scaled \
+                         above 1×), whose steps every node runs on"
+                    );
+                    tracing::error!("[{}] {refusal}", proc_id_clone);
+                    state_arc.fail_with(refusal);
+                    return;
+                }
+                step_progress.note_it_paces_its_own_callbacks();
             }
 
             if matches!(

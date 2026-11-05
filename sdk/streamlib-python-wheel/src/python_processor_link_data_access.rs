@@ -1523,7 +1523,7 @@ mod tests {
             helper.take_every_stream_clock_board_publish_noted();
             assert!(!is_readable_within(0));
 
-            clock.open_step(1);
+            assert_eq!(clock.open_the_waiting_step(), Some(0));
             assert!(is_readable_within(1_000));
             helper.take_every_stream_clock_board_publish_noted();
             assert!(!is_readable_within(0));

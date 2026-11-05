@@ -369,10 +369,7 @@ class StreamBuilder:
         self._exposed_output_ports[exposed_output_port] = level
 
     def run_on_clock(self, stream_clock: StreamClock) -> None:
-        """Run this stream on `stream_clock` instead of real time; called at most once.
-
-        The engine refuses a stepped clock, and a scaled clock above 1×, at load.
-        """
+        """Run this stream on `stream_clock` instead of real time; called at most once."""
         if not isinstance(
             stream_clock, (RealTimeStreamClock, ScaledStreamClock, SteppedStreamClock)
         ):

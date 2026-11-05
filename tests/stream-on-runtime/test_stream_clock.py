@@ -18,16 +18,20 @@ from conftest import TatolabdUnderTest
 from engine_media_clock import engine_media_clock_now_ns
 from stream_clock_processors import (
     CONTINUOUS_TICK_COUNTER_INTERVAL_MS,
+    CROSSING_TICK_COUNTER_INTERVAL_MS,
     REAL_TIME_PACED_MESSAGES_REPORTED,
     REAL_TIME_PACED_WRITER_INTERVAL_MS,
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,
 )
 from stream_clock_streams import (
+    FAST_FORWARD_SCALE,
     SLOW_MOTION_SCALE,
+    continuous_ticks_crossing_real_time,
     continuous_ticks_in_slow_motion,
     real_time_writes_beside_steps,
     step_times_through_a_slow_relay,
+    step_times_through_a_slow_relay_in_fast_forward,
     stream_times_in_real_time,
     stream_times_in_slow_motion,
 )
@@ -112,18 +116,22 @@ LIVE_RESCALED_SCALE = 0.25
 TICK_INTERVAL_TOLERANCE = 0.25
 
 
-def assert_ticks_paced_on_stream_time(reported: "dict[str, Any]", scale: float) -> None:
+def assert_ticks_paced_on_stream_time(
+    reported: "dict[str, Any]",
+    scale: float,
+    interval_ms: int = CONTINUOUS_TICK_COUNTER_INTERVAL_MS,
+) -> None:
     assert reported["scale"] == scale, reported
-    interval_ns = CONTINUOUS_TICK_COUNTER_INTERVAL_MS * 1_000_000
+    interval_ns = interval_ms * 1_000_000
     stream_interval_ns = reported["stream_elapsed_ns"] / reported["ticks"]
     machine_interval_ns = reported["machine_elapsed_ns"] / reported["ticks"]
     assert abs(stream_interval_ns / interval_ns - 1) < TICK_INTERVAL_TOLERANCE, (
         f"at {scale}× a tick took {stream_interval_ns / 1e6:.2f} stream ms, not "
-        f"{CONTINUOUS_TICK_COUNTER_INTERVAL_MS}: {reported}"
+        f"{interval_ms}: {reported}"
     )
     assert abs(machine_interval_ns * scale / interval_ns - 1) < TICK_INTERVAL_TOLERANCE, (
         f"at {scale}× a tick took {machine_interval_ns / 1e6:.2f} machine ms, not "
-        f"{CONTINUOUS_TICK_COUNTER_INTERVAL_MS / scale}: {reported}"
+        f"{interval_ms / scale}: {reported}"
     )
 
 
@@ -195,6 +203,70 @@ def test_a_stepped_stream_runs_each_step_through_helpers_faster_than_real_time(
         f"{STEPPED_STREAM_STEPS} unpaced steps of {STEPPED_STREAM_STEP_MS} ms took "
         f"{reported['machine_elapsed_ns'] / 1e6:.0f} machine ms"
     )
+
+
+def test_a_stream_scaled_above_real_time_runs_each_step_through_helpers_paced_at_its_scale(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(step_times_through_a_slow_relay_in_fast_forward)
+    reported = tatolabd.await_marker("STEPPED_STREAM_RUN", timeout=REPORT_TIMEOUT_SECONDS)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    seen = reported["seen"]
+    step_ns = STEPPED_STREAM_STEP_MS * 1_000_000
+    base_ns = seen[0]["written_stream_time_ns"] - seen[0]["step_index"] * step_ns
+    assert [message["step_index"] for message in seen] == list(range(STEPPED_STREAM_STEPS)), seen
+    for message in seen:
+        step_time_ns = base_ns + message["step_index"] * step_ns
+        assert message["written_stream_time_ns"] == step_time_ns, message
+        assert message["relay_stream_time_ns"] == step_time_ns, (
+            f"the step stays open while the slow relay holds its message: {message}"
+        )
+        assert message["stamp_ns"] == step_time_ns, message
+        assert message["lost_since_last_read"] == 0, message
+    paced_ns = (STEPPED_STREAM_STEPS - 1) * step_ns / FAST_FORWARD_SCALE
+    real_time_ns = STEPPED_STREAM_STEPS * step_ns
+    assert paced_ns <= reported["machine_elapsed_ns"] < real_time_ns, (
+        f"{STEPPED_STREAM_STEPS} steps of {STEPPED_STREAM_STEP_MS} ms at {FAST_FORWARD_SCALE}× took "
+        f"{reported['machine_elapsed_ns'] / 1e6:.0f} machine ms"
+    )
+
+
+def test_a_live_rescale_across_real_time_moves_a_helpers_continuous_node_into_steps_and_out(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(continuous_ticks_crossing_real_time)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+
+    below_real_time = tatolabd.await_marker(
+        "CONTINUOUS_TICKS_AT_SCALE_0", timeout=REPORT_TIMEOUT_SECONDS
+    )
+    into_steps = tatolabd.local_api_client().call_tool(
+        "set_stream_clock_scale", {"stream": stream_id, "scale": FAST_FORWARD_SCALE}
+    )
+    in_steps = tatolabd.await_marker("CONTINUOUS_TICKS_AT_SCALE_1", timeout=REPORT_TIMEOUT_SECONDS)
+    out_of_steps = tatolabd.local_api_client().call_tool(
+        "set_stream_clock_scale", {"stream": stream_id, "scale": SLOW_MOTION_SCALE}
+    )
+    below_again = tatolabd.await_marker(
+        "CONTINUOUS_TICKS_AT_SCALE_2", timeout=REPORT_TIMEOUT_SECONDS
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert into_steps == {"stream": stream_id, "scale": FAST_FORWARD_SCALE}
+    assert out_of_steps == {"stream": stream_id, "scale": SLOW_MOTION_SCALE}
+    for reported, scale in (
+        (below_real_time, SLOW_MOTION_SCALE),
+        (in_steps, FAST_FORWARD_SCALE),
+        (below_again, SLOW_MOTION_SCALE),
+    ):
+        assert_ticks_paced_on_stream_time(reported, scale, CROSSING_TICK_COUNTER_INTERVAL_MS)
+    assert in_steps["stream_elapsed_ns"] == in_steps["ticks"] * CROSSING_TICK_COUNTER_INTERVAL_MS * 1_000_000, (
+        f"in steps of its interval, every tick lands one step after the last: {in_steps}"
+    )
+    assert below_again["stream_time_went_backwards"] is False, below_again
 
 
 def test_a_node_paced_by_real_time_writes_on_the_machine_clock_beside_steps_it_never_holds(

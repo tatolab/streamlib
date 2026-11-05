@@ -3,6 +3,7 @@
 
 //! The clock one stream runs on, and the spec a graph names it by.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex, RwLock};
@@ -88,13 +89,6 @@ impl StreamClockSpec {
                          step is greater than zero"
                     )));
                 }
-                if scale > 1.0 {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a scaled clock at {scale}×; faster than \
-                         real time runs behind the step barrier, which this runtime does not \
-                         run yet. Use a scale of at most 1"
-                    )));
-                }
                 Ok(())
             }
             Self::Stepped {
@@ -141,6 +135,16 @@ pub struct StreamClockReading {
     pub step_index: Option<u64>,
 }
 
+/// Whether a published clock advances one step at a time behind the step
+/// barrier: a stepped clock, or a scaled one faster than real time.
+pub fn a_published_clock_runs_behind_the_step_barrier(published: &StreamClockBoardEntry) -> bool {
+    match published.mode {
+        STREAM_CLOCK_BOARD_MODE_STEPPED => true,
+        STREAM_CLOCK_BOARD_MODE_SCALED => f64::from_bits(published.scale_f64_bits) > 1.0,
+        _ => false,
+    }
+}
+
 /// Stream time on a published clock, at machine monotonic time `machine_now_ns`.
 ///
 /// The one arithmetic the engine and every helper share, so a stamp taken in
@@ -149,6 +153,11 @@ pub fn stream_time_ns_on_a_published_clock(
     published: &StreamClockBoardEntry,
     machine_now_ns: i64,
 ) -> i64 {
+    if a_published_clock_runs_behind_the_step_barrier(published) {
+        return published
+            .base_ns
+            .saturating_add(stream_ns_of_steps(published.step_index, published.step_ns));
+    }
     match published.mode {
         STREAM_CLOCK_BOARD_MODE_SCALED => {
             let scale = f64::from_bits(published.scale_f64_bits);
@@ -157,14 +166,32 @@ pub fn stream_time_ns_on_a_published_clock(
                 .base_ns
                 .saturating_add((machine_elapsed_ns as f64 * scale) as i64)
         }
-        STREAM_CLOCK_BOARD_MODE_STEPPED => published.base_ns.saturating_add(
-            published
-                .step_index
-                .saturating_mul(published.step_ns)
-                .min(i64::MAX as u64) as i64,
-        ),
         _ => machine_now_ns,
     }
+}
+
+/// The multiple of real time a published clock's steps open at; `None` when
+/// they open as fast as the barrier closes them, or the clock does not step.
+fn pace_of_a_published_clocks_steps(published: &StreamClockBoardEntry) -> Option<f64> {
+    match published.mode {
+        STREAM_CLOCK_BOARD_MODE_STEPPED if published.pace_f64_bits != 0 => {
+            Some(f64::from_bits(published.pace_f64_bits))
+        }
+        STREAM_CLOCK_BOARD_MODE_SCALED
+            if a_published_clock_runs_behind_the_step_barrier(published) =>
+        {
+            Some(f64::from_bits(published.scale_f64_bits))
+        }
+        _ => None,
+    }
+}
+
+fn stream_ns_of_steps(step_count: u64, step_ns: u64) -> i64 {
+    step_count.saturating_mul(step_ns).min(i64::MAX as u64) as i64
+}
+
+fn machine_ns_of_steps_paced_at(step_count: u64, step_ns: u64, pace: f64) -> i64 {
+    ((step_count as f64) * (step_ns as f64) / pace) as i64
 }
 
 /// The machine monotonic time at which `published` reaches stream time
@@ -199,13 +226,32 @@ pub struct StreamClock {
     runs_on_the_machine_clock: bool,
     published: RwLock<StreamClockBoardEntry>,
     board_read_by_helpers: Option<StreamClockBoard>,
-    /// How many steps have opened; step `k` is open once this is `k + 1`.
-    steps_opened: Mutex<u64>,
+    /// Mirrors [`a_published_clock_runs_behind_the_step_barrier`] on
+    /// `published`, read without its lock.
+    runs_behind_the_step_barrier: AtomicBool,
+    step_barrier_position: Mutex<StepBarrierPosition>,
     a_step_opened: Condvar,
     /// How many times a node noted progress on its step, so the step
     /// coordinator wakes for it.
     step_progress_notes: Mutex<u64>,
     a_node_noted_step_progress: Condvar,
+}
+
+/// Where a clock stands behind the step barrier, as its runners wait on it.
+#[derive(Debug, Clone, Copy, Default)]
+struct StepBarrierPosition {
+    /// How many steps have opened; the next to open is this one.
+    steps_opened: u64,
+    /// The step open now; `None` before one opens and while the clock runs
+    /// free of the barrier.
+    step_open_now: Option<u64>,
+}
+
+impl StepBarrierPosition {
+    fn holds_a_step_opened_after(&self, after: Option<u64>) -> Option<u64> {
+        self.step_open_now
+            .filter(|step_open_now| after.is_none_or(|after| *step_open_now > after))
+    }
 }
 
 impl std::fmt::Debug for StreamClock {
@@ -262,9 +308,12 @@ impl StreamClock {
         Self {
             spec: RwLock::new(spec),
             runs_on_the_machine_clock: spec.is_real(),
+            runs_behind_the_step_barrier: AtomicBool::new(
+                a_published_clock_runs_behind_the_step_barrier(&published),
+            ),
             published: RwLock::new(published),
             board_read_by_helpers: None,
-            steps_opened: Mutex::new(0),
+            step_barrier_position: Mutex::new(StepBarrierPosition::default()),
             a_step_opened: Condvar::new(),
             step_progress_notes: Mutex::new(0),
             a_node_noted_step_progress: Condvar::new(),
@@ -296,6 +345,10 @@ impl StreamClock {
     /// Run a scaled clock at `scale` from now on, publishing it to the
     /// stream's helpers; stream time carries on from where it stands.
     ///
+    /// Crossing 1× moves the clock behind the step barrier or out of it: above
+    /// 1× it runs in steps of its `step_ns`, paced at the scale, and the next
+    /// step waits for the stream's step coordinator to open it.
+    ///
     /// Refuses a real or stepped clock and a scale this runtime does not run,
     /// naming `stream_id`.
     pub fn rescale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {
@@ -319,18 +372,66 @@ impl StreamClock {
         };
         let rescaled_spec = StreamClockSpec::Scaled { scale, step_ns };
         rescaled_spec.refusal_unless_this_runtime_runs_it(stream_id)?;
-        let mut published = self.published.write();
-        let rescaled = StreamClockBoardEntry {
-            base_ns: stream_time_ns_on_a_published_clock(&published, machine_now_ns),
-            anchor_ns: machine_now_ns,
-            scale_f64_bits: scale.to_bits(),
-            ..*published
+        let rescaled = {
+            let mut published = self.published.write();
+            let mut position = self.step_barrier_position.lock();
+            let stream_now_ns = stream_time_ns_on_a_published_clock(&published, machine_now_ns);
+            let goes_behind_the_step_barrier = scale > 1.0;
+            let rescaled = match (
+                a_published_clock_runs_behind_the_step_barrier(&published),
+                goes_behind_the_step_barrier,
+            ) {
+                (false, false) => StreamClockBoardEntry {
+                    base_ns: stream_now_ns,
+                    anchor_ns: machine_now_ns,
+                    scale_f64_bits: scale.to_bits(),
+                    ..*published
+                },
+                (false, true) => {
+                    let next_step = position.steps_opened;
+                    StreamClockBoardEntry {
+                        base_ns: stream_now_ns
+                            .saturating_sub(stream_ns_of_steps(next_step, step_ns)),
+                        anchor_ns: machine_now_ns.saturating_sub(machine_ns_of_steps_paced_at(
+                            next_step, step_ns, scale,
+                        )),
+                        step_index: next_step,
+                        a_step_is_open: 0,
+                        scale_f64_bits: scale.to_bits(),
+                        ..*published
+                    }
+                }
+                (true, true) => StreamClockBoardEntry {
+                    anchor_ns: machine_now_ns.saturating_sub(machine_ns_of_steps_paced_at(
+                        published.step_index,
+                        step_ns,
+                        scale,
+                    )),
+                    scale_f64_bits: scale.to_bits(),
+                    ..*published
+                },
+                (true, false) => {
+                    position.step_open_now = None;
+                    StreamClockBoardEntry {
+                        base_ns: stream_now_ns,
+                        anchor_ns: machine_now_ns,
+                        a_step_is_open: 0,
+                        scale_f64_bits: scale.to_bits(),
+                        ..*published
+                    }
+                }
+            };
+            if let Some(board) = &self.board_read_by_helpers {
+                board.publish(rescaled);
+            }
+            *published = rescaled;
+            self.runs_behind_the_step_barrier
+                .store(goes_behind_the_step_barrier, Ordering::Release);
+            *spec = rescaled_spec;
+            rescaled
         };
-        if let Some(board) = &self.board_read_by_helpers {
-            board.publish(rescaled);
-        }
-        *published = rescaled;
-        *spec = rescaled_spec;
+        self.a_step_opened.notify_all();
+        self.note_step_progress();
         Ok(stream_clock_reading_of_a_published_clock(&rescaled))
     }
 
@@ -369,50 +470,121 @@ impl StreamClock {
         *self.published.read()
     }
 
-    /// Whether this clock advances in steps.
-    pub fn is_stepped(&self) -> bool {
-        matches!(*self.spec.read(), StreamClockSpec::Stepped { .. })
+    /// Whether this clock advances one step at a time behind the step
+    /// barrier now: a stepped clock, or a scaled one faster than real time.
+    pub fn runs_behind_the_step_barrier(&self) -> bool {
+        self.runs_behind_the_step_barrier.load(Ordering::Acquire)
     }
 
-    /// Open step `step_index` of a stepped clock: stream time moves to
-    /// `base + step_index × step_ns`, the stream's helpers read it off the
-    /// board, and every runner waiting on a step wakes.
-    pub fn open_step(&self, step_index: u64) {
+    /// Open the step a clock behind the step barrier waits on: stream time
+    /// moves to it, the stream's helpers read it off the board, and every
+    /// runner waiting on a step wakes. Its steps from here on are paced from
+    /// now. `None`, opening nothing, when the clock runs free of the barrier
+    /// or a step is open already.
+    pub fn open_the_waiting_step(&self) -> Option<u64> {
+        self.open_the_waiting_step_at(machine_monotonic_now_ns())
+    }
+
+    /// [`Self::open_the_waiting_step`] at machine monotonic `machine_now_ns`.
+    pub fn open_the_waiting_step_at(&self, machine_now_ns: i64) -> Option<u64> {
+        let opened =
+            {
+                let mut published = self.published.write();
+                if !a_published_clock_runs_behind_the_step_barrier(&published)
+                    || published.a_step_is_open != 0
+                {
+                    return None;
+                }
+                let waiting_step = published.step_index;
+                if let Some(pace) = pace_of_a_published_clocks_steps(&published) {
+                    published.anchor_ns = machine_now_ns.saturating_sub(
+                        machine_ns_of_steps_paced_at(waiting_step, published.step_ns, pace),
+                    );
+                }
+                published.a_step_is_open = 1;
+                self.publish_and_note_the_open_step(&published);
+                waiting_step
+            };
+        self.a_step_opened.notify_all();
+        Some(opened)
+    }
+
+    /// Open the step after `step_index`, when `step_index` is the step open
+    /// behind the barrier now; `false`, opening nothing, otherwise.
+    pub fn open_the_step_after(&self, step_index: u64) -> bool {
         {
             let mut published = self.published.write();
-            published.step_index = step_index;
-            published.a_step_is_open = 1;
-            if let Some(board) = &self.board_read_by_helpers {
-                board.publish(*published);
+            if !a_published_clock_runs_behind_the_step_barrier(&published)
+                || published.a_step_is_open == 0
+                || published.step_index != step_index
+            {
+                return false;
             }
+            published.step_index = step_index.saturating_add(1);
+            self.publish_and_note_the_open_step(&published);
         }
-        *self.steps_opened.lock() = step_index.saturating_add(1);
         self.a_step_opened.notify_all();
+        true
     }
 
-    /// The step open now; `None` before the first opens.
-    pub fn step_open_now(&self) -> Option<u64> {
-        self.steps_opened.lock().checked_sub(1)
+    fn publish_and_note_the_open_step(&self, published: &StreamClockBoardEntry) {
+        if let Some(board) = &self.board_read_by_helpers {
+            board.publish(*published);
+        }
+        let mut position = self.step_barrier_position.lock();
+        position.steps_opened = published.step_index.saturating_add(1);
+        position.step_open_now = Some(published.step_index);
+    }
+
+    /// The step open behind the barrier now; `None` while none is, or the
+    /// clock runs free of the barrier.
+    pub fn step_open_behind_the_barrier(&self) -> Option<u64> {
+        let published = self.published.read();
+        (a_published_clock_runs_behind_the_step_barrier(&published)
+            && published.a_step_is_open != 0)
+            .then_some(published.step_index)
+    }
+
+    /// The machine monotonic time at which step `step_index` opens, no
+    /// earlier, as the clock is paced now; `None` when its steps are unpaced
+    /// or it runs free of the barrier.
+    pub fn machine_time_ns_the_step_opens(&self, step_index: u64) -> Option<i64> {
+        let published = self.published.read();
+        let pace = pace_of_a_published_clocks_steps(&published)?;
+        Some(
+            published
+                .anchor_ns
+                .saturating_add(machine_ns_of_steps_paced_at(
+                    step_index,
+                    published.step_ns,
+                    pace,
+                )),
+        )
     }
 
     /// The step open once one later than `after` is, waiting up to
-    /// `longest_wait` for it; `None` when none opened in that time. With
-    /// `after` absent, any open step will do.
+    /// `longest_wait` for it; `None` when none opened in that time, or the
+    /// clock runs free of the barrier. With `after` absent, any open step will
+    /// do.
     pub fn wait_for_a_step_opened_after(
         &self,
         after: Option<u64>,
         longest_wait: Duration,
     ) -> Option<u64> {
-        let steps_opened_before_the_wait = after.map_or(0, |after| after.saturating_add(1));
-        let mut steps_opened = self.steps_opened.lock();
-        if *steps_opened <= steps_opened_before_the_wait {
+        let mut position = self.step_barrier_position.lock();
+        if position.holds_a_step_opened_after(after).is_none()
+            && self.runs_behind_the_step_barrier()
+        {
             let _ = self.a_step_opened.wait_while_for(
-                &mut steps_opened,
-                |steps_opened| *steps_opened <= steps_opened_before_the_wait,
+                &mut position,
+                |position| {
+                    position.holds_a_step_opened_after(after).is_none()
+                        && self.runs_behind_the_step_barrier()
+                },
                 longest_wait,
             );
         }
-        (*steps_opened > steps_opened_before_the_wait).then(|| *steps_opened - 1)
+        position.holds_a_step_opened_after(after)
     }
 
     /// Wake the step coordinator: a node's callback started or finished, or it
@@ -442,12 +614,16 @@ pub fn stream_clock_reading_of_a_published_clock(
     published: &StreamClockBoardEntry,
 ) -> StreamClockReading {
     match published.mode {
-        STREAM_CLOCK_BOARD_MODE_SCALED => StreamClockReading {
-            mode: "scaled",
-            scale: f64::from_bits(published.scale_f64_bits),
-            step_ns: None,
-            step_index: None,
-        },
+        STREAM_CLOCK_BOARD_MODE_SCALED => {
+            let steps = a_published_clock_runs_behind_the_step_barrier(published);
+            StreamClockReading {
+                mode: "scaled",
+                scale: f64::from_bits(published.scale_f64_bits),
+                step_ns: steps.then_some(published.step_ns),
+                step_index: (steps && published.a_step_is_open != 0)
+                    .then_some(published.step_index),
+            }
+        }
         STREAM_CLOCK_BOARD_MODE_STEPPED => StreamClockReading {
             mode: "stepped",
             scale: 1.0,
@@ -554,7 +730,7 @@ mod tests {
             stream_clock_reading_of_a_published_clock(&stream_clock.published()).step_index,
             None
         );
-        stream_clock.open_step(0);
+        assert_eq!(stream_clock.open_the_waiting_step_at(7_000), Some(0));
         assert_eq!(
             stream_clock_reading_of_a_published_clock(&stream_clock.published()).step_index,
             Some(0)
@@ -617,13 +793,6 @@ mod tests {
             .contains("finite")
         );
         assert!(
-            refusal(StreamClockSpec::Scaled {
-                scale: 2.0,
-                step_ns: 1
-            })
-            .contains("step barrier")
-        );
-        assert!(
             refusal(StreamClockSpec::Stepped {
                 step_ns: 0,
                 pace: None,
@@ -659,6 +828,12 @@ mod tests {
             .unwrap();
         StreamClockSpec::Scaled {
             scale: 1.0,
+            step_ns: 1,
+        }
+        .refusal_unless_this_runtime_runs_it("rig")
+        .unwrap();
+        StreamClockSpec::Scaled {
+            scale: 8.0,
             step_ns: 1,
         }
         .refusal_unless_this_runtime_runs_it("rig")
@@ -705,7 +880,7 @@ mod tests {
         );
 
         let scaled = a_half_speed_clock_started_at(0);
-        for refused_scale in [0.0, -1.0, f64::NAN, 2.0] {
+        for refused_scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert!(scaled.rescale_at("warped", refused_scale, 10).is_err());
         }
         assert_eq!(scaled.reading().scale, 0.5);
@@ -723,5 +898,119 @@ mod tests {
 
         let real = StreamClock::starting_at(StreamClockSpec::Real, 0);
         assert_eq!(real.machine_time_ns_reaching(700, 500), 700);
+    }
+
+    fn a_clock_at_four_times_real_time_started_at(machine_now_ns: i64) -> StreamClock {
+        StreamClock::starting_at(
+            StreamClockSpec::Scaled {
+                scale: 4.0,
+                step_ns: 100,
+            },
+            machine_now_ns,
+        )
+    }
+
+    #[test]
+    fn a_scaled_clock_above_real_time_runs_in_steps_paced_at_its_scale() {
+        let clock = a_clock_at_four_times_real_time_started_at(1_000);
+        assert!(clock.runs_behind_the_step_barrier());
+        assert_eq!(clock.stream_time_ns_at(9_000), 1_000);
+        assert_eq!(clock.reading().step_ns, Some(100));
+        assert_eq!(clock.reading().step_index, None);
+        assert_eq!(clock.step_open_behind_the_barrier(), None);
+
+        assert_eq!(clock.open_the_waiting_step_at(5_000), Some(0));
+        assert_eq!(clock.open_the_waiting_step_at(5_000), None);
+        assert_eq!(clock.stream_time_ns_at(9_000), 1_000);
+        assert!(clock.open_the_step_after(0));
+        assert!(!clock.open_the_step_after(0));
+        assert_eq!(clock.stream_time_ns_at(9_000), 1_100);
+        assert_eq!(clock.reading().step_index, Some(1));
+        assert_eq!(clock.step_open_behind_the_barrier(), Some(1));
+        assert_eq!(clock.machine_time_ns_the_step_opens(2), Some(5_050));
+        assert_eq!(
+            clock.wait_for_a_step_opened_after(Some(0), Duration::ZERO),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn crossing_real_time_live_moves_the_clock_in_and_out_of_steps_at_its_stream_time() {
+        let clock = StreamClock::starting_at(
+            StreamClockSpec::Scaled {
+                scale: 0.5,
+                step_ns: 100,
+            },
+            1_000,
+        );
+        assert!(!clock.runs_behind_the_step_barrier());
+        assert_eq!(clock.machine_time_ns_the_step_opens(0), None);
+
+        let reading = clock.rescale_at("warped", 4.0, 3_000).unwrap();
+        assert_eq!(reading.step_ns, Some(100));
+        assert!(clock.runs_behind_the_step_barrier());
+        assert_eq!(clock.stream_time_ns_at(3_000), 2_000);
+        assert_eq!(clock.stream_time_ns_at(90_000), 2_000);
+        assert_eq!(clock.open_the_waiting_step_at(3_000), Some(0));
+        assert!(clock.open_the_step_after(0));
+        assert_eq!(clock.stream_time_ns_at(3_000), 2_100);
+        assert_eq!(clock.machine_time_ns_the_step_opens(2), Some(3_050));
+
+        let reading = clock.rescale_at("warped", 0.5, 4_000).unwrap();
+        assert_eq!((reading.step_ns, reading.step_index), (None, None));
+        assert!(!clock.runs_behind_the_step_barrier());
+        assert_eq!(clock.stream_time_ns_at(4_000), 2_100);
+        assert_eq!(clock.stream_time_ns_at(6_000), 3_100);
+        assert_eq!(clock.step_open_behind_the_barrier(), None);
+        assert!(!clock.open_the_step_after(1));
+        assert_eq!(clock.open_the_waiting_step_at(6_000), None);
+        assert_eq!(
+            clock.wait_for_a_step_opened_after(Some(1), Duration::from_secs(5)),
+            None
+        );
+
+        clock.rescale_at("warped", 2.0, 6_000).unwrap();
+        assert_eq!(clock.stream_time_ns_at(6_000), 3_100);
+        assert_eq!(clock.open_the_waiting_step_at(6_000), Some(2));
+        assert_eq!(clock.stream_time_ns_at(6_000), 3_100);
+        assert!(clock.open_the_step_after(2));
+        assert_eq!(clock.stream_time_ns_at(6_000), 3_200);
+    }
+
+    #[test]
+    fn a_rescale_above_real_time_keeps_the_open_step_and_paces_the_next_at_the_new_scale() {
+        let clock = a_clock_at_four_times_real_time_started_at(0);
+        assert_eq!(clock.open_the_waiting_step_at(0), Some(0));
+        assert!(clock.open_the_step_after(0));
+        clock.rescale_at("warped", 2.0, 1_000).unwrap();
+        assert_eq!(clock.step_open_behind_the_barrier(), Some(1));
+        assert_eq!(clock.stream_time_ns_at(1_000), 100);
+        assert_eq!(clock.machine_time_ns_the_step_opens(2), Some(1_050));
+    }
+
+    #[test]
+    fn a_paced_stepped_clocks_steps_open_no_earlier_than_their_share_of_real_time() {
+        let stepped_at = |pace: Option<f64>| {
+            StreamClock::starting_at(
+                StreamClockSpec::Stepped {
+                    step_ns: 10_000_000,
+                    pace,
+                    stop_after_steps: None,
+                },
+                0,
+            )
+        };
+        let paced_at_twice_real_time = stepped_at(Some(2.0));
+        assert_eq!(
+            paced_at_twice_real_time.open_the_waiting_step_at(1_000),
+            Some(0)
+        );
+        assert_eq!(
+            paced_at_twice_real_time.machine_time_ns_the_step_opens(4),
+            Some(20_001_000)
+        );
+        let unpaced = stepped_at(None);
+        assert_eq!(unpaced.open_the_waiting_step_at(1_000), Some(0));
+        assert_eq!(unpaced.machine_time_ns_the_step_opens(4), None);
     }
 }

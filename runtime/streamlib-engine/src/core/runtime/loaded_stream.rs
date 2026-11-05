@@ -15,9 +15,7 @@ use super::graph_change_listener::GraphChangeListener;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
 use super::stream_actions_of_this_runtime::LoadedStreamHolding;
-use super::stream_step_coordinator::{
-    StepLedgerReading, SteppedClockTheCoordinatorRuns, StreamStepCoordinatorOfOneStream,
-};
+use super::stream_step_coordinator::{StepLedgerReading, StreamStepCoordinatorOfOneStream};
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
     ShutdownEscalationOfOneStream, StreamEnvironment, StreamLocation,
@@ -32,7 +30,8 @@ use crate::core::context::{
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
-    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
+    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, StepProgressOfOneNodeComponent,
+    cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
@@ -442,7 +441,9 @@ impl LoadedStreamInThisRuntime {
     /// declared, which the next start runs.
     ///
     /// Refused naming the stream when it is not started, its clock is real or
-    /// stepped, or `scale` is one this runtime does not run.
+    /// stepped, or `scale` is one this runtime does not run; and a scale above
+    /// 1, which runs the clock in steps, naming a node that runs its own
+    /// callbacks when the stream holds one.
     pub fn set_stream_clock_scale(&self, scale: f64) -> Result<StreamClockReading> {
         let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() else {
             return Err(Error::Runtime(format!(
@@ -450,6 +451,17 @@ impl LoadedStreamInThisRuntime {
                 self.stream_id()
             )));
         };
+        if scale > 1.0
+            && let Some(node_that_paces_its_own_callbacks) =
+                self.a_node_that_paces_its_own_callbacks()
+        {
+            return Err(Error::GraphError(format!(
+                "the stream `{}` cannot run its clock at {scale}×: above 1× the clock runs in \
+                 steps every node runs on, and the node `{node_that_paces_its_own_callbacks}` \
+                 paces itself (execution = manual)",
+                self.stream_id()
+            )));
+        }
         let rescaled = this_streams_runtime_context
             .stream_clock
             .rescale(self.stream_id(), scale)?;
@@ -458,6 +470,22 @@ impl LoadedStreamInThisRuntime {
             self.stream_id()
         );
         Ok(rescaled)
+    }
+
+    /// The display name of a node in this stream that runs its own callbacks
+    /// inside the step barrier, when one does.
+    fn a_node_that_paces_its_own_callbacks(&self) -> Option<String> {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .find(|node| {
+                    node.get::<StepProgressOfOneNodeComponent>()
+                        .is_some_and(|step_progress| step_progress.0.paces_its_own_callbacks())
+                })
+                .map(|node| node.display_name.clone())
+        })
     }
 
     /// This stream's step ledger as it stands: each node's step progress and
@@ -537,9 +565,7 @@ impl LoadedStreamInThisRuntime {
         tracing::info!("[start] Committing pending graph operations");
         self.compiler.commit(&this_streams_runtime_context)?;
 
-        if let Some(stepped_clock) =
-            SteppedClockTheCoordinatorRuns::of(this_streams_runtime_context.stream_clock.spec())
-        {
+        if !this_streams_runtime_context.stream_clock.spec().is_real() {
             let earlier_step_coordinator = self.step_coordinator.lock().take();
             if let Some(earlier_step_coordinator) = earlier_step_coordinator {
                 earlier_step_coordinator.stop();
@@ -548,7 +574,6 @@ impl LoadedStreamInThisRuntime {
                 Weak::clone(&self.this_stream),
                 self.stream_id(),
                 Arc::clone(&this_streams_runtime_context.stream_clock),
-                stepped_clock,
             )?);
         }
 

@@ -230,9 +230,12 @@ enum TatolabVerb {
     #[command(
         long_about = "Stream time carries on from where it stands at the new scale — 0.5 runs the \
                       stream at half speed, 1 at real time — and every node's time, write stamps \
-                      and continuous pace follow it. Refused for a stream on the real or a stepped \
-                      clock, and for a scale above 1. Live only: the stream's next start runs the \
-                      clock its stream function names.",
+                      and continuous pace follow it. Above 1 the clock runs in steps of its \
+                      step_ns, paced at the scale, behind the step barrier every node runs on. \
+                      Refused for a stream on the real or a stepped clock, and for a scale above 1 \
+                      while the stream holds a node that paces itself and is not paced by real \
+                      time. Live only: the stream's next start runs the clock its stream function \
+                      names.",
         override_usage = "tatolab clock [STREAM] --scale <SCALE>"
     )]
     Clock {
