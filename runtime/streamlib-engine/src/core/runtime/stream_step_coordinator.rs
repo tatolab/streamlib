@@ -5,7 +5,7 @@
 //! closes it once every node finished it and nothing written in it is still in
 //! flight.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -68,6 +68,8 @@ impl StepLedgerEntryOfOneLink {
 pub(crate) struct StepLedgerReading {
     pub(crate) nodes_by_processor_id: BTreeMap<String, StepLedgerEntryOfOneNode>,
     pub(crate) links_by_link_id: BTreeMap<String, StepLedgerEntryOfOneLink>,
+    /// Links in the graph left off the balance on this reading.
+    pub(crate) link_ids_off_the_balance: BTreeSet<String>,
 }
 
 impl StepLedgerReading {
@@ -143,6 +145,7 @@ impl StepLedgerReading {
                 .contains(link.to_port().processor_id().as_str())
                 || link_ids_into_a_windowed_port.contains(link.id.as_str())
             {
+                reading.link_ids_off_the_balance.insert(link.id.to_string());
                 continue;
             }
             let is_wired = link
@@ -210,10 +213,13 @@ pub(crate) struct StepLedgerLinkBaselines {
 impl StepLedgerLinkBaselines {
     /// Follow the links of `reading`: a link not wired yet is baselined at
     /// what it holds in flight now, a wired one keeps the baseline it had when
-    /// it was first seen wired, and a link gone from the graph is forgotten.
+    /// it was first seen wired, also while it is off the balance, and a link
+    /// gone from the graph is forgotten.
     pub(crate) fn follow_the_links_in(&mut self, reading: &StepLedgerReading) {
-        self.bags_in_flight_by_link_id
-            .retain(|link_id, _| reading.links_by_link_id.contains_key(link_id));
+        self.bags_in_flight_by_link_id.retain(|link_id, _| {
+            reading.links_by_link_id.contains_key(link_id)
+                || reading.link_ids_off_the_balance.contains(link_id)
+        });
         for (link_id, link) in &reading.links_by_link_id {
             if link.is_wired {
                 self.bags_in_flight_by_link_id
@@ -452,6 +458,7 @@ mod tests {
                 .enumerate()
                 .map(|(index, link)| (format!("l{index}"), link))
                 .collect(),
+            link_ids_off_the_balance: BTreeSet::new(),
         }
     }
 
@@ -555,6 +562,25 @@ mod tests {
         );
         assert!(
             !a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 2, 0)])
+                .lets_the_step_close(0, &baselines)
+        );
+    }
+
+    #[test]
+    fn bags_queued_while_a_link_was_off_the_balance_hold_the_step_open_once_it_is_back() {
+        let mut baselines = StepLedgerLinkBaselines::default();
+        baselines.follow_the_links_in(&a_reading([], [a_link(2, 2, 0)]));
+        let mut off_the_balance_while_its_reader_is_paused = a_reading([], []);
+        off_the_balance_while_its_reader_is_paused
+            .link_ids_off_the_balance
+            .insert("l0".to_owned());
+        baselines.follow_the_links_in(&off_the_balance_while_its_reader_is_paused);
+        let back_with_a_backlog_and_a_new_bag =
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 3, 0)]);
+        baselines.follow_the_links_in(&back_with_a_backlog_and_a_new_bag);
+        assert!(!back_with_a_backlog_and_a_new_bag.lets_the_step_close(0, &baselines));
+        assert!(
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 6, 0)])
                 .lets_the_step_close(0, &baselines)
         );
     }
