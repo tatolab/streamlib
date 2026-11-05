@@ -80,11 +80,19 @@ pub struct HelperProcessLossCountBoard {
 /// then the service.
 struct HelperProcessLossCountBoardReadHandles {
     inbound_link_slots: Vec<
-        EntryHandle<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
+        EntryHandle<
+            ipc_threadsafe::Service,
+            HelperProcessLossCountBoardKey,
+            InboundLinkLossCountBoardSlot,
+        >,
     >,
     output_ports: Vec<(
         String,
-        EntryHandle<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
+        EntryHandle<
+            ipc_threadsafe::Service,
+            HelperProcessLossCountBoardKey,
+            OutputPortBagCountBoardEntry,
+        >,
     )>,
     _reader: Reader<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
@@ -174,15 +182,21 @@ pub struct HelperProcessLossCountBoardWriter {
 
 /// One inbound-link slot, and what was last written on it.
 struct InboundLinkLossCountBoardSlotBeingWritten {
-    entry:
-        EntryHandleMut<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
+    entry: EntryHandleMut<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        InboundLinkLossCountBoardSlot,
+    >,
     last_written: InboundLinkLossCountBoardSlot,
 }
 
 /// One output port's entry, and what was last written on it.
 struct OutputPortBagCountBoardEntryBeingWritten {
-    entry:
-        EntryHandleMut<ipc_threadsafe::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
+    entry: EntryHandleMut<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        OutputPortBagCountBoardEntry,
+    >,
     last_written: OutputPortBagCountBoardEntry,
 }
 

@@ -52,10 +52,9 @@ pub(crate) use audio_block_bag_wire_codec::{
 
 use audio_block_bag_wire_codec::read_an_audio_block_off_the_wire;
 
-use super::FrameHeader;
 use super::mailbox::PortMailboxQueuedFrameMeasure;
 
-/// A measure over one queued wire frame: what the audio block it carries is
+/// A measure over one queued payload: what the audio block it carries is
 /// worth in frames at `contract`'s rate, and the format it stated.
 ///
 /// Installed on a windowed port's mailbox so the readiness gate can ask how
@@ -75,15 +74,7 @@ pub(crate) fn queued_audio_window_frame_measure(
     contract: ResolvedAudioWindowContract,
     latest_source_audio_format: Arc<LatestQueuedSourceAudioFormat>,
 ) -> PortMailboxQueuedFrameMeasure {
-    Arc::new(move |wire_frame: &[u8]| -> u64 {
-        // `read_payload_from_slice` is the one place the frame's stamped
-        // length is trusted against what the frame actually carries; a
-        // truncated frame's leading bytes are a well-formed shorter message in
-        // every self-describing wire format, which is the trap it exists for.
-        let Some(body) = FrameHeader::read_payload_from_slice(wire_frame) else {
-            return 0;
-        };
-
+    Arc::new(move |body: &[u8]| -> u64 {
         let Ok(block) = read_an_audio_block_off_the_wire(body) else {
             return 0;
         };

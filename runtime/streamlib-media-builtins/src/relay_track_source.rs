@@ -1034,7 +1034,7 @@ mod tests {
 
         let payloads_and_losses: Vec<(Vec<u8>, u64)> =
             std::iter::from_fn(|| reader.read_raw("in").unwrap())
-                .map(|message| (message.payload_bytes, message.lost_since_last_read))
+                .map(|message| (message.payload.to_vec(), message.lost_since_last_read))
                 .collect();
         assert_eq!(
             payloads_and_losses,

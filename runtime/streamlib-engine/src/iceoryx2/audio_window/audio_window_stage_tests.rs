@@ -116,7 +116,7 @@ struct EmittedWindow {
 fn drain_every_ready_window(stage: &mut AudioWindowAccumulator) -> Vec<EmittedWindow> {
     let mut windows = Vec::new();
     while let Some(window) = stage.next_ready_window().expect("a window emits") {
-        let block = read_an_audio_block_off_the_wire(&window.message.payload_bytes)
+        let block = read_an_audio_block_off_the_wire(&window.message.payload)
             .expect("an emitted window reads back");
         assert_eq!(
             block.first_sample_timestamp_ns, window.message.timestamp_ns,
@@ -774,8 +774,7 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
         .next_ready_window()
         .expect("a window emits")
         .expect("a full window");
-    let block =
-        read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
+    let block = read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
     assert_eq!(block.dtype, AudioBlockSampleDtype::I16);
     assert_eq!(block.interleaved_sample_bytes.len(), 256 * 2);
     for scalar in block.interleaved_sample_bytes.as_chunks::<2>().0.iter() {
@@ -845,7 +844,7 @@ fn assert_the_readiness_floor_holds_for(
                 )
             });
         let emitted =
-            read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
+            read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
         assert_eq!(
             emitted.channels, channels_each_window_carries,
             "the window the floor promised carries the count the contract resolves to"
@@ -947,8 +946,7 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
         .next_ready_window()
         .expect("a window emits")
         .expect("the run after the gap fills its own window");
-    let block =
-        read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
+    let block = read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
     assert_eq!(
         block.first_sample_timestamp_ns, NANOSECONDS_PER_SECOND,
         "the window after the gap is anchored on its own run's first block"

@@ -1103,7 +1103,9 @@ mod tests {
         (shutdown_channel, shutdown_wake_fd)
     }
 
-    fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc_threadsafe::Service>) -> i32 {
+    fn listener_fd_of(
+        listener: &iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
+    ) -> i32 {
         // SAFETY: every caller uses the fd only while `listener` is alive.
         unsafe { listener.file_descriptor().native_handle() }
     }
@@ -1145,7 +1147,8 @@ mod tests {
         );
 
         // A third of the declared 512-sample window.
-        mailboxes.route(one_mono_audio_frame_for("audio", 160, 0));
+        let link_into_audio = a_test_link_into(&mailboxes, "audio");
+        link_into_audio.send(&one_mono_audio_frame_for(160, 0));
         assert_eq!(
             ports_would_return_something(&processor),
             Some(false),
@@ -1154,8 +1157,7 @@ mod tests {
         );
 
         for block in 1..4i64 {
-            mailboxes.route(one_mono_audio_frame_for(
-                "audio",
+            link_into_audio.send(&one_mono_audio_frame_for(
                 160,
                 block * 160 * 1_000_000_000 / 16_000,
             ));
@@ -1202,13 +1204,11 @@ mod tests {
         .expect("the mock's own declaration resolves")
     }
 
-    /// One wire frame stamped for `port`, carrying `frames` mono 16 kHz samples
-    /// — the shape `InputMailboxesInner::route` injects.
+    /// One sample carrying `frames` mono 16 kHz samples as an audio block bag.
     fn one_mono_audio_frame_for(
-        port: &str,
         frames: usize,
         first_sample_timestamp_ns: i64,
-    ) -> Vec<u8> {
+    ) -> crate::iceoryx2::channel_sample_test_support::TestChannelSample {
         #[derive(serde::Serialize)]
         struct AudioBlockBag<'a> {
             #[serde(rename = "samples", with = "serde_bytes")]
@@ -1232,25 +1232,10 @@ mod tests {
         })
         .expect("an audio block bag encodes");
 
-        one_wire_frame_stamped_for(port, first_sample_timestamp_ns, &body)
-    }
-
-    /// `body` behind a frame header stamped for `port` — the shape
-    /// `InputMailboxesInner::route` injects.
-    fn one_wire_frame_stamped_for(port: &str, timestamp_ns: i64, body: &[u8]) -> Vec<u8> {
-        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
-
-        let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new(
-            port,
-            timestamp_ns,
-            body.len() as u32,
-            MessageGroupBoundary::StartsGroup,
+        crate::iceoryx2::channel_sample_test_support::TestChannelSample::carrying(
+            first_sample_timestamp_ns,
+            &body,
         )
-        .expect("port fits PortKey")
-        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(body);
-        frame
     }
 
     /// A reactive processor's scheduling loop running on its own thread, as the
@@ -1378,8 +1363,18 @@ mod tests {
     }
 
     /// One wire frame stamped for `in1`, carrying four opaque bytes.
-    fn one_frame_for_in1() -> Vec<u8> {
-        one_wire_frame_stamped_for("in1", 0, &[0; 4])
+    fn one_frame_for_in1() -> crate::iceoryx2::channel_sample_test_support::TestChannelSample {
+        crate::iceoryx2::channel_sample_test_support::TestChannelSample::carrying(0, &[0; 4])
+    }
+
+    /// A test link bound into `port` of `mailboxes`.
+    fn a_test_link_into(
+        mailboxes: &crate::iceoryx2::InputMailboxesInner,
+        port: &str,
+    ) -> crate::iceoryx2::channel_sample_test_support::TestLinkIntoAnInputPort {
+        crate::iceoryx2::channel_sample_test_support::TestLinkIntoAnInputPort::bound_into(
+            mailboxes, port, 16,
+        )
     }
 
     fn open_one_listener_event_service(
@@ -1414,6 +1409,7 @@ mod tests {
             crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
                 .unwrap(),
         ));
+        let link_into_in1 = a_test_link_into(&mailboxes, "in1");
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
             Arc::clone(&mailboxes),
@@ -1423,7 +1419,7 @@ mod tests {
 
         let mut undelivered_notifies = 0;
         for _ in 0..FRAMES_AT_ONE_KILOHERTZ {
-            mailboxes.route(one_frame_for_in1());
+            link_into_in1.send(&one_frame_for_in1());
             if notifier.notify().unwrap() == 0 {
                 undelivered_notifies += 1;
             }
@@ -1459,6 +1455,7 @@ mod tests {
             crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
                 .unwrap(),
         ));
+        let link_into_in1 = a_test_link_into(&mailboxes, "in1");
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
             Arc::clone(&mailboxes),
@@ -1475,7 +1472,7 @@ mod tests {
         );
 
         for _ in 0..3 {
-            mailboxes.route(one_frame_for_in1());
+            link_into_in1.send(&one_frame_for_in1());
             notifier.notify().unwrap();
         }
         // Several paused ticks, each of which drains the listener.
@@ -1507,7 +1504,8 @@ mod tests {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let service = open_one_listener_event_service(&node, "first-link-gap");
         let (processor, mailboxes) = input_only_processor_with_plain_port(None);
-        mailboxes.route(one_frame_for_in1());
+        let link_into_in1 = a_test_link_into(&mailboxes, "in1");
+        link_into_in1.send(&one_frame_for_in1());
         mailboxes.set_listener(
             crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
                 .unwrap(),

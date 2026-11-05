@@ -326,7 +326,7 @@ impl PythonProcessorLinkDataAccess {
             Some(message) => payload_bytes_cast_into_the_read_target_when_named(
                 python,
                 port_name,
-                &message.payload_bytes,
+                &message.payload,
                 into,
                 offered_gpu_limited_access,
             )
@@ -443,7 +443,7 @@ impl PythonProcessorLinkDataAccess {
         let payload = payload_bytes_cast_into_the_read_target_when_named(
             python,
             port_name,
-            &message.payload_bytes,
+            &message.payload,
             into,
             offered_gpu_limited_access,
         )?;
@@ -890,7 +890,7 @@ impl PythonProcessorLinkDataAccess {
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
             Some(message) => Ok((
-                Some(PyBytes::new(python, &message.payload_bytes).into_any()),
+                Some(PyBytes::new(python, &message.payload).into_any()),
                 Some(message.timestamp_ns),
             )),
             None => Ok((None, None)),
@@ -1272,7 +1272,7 @@ mod tests {
                     .read_raw("frames_from_upstream")
                     .unwrap()
                     .expect("the wired input received nothing");
-                assert_eq!(message.payload_bytes, b"access unit");
+                assert_eq!(message.payload, b"access unit");
                 assert_eq!(message.timestamp_ns, timestamp_ns);
                 assert_eq!(message.group_boundary, group_boundary);
             }

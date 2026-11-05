@@ -7,10 +7,11 @@
 //! the wheel's helper-process transport share the same wire-compatible types.
 
 pub use streamlib_ipc_types::{
-    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagUserHeader,
-    FRAME_HEADER_FLAG_STARTS_GROUP, FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE,
-    FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, FramePayloadRefusal,
-    MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, MessageGroupBoundary, PortKey,
-    RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
+    ChannelTrustTier, DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES, DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelPayloadCacheLine, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, DataChannelSamplePayloadRefusal, DataChannelSampleUserHeader,
+    GpuPoolSlotFrameDescriptorBody, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
+    MessageGroupBoundary, PortKey, RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    TRUSTED_CHANNEL_CHUNK_CEILING_BYTES, UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
+    data_channel_payload_bytes_of, data_channel_payload_cache_lines_for,
 };

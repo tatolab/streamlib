@@ -382,11 +382,11 @@ pub enum Error {
     },
 
     #[error(
-        "frame on input port '{port}' stamps a payload length of \
-         {stamped_payload_bytes} bytes but carries only {available_payload_bytes} \
-         after its header — the frame is malformed and was dropped"
+        "a sample on input port '{port}' stamps a payload length of \
+         {stamped_payload_bytes} bytes but carries only {available_payload_bytes} — \
+         the sample is malformed and was dropped"
     )]
-    FrameHeaderPayloadLengthExceedsFrameBytes {
+    ChannelSampleStampsAPayloadPastTheSample {
         port: String,
         stamped_payload_bytes: usize,
         available_payload_bytes: usize,

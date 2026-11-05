@@ -22,7 +22,10 @@ use super::helper_process_loss_count_board::{
     HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
     output_port_keys,
 };
-use super::{DataChannelBagUserHeader, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
+use super::{
+    DataChannelPayloadCacheLine, DataChannelSampleUserHeader, MAX_INPUT_PORT_BORROW_QUOTA,
+    MAX_PUBLISHERS_PER_CHANNEL,
+};
 use crate::core::error::{Error, Result};
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry,
@@ -43,10 +46,6 @@ const LOSS_COUNT_BOARD_MAX_READERS: usize = 1;
 /// with the same headroom a channel gives each port slot for a node a crash left
 /// behind.
 const LOSS_COUNT_BOARD_MAX_NODES: usize = 2 * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT;
-
-/// Samples a channel subscriber borrows at once: the receive path copies each
-/// sample out and drops it before taking the next.
-const CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES: usize = 1;
 
 /// Samples a channel publisher loans at once: every write loans, fills and sends
 /// one before the next.
@@ -231,13 +230,39 @@ pub(crate) struct ChannelSizing {
     pub(crate) channel_service_creation_depth: usize,
 }
 
-/// The publisher of a channel data service: `[u8]` frames under the
-/// sequence-number user header.
-pub type ChannelDataServicePublisher = Publisher<ipc_threadsafe::Service, [u8], DataChannelBagUserHeader>;
+/// The samples a channel subscriber may borrow at once on a service created
+/// `channel_service_creation_depth` deep: a full mailbox, the most a reader may
+/// hold past it, and the sample being admitted. Each link holds itself to its
+/// own port's depth and quota inside this.
+pub(crate) const fn channel_subscriber_max_borrowed_samples(
+    channel_service_creation_depth: usize,
+) -> usize {
+    channel_service_creation_depth + MAX_INPUT_PORT_BORROW_QUOTA + 1
+}
 
-/// A subscriber to a channel data service: `[u8]` frames under the
-/// sequence-number user header.
-pub type ChannelDataServiceSubscriber = Subscriber<ipc_threadsafe::Service, [u8], DataChannelBagUserHeader>;
+/// The publisher of a channel data service: payload cache lines under the
+/// channel sample user header.
+pub type ChannelDataServicePublisher =
+    Publisher<ipc_threadsafe::Service, [DataChannelPayloadCacheLine], DataChannelSampleUserHeader>;
+
+/// A subscriber to a channel data service: payload cache lines under the
+/// channel sample user header.
+pub type ChannelDataServiceSubscriber =
+    Subscriber<ipc_threadsafe::Service, [DataChannelPayloadCacheLine], DataChannelSampleUserHeader>;
+
+/// One sample a channel subscriber received.
+pub type ChannelDataServiceSample = iceoryx2::sample::Sample<
+    ipc_threadsafe::Service,
+    [DataChannelPayloadCacheLine],
+    DataChannelSampleUserHeader,
+>;
+
+/// One sample a channel publisher loaned, not yet sent.
+pub type ChannelDataServiceLoanedSample = iceoryx2::sample_mut::SampleMut<
+    ipc_threadsafe::Service,
+    [DataChannelPayloadCacheLine],
+    DataChannelSampleUserHeader,
+>;
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -298,8 +323,8 @@ impl Iceoryx2Node {
         Ok(Iceoryx2NotifyService { inner: service })
     }
 
-    /// Open or create a channel-centric publish-subscribe service for `[u8]`
-    /// slices under [`DataChannelBagUserHeader`].
+    /// Open or create a channel-centric publish-subscribe service for payload
+    /// cache lines under [`DataChannelSampleUserHeader`].
     ///
     /// Every opener comes through here or [`Self::open_existing_channel_service`],
     /// which share one builder: iceoryx2 refuses an opener presenting any other
@@ -484,21 +509,24 @@ fn iceoryx2_service_name_of(service_name: &str) -> Result<ServiceName> {
     })
 }
 
-/// The channel data service builder: `[u8]` frames under
-/// [`DataChannelBagUserHeader`], the one type pair every opener
-/// presents.
+/// The channel data service builder: payload cache lines under
+/// [`DataChannelSampleUserHeader`], the one type pair every opener presents.
 fn channel_data_service_builder(
     node: &Node<ipc_threadsafe::Service>,
     service_name: &ServiceName,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc_threadsafe::Service> {
+) -> PublishSubscribeServiceBuilder<
+    [DataChannelPayloadCacheLine],
+    DataChannelSampleUserHeader,
+    ipc_threadsafe::Service,
+> {
     node.service_builder(service_name)
-        .publish_subscribe::<[u8]>()
-        .user_header::<DataChannelBagUserHeader>()
+        .publish_subscribe::<[DataChannelPayloadCacheLine]>()
+        .user_header::<DataChannelSampleUserHeader>()
 }
 
 /// The channel data service builder carrying the whole channel policy every
 /// opener presents — the fixed slot counts, the creation depth, and the
-/// one-sample, no-history, safe-overflow limits iceoryx2 verifies on each open.
+/// borrow, no-history and safe-overflow limits iceoryx2 verifies on each open.
 ///
 /// One spelling, because a test that re-states the chain to reproduce an open
 /// failure stops reproducing it the moment a setting moves on one side only.
@@ -507,13 +535,19 @@ fn channel_data_service_builder_under_the_channel_policy(
     service_name: &ServiceName,
     max_subscribers: usize,
     channel_service_creation_depth: usize,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc_threadsafe::Service> {
+) -> PublishSubscribeServiceBuilder<
+    [DataChannelPayloadCacheLine],
+    DataChannelSampleUserHeader,
+    ipc_threadsafe::Service,
+> {
     channel_data_service_builder(node, service_name)
         .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
         .max_subscribers(max_subscribers)
         .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
         .subscriber_max_buffer_size(channel_service_creation_depth)
-        .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
+        .subscriber_max_borrowed_samples(channel_subscriber_max_borrowed_samples(
+            channel_service_creation_depth,
+        ))
         .history_size(CHANNEL_HISTORY_SIZE)
         .enable_safe_overflow(true)
 }
@@ -571,8 +605,8 @@ fn channel_data_service_built_by_something_other_than_this_engine(
     failure: &dyn std::fmt::Debug,
 ) -> Error {
     Error::Runtime(format!(
-        "channel data service '{}' exists with a sample type other than `[u8]` frames under \
-         the `DataChannelBagUserHeader` user header, so it was built by \
+        "channel data service '{}' exists with a sample type other than payload cache lines \
+         under the `DataChannelSampleUserHeader` user header, so it was built by \
          something other than this engine: {failure:?}",
         service_name.as_str()
     ))
@@ -582,8 +616,8 @@ fn channel_data_service_built_by_something_other_than_this_engine(
 pub struct Iceoryx2Service {
     inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
         ipc_threadsafe::Service,
-        [u8],
-        DataChannelBagUserHeader,
+        [DataChannelPayloadCacheLine],
+        DataChannelSampleUserHeader,
     >,
 }
 
@@ -605,8 +639,8 @@ impl Iceoryx2Service {
 
     /// Create a channel publisher under [`AllocationStrategy::PowerOfTwo`].
     ///
-    /// `expected_payload_bytes` primes the initial per-slot data segment (the
-    /// [`FRAME_HEADER_SIZE`] header is added internally) — it is a HINT, never a
+    /// `expected_payload_bytes` primes the initial per-slot data segment — it is
+    /// a HINT, never a
     /// cap. The first loan larger than the primed slot grows the shared-memory
     /// segment (rounded to the next power of two) and subscribers remap
     /// transparently, so an oversized payload delivers instead of failing with
@@ -618,7 +652,9 @@ impl Iceoryx2Service {
     ) -> Result<ChannelDataServicePublisher> {
         self.inner
             .publisher_builder()
-            .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(streamlib_ipc_types::data_channel_payload_cache_lines_for(
+                expected_payload_bytes,
+            ))
             .allocation_strategy(AllocationStrategy::PowerOfTwo)
             .max_loaned_samples(CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES)
             .create()
@@ -635,7 +671,9 @@ impl Iceoryx2Service {
     ) -> ChannelDataServicePublisher {
         self.inner
             .publisher_builder()
-            .initial_max_slice_len(primed_slice_bytes)
+            .initial_max_slice_len(streamlib_ipc_types::data_channel_payload_cache_lines_for(
+                primed_slice_bytes,
+            ))
             .create()
             .expect("a publisher with the library's static allocation strategy")
     }
@@ -714,6 +752,7 @@ mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::iceoryx2::InboundLinkName;
+    use crate::iceoryx2::channel_sample_test_support::{TestChannelSample, stamped_payload_of};
 
     fn unique_service_name(tag: &str) -> String {
         format!(
@@ -845,11 +884,12 @@ mod tests {
     }
 
     /// Every channel service states the sample limits the engine's ports stay
-    /// inside: one borrowed sample per subscriber, no history, room for twice
-    /// its subscribers in nodes — and a publisher that loans one sample at a
-    /// time.
+    /// inside: a full mailbox, the most a reader may hold past it and the
+    /// sample being admitted borrowed per subscriber, no history, room for
+    /// twice its subscribers in nodes — and a publisher that loans one sample
+    /// at a time.
     #[test]
-    fn a_channel_service_lends_one_sample_at_a_time_and_replays_none() {
+    fn a_channel_service_lends_a_mailbox_and_a_quota_per_subscriber_and_replays_none() {
         use crate::iceoryx2::DeliveryProfile;
 
         let max_subscribers = 3;
@@ -862,7 +902,10 @@ mod tests {
             .expect("open channel data service");
 
         let static_config = service.inner.static_config();
-        assert_eq!(static_config.subscriber_max_borrowed_samples(), 1);
+        assert_eq!(
+            static_config.subscriber_max_borrowed_samples(),
+            DeliveryProfile::ORDERED_DEPTH + crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA + 1
+        );
         assert_eq!(static_config.history_size(), 0);
         assert_eq!(static_config.max_nodes(), max_subscribers * 2);
 
@@ -980,9 +1023,7 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..(depth * 3) {
-            let sample = publisher.loan_slice_uninit(8).expect("loan");
-            let sample = sample.write_from_slice(&[0u8; 8]);
-            sample.send().expect("send must succeed with overflow on");
+            TestChannelSample::carrying(0, &[0u8; 8]).send_unnumbered_on(&publisher);
         }
         let elapsed = start.elapsed();
         assert!(
@@ -1034,7 +1075,7 @@ mod tests {
             Err(refusal) => refusal.to_string(),
         };
         assert!(
-            refusal.contains("DataChannelBagUserHeader")
+            refusal.contains("DataChannelSampleUserHeader")
                 && refusal.contains(&built_without_the_header),
             "the refusal must name the header and the service: {refusal}"
         );
@@ -1158,11 +1199,7 @@ mod tests {
                 startup_p.wait();
                 let start = Instant::now();
                 for i in 0..total {
-                    let mut payload = vec![0u8; FRAME_HEADER_SIZE + 4];
-                    payload[FRAME_HEADER_SIZE..].copy_from_slice(&i.to_le_bytes());
-                    let sample = publisher.loan_slice_uninit(payload.len()).expect("loan");
-                    let sample = sample.write_from_slice(&payload);
-                    sample.send().expect("send");
+                    TestChannelSample::carrying(0, &i.to_le_bytes()).send_unnumbered_on(&publisher);
                     sent_clone.fetch_add(1, Ordering::Relaxed);
 
                     let target = start + interval * (i + 1);
@@ -1307,13 +1344,7 @@ mod tests {
         let subscriber = service.create_subscriber(depth).expect("create subscriber");
 
         for i in 0..send_count {
-            let mut payload = vec![0u8; FRAME_HEADER_SIZE + 1];
-            payload[FRAME_HEADER_SIZE] = i as u8;
-            let sample = publisher
-                .loan_slice_uninit(payload.len())
-                .expect("loan slot");
-            let sample = sample.write_from_slice(&payload);
-            sample.send().expect("send must succeed even on overwrite");
+            TestChannelSample::carrying(0, &[i as u8]).send_unnumbered_on(&publisher);
         }
 
         // Drain everything currently in the subscriber's queue.
@@ -1322,7 +1353,7 @@ mod tests {
         while std::time::Instant::now() < deadline {
             match subscriber.receive() {
                 Ok(Some(sample)) => {
-                    received.push(sample.payload()[FRAME_HEADER_SIZE]);
+                    received.push(stamped_payload_of(&sample)[0]);
                 }
                 Ok(None) => break,
                 Err(e) => panic!("subscriber.receive() failed: {e:?}"),
@@ -1380,23 +1411,16 @@ mod tests {
         payload[0] = 0xAB;
         payload[oversized - 1] = 0xCD;
 
-        let sample = publisher
-            .loan_slice_uninit(oversized)
-            .expect("PowerOfTwo publisher must loan a slice far larger than its primed hint");
-        let sample = sample.write_from_slice(&payload);
-        sample.send().expect("send oversized sample");
+        TestChannelSample::carrying(0, &payload).send_unnumbered_on(&publisher);
 
         let received = subscriber
             .receive()
             .expect("receive")
             .expect("subscriber must transparently remap the grown segment and deliver");
-        assert_eq!(
-            received.payload().len(),
-            oversized,
-            "full payload delivered"
-        );
-        assert_eq!(received.payload()[0], 0xAB);
-        assert_eq!(received.payload()[oversized - 1], 0xCD);
+        let received = stamped_payload_of(&received);
+        assert_eq!(received.len(), oversized, "full payload delivered");
+        assert_eq!(received[0], 0xAB);
+        assert_eq!(received[oversized - 1], 0xCD);
     }
 
     /// End-to-end reconnect cycle: connect → disconnect → reconnect a
@@ -2129,11 +2153,7 @@ mod tests {
             .unwrap_or_else(|refusal| panic!("{node_name} opens the channel: {refusal:?}"))
         };
         let publish_one_bag_from = |publisher: &ChannelDataServicePublisher| {
-            publisher
-                .loan_slice(8)
-                .expect("a loan")
-                .send()
-                .expect("a send")
+            TestChannelSample::carrying(0, &[0u8; 8]).send_unnumbered_on(publisher)
         };
 
         // Each source opens and publishes, and only then does a subscriber in

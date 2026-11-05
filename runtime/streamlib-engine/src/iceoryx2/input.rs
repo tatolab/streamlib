@@ -37,13 +37,17 @@ use super::audio_window::{
 use super::bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 use super::channel_name::InboundLinkName;
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
+use super::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
+use super::input_port_message_payload::{
+    BorrowedChannelSample, InputPortMessagePayload, SamplesOneInboundLinkHolds,
+};
 use super::loss_counters::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     InboundLinkDiscardedSampleCounter, InboundLinkDroppedBagCounter,
 };
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
-use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
+use super::{ChannelDataServiceSubscriber, DataChannelPayloadDescriptorKind, MessageGroupBoundary};
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -64,10 +68,11 @@ pub(super) struct BagBodyForTheReader {
 
 /// One message read off an input port: its payload as the producer wrote it, its
 /// stamp, whether it starts a group, and what its link lost ahead of it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MessageReadFromInputPort {
-    /// The payload exactly as the producer wrote it.
-    pub payload_bytes: Vec<u8>,
+    /// The payload exactly as the producer wrote it, borrowed in its sample
+    /// where it arrived in one.
+    pub payload: InputPortMessagePayload,
     /// The publish stamp, or a window's first-sample instant.
     pub timestamp_ns: i64,
     /// Whether the message opens a group; a window always opens one.
@@ -152,6 +157,9 @@ struct PortBoundSubscriber {
     /// numbering of the publisher that is sending it — one unbroken run per
     /// publisher, so a replaced producer is a baseline rather than a gap.
     bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost<UniquePublisherId>,
+    /// The samples this link holds, queued or with its reader, held to its
+    /// port's mailbox depth plus borrow quota.
+    samples_this_link_holds: SamplesOneInboundLinkHolds,
 }
 
 /// A destination's channel subscribers and its notify-service [`Listener`],
@@ -272,6 +280,8 @@ impl PortReadiness {
 /// `&mut self` through `Arc<...>`.
 struct PortConfig {
     mailbox: PortMailbox,
+    /// The messages a reader may hold past the mailbox, per inbound link.
+    borrow_quota: usize,
     /// How this port windows what arrives on it.
     audio_windowing: InstalledInputPortAudioWindowing,
     /// The dropped-bag counter of the link that delivered the bag last handed
@@ -360,6 +370,7 @@ fn windowed_port_config(
             )),
         )),
         dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+        borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
     }
 }
 
@@ -505,6 +516,7 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size, read_mode),
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
                 dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+                borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
         );
     }
@@ -549,6 +561,7 @@ impl InputMailboxesInner {
                 ),
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
                 dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
+                borrow_quota: DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
         );
     }
@@ -626,7 +639,8 @@ impl InputMailboxesInner {
                      device its processor opened"
                 )));
             }
-            let settled = windowed_port_config(port, existing.mailbox.read_mode(), contract);
+            let mut settled = windowed_port_config(port, existing.mailbox.read_mode(), contract);
+            settled.borrow_quota = existing.borrow_quota;
             // Anything that arrived while the contract was unsettled moves into
             // the mailbox the contract sized, rather than being dropped where
             // no counter would see it.
@@ -725,6 +739,7 @@ impl InputMailboxesInner {
                 dropped_bag_counter,
                 discarded_sample_counter,
                 bags_the_ring_overwrote: Default::default(),
+                samples_this_link_holds: SamplesOneInboundLinkHolds::default(),
             });
     }
 
@@ -948,16 +963,32 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Receive all pending payloads from every channel subscriber and route them
-    /// to mailboxes by the subscriber's local-port binding.
+    /// Set how many messages `port`'s reader may hold past its mailbox, per
+    /// inbound link. Refused for a port never added.
+    pub fn set_input_port_borrow_quota(&self, port: &str, borrow_quota: usize) -> Result<()> {
+        self.ports
+            .lock()
+            .get_mut(port)
+            .ok_or_else(|| unknown_input_port(port))?
+            .borrow_quota = borrow_quota;
+        Ok(())
+    }
+
+    /// Receive all pending samples from every channel subscriber and queue them
+    /// on mailboxes by the subscriber's local-port binding.
+    ///
+    /// A plain port queues the sample itself, so a read borrows it in place. A
+    /// windowed port queues a copy, because its stage may hold more blocks than
+    /// a link may borrow.
     ///
     /// Every loss this pass can see is counted on the link it happened to: the
     /// bags a jump in the sequence number says the ring overwrote, on an
     /// `ordered` port — a `newest` port passing over bags is the profile working
-    /// — and a frame too short to carry a header or bound to a port with no
-    /// mailbox, which consumed a number and reaches no reader. The messages a
-    /// writer declared lost upstream of it are told to an `ordered` port's
-    /// reader and counted on no link.
+    /// — a sample bound to a port with no mailbox, and the newest sample of a
+    /// link already holding its port's mailbox depth plus borrow quota, each of
+    /// which consumed a number and reaches no reader. The messages a writer
+    /// declared lost upstream of it are told to an `ordered` port's reader and
+    /// counted on no link.
     ///
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
@@ -968,6 +999,14 @@ impl InputMailboxesInner {
                 let sample = match bound.subscriber.receive() {
                     Ok(Some(sample)) => sample,
                     Ok(None) => break, // no more samples on this subscriber
+                    Err(iceoryx2::port::ReceiveError::ExceedsMaxBorrows) => {
+                        tracing::trace!(
+                            link = %bound.inbound_link_name,
+                            "InputMailboxes: the link holds every sample its service lets one \
+                             subscriber borrow; the rest wait in its ring"
+                        );
+                        break;
+                    }
                     Err(e) => {
                         tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
                         break;
@@ -979,7 +1018,8 @@ impl InputMailboxesInner {
                         sample.origin(),
                         channel_user_header.sequence_number,
                     );
-                let slice: &[u8] = sample.payload();
+                let borrowed =
+                    BorrowedChannelSample::holding(sample, &bound.samples_this_link_holds);
                 let ports = self.ports.lock();
                 let port_config = ports.get(&bound.local_port);
                 if port_config
@@ -998,16 +1038,6 @@ impl InputMailboxesInner {
                             );
                     }
                 }
-                if slice.len() < FRAME_HEADER_SIZE {
-                    bound.dropped_bag_counter.record_one_dropped_bag();
-                    tracing::warn!(
-                        link = %bound.inbound_link_name,
-                        "InputMailboxes: received slice too small ({} < {}); dropped and counted",
-                        slice.len(),
-                        FRAME_HEADER_SIZE
-                    );
-                    continue;
-                }
                 let Some(port_config) = port_config else {
                     bound.dropped_bag_counter.record_one_dropped_bag();
                     tracing::warn!(
@@ -1018,13 +1048,35 @@ impl InputMailboxesInner {
                     );
                     continue;
                 };
-                // Copied rather than parking the iceoryx2 `Sample`: a parked sample
-                // pins its shm slot while the frame sits queued and couples the
-                // mailbox's drop-oldest depth to the subscriber ring's. The header
-                // stays on the queued frame so the stamped-length refusal is a
-                // port-named error at the read, not a receive-time drop.
+                let payload = if port_config.audio_windowing.is_windowed() {
+                    let area = borrowed.sample_payload_area_bytes();
+                    InputPortMessagePayload::OwnedBytes(
+                        channel_user_header
+                            .payload_within(area)
+                            .unwrap_or(area)
+                            .to_vec(),
+                    )
+                } else {
+                    let most_samples_the_link_may_hold =
+                        port_config.mailbox.capacity() + port_config.borrow_quota;
+                    if bound.samples_this_link_holds.held_sample_count()
+                        > most_samples_the_link_may_hold
+                    {
+                        bound.dropped_bag_counter.record_one_dropped_bag();
+                        tracing::trace!(
+                            port = %bound.local_port,
+                            link = %bound.inbound_link_name,
+                            borrow_quota = port_config.borrow_quota,
+                            "InputMailboxes: the link's reader holds past its borrow quota; the \
+                             newest frame is dropped and counted"
+                        );
+                        continue;
+                    }
+                    InputPortMessagePayload::BorrowedChannelSample(borrowed)
+                };
                 port_config.mailbox.push_frame_from_inbound_link(
-                    slice.to_vec(),
+                    payload,
+                    channel_user_header,
                     &bound.dropped_bag_counter,
                     &bound.inbound_link_name,
                 );
@@ -1106,28 +1158,47 @@ impl InputMailboxesInner {
             (delivered, lost_since_last_read)
         };
         let inbound_link_name = delivered.inbound_link_name;
-        let mut frame_bytes_from_wire = delivered.payload;
-
-        let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
-        let stamped_payload_bytes = header.len as usize;
-        let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
-        if stamped_payload_bytes > available_payload_bytes {
-            return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+        let channel_user_header = delivered.channel_user_header;
+        let payload_area_byte_len = match &delivered.payload {
+            InputPortMessagePayload::BorrowedChannelSample(borrowed) => {
+                borrowed.sample_payload_area_bytes().len()
+            }
+            InputPortMessagePayload::OwnedBytes(bytes) => bytes.len(),
+        };
+        let stamped_payload_bytes = channel_user_header.payload_byte_len as usize;
+        if stamped_payload_bytes > payload_area_byte_len {
+            return Err(Error::ChannelSampleStampsAPayloadPastTheSample {
                 port: port.to_string(),
                 stamped_payload_bytes,
-                available_payload_bytes,
+                available_payload_bytes: payload_area_byte_len,
             });
         }
-        frame_bytes_from_wire.copy_within(
-            FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
-            0,
-        );
-        frame_bytes_from_wire.truncate(stamped_payload_bytes);
+        match channel_user_header.payload_descriptor.known_kind() {
+            Ok(DataChannelPayloadDescriptorKind::Bytes) => {}
+            Ok(unread_kind) => {
+                return Err(Error::Link(format!(
+                    "a message on input port '{port}' carries a {unread_kind:?} payload, which \
+                     this read does not take"
+                )));
+            }
+            Err(refusal) => {
+                return Err(Error::Link(format!(
+                    "a message on input port '{port}' was refused: {refusal}"
+                )));
+            }
+        }
+        let payload = match delivered.payload {
+            InputPortMessagePayload::OwnedBytes(mut bytes) => {
+                bytes.truncate(stamped_payload_bytes);
+                InputPortMessagePayload::OwnedBytes(bytes)
+            }
+            borrowed => borrowed,
+        };
         Ok(Some(BagBodyForTheReader {
             message: MessageReadFromInputPort {
-                payload_bytes: frame_bytes_from_wire,
-                timestamp_ns: header.timestamp_ns,
-                group_boundary: header.group_boundary(),
+                payload,
+                timestamp_ns: channel_user_header.timestamp_ns,
+                group_boundary: channel_user_header.group_boundary(),
                 lost_since_last_read,
             },
             inbound_link_name,
@@ -1178,7 +1249,7 @@ impl InputMailboxesInner {
             else {
                 return Ok(None);
             };
-            let flush = stage.lock().accept(&bag.message.payload_bytes)?;
+            let flush = stage.lock().accept(&bag.message.payload)?;
             if let Some(flush) = flush {
                 Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
             }
@@ -1243,7 +1314,7 @@ impl InputMailboxesInner {
             return Ok(None);
         };
         Ok(Some((
-            deserialize_msgpack_payload(&message.payload_bytes)?,
+            deserialize_msgpack_payload(&message.payload)?,
             inbound_link_name,
         )))
     }
@@ -1336,7 +1407,7 @@ impl InputMailboxesInner {
             .any(|readiness| readiness.a_read_would_return_something())
     }
 
-    /// Drain all raw frame slices from the given port's mailbox.
+    /// Drain every payload queued on the given port's mailbox, as copies.
     pub fn drain(&self, port: &str) -> Vec<Vec<u8>> {
         let ports = self.ports.lock();
         ports
@@ -1344,35 +1415,6 @@ impl InputMailboxesInner {
             .into_iter()
             .flat_map(|p| p.mailbox.drain())
             .collect()
-    }
-
-    /// Route a raw frame slice into the mailbox named by the frame's stamped
-    /// source-port key. This is the manual-injection path — used only by
-    /// callers that synthesize a frame directly (SDK e2e harness + unit
-    /// tests), NOT the live receive path (which is [`receive_pending`],
-    /// routing by subscriber-to-local-port binding). The two differ: the live
-    /// path is binding-keyed so two destinations subscribing one channel each
-    /// land in their own local port, whereas this routes by the header's
-    /// stamped source port.
-    ///
-    /// Returns true if the payload was routed, false if no matching mailbox
-    /// exists. Thread-safe: can be called from any thread.
-    ///
-    /// [`receive_pending`]: Self::receive_pending
-    pub fn route(&self, raw: Vec<u8>) -> bool {
-        if raw.len() < FRAME_HEADER_SIZE {
-            return false;
-        }
-        let port = FrameHeader::read_port_from_slice(&raw);
-        let ports = self.ports.lock();
-        if let Some(port_config) = ports.get(port) {
-            port_config
-                .mailbox
-                .push_frame_without_inbound_link_attribution(raw);
-            true
-        } else {
-            false
-        }
     }
 
     /// Get the list of configured port names.
@@ -1471,7 +1513,7 @@ impl InputMailboxes {
         let message = self
             .read_raw(port)?
             .ok_or_else(|| Error::Link(format!("No data available on port: {}", port)))?;
-        deserialize_msgpack_payload(&message.payload_bytes)
+        deserialize_msgpack_payload(&message.payload)
     }
 
     /// The next message on `port`, its payload untouched, or `None` when the
@@ -1653,35 +1695,13 @@ mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::test_support::CapturedTracingWarnings;
-    use crate::iceoryx2::{DataChannelBagUserHeader, PortKey};
+    use crate::iceoryx2::channel_sample_test_support::TestChannelSample;
 
     fn unique_suffix(tag: &str) -> String {
         format!(
             "test/input/{tag}/{}",
             mint_machine_global_unique_name_suffix()
         )
-    }
-
-    /// Build a wire frame for `port`: a header stamping `stamped_payload_bytes`
-    /// over the body `carried_body`. The stamped and carried lengths are
-    /// separate arguments because several tests exercise their divergence.
-    fn wire_frame_stamping(
-        port: &str,
-        timestamp_ns: i64,
-        stamped_payload_bytes: u32,
-        carried_body: &[u8],
-    ) -> Vec<u8> {
-        let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
-        FrameHeader::new(
-            port,
-            timestamp_ns,
-            stamped_payload_bytes,
-            MessageGroupBoundary::StartsGroup,
-        )
-        .expect("port fits PortKey")
-        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);
-        frame
     }
 
     /// A test channel's publisher, numbering its sends from zero the way
@@ -1701,16 +1721,15 @@ mod tests {
             }
         }
 
-        /// Send `bytes` as one sample carrying the next sequence number.
-        fn send_numbered(&self, bytes: &[u8]) {
-            let mut sample = self.publisher.loan_slice_uninit(bytes.len()).unwrap();
-            *sample.user_header_mut() = DataChannelBagUserHeader {
-                sequence_number: self
-                    .next_sequence_number
-                    .replace(self.next_sequence_number.get() + 1),
-                messages_lost_upstream_before_this_one: 0,
-            };
-            sample.write_from_slice(bytes).send().unwrap();
+        /// Send `sample` carrying the next sequence number.
+        fn send_numbered(&self, sample: &TestChannelSample) {
+            let sequence_number = self
+                .next_sequence_number
+                .replace(self.next_sequence_number.get() + 1);
+            let _subscribers_reached = sample.send_under(
+                &self.publisher,
+                sample.user_header_numbered(sequence_number),
+            );
         }
     }
 
@@ -1748,14 +1767,29 @@ mod tests {
         )
     }
 
-    /// Publish one frame stamped with `source_port` onto an open channel.
+    /// Publish one sample carrying `body` onto an open channel.
     fn publish_one_frame(
         publisher: &TestChannelPublisherNumberingItsSends,
-        source_port: &str,
+        _source_port: &str,
         body: &[u8],
     ) {
-        let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
-        publisher.send_numbered(&frame);
+        publisher.send_numbered(&TestChannelSample::carrying(0, body));
+    }
+
+    /// A link bound into `port` of `mailboxes`, for a test that publishes
+    /// samples onto it one at a time.
+    fn a_test_link_into(
+        mailboxes: &InputMailboxesInner,
+        port: &str,
+    ) -> TestChannelPublisherNumberingItsSends {
+        let (publisher, subscriber) = open_channel_for_one_link(&format!("test-link/{port}"), 16);
+        mailboxes.add_channel_subscriber(
+            port,
+            &format!("L-test-{port}"),
+            &InboundLinkName::from("psource/out"),
+            subscriber,
+        );
+        publisher
     }
 
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
@@ -1829,17 +1863,16 @@ mod tests {
             "empty mailboxes report no data"
         );
 
-        // Build a minimal valid frame for `port_a` and route it directly
-        // — bypasses the iceoryx2 subscriber, exercising only the
-        // mailbox-depth accounting.
-        let make_frame = |port: &str| wire_frame_stamping(port, 0, 4, &[1, 2, 3, 4]);
+        let link_into_port_a = a_test_link_into(&mailboxes, "port_a");
+        let link_into_port_b = a_test_link_into(&mailboxes, "port_b");
+        let frame = TestChannelSample::carrying(0, &[1, 2, 3, 4]);
 
         // Burst: three frames on port_a, two on port_b.
         for _ in 0..3 {
-            assert!(mailboxes.route(make_frame("port_a")));
+            link_into_port_a.send_numbered(&frame);
         }
         for _ in 0..2 {
-            assert!(mailboxes.route(make_frame("port_b")));
+            link_into_port_b.send_numbered(&frame);
         }
 
         // All 5 are queued; any_port_has_data sees them.
@@ -1914,7 +1947,7 @@ mod tests {
 
         let mut payloads: Vec<Vec<u8>> = Vec::new();
         while let Some(message) = mailboxes.read_raw("in").unwrap() {
-            payloads.push(message.payload_bytes);
+            payloads.push(message.payload.to_vec());
         }
         payloads.sort();
         assert_eq!(
@@ -2257,7 +2290,7 @@ mod tests {
         assert_eq!(
             mailboxes.read_raw("in").unwrap(),
             Some(MessageReadFromInputPort {
-                payload_bytes: b"continues-a-group".to_vec(),
+                payload: b"continues-a-group".to_vec().into(),
                 timestamp_ns: 111,
                 group_boundary: MessageGroupBoundary::ContinuesGroup,
                 lost_since_last_read: 0,
@@ -2267,7 +2300,7 @@ mod tests {
             mailboxes.read_raw_from_inbound_link("in").unwrap(),
             Some((
                 MessageReadFromInputPort {
-                    payload_bytes: b"starts-a-group".to_vec(),
+                    payload: b"starts-a-group".to_vec().into(),
                     timestamp_ns: 222,
                     group_boundary: MessageGroupBoundary::StartsGroup,
                     lost_since_last_read: 0,
@@ -2296,6 +2329,142 @@ mod tests {
             channel.create_subscriber(16).unwrap(),
         );
         (mailboxes, output_writer_publishing_onto(&channel, "out"))
+    }
+
+    /// A read hands back the channel sample itself, and the bytes it borrows
+    /// stay as they were while the publisher keeps sending into the same
+    /// channel.
+    ///
+    /// Fail-without-fix: copy the sample out at the receive and the payload is
+    /// owned bytes, not the borrowed sample.
+    #[test]
+    fn a_borrowed_message_keeps_its_bytes_while_the_publisher_keeps_sending() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("borrow-held", ReadMode::ReadNextInOrder);
+        write_starting_a_group(&output_writer, "held");
+        let held = mailboxes
+            .read_raw("in")
+            .unwrap()
+            .expect("the first message");
+        assert!(
+            matches!(
+                held.payload,
+                InputPortMessagePayload::BorrowedChannelSample(_)
+            ),
+            "a read must borrow the sample, not copy it: {:?}",
+            held.payload
+        );
+        let held_address = held.payload.as_ptr();
+        assert_eq!(
+            held_address as usize % 64,
+            0,
+            "the payload starts cache-line aligned"
+        );
+
+        for later in 0..40 {
+            write_starting_a_group(&output_writer, &format!("later-{later:02}"));
+            let _ = mailboxes.read_raw("in").unwrap();
+        }
+
+        assert_eq!(held.payload, b"held");
+        assert_eq!(held.payload.as_ptr(), held_address);
+    }
+
+    /// A reader holding its quota past a full mailbox drops and counts only its
+    /// own link's newest frames, and a second link on the same output, read as
+    /// it arrives, receives every frame.
+    ///
+    /// Fail-without-fix: hold no per-link budget and the stalled reader's
+    /// subscriber exhausts its borrow limit, so its frames are lost uncounted
+    /// in its ring.
+    #[test]
+    fn a_link_past_its_quota_drops_only_its_own_frames() {
+        const MAILBOX_DEPTH: usize = 4;
+        const FRAMES_PAST_THE_FULL_MAILBOX: usize = 5;
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix("quota-two-links"), 3, 16)
+            .unwrap();
+        let stalled = InputMailboxesInner::new();
+        stalled.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
+        stalled.add_channel_subscriber(
+            "in",
+            "L-stalled",
+            &InboundLinkName::from("psource/out"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let keeping_up = InputMailboxesInner::new();
+        keeping_up.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
+        keeping_up.add_channel_subscriber(
+            "in",
+            "L-keeping-up",
+            &InboundLinkName::from("psource/out"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let output_writer = output_writer_publishing_onto(&channel, "out");
+        let quota = DEFAULT_INPUT_PORT_BORROW_QUOTA;
+
+        let mut held_by_the_stalled_reader = Vec::new();
+        let mut read_by_the_keeping_up_reader = 0;
+        let total_frames = quota + MAILBOX_DEPTH + FRAMES_PAST_THE_FULL_MAILBOX;
+        for frame in 0..total_frames {
+            write_starting_a_group(&output_writer, &format!("frame-{frame}"));
+            if held_by_the_stalled_reader.len() < quota {
+                held_by_the_stalled_reader
+                    .push(stalled.read_raw("in").unwrap().expect("a frame to hold"));
+            } else {
+                stalled.receive_pending();
+            }
+            while keeping_up.read_raw("in").unwrap().is_some() {
+                read_by_the_keeping_up_reader += 1;
+            }
+        }
+
+        assert_eq!(
+            dropped_bag_counts_of(&stalled),
+            std::collections::BTreeMap::from([(
+                "L-stalled".to_string(),
+                FRAMES_PAST_THE_FULL_MAILBOX as u64
+            )]),
+        );
+        assert_eq!(
+            dropped_bag_counts_of(&keeping_up),
+            std::collections::BTreeMap::from([("L-keeping-up".to_string(), 0)]),
+        );
+        assert_eq!(read_by_the_keeping_up_reader, total_frames);
+
+        drop(held_by_the_stalled_reader);
+        write_starting_a_group(&output_writer, "after-the-release");
+        stalled.receive_pending();
+        let mut queued = stalled.drain("in");
+        assert_eq!(queued.len(), MAILBOX_DEPTH);
+        assert_eq!(queued.pop().unwrap(), b"after-the-release");
+    }
+
+    /// A port's quota is what it was set to: with a quota of zero, a message its
+    /// reader holds takes a place in the mailbox, so the frame that would fill
+    /// it is the newest one dropped.
+    #[test]
+    fn a_port_with_no_quota_drops_the_newest_frame_while_its_reader_holds_one() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("quota-zero", ReadMode::ReadNextInOrder);
+        mailboxes.set_input_port_borrow_quota("in", 0).unwrap();
+        write_starting_a_group(&output_writer, "held");
+        let _held = mailboxes.read_raw("in").unwrap().expect("the held message");
+        for frame in 0..15 {
+            write_starting_a_group(&output_writer, &format!("queued-{frame}"));
+        }
+        write_starting_a_group(&output_writer, "past-the-quota");
+        mailboxes.receive_pending();
+
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 1)]),
+        );
+        assert!(
+            mailboxes
+                .set_input_port_borrow_quota("not-a-port", 1)
+                .is_err()
+        );
     }
 
     fn write_starting_a_group(output_writer: &crate::iceoryx2::OutputWriterInner, payload: &str) {
@@ -2385,7 +2554,7 @@ mod tests {
         std::iter::from_fn(|| mailboxes.read_raw(port).unwrap())
             .map(|message| {
                 (
-                    String::from_utf8(message.payload_bytes).unwrap(),
+                    String::from_utf8(message.payload.to_vec()).unwrap(),
                     message.lost_since_last_read,
                 )
             })
@@ -2448,7 +2617,7 @@ mod tests {
         let read_claimed_and_lost_since_last_read: Vec<(String, bool, u64)> =
             std::iter::from_fn(|| mailboxes.read_raw("in").unwrap())
                 .map(|message| {
-                    let surface_id = String::from_utf8(message.payload_bytes).unwrap();
+                    let surface_id = String::from_utf8(message.payload.to_vec()).unwrap();
                     let claim = minted_frame_generations
                         .refusal_of_a_retired_frame_id_named(&surface_id)
                         .expect("every id names a slot the ring owns");
@@ -2514,24 +2683,6 @@ mod tests {
             mailboxes.count_the_message_last_read_as_lost("not-a-port"),
             Err(Error::Link(refusal)) if refusal.contains("Unknown input port")
         ));
-    }
-
-    /// A bag no link delivered — a manually injected frame — has no link to
-    /// count its loss on, and is refused rather than charged to another.
-    #[test]
-    fn a_message_no_link_delivered_is_not_counted_lost_on_any_link() {
-        let (mailboxes, _output_writer) = a_port_read_as_fed_by_a_native_writer(
-            "injected-not-countable",
-            ReadMode::ReadNextInOrder,
-        );
-        assert!(mailboxes.route(wire_frame_stamping("in", 0, 3, b"raw")));
-        mailboxes.read_raw("in").unwrap().expect("the injected bag");
-
-        assert!(mailboxes.count_the_message_last_read_as_lost("in").is_err());
-        assert_eq!(
-            dropped_bag_counts_of(&mailboxes),
-            std::collections::BTreeMap::from([("L-declared".to_string(), 0)]),
-        );
     }
 
     /// Bags the ring overwrote behind bags already queued are told to the first
@@ -2673,36 +2824,6 @@ mod tests {
         );
     }
 
-    /// A frame too short to carry a frame header consumed a sequence number and
-    /// reaches no reader, so it is counted on the link it arrived on rather than
-    /// only warned about.
-    #[test]
-    fn a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on() {
-        let (publisher, subscriber) = open_channel_for_one_link("undersized-frame", 4);
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("in", 4, ReadMode::SkipToLatest);
-        mailboxes.add_channel_subscriber(
-            "in",
-            "L-undersized",
-            &InboundLinkName::from("psource/out"),
-            subscriber,
-        );
-
-        publisher.send_numbered(&[0u8; FRAME_HEADER_SIZE - 1]);
-        publish_one_frame(&publisher, "out", b"a whole frame");
-        mailboxes.receive_pending();
-
-        assert_eq!(
-            dropped_bag_counts_of(&mailboxes),
-            std::collections::BTreeMap::from([("L-undersized".to_string(), 1)]),
-        );
-        assert_eq!(
-            mailboxes.drain("in").len(),
-            1,
-            "the whole frame behind it is delivered"
-        );
-    }
-
     /// A frame for a link whose local port has no mailbox consumed a sequence
     /// number and reaches no reader, so it is counted on its link.
     #[test]
@@ -2769,7 +2890,7 @@ mod tests {
             .expect("a delivered bag names its link")
         {
             named.push((
-                String::from_utf8(message.payload_bytes).unwrap(),
+                String::from_utf8(message.payload.to_vec()).unwrap(),
                 inbound_link_name.as_str().to_string(),
             ));
         }
@@ -2957,13 +3078,13 @@ mod tests {
             .read_raw("videoIn")
             .expect("a cast-alike spelling names the port")
             .expect("three bags were published")
-            .payload_bytes;
+            .payload;
         assert_eq!(payload, b"first");
         let (message, inbound_link_name) = mailboxes
             .read_raw_from_inbound_link("VideoIn")
             .expect("a cast-alike spelling names the port")
             .expect("two bags remain");
-        assert_eq!(message.payload_bytes, b"second");
+        assert_eq!(message.payload, b"second");
         assert_eq!(inbound_link_name.as_str(), "pcamera/videoout");
         let (bag, _inbound_link_name) = mailboxes
             .read_msgpack_from_inbound_link::<String>("VIDEOIN")
@@ -3169,49 +3290,6 @@ mod tests {
             discarded_samples_by_link(),
             std::collections::BTreeMap::from([("L-second".to_string(), 0)]),
         );
-    }
-
-    /// A bag nothing delivered has no link to name, and the read says so
-    /// instead of borrowing one.
-    ///
-    /// The refusal consumes the bag it refused — the mailbox admits no peek, so
-    /// the frame leaves the queue before its link is looked at — and `read_raw`,
-    /// which names no link, is the read for such a port.
-    #[test]
-    fn an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one() {
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("in", 4, ReadMode::ReadNextInOrder);
-        assert!(
-            mailboxes.route(wire_frame_stamping("in", 0, 5, b"hello")),
-            "the frame must route to port 'in'"
-        );
-
-        let refusal = mailboxes
-            .read_raw_from_inbound_link("in")
-            .expect_err("an injected bag has no link to name")
-            .to_string();
-        assert!(
-            refusal.contains("'in'") && refusal.contains("read_raw"),
-            "the refusal must name the port and the read that does work; got {refusal}"
-        );
-        assert!(
-            mailboxes
-                .read_raw("in")
-                .expect("the plain read is untouched by the refusal")
-                .is_none(),
-            "the refusal consumes the bag it refused, so nothing is left behind it"
-        );
-
-        assert!(
-            mailboxes.route(wire_frame_stamping("in", 0, 5, b"world")),
-            "the frame must route to port 'in'"
-        );
-        let body = mailboxes
-            .read_raw("in")
-            .expect("the plain read is untouched")
-            .expect("a read that names no link reads an injected bag whole")
-            .payload_bytes;
-        assert_eq!(body, b"world");
     }
 
     // =========================================================================
@@ -3568,8 +3646,7 @@ mod tests {
         fn windows_read_out_of(mailboxes: &InputMailboxesInner) -> Vec<Vec<f32>> {
             let mut windows = Vec::new();
             while let Some(message) = mailboxes.read_raw("in").expect("the port reads") {
-                let (scalars, sample_rate, channels) =
-                    scalars_of_one_window(&message.payload_bytes);
+                let (scalars, sample_rate, channels) = scalars_of_one_window(&message.payload);
                 assert_eq!(sample_rate, 48_000, "the window is at the device's rate");
                 assert_eq!(channels, 2, "the window is in the device's channel count");
                 assert_eq!(
@@ -3818,7 +3895,7 @@ mod tests {
             .read_raw("in")
             .expect("a window reads")
             .expect("the gate said a window was ready")
-            .payload_bytes;
+            .payload;
         assert!(!window.is_empty());
     }
 
@@ -3889,7 +3966,7 @@ mod tests {
             .read_raw("in")
             .expect("reads")
             .expect("a bag")
-            .payload_bytes;
+            .payload;
         assert_eq!(read_back, published);
     }
 
@@ -3952,7 +4029,7 @@ mod tests {
             published_bags: usize,
             contract: Option<ResolvedAudioWindowContract>,
         ) -> u64 {
-            let (publisher, subscriber) = open_channel_for_one_link(tag, 4);
+            let (publisher, subscriber) = open_channel_for_one_link(tag, depth);
             let mailboxes = InputMailboxesInner::new();
             match contract {
                 Some(contract) => {
@@ -4253,19 +4330,18 @@ mod tests {
     /// unusable, so it must surface as a typed error naming the port and both
     /// numbers rather than slicing past the frame.
     ///
-    /// Fail-without-fix: drop the bound and the read slices
-    /// `[80..80 + 4096]` out of an 88-byte frame — "range end index 4176 out of
-    /// range for slice of length 88".
+    /// Fail-without-fix: drop the bound and the read slices `[..4096]` out of
+    /// a 64-byte sample.
     #[test]
     fn a_read_rejects_a_frame_stamping_more_payload_than_it_carries() {
         const STAMPED: u32 = 4096;
-        const CARRIED: usize = 8;
+        const CARRIED: usize = 64;
 
         let inner = InputMailboxesInner::new();
         inner.add_port("in", 64, ReadMode::ReadNextInOrder);
+        let link = a_test_link_into(&inner, "in");
 
-        let malformed = wire_frame_stamping("in", 42, STAMPED, &[0u8; CARRIED]);
-        assert!(inner.route(malformed), "frame must route to port 'in'");
+        link.send_numbered(&TestChannelSample::stamping(42, STAMPED, &[0u8; CARRIED]));
 
         let err = match inner.read_raw("in") {
             Err(e) => e,
@@ -4274,7 +4350,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+                Error::ChannelSampleStampsAPayloadPastTheSample {
                     port,
                     stamped_payload_bytes,
                     available_payload_bytes,
@@ -4286,7 +4362,7 @@ mod tests {
         );
         // Diagnosable without a debugger: the rendered message carries all three.
         let rendered = err.to_string();
-        for expected in ["'in'", "4096", "8"] {
+        for expected in ["'in'", "4096", "64"] {
             assert!(
                 rendered.contains(expected),
                 "message must name {expected}: {rendered}"
@@ -4295,14 +4371,10 @@ mod tests {
 
         // The malformed frame is dropped — the port keeps serving.
         let body = [1u8, 2, 3, 4];
-        let well_formed = wire_frame_stamping("in", 43, body.len() as u32, &body);
-        assert!(
-            inner.route(well_formed),
-            "well-formed frame must route to port 'in'"
-        );
+        link.send_numbered(&TestChannelSample::carrying(43, &body));
 
         let MessageReadFromInputPort {
-            payload_bytes: data,
+            payload: data,
             timestamp_ns,
             ..
         } = inner
@@ -4327,13 +4399,13 @@ mod tests {
 
         let inner = InputMailboxesInner::new();
         inner.add_port("in", 8, ReadMode::ReadNextInOrder);
+        let link = a_test_link_into(&inner, "in");
 
         let body: Vec<u8> = (0..CARRIED as u32).map(|i| (i % 251) as u8).collect();
-        let frame = wire_frame_stamping("in", 77, STAMPED as u32, &body);
-        assert!(inner.route(frame), "frame must route to port 'in'");
+        link.send_numbered(&TestChannelSample::stamping(77, STAMPED as u32, &body));
 
         let MessageReadFromInputPort {
-            payload_bytes: data,
+            payload: data,
             timestamp_ns,
             ..
         } = inner
@@ -4354,28 +4426,6 @@ mod tests {
 
         // The slack was dropped with the frame — the port is empty.
         assert!(inner.read_raw("in").expect("read").is_none());
-    }
-
-    /// A malformed length prefix must not deliver a frame to a real mailbox.
-    ///
-    /// The saturating bound is only safe because a clamped name fails to match
-    /// a port — which stops being true at exactly one width: a port named with
-    /// the full 63 bytes is what the clamp produces, so an over-capacity prefix
-    /// on a frame for that port reads back as the port's own name.
-    #[test]
-    fn route_refuses_a_frame_whose_port_key_prefix_is_over_capacity() {
-        let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
-
-        let inner = InputMailboxesInner::new();
-        inner.add_port(&longest_port, 64, ReadMode::ReadNextInOrder);
-
-        let mut frame = wire_frame_stamping(&longest_port, 42, 4, &[0u8; 4]);
-        frame[0] = 0xFF;
-
-        assert!(
-            !inner.route(frame),
-            "a frame with an over-capacity prefix must not reach a real mailbox"
-        );
     }
 
     /// Clone bumps the strong count via the host-installed

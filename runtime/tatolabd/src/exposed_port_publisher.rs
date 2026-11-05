@@ -586,7 +586,7 @@ impl ExposedPortTrackWriter {
             return;
         }
         let timestamp = the_object_timestamp_of(message.timestamp_ns);
-        let payload = Bytes::from(message.payload_bytes);
+        let payload = Bytes::from(message.payload.to_vec());
         for track in &mut self.tracks_at_each_relay {
             if !track.levels_served.contains(&level_now) {
                 track.finish_the_group_being_written();
@@ -994,7 +994,7 @@ mod tests {
         lost_since_last_read: u64,
     ) -> MessageReadFromInputPort {
         MessageReadFromInputPort {
-            payload_bytes: payload.to_vec(),
+            payload: payload.to_vec().into(),
             timestamp_ns: 1_000,
             group_boundary,
             lost_since_last_read,

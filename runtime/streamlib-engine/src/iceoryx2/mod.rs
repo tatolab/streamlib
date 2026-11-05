@@ -10,6 +10,8 @@ mod channel_ceiling;
 mod channel_idle_poll_backoff;
 mod channel_name;
 #[cfg(test)]
+pub(crate) mod channel_sample_test_support;
+#[cfg(test)]
 mod channel_sizing_tests;
 mod child_process_start_outside_listener_binds;
 mod delivery_profile;
@@ -17,6 +19,8 @@ mod helper_process_loss_count_board;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
+mod input_port_borrow_quota;
+mod input_port_message_payload;
 mod loss_counters;
 mod mailbox;
 mod message_group_loss_recovery_gate;
@@ -67,6 +71,12 @@ pub use iceoryx2_domain_for_this_test_process::{
     iceoryx2_domain_for_this_test_process,
 };
 pub use input::{InputMailboxes, InputMailboxesInner, MessageReadFromInputPort};
+pub use input_port_borrow_quota::{
+    DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA, input_port_borrow_quota,
+};
+pub use input_port_message_payload::{
+    BorrowedChannelSample, InputPortMessagePayload, SamplesOneInboundLinkHolds,
+};
 pub use loss_counters::{
     BagCountsByOutputPort, DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
 };
@@ -80,20 +90,22 @@ pub use payload::MessageGroupBoundary;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{
-    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
+    ChannelDataServiceLoanedSample, ChannelDataServicePublisher, ChannelDataServiceSample,
+    ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
     Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
     create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
     engine_owned_iceoryx2_prefix_for_this_user, reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
 };
-pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
+pub use output::{ChannelEgressConfig, OutputPortPayloadLoan, OutputWriter, OutputWriterInner};
 pub use payload::{
-    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagUserHeader,
-    FRAME_HEADER_FLAG_STARTS_GROUP, FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE,
-    FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, FramePayloadRefusal,
-    MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
+    ChannelTrustTier, DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES, DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelPayloadCacheLine, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, DataChannelSamplePayloadRefusal, DataChannelSampleUserHeader,
+    GpuPoolSlotFrameDescriptorBody, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
     RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
+    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES, data_channel_payload_bytes_of,
+    data_channel_payload_cache_lines_for,
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;

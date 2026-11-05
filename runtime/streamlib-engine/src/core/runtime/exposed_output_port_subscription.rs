@@ -32,8 +32,7 @@ use crate::core::graph::{
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
 use crate::iceoryx2::{
-    BagsAGapInTheNumberingSaysWereLost, DataChannelBagUserHeader, FrameHeader,
-    MessageReadFromInputPort,
+    BagsAGapInTheNumberingSaysWereLost, DataChannelSampleUserHeader, MessageReadFromInputPort,
 };
 
 /// One output port a loaded stream exposes, as it stands now.
@@ -401,8 +400,8 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
     fn message_from_a_bag_headed(
         &mut self,
         run: OneUnbrokenRun,
-        channel_user_header: DataChannelBagUserHeader,
-        framed_bag: &[u8],
+        channel_user_header: DataChannelSampleUserHeader,
+        sample_payload_area: &[u8],
     ) -> Option<MessageReadFromInputPort> {
         self.lost_ahead_of_the_next_message_forwarded = self
             .lost_ahead_of_the_next_message_forwarded
@@ -411,15 +410,14 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
                     .how_many_were_lost_before(run, channel_user_header.sequence_number),
             )
             .saturating_add(channel_user_header.messages_lost_upstream_before_this_one);
-        let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag) else {
+        let Ok(payload) = channel_user_header.payload_within(sample_payload_area) else {
             self.lost_ahead_of_the_next_message_forwarded += 1;
             return None;
         };
-        let header = FrameHeader::read_from_slice(framed_bag);
         Some(MessageReadFromInputPort {
-            payload_bytes: payload.to_vec(),
-            timestamp_ns: header.timestamp_ns,
-            group_boundary: header.group_boundary(),
+            payload: payload.to_vec().into(),
+            timestamp_ns: channel_user_header.timestamp_ns,
+            group_boundary: channel_user_header.group_boundary(),
             lost_since_last_read: std::mem::take(
                 &mut self.lost_ahead_of_the_next_message_forwarded,
             ),
@@ -438,7 +436,11 @@ impl ReservedSlotBagForwarding for ExposedOutputPortMessageForwarding<UniquePubl
         &mut self,
         bag: BagReceivedOnTheReservedSlot<'_>,
     ) -> Option<MessageReadFromInputPort> {
-        self.message_from_a_bag_headed(bag.publisher, bag.channel_user_header, bag.framed_bag)
+        self.message_from_a_bag_headed(
+            bag.publisher,
+            bag.channel_user_header,
+            bag.sample_payload_area,
+        )
     }
 
     fn dropped_into_a_full_receiver(&mut self, dropped: MessageReadFromInputPort, _channel: &str) {
@@ -465,7 +467,7 @@ mod tests {
         MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
     };
-    use crate::iceoryx2::{FRAME_HEADER_SIZE, MessageGroupBoundary, OutputWriterInner};
+    use crate::iceoryx2::{DataChannelPayloadDescriptor, MessageGroupBoundary, OutputWriterInner};
 
     /// How long a message or a change has to arrive.
     const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
@@ -574,7 +576,7 @@ mod tests {
         lost_since_last_read: u64,
     ) -> MessageReadFromInputPort {
         MessageReadFromInputPort {
-            payload_bytes: payload.to_vec(),
+            payload: payload.to_vec().into(),
             timestamp_ns,
             group_boundary,
             lost_since_last_read,
@@ -637,10 +639,7 @@ mod tests {
         let mut subscription = camera.subscribe("out1").unwrap();
         // The first message read is the numbering's baseline.
         camera.write(b"first", 0, MessageGroupBoundary::StartsGroup);
-        assert_eq!(
-            camera.next_message(&mut subscription).payload_bytes,
-            b"first"
-        );
+        assert_eq!(camera.next_message(&mut subscription).payload, b"first");
 
         let written_while_not_reading = 400u64;
         for index in 0..written_while_not_reading {
@@ -657,7 +656,7 @@ mod tests {
         let mut count = |message: MessageReadFromInputPort| {
             read += 1;
             lost += message.lost_since_last_read;
-            message.payload_bytes
+            message.payload
         };
         // Everything queued is read before `last`, so the receiver has room for it.
         while let Ok(Some(message)) = camera.async_runtime.block_on(async {
@@ -808,27 +807,21 @@ mod tests {
         );
     }
 
-    /// A channel user header carrying `sequence_number` and no declared loss.
-    fn numbered(sequence_number: u64) -> DataChannelBagUserHeader {
-        DataChannelBagUserHeader {
+    /// A channel user header numbered `sequence_number`, stamping 7 and
+    /// `stamped_payload_bytes`, starting a group, with no declared loss.
+    fn numbered_stamping(
+        sequence_number: u64,
+        stamped_payload_bytes: usize,
+    ) -> DataChannelSampleUserHeader {
+        DataChannelSampleUserHeader {
             sequence_number,
-            messages_lost_upstream_before_this_one: 0,
+            ..DataChannelSampleUserHeader::new(
+                7,
+                stamped_payload_bytes as u32,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
         }
-    }
-
-    /// `payload` framed as `out1` sends it, stamped 7 and starting a group.
-    fn framed(payload: &[u8]) -> Vec<u8> {
-        let mut bag = vec![0u8; FRAME_HEADER_SIZE + payload.len()];
-        FrameHeader::new(
-            "out1",
-            7,
-            payload.len() as u32,
-            MessageGroupBoundary::StartsGroup,
-        )
-        .unwrap()
-        .write_to_slice(&mut bag);
-        bag[FRAME_HEADER_SIZE..].copy_from_slice(payload);
-        bag
     }
 
     /// A gap in the numbering, an unreadable bag and a message dropped into a
@@ -838,7 +831,7 @@ mod tests {
         let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
         let run = 1u64;
         let first = forwarding
-            .message_from_a_bag_headed(run, numbered(0), &framed(b"a"))
+            .message_from_a_bag_headed(run, numbered_stamping(0, 1), b"a")
             .unwrap();
         assert_eq!(
             first,
@@ -846,11 +839,11 @@ mod tests {
         );
         assert!(
             forwarding
-                .message_from_a_bag_headed(run, numbered(3), &[0u8; 4])
+                .message_from_a_bag_headed(run, numbered_stamping(3, 8), &[0u8; 4])
                 .is_none()
         );
         let dropped = forwarding
-            .message_from_a_bag_headed(run, numbered(4), &framed(b"b"))
+            .message_from_a_bag_headed(run, numbered_stamping(4, 1), b"b")
             .unwrap();
         assert_eq!(
             dropped.lost_since_last_read, 3,
@@ -859,7 +852,7 @@ mod tests {
         forwarding.count_a_message_dropped_into_a_full_receiver(dropped);
         assert_eq!(
             forwarding
-                .message_from_a_bag_headed(run, numbered(5), &framed(b"c"))
+                .message_from_a_bag_headed(run, numbered_stamping(5, 1), b"c")
                 .unwrap()
                 .lost_since_last_read,
             4,
@@ -873,20 +866,20 @@ mod tests {
     fn the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it() {
         let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
         let run = 1u64;
-        let first_carrying_two_lost_upstream = DataChannelBagUserHeader {
-            sequence_number: 0,
+        let first_carrying_two_lost_upstream = DataChannelSampleUserHeader {
             messages_lost_upstream_before_this_one: 2,
+            ..numbered_stamping(0, 1)
         };
         assert_eq!(
             forwarding
-                .message_from_a_bag_headed(run, first_carrying_two_lost_upstream, &framed(b"a"))
+                .message_from_a_bag_headed(run, first_carrying_two_lost_upstream, b"a")
                 .unwrap()
                 .lost_since_last_read,
             2
         );
         assert_eq!(
             forwarding
-                .message_from_a_bag_headed(run, numbered(1), &framed(b"b"))
+                .message_from_a_bag_headed(run, numbered_stamping(1, 1), b"b")
                 .unwrap()
                 .lost_since_last_read,
             0,

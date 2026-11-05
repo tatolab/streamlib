@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_queue::ArrayQueue;
 
+use super::DataChannelSampleUserHeader;
 use super::channel_name::InboundLinkName;
+use super::input_port_message_payload::InputPortMessagePayload;
 use super::loss_counters::InboundLinkDroppedBagCounter;
 use super::read_mode::ReadMode;
 
@@ -35,17 +37,15 @@ pub type PortMailboxEvictionNotice = Arc<dyn Fn() + Send + Sync>;
 ///
 /// The tag rides the entry rather than the port so a port fanning in N links
 /// attributes an eviction to the link whose bag was lost, not to the link whose
-/// push made room. `None` on the manual-injection path
-/// ([`PortMailbox::push_frame_without_inbound_link_attribution`]), which
-/// synthesizes a frame with no link behind it.
+/// push made room.
 struct PortMailboxQueuedFrame {
-    payload: Vec<u8>,
+    payload: InputPortMessagePayload,
+    channel_user_header: DataChannelSampleUserHeader,
     dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
     /// The link's messages lost before reaching the mailbox, as the count stood
     /// when this frame was queued.
     lost_before_reaching_the_mailbox_when_queued: u64,
-    /// The link this frame arrived on, so a read can name it. `None` on the
-    /// manual-injection path, which has no link behind it.
+    /// The link this frame arrived on, so a read can name it.
     inbound_link_name: Option<InboundLinkName>,
     /// This frame's share of [`PortMailbox::queued_frame_measure_total`], taken
     /// when it was pushed. Zero on a mailbox with no measure installed.
@@ -70,6 +70,7 @@ impl PortMailboxQueuedFrame {
         }
         PortMailboxDeliveredBag {
             payload: self.payload,
+            channel_user_header: self.channel_user_header,
             inbound_link_name: self.inbound_link_name,
             dropped_bag_counter: self.dropped_bag_counter,
         }
@@ -78,19 +79,21 @@ impl PortMailboxQueuedFrame {
 
 /// One frame handed to a reader, with the inbound link it arrived on.
 pub struct PortMailboxDeliveredBag {
-    /// The raw wire frame (header + body), exactly as it was queued.
-    pub payload: Vec<u8>,
-    /// The link it arrived on; `None` for a manually injected frame.
+    /// The sample's payload area, or the bytes copied out of it.
+    pub payload: InputPortMessagePayload,
+    /// The user header the sample carried.
+    pub channel_user_header: DataChannelSampleUserHeader,
+    /// The link it arrived on.
     pub inbound_link_name: Option<InboundLinkName>,
     /// The dropped-bag count of the link it arrived on, which has noted this
-    /// bag as taken; `None` for a manually injected frame.
+    /// bag as taken.
     pub dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
 }
 
 /// Per-port mailbox with configurable history depth.
 ///
-/// Stores raw wire-format `[u8]` slices (header + data) as `Vec<u8>`.
-/// Uses a crossbeam ArrayQueue internally for lock-free, thread-safe access.
+/// Stores each frame's payload — the channel sample itself, or a copy for a
+/// windowed port — with the user header it carried. Uses a crossbeam ArrayQueue internally for lock-free, thread-safe access.
 /// Multiple threads can push and pop concurrently (MPMC); the queue stays
 /// sound, but a link's losses land on the right bag only while its owner
 /// serializes every push and pop.
@@ -161,37 +164,27 @@ impl PortMailbox {
         }
     }
 
-    /// Push a raw frame slice that arrived on `dropped_bag_counter`'s inbound link.
+    /// Push a frame that arrived on `dropped_bag_counter`'s inbound link under
+    /// `channel_user_header`.
     ///
     /// If the mailbox is full, the oldest entry is evicted to make room and, on
     /// an `ordered` port, counted against the link *it* arrived on.
     /// Thread-safe: can be called from any thread.
     pub fn push_frame_from_inbound_link(
         &self,
-        payload: Vec<u8>,
+        payload: InputPortMessagePayload,
+        channel_user_header: DataChannelSampleUserHeader,
         dropped_bag_counter: &InboundLinkDroppedBagCounter,
         inbound_link_name: &InboundLinkName,
     ) {
         let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
+            channel_user_header,
             lost_before_reaching_the_mailbox_when_queued: dropped_bag_counter
                 .lost_before_reaching_the_mailbox(),
             dropped_bag_counter: Some(dropped_bag_counter.clone()),
             inbound_link_name: Some(inbound_link_name.clone()),
-            measure,
-        });
-    }
-
-    /// Push a raw frame slice that no inbound link delivered — the
-    /// manual-injection path, whose evictions have no link to name.
-    pub fn push_frame_without_inbound_link_attribution(&self, payload: Vec<u8>) {
-        let measure = self.measure_of(&payload);
-        self.push_frame(PortMailboxQueuedFrame {
-            payload,
-            dropped_bag_counter: None,
-            lost_before_reaching_the_mailbox_when_queued: 0,
-            inbound_link_name: None,
             measure,
         });
     }
@@ -286,11 +279,11 @@ impl PortMailbox {
         self.capacity
     }
 
-    /// Drain all entries from the mailbox.
+    /// Drain all entries from the mailbox, each payload copied out.
     ///
     /// Thread-safe: can be called from any thread.
     pub fn drain(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
-        std::iter::from_fn(move || self.pop().map(|bag| bag.payload))
+        std::iter::from_fn(move || self.pop().map(|bag| bag.payload.to_vec()))
     }
 
     /// Hand every queued frame over to the mailbox replacing this one, oldest
@@ -326,7 +319,28 @@ mod tests {
 
     /// The payload alone, for the assertions that care only which bag survived.
     fn payload_of(bag: Option<PortMailboxDeliveredBag>) -> Option<Vec<u8>> {
-        bag.map(|bag| bag.payload)
+        bag.map(|bag| bag.payload.to_vec())
+    }
+
+    /// Push `payload` as owned bytes under a header stamping its length.
+    fn push_owned_bytes(
+        mailbox: &PortMailbox,
+        payload: Vec<u8>,
+        dropped_bag_counter: &InboundLinkDroppedBagCounter,
+        inbound_link_name: &InboundLinkName,
+    ) {
+        let channel_user_header = DataChannelSampleUserHeader::new(
+            0,
+            payload.len() as u32,
+            crate::iceoryx2::MessageGroupBoundary::StartsGroup,
+            crate::iceoryx2::DataChannelPayloadDescriptor::bytes(),
+        );
+        mailbox.push_frame_from_inbound_link(
+            InputPortMessagePayload::OwnedBytes(payload),
+            channel_user_header,
+            dropped_bag_counter,
+            inbound_link_name,
+        );
     }
 
     #[test]
@@ -338,8 +352,8 @@ mod tests {
         let second_link_name = InboundLinkName::from("psecond/out");
         let mailbox = PortMailbox::new(1, ReadMode::ReadNextInOrder);
 
-        mailbox.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
-        mailbox.push_frame_from_inbound_link(vec![2], &from_second_link, &second_link_name);
+        push_owned_bytes(&mailbox, vec![1], &from_first_link, &first_link_name);
+        push_owned_bytes(&mailbox, vec![2], &from_second_link, &second_link_name);
 
         assert_eq!(
             from_first_link.dropped_bag_count(),
@@ -361,7 +375,7 @@ mod tests {
         let mailbox = PortMailbox::new(4, ReadMode::ReadNextInOrder);
 
         for byte in 0..4u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&mailbox, vec![byte], &counter, &any_inbound_link_name());
         }
 
         assert_eq!(counter.dropped_bag_count(), 0);
@@ -379,9 +393,9 @@ mod tests {
         let first_link_name = InboundLinkName::from("pfirst/out");
         let second_link_name = InboundLinkName::from("psecond/out");
         let settling = PortMailbox::new(4, ReadMode::ReadNextInOrder);
-        settling.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
-        settling.push_frame_from_inbound_link(vec![2], &from_first_link, &first_link_name);
-        settling.push_frame_from_inbound_link(vec![3], &from_second_link, &second_link_name);
+        push_owned_bytes(&settling, vec![1], &from_first_link, &first_link_name);
+        push_owned_bytes(&settling, vec![2], &from_first_link, &first_link_name);
+        push_owned_bytes(&settling, vec![3], &from_second_link, &second_link_name);
 
         let replacement = PortMailbox::new(1, ReadMode::ReadNextInOrder);
         settling.hand_every_queued_frame_over_to(&replacement);
@@ -415,7 +429,7 @@ mod tests {
         let counter = counts.counter_for_inbound_link("L-unmeasured");
         let settling = PortMailbox::new(4, ReadMode::ReadNextInOrder);
         for byte in 0..3u8 {
-            settling.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&settling, vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             settling.queued_frame_measure_total(),
@@ -443,7 +457,7 @@ mod tests {
         let mailbox = PortMailbox::new(2, ReadMode::ReadNextInOrder);
 
         for byte in 0..10u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&mailbox, vec![byte], &counter, &any_inbound_link_name());
         }
         let delivered = mailbox.drain().count() as u64;
 
@@ -462,7 +476,7 @@ mod tests {
         let mailbox = PortMailbox::new(4, ReadMode::SkipToLatest);
 
         for byte in 0..10u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&mailbox, vec![byte], &counter, &any_inbound_link_name());
         }
 
         assert_eq!(payload_of(mailbox.pop_latest()), Some(vec![9]));
@@ -490,7 +504,7 @@ mod tests {
         );
 
         for byte in 0..2u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&mailbox, vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             evictions_heard.load(Ordering::Relaxed),
@@ -499,7 +513,7 @@ mod tests {
         );
 
         for byte in 2..6u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
+            push_owned_bytes(&mailbox, vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             counter.dropped_bag_count(),
@@ -510,21 +524,6 @@ mod tests {
             evictions_heard.load(Ordering::Relaxed),
             counter.dropped_bag_count(),
             "the notice must hear exactly the bags the inbound link was charged for"
-        );
-    }
-
-    #[test]
-    fn a_manually_injected_frame_evicts_with_no_link_to_charge() {
-        let mailbox = PortMailbox::new(1, ReadMode::ReadNextInOrder);
-
-        mailbox.push_frame_without_inbound_link_attribution(vec![1]);
-        mailbox.push_frame_without_inbound_link_attribution(vec![2]);
-
-        let delivered = mailbox.pop().expect("the surviving frame is delivered");
-        assert_eq!(delivered.payload, vec![2]);
-        assert_eq!(
-            delivered.inbound_link_name, None,
-            "a frame nothing delivered names no link, and a read must see that rather than a borrowed one"
         );
     }
 }

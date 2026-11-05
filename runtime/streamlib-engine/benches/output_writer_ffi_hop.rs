@@ -408,7 +408,7 @@ fn bench_channel_round_trip(c: &mut Criterion) {
                         .read_raw(black_box("in"))
                         .unwrap()
                         .expect("every write is read back in-line");
-                    black_box(message.payload_bytes);
+                    black_box(message.payload);
                 });
             },
         );

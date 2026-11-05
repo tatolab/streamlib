@@ -11,9 +11,11 @@
 
 use std::time::{Duration, Instant};
 
+use crate::iceoryx2::channel_sample_test_support::{TestChannelSample, stamped_payload_of};
 use crate::iceoryx2::{
-    ChannelDataServiceSubscriber, DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile,
-    FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, MessageGroupBoundary,
+    ChannelDataServiceSubscriber, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelPayloadCacheLine,
+    DataChannelSampleUserHeader, DeliveryProfile, Iceoryx2Node,
+    data_channel_payload_cache_lines_for,
 };
 
 /// Derived from the prime rather than written as a literal, so raising
@@ -21,16 +23,19 @@ use crate::iceoryx2::{
 /// tests below into no-ops.
 const OVERSIZED_PAYLOAD_BYTES: usize = DEFAULT_EXPECTED_PAYLOAD_BYTES * 4;
 
-/// Poll a subscriber until it yields one sample or the deadline passes. A
-/// transport error is a failure in its own right, never a timeout.
+/// Poll a subscriber until it yields one sample or the deadline passes, handing
+/// back its user header and stamped payload. A transport error is a failure in
+/// its own right, never a timeout.
 fn receive_one_sample_within(
     subscriber: &ChannelDataServiceSubscriber,
     timeout: Duration,
-) -> Option<Vec<u8>> {
+) -> Option<(DataChannelSampleUserHeader, Vec<u8>)> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match subscriber.receive() {
-            Ok(Some(sample)) => return Some(sample.payload().to_vec()),
+            Ok(Some(sample)) => {
+                return Some((*sample.user_header(), stamped_payload_of(&sample).to_vec()));
+            }
             Ok(None) => std::thread::sleep(Duration::from_millis(5)),
             Err(err) => panic!("subscriber.receive() failed: {err:?}"),
         }
@@ -55,7 +60,9 @@ fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
 
     assert!(
         publisher
-            .loan_slice_uninit(OVERSIZED_PAYLOAD_BYTES)
+            .loan_slice_uninit(data_channel_payload_cache_lines_for(
+                OVERSIZED_PAYLOAD_BYTES
+            ))
             .is_err(),
         "a publisher primed at the default with no growth strategy must reject an \
          oversized loan — if this passes, the growth tests below prove nothing"
@@ -80,19 +87,19 @@ fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
         .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
         .unwrap();
 
-    let sample = publisher.loan_slice_uninit(OVERSIZED_PAYLOAD_BYTES).expect(
+    let cache_lines = data_channel_payload_cache_lines_for(OVERSIZED_PAYLOAD_BYTES);
+    let sample = publisher.loan_slice_uninit(cache_lines).expect(
         "a publisher primed at DEFAULT_EXPECTED_PAYLOAD_BYTES must grow to loan an \
          oversized slice rather than rejecting it",
     );
     sample
-        .write_from_slice(&vec![0u8; OVERSIZED_PAYLOAD_BYTES])
+        .write_from_fn(|_| DataChannelPayloadCacheLine { bytes: [0u8; 64] })
         .send()
         .unwrap();
 }
 
-/// The full wire format a helper process speaks — `[FrameHeader][payload]` —
-/// survives the grow-on-first-loan path with every header field and every
-/// payload byte intact.
+/// A sample's user header and every payload byte survive the
+/// grow-on-first-loan path intact.
 #[test]
 fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
     let max_subscribers = 2;
@@ -115,37 +122,20 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
         .map(|i| (i % 251) as u8)
         .collect();
 
-    let total_len = FRAME_HEADER_SIZE + OVERSIZED_PAYLOAD_BYTES;
-    let mut frame = vec![0u8; total_len];
-    FrameHeader::new(
-        "dest_port",
-        42,
-        OVERSIZED_PAYLOAD_BYTES as u32,
-        MessageGroupBoundary::StartsGroup,
-    )
-    .expect("dest_port fits PortKey bounds")
-    .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-    frame[FRAME_HEADER_SIZE..].copy_from_slice(&payload);
-
-    let sample = publisher
-        .loan_slice_uninit(total_len)
-        .expect("header + oversized payload must loan from a default-primed publisher");
-    sample.write_from_slice(&frame).send().expect("send");
-
-    let received =
-        receive_one_sample_within(&subscriber, Duration::from_secs(2)).expect("frame within 2s");
-    assert_eq!(
-        received.len(),
-        total_len,
-        "received frame length must match header + payload"
+    TestChannelSample::carrying(42, &payload).send_under(
+        &publisher,
+        TestChannelSample::carrying(42, &payload).user_header_numbered(0),
     );
 
-    let header = FrameHeader::read_from_slice(&received);
-    assert_eq!(header.port(), "dest_port");
-    assert_eq!(header.timestamp_ns, 42);
-    assert_eq!(header.len as usize, OVERSIZED_PAYLOAD_BYTES);
+    let (user_header, received) =
+        receive_one_sample_within(&subscriber, Duration::from_secs(2)).expect("frame within 2s");
+    assert_eq!(user_header.timestamp_ns, 42);
     assert_eq!(
-        &received[FRAME_HEADER_SIZE..],
+        user_header.payload_byte_len as usize,
+        OVERSIZED_PAYLOAD_BYTES
+    );
+    assert_eq!(
+        received.as_slice(),
         payload.as_slice(),
         "payload bytes must survive the grow-on-first-loan path — a mismatch means \
          the subscriber dropped data past the prime"
@@ -218,7 +208,7 @@ fn a_ceiling_sized_bag_fills_the_ceilings_chunk_and_one_byte_more_takes_the_next
             .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
             .unwrap();
         let sample = publisher
-            .loan_slice_uninit(frame_bytes)
+            .loan_slice_uninit(data_channel_payload_cache_lines_for(frame_bytes))
             .expect("a growing publisher loans past its prime");
 
         assert_eq!(
