@@ -68,9 +68,9 @@ _MAPPING_ORIGINS = (
 
 # `get_type_hints` keeps a TypedDict key's requiredness qualifier, which says
 # nothing about the value's type and hides it from the mapper. Recognised by
-# the special form's own name rather than by identity, because the 3.10 floor
-# has these from `typing_extensions` and 3.11+ from `typing`, and a config
-# class may be written against either.
+# the special form's own name rather than by identity, because `typing` and
+# `typing_extensions` each have their own, and a config class may be written
+# against either.
 _REQUIREDNESS_QUALIFIER_NAMES = ("Required", "NotRequired")
 
 # Where a model's own document points at its own definitions.
@@ -81,9 +81,7 @@ def _is_a_typed_dict(candidate: Any) -> bool:
     """Whether `candidate` is a TypedDict under either spelling.
 
     `typing.is_typeddict` recognises `typing.TypedDict` alone, and a
-    `typing_extensions.TypedDict` subclass — what an author on the 3.10 floor
-    reaches for, and what `Required` / `NotRequired` need there — is invisible
-    to it. The pair of key sets is the structural signature of one; nothing
+    `typing_extensions.TypedDict` subclass is invisible to it. The pair of key sets is the structural signature of one; nothing
     else carries both.
     """
     return typing.is_typeddict(candidate) or (
@@ -344,9 +342,7 @@ def _json_schema_for_annotation(
             return _sequence_schema(annotation, origin, ancestry)
         if origin in _MAPPING_ORIGINS:
             return {"type": "object"}
-        # A parameterized generic the deriver does not know. This branch is
-        # also what keeps one out of the nested-class branch below on Python
-        # 3.10, where `isinstance(dict[str, int], type)` is still True.
+        # A parameterized generic the deriver does not know.
         return {}
 
     if isinstance(annotation, type):

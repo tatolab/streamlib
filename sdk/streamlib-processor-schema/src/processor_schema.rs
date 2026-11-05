@@ -57,7 +57,7 @@ pub struct RuntimeOptions {
     /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
     #[serde(default)]
     pub unsafe_send: bool,
-    /// [Python] Required Python version spec (e.g., ">=3.10"). Python runtime only.
+    /// [Python] Required Python version spec (e.g., ">=3.12"). Python runtime only.
     #[serde(default)]
     pub python_version: Option<String>,
 }

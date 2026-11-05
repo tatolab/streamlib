@@ -19,16 +19,16 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Self, TypedDict, assert_type
 
 import pydantic
 import pytest
-from typing_extensions import Self, assert_type
 
 from tatolab.runtime import _engine
 from tatolab.stream import (
     MsgpackCast,
     NodeLinkDataAccess,
+    PortPayloadBorrow,
     gpu_limited_access_of_the_typed_read_in_progress,
     msgpack,
     msgpack_typed_dict_cast,
@@ -70,12 +70,12 @@ class PayloadBytesTheCastWasHanded:
     """A target with its own `from_bytes`, keeping exactly what it was handed
     and what the read offered it while it ran."""
 
-    def __init__(self, payload: bytes, offered: object) -> None:
+    def __init__(self, payload: PortPayloadBorrow, offered: object) -> None:
         self.payload = payload
         self.offered = offered
 
     @classmethod
-    def from_bytes(cls, payload: bytes) -> Self:
+    def from_bytes(cls, payload: PortPayloadBorrow) -> Self:
         return cls(payload, gpu_limited_access_of_the_typed_read_in_progress())
 
 
@@ -85,6 +85,13 @@ class DetectionDataclassWithoutACast:
 
     label: str
     score: float
+
+
+def payload_bytes_and_stamp_of(
+    read: "tuple[PortPayloadBorrow, int] | tuple[None, None]",
+) -> "tuple[bytes | None, int | None]":
+    payload, timestamp_ns = read
+    return (None if payload is None else bytes(payload), timestamp_ns)
 
 
 class WiredLinkUnderTest:
@@ -144,15 +151,16 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
 def test_a_read_without_into_yields_the_payload_bytes_unchanged(
     wired_link: WiredLinkUnderTest,
 ):
-    """No target named, so nothing is cast: the read hands back the bytes the
-    writer wrote — msgpack or not, the runtime never looks inside."""
+    """No target named, so nothing is cast: the read hands back a borrow of
+    the bytes the writer wrote — msgpack or not, the runtime never looks inside."""
     for payload in (msgpack.pack({"label": "cat", "score": 0.9}), b"\xc1 not msgpack"):
         wired_link.deliver(payload)
 
         read = wired_link.destination.read_from_input_port(INPUT_PORT)
 
-        assert read == payload
-        assert type(read) is bytes
+        assert read is not None
+        assert bytes(read) == payload
+        assert type(read).__name__ == "PortPayloadBorrow", "a read borrows rather than copying"
 
 
 def test_read_with_timestamp_yields_the_payload_bytes_and_the_writers_stamp(
@@ -160,10 +168,9 @@ def test_read_with_timestamp_yields_the_payload_bytes_and_the_writers_stamp(
 ):
     wired_link.source.write_to_output_port(OUTPUT_PORT, b"stamped", 42)
 
-    assert wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT) == (
-        b"stamped",
-        42,
-    )
+    assert payload_bytes_and_stamp_of(
+        wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT)
+    ) == (b"stamped", 42)
     assert wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT) == (
         None,
         None,
@@ -192,7 +199,7 @@ def test_the_target_is_handed_the_payload_bytes_exactly(
     )
 
     assert read is not None
-    assert read.payload == b"\x00\x01\x02 any bytes at all"
+    assert bytes(read.payload) == b"\x00\x01\x02 any bytes at all"
     assert read.offered is None
 
 
@@ -291,31 +298,44 @@ def test_a_target_without_from_bytes_is_refused_by_port_name(
 
 
 # =============================================================================
-# The write takes bytes and nothing else
+# The write takes a buffer and nothing else
 # =============================================================================
 
 
 @pytest.mark.parametrize(
-    ("payload_that_is_not_bytes", "type_name"),
+    ("payload_that_is_not_a_buffer", "type_name"),
     [
         ({"label": "cat"}, "dict"),
         ("cat", "str"),
-        (bytearray(b"cat"), "bytearray"),
-        (memoryview(b"cat"), "memoryview"),
     ],
 )
-def test_a_write_refuses_a_payload_that_is_not_bytes_naming_bytes(
-    wired_link: WiredLinkUnderTest, payload_that_is_not_bytes: object, type_name: str
+def test_a_write_refuses_a_payload_that_is_not_a_buffer_naming_the_buffer(
+    wired_link: WiredLinkUnderTest, payload_that_is_not_a_buffer: object, type_name: str
 ):
     """No encoding happens behind `write`, so a record handed to it is an
     author's mistake to name at the call — never one to pack for them."""
-    with pytest.raises(TypeError, match=f"as bytes; got a {type_name}"):
+    with pytest.raises(TypeError, match=f"as a contiguous buffer.*; got a {type_name}"):
         wired_link.source.write_to_output_port(
             OUTPUT_PORT,
-            payload_that_is_not_bytes,  # type: ignore[arg-type]
+            payload_that_is_not_a_buffer,  # type: ignore[arg-type]
         )
 
     assert wired_link.destination.read_from_input_port(INPUT_PORT) is None
+
+
+@pytest.mark.parametrize(
+    "payload_buffer",
+    [bytearray(b"cat"), memoryview(b"xcat")[1:]],
+    ids=["bytearray", "memoryview"],
+)
+def test_a_write_copies_any_contiguous_buffer(
+    wired_link: WiredLinkUnderTest, payload_buffer: "bytearray | memoryview"
+):
+    wired_link.source.write_to_output_port(OUTPUT_PORT, payload_buffer)
+
+    read = wired_link.destination.read_from_input_port(INPUT_PORT)
+    assert read is not None
+    assert bytes(read) == b"cat"
 
 
 def test_a_write_that_names_starts_group_still_delivers_the_payload(
@@ -329,14 +349,12 @@ def test_a_write_that_names_starts_group_still_delivers_the_payload(
         OUTPUT_PORT, b"key", timestamp_ns=8, starts_group=True
     )
 
-    assert wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT) == (
-        b"delta",
-        7,
-    )
-    assert wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT) == (
-        b"key",
-        8,
-    )
+    assert payload_bytes_and_stamp_of(
+        wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT)
+    ) == (b"delta", 7)
+    assert payload_bytes_and_stamp_of(
+        wired_link.destination.read_from_input_port_with_timestamp(INPUT_PORT)
+    ) == (b"key", 8)
 
 
 # =============================================================================
@@ -361,9 +379,9 @@ def test_a_producer_publishing_one_type_reaches_a_consumer_reading_another(
     audio_chunk: UnrelatedAudioChunk = {"samples": [1, 2, 3], "sample_rate_hz": 48_000}
     wired_link.deliver(msgpack.pack(audio_chunk))
 
-    assert wired_link.destination.read_from_input_port(INPUT_PORT) == msgpack.pack(
-        audio_chunk
-    )
+    read = wired_link.destination.read_from_input_port(INPUT_PORT)
+    assert read is not None
+    assert bytes(read) == msgpack.pack(audio_chunk)
 
 
 def test_the_mismatch_surfaces_only_at_a_read_that_asked_for_strictness(
@@ -379,7 +397,9 @@ def test_the_mismatch_surfaces_only_at_a_read_that_asked_for_strictness(
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
 
     wired_link.deliver(audio_chunk)
-    assert wired_link.destination.read_from_input_port(INPUT_PORT) == audio_chunk
+    read = wired_link.destination.read_from_input_port(INPUT_PORT)
+    assert read is not None
+    assert bytes(read) == audio_chunk
 
 
 def test_a_read_that_raises_consumes_its_message(wired_link: WiredLinkUnderTest):
@@ -412,13 +432,13 @@ def test_the_link_keeps_delivering_after_a_read_raises(wired_link: WiredLinkUnde
 
 def test_the_named_target_is_what_a_type_checker_sees(wired_link: WiredLinkUnderTest):
     """Half of what `into=` buys is static: a read that names a target comes
-    back as that target rather than `Any`, and a plain read as `bytes`.
+    back as that target rather than `Any`, and a plain read as a borrow.
 
     `assert_type` is checked by pyright and is a no-op at runtime — the reason
     this asserts nothing else.
     """
     payload = wired_link.destination.read_from_input_port(INPUT_PORT)
-    assert_type(payload, bytes | None)
+    assert_type(payload, PortPayloadBorrow | None)
 
     detection = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=DetectionDataclass

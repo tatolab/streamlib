@@ -54,7 +54,7 @@ uv add tatolab-stream
 The runtime runs your nodes with the project's `.venv/bin/python`, so anything you install there
 your nodes can import. See [Python SDK](https://tatolab.com/docs/install/python) for details.
 
-Supports CPython 3.10 to 3.13 (not the free-threaded builds).
+Supports CPython 3.12 to 3.13 (not the free-threaded builds).
 
 ## Other packages
 

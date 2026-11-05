@@ -489,7 +489,7 @@ write_a_one_stream_fixture_project() {
 [project]
 name = "$(basename "$project_directory")"
 version = "0.0.0"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 TOML
     cat >"$project_directory/stream.py" <<PYTHON
 from tatolab.stream import StreamBuilder, stream

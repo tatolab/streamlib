@@ -7,7 +7,7 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-0ea5e9)](#install)
+[![python](https://img.shields.io/badge/python-3.12%20%E2%80%93%203.13-0ea5e9)](#install)
 [![platform](https://img.shields.io/badge/platform-linux%20x86__64%20%7C%20macOS%20apple%20silicon-64748b)](#what-ships-today)
 [![gpu](https://img.shields.io/badge/GPU-Vulkan-64748b)](#gpu-without-the-vendor-lock)
 
@@ -699,7 +699,7 @@ model-input tensor kernel, and the monotonic clock every node shares.
   scaffolded stream there. Ray-tracing kernels, `VirtualCameraSink` and the fd-shaped raw handles
   refuse by name on macOS.
 
-A stream's venv runs CPython 3.10 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
+A stream's venv runs CPython 3.12 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
 
 Not built yet: the macOS app, serving an exposed port off the machine, and Windows.
 

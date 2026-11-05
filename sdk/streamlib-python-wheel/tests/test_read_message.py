@@ -23,6 +23,7 @@ from tatolab.stream import (
     Message,
     MsgpackCast,
     NodeLinkDataAccess,
+    PortPayloadBorrow,
     RuntimeContextFullAccess,
     msgpack,
 )
@@ -85,6 +86,20 @@ def one_link_into_one_port(request: pytest.FixtureRequest) -> Iterator[OneLinkIn
     yield OneLinkIntoOnePort(context, source, channel_service_name)
 
 
+def message_with_its_payload_copied(
+    message: "Message[PortPayloadBorrow] | None",
+) -> "Message[bytes] | None":
+    if message is None:
+        return None
+    return Message(
+        payload=bytes(message.payload),
+        timestamp_ns=message.timestamp_ns,
+        starts_group=message.starts_group,
+        lost_since_last_read=message.lost_since_last_read,
+        inbound_link=message.inbound_link,
+    )
+
+
 def test_a_message_arrives_with_its_stamp_its_group_flag_and_its_link(
     one_link_into_one_port: OneLinkIntoOnePort,
 ):
@@ -93,14 +108,14 @@ def test_a_message_arrives_with_its_stamp_its_group_flag_and_its_link(
     inputs = one_link_into_one_port.context.inputs
     inbound_link = one_link_into_one_port.inbound_link
 
-    assert inputs.read_message(INPUT_PORT) == Message(
+    assert message_with_its_payload_copied(inputs.read_message(INPUT_PORT)) == Message(
         payload=b"keyframe",
         timestamp_ns=STAMP_NS,
         starts_group=True,
         lost_since_last_read=0,
         inbound_link=inbound_link,
     )
-    assert inputs.read_message(INPUT_PORT) == Message(
+    assert message_with_its_payload_copied(inputs.read_message(INPUT_PORT)) == Message(
         payload=b"delta",
         timestamp_ns=STAMP_NS,
         starts_group=False,
@@ -122,12 +137,14 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
 
     for index in range(INPUT_PORT_RING_DEPTH + messages_past_the_ring):
         one_link_into_one_port.deliver(f"after-{index}".encode(), starts_group=False)
-    after_the_overrun: "list[Message[bytes]]" = []
+    after_the_overrun: "list[Message[PortPayloadBorrow]]" = []
     while (message := inputs.read_message(INPUT_PORT)) is not None:
         after_the_overrun.append(message)
 
     assert first is not None and first.lost_since_last_read == 0
-    assert [(message.payload, message.lost_since_last_read) for message in after_the_overrun] == [
+    assert [
+        (bytes(message.payload), message.lost_since_last_read) for message in after_the_overrun
+    ] == [
         (b"after-2", messages_past_the_ring),
         (b"after-3", 0),
     ]

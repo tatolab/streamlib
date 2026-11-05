@@ -44,7 +44,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, NoReturn, Optional
 
-OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 10)
+OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 
 DESCRIBE_ARGUMENT = "--describe"
 DESCRIBE_INSTALLED_MODULES_ARGUMENT = "--describe-installed-modules"

@@ -17,8 +17,8 @@ _MessagePayload_co = TypeVar("_MessagePayload_co", covariant=True)
 class Message(Generic[_MessagePayload_co]):
     """One message read off an input port, with what the engine knows about it.
 
-    `payload` is the bytes the producer wrote, or what `into.from_bytes` built
-    from them. `timestamp_ns` is the producer's stamp. `starts_group` is the
+    `payload` is a `PortPayloadBorrow` of the bytes the producer wrote, or what
+    `into.from_bytes` built from it. `timestamp_ns` is the producer's stamp. `starts_group` is the
     flag the producer wrote, so a reader can resume at a group's first message.
     `lost_since_last_read` counts the messages `inbound_link` lost between the
     previous message read from it and this one; each loss is counted once, and

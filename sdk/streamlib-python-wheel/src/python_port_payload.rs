@@ -362,14 +362,15 @@ impl PythonPortPayloadLoan {
     }
 
     /// Publish on a clean exit; give the sample back when the block raised.
-    #[pyo3(signature = (exception_type, _exception = None, _traceback = None))]
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
     fn __exit__(
         &self,
         python: Python<'_>,
         exception_type: Option<&Bound<'_, PyAny>>,
-        _exception: Option<&Bound<'_, PyAny>>,
-        _traceback: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
+        let _ = (exception, traceback);
         match exception_type {
             Some(exception_type) if !exception_type.is_none() => {
                 self.close_giving_back();

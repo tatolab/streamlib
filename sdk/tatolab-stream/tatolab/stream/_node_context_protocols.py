@@ -9,8 +9,9 @@ implementation, held to it member for member by the wheel's conformance gate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, overload
+from collections.abc import Buffer, Sequence
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, overload
 
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
@@ -23,14 +24,83 @@ _MessageReadTarget = TypeVar("_MessageReadTarget")
 _MessageReadTarget_co = TypeVar("_MessageReadTarget_co", covariant=True)
 
 
+@runtime_backed_protocol
+class PortPayloadBorrow(Protocol):
+    """A read message's payload, held in the shared-memory sample it arrived in.
+
+    A read-only buffer: `memoryview(payload)`, `numpy.frombuffer(payload)` and
+    `msgpack.unpack(payload)` read the sample itself, and `bytes(payload)` is the
+    one copy. The sample counts against its link's borrow quota while the borrow
+    or any `memoryview` or DLPack tensor over it lives.
+    """
+
+    def __len__(self) -> int: ...
+    def __bytes__(self) -> bytes: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+    def __dlpack__(
+        self,
+        *,
+        stream: Any | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any:
+        """The payload as a read-only 1-D `uint8` CPU tensor over the sample.
+
+        `copy=True`, a device other than the CPU and a stream are refused.
+        """
+        ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
+@runtime_backed_protocol
+class PortPayloadLoan(Protocol):
+    """A sample loaned on an output port for its writer to fill in place.
+
+    `with ctx.outputs.loan(port, byte_len) as out:` hands out a writable buffer
+    over the sample. A clean exit publishes it; a raise gives it back
+    unpublished. Leaving the block while a `memoryview` or DLPack tensor over it
+    lives raises `BufferError` and publishes nothing, and the port stays loaned,
+    refusing a write and a second loan, until the last export goes.
+    """
+
+    def __enter__(self) -> PortPayloadLoan: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = None,
+        exception: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> Literal[False]: ...
+    def __len__(self) -> int: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+    def __release_buffer__(self, buffer: memoryview, /) -> None: ...
+    def __dlpack__(
+        self,
+        *,
+        stream: Any | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any:
+        """The loan as a writable 1-D `uint8` CPU tensor over the sample.
+
+        `copy=True`, a device other than the CPU and a stream are refused.
+        """
+        ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
 class CastFromMessagePayloadBytes(Protocol[_MessageReadTarget_co]):
     """What `read(port, into=…)` takes: anything whose `from_bytes` builds the read's result.
 
     A class with a `from_bytes` classmethod is one — `into=VideoFrame` reads a
-    `VideoFrame` — and so is `msgpack_typed_dict_cast(SomeTypedDict)`.
+    `VideoFrame` — and so is `msgpack_typed_dict_cast(SomeTypedDict)`. It is
+    handed the read's `PortPayloadBorrow`, so it takes a `Buffer`.
     """
 
-    def from_bytes(self, payload: bytes, /) -> _MessageReadTarget_co:
+    def from_bytes(self, payload: PortPayloadBorrow, /) -> _MessageReadTarget_co:
         """Build the read's result from one message's payload."""
         ...
 
@@ -135,7 +205,7 @@ class NodeLinkDataAccess(Protocol):
     @overload
     def read_from_input_port(
         self, port_name: str, *, into: None = None
-    ) -> bytes | None: ...
+    ) -> PortPayloadBorrow | None: ...
     @overload
     def read_from_input_port(
         self,
@@ -154,7 +224,7 @@ class NodeLinkDataAccess(Protocol):
 
     def read_from_input_port_with_timestamp(
         self, port_name: str
-    ) -> tuple[bytes, int] | tuple[None, None]:
+    ) -> tuple[PortPayloadBorrow, int] | tuple[None, None]:
         """The next message's payload on `port_name` with its timestamp, or `(None, None)`."""
         ...
 
@@ -165,11 +235,21 @@ class NodeLinkDataAccess(Protocol):
     def write_to_output_port(
         self,
         port_name: str,
-        payload: bytes,
+        payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
     ) -> None:
-        """Publish one message to every downstream link on `port_name`."""
+        """Publish a copy of `payload`, any contiguous buffer, to every downstream link on `port_name`."""
+        ...
+
+    def loan_on_output_port(
+        self,
+        port_name: str,
+        payload_byte_len: int,
+        timestamp_ns: int | None = None,
+        starts_group: bool = True,
+    ) -> PortPayloadLoan:
+        """Loan `payload_byte_len` bytes on `port_name` to fill in place and publish on exit."""
         ...
 
 
@@ -282,7 +362,9 @@ class LinkInputDataReader(Protocol):
     """
 
     @overload
-    def read(self, port_name: str, *, into: None = None) -> bytes | None: ...
+    def read(
+        self, port_name: str, *, into: None = None
+    ) -> PortPayloadBorrow | None: ...
     @overload
     def read(
         self,
@@ -298,7 +380,8 @@ class LinkInputDataReader(Protocol):
     ) -> Any:
         """The next message's payload on `port_name`, or `None` when none is waiting.
 
-        With `into`, the payload is handed to `into.from_bytes` and its result
+        The payload is a `PortPayloadBorrow` of the sample it arrived in. With
+        `into`, the borrow is handed to `into.from_bytes` and its result
         returned, so a payload that does not fit raises here, at the consuming
         read. `into=VideoFrame` constructs and validates;
         `into=msgpack_typed_dict_cast(SomeTypedDict)` types the map and checks
@@ -308,14 +391,14 @@ class LinkInputDataReader(Protocol):
 
     def read_with_timestamp(
         self, port_name: str
-    ) -> tuple[bytes, int] | tuple[None, None]:
+    ) -> tuple[PortPayloadBorrow, int] | tuple[None, None]:
         """The next message's payload on `port_name` with its timestamp, or `(None, None)`."""
         ...
 
     @overload
     def read_from_inbound_link(
         self, port_name: str, *, into: None = None
-    ) -> tuple[bytes, str] | None: ...
+    ) -> tuple[PortPayloadBorrow, str] | None: ...
     @overload
     def read_from_inbound_link(
         self,
@@ -344,7 +427,7 @@ class LinkInputDataReader(Protocol):
     @overload
     def read_from_inbound_link_with_timestamp(
         self, port_name: str, *, into: None = None
-    ) -> tuple[bytes, str, int] | None: ...
+    ) -> tuple[PortPayloadBorrow, str, int] | None: ...
     @overload
     def read_from_inbound_link_with_timestamp(
         self,
@@ -368,7 +451,7 @@ class LinkInputDataReader(Protocol):
     @overload
     def read_message(
         self, port_name: str, *, into: None = None
-    ) -> Message[bytes] | None: ...
+    ) -> Message[PortPayloadBorrow] | None: ...
     @overload
     def read_message(
         self,
@@ -444,18 +527,35 @@ class LinkOutputDataWriter(Protocol):
     def write(
         self,
         port_name: str,
-        payload: bytes,
+        payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
     ) -> None:
-        """Publish one message carrying `payload` to every downstream link on `port_name`.
+        """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
-        `payload` is `bytes` and nothing else — `tatolab.stream.msgpack.pack`
-        encodes a record. Omitting `timestamp_ns` stamps the monotonic now.
+        `payload` is any contiguous buffer — `bytes`, a `memoryview`, a numpy
+        array — and `tatolab.stream.msgpack.pack` encodes a record. Omitting `timestamp_ns` stamps the monotonic now.
         `starts_group=True` says the message stands alone; only encoded media
         passes `False`, for a message a decoder cannot enter at. A payload over
         the channel's ceiling is dropped and counted against this port, never
         raised.
+        """
+        ...
+
+    def loan(
+        self,
+        port_name: str,
+        payload_byte_len: int,
+        timestamp_ns: int | None = None,
+        starts_group: bool = True,
+    ) -> PortPayloadLoan:
+        """Loan `payload_byte_len` bytes on `port_name` to fill in place: `with ctx.outputs.loan(...) as out:`.
+
+        The sample is published when the block exits cleanly, stamped
+        `timestamp_ns` or the monotonic now, and given back when it raises. A
+        write or a second loan on the port is refused while this one is open,
+        so a port's order is its write order. A port no link has reached, or a
+        payload over the channel's ceiling, loans bytes that publish nowhere.
         """
         ...
 

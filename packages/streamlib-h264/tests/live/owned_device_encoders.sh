@@ -126,7 +126,7 @@ cat > "$PROJECT_DIR/pyproject.toml" <<'TOML'
 [project]
 name = "owned-device-encoders"
 version = "0.0.0"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 TOML
 {
     echo "from tatolab.stream import StreamBuilder, stream"

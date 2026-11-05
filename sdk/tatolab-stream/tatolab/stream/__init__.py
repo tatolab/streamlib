@@ -44,6 +44,8 @@ from ._node_context_protocols import (
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
 from ._node_context_protocols import NodeLinkDataAccess as NodeLinkDataAccess
+from ._node_context_protocols import PortPayloadBorrow as PortPayloadBorrow
+from ._node_context_protocols import PortPayloadLoan as PortPayloadLoan
 from ._node_context_protocols import (
     RuntimeContextFullAccess as RuntimeContextFullAccess,
 )
@@ -136,6 +138,8 @@ __all__ = [
     "NodeReference",
     "OpaqueFdAllocationExport",
     "PixelAccessToOneClaimedSurface",
+    "PortPayloadBorrow",
+    "PortPayloadLoan",
     "RayTracingKernel",
     "RelayTrackSource",
     "RelayTrackSourceConfig",

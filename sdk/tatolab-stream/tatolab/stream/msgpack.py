@@ -13,13 +13,10 @@ keys, `bytes` as msgpack `bin` — for a node that writes or reads one:
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from collections.abc import Buffer, Mapping
+from typing import Any, Generic, Self, TypeVar, cast
 
 import msgpack
-
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
 __all__ = [
     "MsgpackCast",
@@ -94,8 +91,8 @@ def pack(mapping: Mapping[str, Any]) -> bytes:
     return cast(bytes, packed)
 
 
-def unpack(payload: bytes) -> Any:
-    """Decode msgpack bytes into ordinary Python data, msgpack `str` as `str`.
+def unpack(payload: Buffer) -> Any:
+    """Decode a msgpack buffer into ordinary Python data, msgpack `str` as `str`.
 
     A map's keys come back as written, so a Rust producer's integer-keyed map reads.
     """
@@ -130,7 +127,7 @@ class MsgpackCast:
     """
 
     @classmethod
-    def from_bytes(cls, payload: bytes) -> Self:
+    def from_bytes(cls, payload: Buffer) -> Self:
         """Unpack `payload` and construct this class from the map's keys."""
         message_entries = unpack(payload)
         if not isinstance(message_entries, dict):
@@ -156,7 +153,7 @@ class MsgpackTypedDictCast(Generic[_TypedDictReadTarget]):
     def __init__(self, typed_dict_class: type[_TypedDictReadTarget]) -> None:
         self.typed_dict_class = typed_dict_class
 
-    def from_bytes(self, payload: bytes) -> _TypedDictReadTarget:
+    def from_bytes(self, payload: Buffer) -> _TypedDictReadTarget:
         """Unpack `payload` and hand the map back as the TypedDict, checking nothing."""
         return cast(_TypedDictReadTarget, unpack(payload))
 

@@ -7,7 +7,7 @@ name = "tatolab-browser"
 version = "0.68.27"
 description = "A web page as a stream source: the machine's shared Chromium (CEF) browser host renders it offscreen as a tab, and its frames, audio and events are published through the module host table."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "BUSL-1.1" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
 # dependency's.
@@ -45,7 +45,7 @@ extraPaths = [
     "../tatolab-compositor/python",
     "../tatolab-microphone/python",
 ]
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"

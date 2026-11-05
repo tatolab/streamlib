@@ -730,9 +730,9 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
             "not attempted: the runtime is a CPython extension module",
         ),
         (
-            "sys.version_info = (3, 9, 18, 'final', 0)",
+            "sys.version_info = (3, 11, 9, 'final', 0)",
             f"version: {platform.python_version()}",
-            "not attempted: the runtime needs CPython 3.10 or newer",
+            "not attempted: the runtime needs CPython 3.12 or newer",
         ),
         (
             "_config_variable = sysconfig.get_config_var\n"
@@ -743,7 +743,7 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
             "not attempted: the runtime is built for the GIL-enabled CPython",
         ),
     ],
-    ids=["not-cpython", "below-3.10", "free-threaded"],
+    ids=["not-cpython", "below-3.12", "free-threaded"],
 )
 def test_an_interpreter_the_runtime_cannot_load_in_is_refused_before_importing_it(
     project_directory: Path,

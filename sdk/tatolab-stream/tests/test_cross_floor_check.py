@@ -39,11 +39,6 @@ FLOOR_CLEAN_STREAM_SOURCE = (
     "    stream_builder.add(TestPatternSource)\n"
 )
 
-requires_tomllib = pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="the dependency rule reads pyproject.toml with tomllib"
-)
-
-
 def findings_in(source: str) -> "list[tuple[int, str, str]]":
     return [
         (finding.line, finding.what_binds_it, finding.portable_spelling)
@@ -300,7 +295,6 @@ def test_importing_a_single_floor_name_is_not_a_use_of_it():
 # ---------------------------------------------------------------------------
 
 
-@requires_tomllib
 def test_a_floor_bound_dependency_without_a_marker_is_named_with_its_line():
     findings = manifest_findings_in(
         """\
@@ -329,7 +323,6 @@ def test_a_floor_bound_dependency_without_a_marker_is_named_with_its_line():
     assert 'sys_platform == "darwin"' in findings[1][2]
 
 
-@requires_tomllib
 def test_a_dependency_is_placed_on_its_own_line_in_its_own_array():
     findings = manifest_findings_in(
         """\
@@ -352,7 +345,6 @@ def test_a_dependency_is_placed_on_its_own_line_in_its_own_array():
     assert [line for line, _, _ in findings] == [5, 6, 12]
 
 
-@requires_tomllib
 def test_a_marked_floor_bound_dependency_is_not_flagged():
     assert manifest_findings_in(
         """\
@@ -365,24 +357,6 @@ def test_a_marked_floor_bound_dependency_is_not_flagged():
         ]
         """
     ) == []
-
-
-def test_on_a_python_without_tomllib_the_dependency_rule_is_skipped_by_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setattr(_cross_floor_check, "tomllib", None)
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\ndependencies = ["cupy-cuda13x"]\n'
-    )
-    (tmp_path / "effect.py").write_text("import cupy\n")
-
-    report = check_app_directory_for_floor_bindings(tmp_path)
-    block = render_cross_floor_warning_block(report, tmp_path)
-
-    assert [finding.file.name for finding in report.findings] == ["effect.py"]
-    assert report.skipped_rule_reason is not None
-    assert "dependency rule was skipped" in block
-    assert "tomllib" in block
 
 
 # ---------------------------------------------------------------------------

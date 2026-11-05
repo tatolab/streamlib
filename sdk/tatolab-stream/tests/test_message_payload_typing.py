@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 # pyright: reportUnnecessaryTypeIgnoreComment=true
 
-"""A message's payload is bytes, as pyright reads `ctx.inputs` and `ctx.outputs`.
+"""A read borrows a buffer and a write takes one, as pyright reads `ctx.inputs` and `ctx.outputs`.
 
 Pyright checks this file and reports an ignore comment that silences nothing,
 so the `assert_type` calls are the proof of each read's narrowing and the
@@ -12,19 +12,18 @@ functions also run, over an in-memory port standing in for the runtime's.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, cast
-
-from typing_extensions import assert_type
+from typing import Any, TypedDict, assert_type, cast
 
 from tatolab.stream import (
     AudioBlock,
     LinkInputDataReader,
     LinkOutputDataWriter,
     Message,
+    PortPayloadBorrow,
     VideoFrame,
     msgpack_typed_dict_cast,
 )
-from tatolab.stream.msgpack import pack
+from tatolab.stream.msgpack import pack, unpack
 
 FRAME_ENTRIES: "dict[str, Any]" = {
     "surface_id": "surface-7",
@@ -78,7 +77,10 @@ class InMemoryPortStandingInForTheRuntimes:
 
 def read_every_spelling(inputs: LinkInputDataReader) -> None:
     payload = inputs.read("video")
-    assert_type(payload, "bytes | None")
+    assert_type(payload, "PortPayloadBorrow | None")
+    assert payload is not None
+    assert unpack(payload) == FRAME_ENTRIES
+    assert len(memoryview(payload)) == len(payload)
 
     frame = inputs.read("video", into=VideoFrame)
     assert_type(frame, "VideoFrame | None")
@@ -88,16 +90,16 @@ def read_every_spelling(inputs: LinkInputDataReader) -> None:
     assert_type(record, "DetectionRecord | None")
 
     payload_and_stamp = inputs.read_with_timestamp("video")
-    assert_type(payload_and_stamp, "tuple[bytes, int] | tuple[None, None]")
+    assert_type(payload_and_stamp, "tuple[PortPayloadBorrow, int] | tuple[None, None]")
 
     frame_and_link = inputs.read_from_inbound_link("video", into=VideoFrame)
     assert_type(frame_and_link, "tuple[VideoFrame, str] | None")
 
     payload_and_link = inputs.read_from_inbound_link("video")
-    assert_type(payload_and_link, "tuple[bytes, str] | None")
+    assert_type(payload_and_link, "tuple[PortPayloadBorrow, str] | None")
 
     message = inputs.read_message("video")
-    assert_type(message, "Message[bytes] | None")
+    assert_type(message, "Message[PortPayloadBorrow] | None")
     assert message is not None
     assert_type(message.starts_group, bool)
     assert_type(message.lost_since_last_read, int)
@@ -111,6 +113,7 @@ def write_every_spelling(outputs: LinkOutputDataWriter, frame: VideoFrame) -> No
     outputs.write("video", frame.to_bytes())
     outputs.write("video", pack(FRAME_ENTRIES), timestamp_ns=5)
     outputs.write("video", b"\x00", timestamp_ns=6, starts_group=False)
+    outputs.write("video", memoryview(bytearray(b"\x01")))
     outputs.write("video", FRAME_ENTRIES)  # type: ignore[arg-type]
 
 
@@ -139,6 +142,7 @@ def test_every_write_spelling_hands_the_payload_on_as_bytes():
         (None, True),
         (5, True),
         (6, False),
+        (None, True),
         (None, True),
     ]
     assert VideoFrame.from_bytes(port.written[0][1]) == frame

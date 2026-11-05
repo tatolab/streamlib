@@ -37,7 +37,7 @@ from tatolab.runtime._processor_interpreter_bootstrap import (
     ParentProcessLogSink,
     load_processor_class,
 )
-from tatolab.stream import msgpack
+from tatolab.stream import NodeLinkDataAccess, msgpack
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -47,6 +47,14 @@ pytestmark = pytest.mark.usefixtures(
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
 
 PROBE_MODULE = "helper_process_probes"
+
+
+
+def payload_bytes_read_from(destination: NodeLinkDataAccess, input_port: str) -> bytes:
+    """The next message's payload on `input_port` as a copy, raising when none waits."""
+    read = destination.read_from_input_port(input_port)
+    assert read is not None, f"no message waited on {input_port!r}"
+    return bytes(read)
 
 
 def frame_index_payload(frame_index: int) -> bytes:
@@ -254,7 +262,7 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     source.write_to_output_port("frames_to_downstream", frame_index_payload(11))
 
     assert destination.any_input_port_has_data()
-    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(11)
+    assert payload_bytes_read_from(destination, "frames_from_upstream") == frame_index_payload(11)
 
 
 def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_ports_depth():
@@ -267,7 +275,6 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     depth would refuse the second destination's open
     (`DoesNotSupportRequestedMinBufferSize`).
     """
-    from tatolab.stream import NodeLinkDataAccess
 
     messages_published_while_neither_reads = 10
     shallow_wiring = engine_shaped_link_wiring("input", "L-shallow-port")
@@ -355,7 +362,7 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     connect()
 
     source.write_to_output_port("frames_to_downstream", frame_index_payload(13))
-    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(13), (
+    assert payload_bytes_read_from(destination, "frames_from_upstream") == frame_index_payload(13), (
         "the reconnected link must carry data through freshly opened ports"
     )
 
@@ -388,7 +395,7 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     )
 
     source.write_to_output_port("frames_to_downstream", frame_index_payload(14))
-    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(14), (
+    assert payload_bytes_read_from(destination, "frames_from_upstream") == frame_index_payload(14), (
         "an unrecognised direction must leave both ends of the link wired"
     )
 
@@ -991,7 +998,6 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     A processor left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.
     """
-    from tatolab.stream import NodeLinkDataAccess
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -1626,7 +1632,6 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     Fail-without-fix: move the drain back under the idle branch and the burst
     below is processed with a drain or two at most, all after it ended.
     """
-    from tatolab.stream import NodeLinkDataAccess
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()

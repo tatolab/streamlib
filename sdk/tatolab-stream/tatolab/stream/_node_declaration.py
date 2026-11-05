@@ -555,8 +555,6 @@ def _config_class_named_by_the_init_annotation(
             f"names no class, so the helper has nothing to construct and no schema can "
             f"be derived. To fix: {how_to_declare_a_config_class}"
         )
-    # The origin check, not the class check, is what refuses `dict[str, Any]` on
-    # Python 3.10, where `isinstance(dict[str, Any], type)` is still True.
     if typing.get_origin(annotation) is not None or not isinstance(annotation, type):
         raise TypeError(
             f"{node_class.__name__}.__init__ annotates `config` as {annotation!r}, "

@@ -124,8 +124,8 @@ def test_a_message_arrives_as_its_payload_bytes_with_its_link_and_its_producers_
 
     assert read is not None
     payload, inbound_link, timestamp_ns = read
-    assert payload == b"h264"
-    assert type(payload) is bytes
+    assert bytes(payload) == b"h264"
+    assert type(payload).__name__ == "PortPayloadBorrow", "a read borrows rather than copying"
     assert inbound_link == two_links_into_one_port.channel_named["video"]
     assert timestamp_ns == VIDEO_STAMP_NS
 
@@ -188,7 +188,9 @@ def test_the_untimestamped_fan_in_read_yields_the_payload_bytes_and_the_link(
 
     read = two_links_into_one_port.context.inputs.read_from_inbound_link(INPUT_PORT)
 
-    assert read == (
+    assert read is not None
+    payload, inbound_link = read
+    assert (bytes(payload), inbound_link) == (
         b"opus",
         two_links_into_one_port.channel_named["audio"],
     )
@@ -225,7 +227,7 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
 
     source.write_to_output_port(OUTPUT_PORT, b"h264", VIDEO_STAMP_NS)
 
-    assert context.inputs.read_from_inbound_link(INPUT_PORT) == (
-        b"h264",
-        inbound_link_name,
-    )
+    read = context.inputs.read_from_inbound_link(INPUT_PORT)
+    assert read is not None
+    payload, inbound_link = read
+    assert (bytes(payload), inbound_link) == (b"h264", inbound_link_name)

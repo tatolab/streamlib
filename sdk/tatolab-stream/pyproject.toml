@@ -12,7 +12,7 @@ name = "tatolab-stream"
 version = "0.68.27"
 description = "The Python SDK for Tatolab streams. To get started, install the Tatolab app: see tatolab.com/docs/install"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 # What this package's own modules import, never the runtime. numpy is imported
 # lazily, only where a caller hands it an array.
 dependencies = ["msgpack>=1.0"]
@@ -24,8 +24,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
@@ -46,7 +44,8 @@ test = [
     "pytest>=7.0",
     "numpy>=2.1",
     "pydantic>=2.0",
-    # `NotRequired` and `Required` at the 3.10 floor.
+    # The config deriver reads a `typing_extensions.TypedDict` as it reads one
+    # from `typing`, and its tests prove it.
     "typing_extensions>=4.6",
     # Lints and format-checks the scaffold templates `tatolab new` writes.
     "ruff==0.16.9",
@@ -76,7 +75,7 @@ extend-select = ["A"]
 
 [tool.pyright]
 include = ["tatolab", "tests", "scaffold_template"]
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"

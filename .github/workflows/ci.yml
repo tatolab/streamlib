@@ -447,12 +447,12 @@ jobs:
 
       # The stream package with its test group and nothing of the runtime, so a
       # stream test that reaches for the runtime fails to import; built and
-      # installed, not editable. 3.10 is the floor `requires-python` promises.
-      - name: Stream package tests (Python 3.10)
+      # installed, not editable. 3.12 is the floor `requires-python` promises.
+      - name: Stream package tests (Python 3.12)
         run: |
           (
             cd sdk/tatolab-stream
-            uv venv --python 3.10 .venv
+            uv venv --python 3.12 .venv
             VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
             .venv/bin/pytest tests -q
             uvx pyright@1.1.411
@@ -641,7 +641,7 @@ jobs:
       - name: "Compositor: GPU-free tests and types"
         working-directory: packages/tatolab-compositor
         run: |
-          uv venv --python 3.10 .venv
+          uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
           .venv/bin/python -m pytest tests -v
           uvx pyright@1.1.411
@@ -651,7 +651,7 @@ jobs:
       - name: "Test pattern: GPU-free tests and types"
         working-directory: packages/tatolab-testpattern
         run: |
-          uv venv --python 3.10 .venv
+          uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
           .venv/bin/python -m pytest tests -v
           uvx pyright@1.1.411
@@ -663,7 +663,7 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo clippy --locked --lib --all-targets -- -D warnings
-          uv venv --python 3.10 .venv
+          uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
           .venv/bin/python -m mypy.stubtest tatolab.virtualcamera._native
@@ -748,10 +748,10 @@ jobs:
       # A scaffolded stream compiles and type-checks with no runtime installed,
       # in what a user's `uv sync` gives it: `tatolab-stream`, the H.264 and
       # test-pattern modules and numpy.
-      - name: Scaffolded stream compiles and type-checks (Python 3.10)
+      - name: Scaffolded stream compiles and type-checks (Python 3.12)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
-          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
+          uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
             "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl \
             "$GITHUB_WORKSPACE/packages/tatolab-testpattern" 'numpy>=2.1'
@@ -1032,7 +1032,7 @@ jobs:
         run: rustup toolchain install
 
       # The interpreter the venvs below are built from and the extension's
-      # unit tests link: the image's own `python3` is not one the abi3-py310
+      # unit tests link: the image's own `python3` is not one the abi3-py312
       # floor accepts.
       - name: Install Python
         id: setup-python
