@@ -180,7 +180,7 @@ of them adds a mechanism.
 1. **The watchdog ends the process.** It arms when any engine teardown starts: `run()`'s,
    `shutdown()`, context-manager exit, `atexit`. On expiry it logs what is still running and
    exits with status 124, distinct from the third interrupt's 130.
-   - Bites: an embedding host (Isaac Sim, a notebook) loses its interpreter. The ADR accepts
+   - Bites: an embedding host (a notebook) loses its interpreter. The ADR accepts
      that nothing hangs the app.
 2. **`run()` raises `RuntimeError` naming each abandoned processor** by display name and id.
    Every other `run()` failure already raises that type, and the CLI already reports it as a
