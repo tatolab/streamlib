@@ -152,7 +152,12 @@ impl HelperProcessGpuExchangeClient {
         // Sent as its own op rather than a batch of one: a single dispatch's
         // refusal names the binding, never "dispatch 0 of this batch". The
         // host runs both ops on the same recording machinery.
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let run_response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        #[cfg(target_os = "linux")]
+        self.note_the_texture_layouts_a_run_left(&run_response);
+        #[cfg(not(target_os = "linux"))]
+        let _ = run_response;
         Ok(())
     }
 
@@ -172,7 +177,12 @@ impl HelperProcessGpuExchangeClient {
         let op = PyDict::new(python);
         op.set_item("op", "run_compute_kernel_batch")?;
         op.set_item("dispatches", dispatches)?;
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let run_response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        #[cfg(target_os = "linux")]
+        self.note_the_texture_layouts_a_run_left(&run_response);
+        #[cfg(not(target_os = "linux"))]
+        let _ = run_response;
         Ok(())
     }
 
@@ -247,7 +257,12 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("vertex_buffers", PyList::empty(python))?;
         // `viewport` / `scissor` are omitted: the host fills them with the
         // render area, which is the whole target this op ever draws into.
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let run_response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        #[cfg(target_os = "linux")]
+        self.note_the_texture_layouts_a_run_left(&run_response);
+        #[cfg(not(target_os = "linux"))]
+        let _ = run_response;
         Ok(())
     }
 
@@ -294,7 +309,12 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("width", grid.0)?;
         op.set_item("height", grid.1)?;
         op.set_item("depth", grid.2)?;
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let run_response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        #[cfg(target_os = "linux")]
+        self.note_the_texture_layouts_a_run_left(&run_response);
+        #[cfg(not(target_os = "linux"))]
+        let _ = run_response;
         Ok(())
     }
 

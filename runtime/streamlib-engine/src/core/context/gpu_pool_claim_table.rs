@@ -302,14 +302,14 @@ impl GpuPoolClaimTables {
 }
 
 /// The claim tables one GPU pool leases its slots' rows from.
-pub(crate) struct GpuPoolClaimTablesOfOnePool {
+pub struct GpuPoolClaimTablesOfOnePool {
     pool_name: String,
     tables: Vec<Arc<GpuPoolClaimTable>>,
 }
 
 impl GpuPoolClaimTablesOfOnePool {
     /// A pool with no table yet; its first slot creates one.
-    pub(crate) fn named(pool_name: impl Into<String>) -> Self {
+    pub fn named(pool_name: impl Into<String>) -> Self {
         Self {
             pool_name: pool_name.into(),
             tables: Vec::new(),
@@ -318,7 +318,7 @@ impl GpuPoolClaimTablesOfOnePool {
 
     /// A row for the slot `pool_slot_key`, from a table this pool holds or a
     /// new one when every row is leased.
-    pub(crate) fn lease_a_row_for_a_slot(
+    pub fn lease_a_row_for_a_slot(
         &mut self,
         every_claim_table: &GpuPoolClaimTables,
         pool_slot_key: &str,

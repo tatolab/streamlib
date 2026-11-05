@@ -13,8 +13,8 @@ use streamlib_consumer_rhi::{
 };
 
 use crate::python_helper_process_pixel_exchange::{
-    HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
-    ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
+    HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse,
+    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
     required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
 use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
@@ -65,7 +65,7 @@ fn import_timeline_edge_for_texture_check_out(
 }
 
 /// The layout the producer left a texture in, as a checkout reports it.
-fn current_image_layout_of_a_texture_check_out(
+pub(super) fn current_image_layout_of_a_texture_check_out(
     surface_id: &str,
     response: &serde_json::Value,
 ) -> PyResult<VulkanLayout> {
@@ -252,15 +252,13 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) format: TextureFormat,
     texture_pool_slot_import: Arc<HelperTexturePoolSlotImport>,
     /// The layout this side's image sits in — seeded from the checkout's
-    /// published cell, republished at release so the next consumer's acquire
-    /// barrier names the right source.
+    /// published cell or the frame's descriptor; a checked-out frame
+    /// republishes it at release so the next consumer's acquire barrier names
+    /// the right source.
     current_image_layout: VulkanLayout,
-    /// The checkout lease this surface owes the surface-share service.
-    #[expect(
-        dead_code,
-        reason = "settled by its own Drop; nothing reads it, and that is the point"
-    )]
-    release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    /// What holds this frame against producer reuse; settled after this
+    /// surface's own release.
+    held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -366,11 +364,16 @@ impl Drop for HelperCheckedOutTextureSurface {
                     {
                         release_failures.push(format!("QFOT release failed: {barrier_failure}"));
                     }
-                    if let Err(publish_failure) =
-                        self.exchange_client.publish_image_layout_to_surface_share(
-                            &self.surface_id,
-                            self.current_image_layout.0,
-                        )
+                    let held_by_a_check_out = matches!(
+                        self.held_against_producer_reuse,
+                        HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(_)
+                    );
+                    if held_by_a_check_out
+                        && let Err(publish_failure) =
+                            self.exchange_client.publish_image_layout_to_surface_share(
+                                &self.surface_id,
+                                self.current_image_layout.0,
+                            )
                     {
                         release_failures.push(format!("layout publish failed: {publish_failure}"));
                     }
@@ -416,6 +419,7 @@ impl HelperProcessGpuExchangeClient {
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
+        self.note_the_pooled_frame_an_acquire_answered(&surface_id, &response)?;
         // The debt exists from the moment the parent allocated: dropping it
         // hands the pool slot back rather than stranding it. Bound before the
         // metadata extraction below, so a malformed response still pays the
@@ -542,17 +546,15 @@ impl HelperProcessGpuExchangeClient {
         })
     }
 
-    /// One frame over a texture pool slot's import: take the layout the
-    /// checkout published as this side's starting point.
+    /// One frame over a texture pool slot's import, starting from the layout
+    /// its producer left it in.
     pub(super) fn texture_checked_out_over_a_pool_slot_import(
         self: &Arc<Self>,
         surface_id: &str,
-        response: &serde_json::Value,
+        current_image_layout: VulkanLayout,
         texture_pool_slot_import: Arc<HelperTexturePoolSlotImport>,
-        release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+        held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     ) -> PyResult<HelperCheckedOutTextureSurface> {
-        let current_image_layout =
-            current_image_layout_of_a_texture_check_out(surface_id, response)?;
         // The consumer-side acquire barrier per the layout protocol: start
         // this side's layout tracking from the layout the producer
         // published. A no-op while the published layout is UNDEFINED, which
@@ -575,7 +577,7 @@ impl HelperProcessGpuExchangeClient {
             format: texture_pool_slot_import.format,
             texture_pool_slot_import,
             current_image_layout,
-            release_check_out_to_surface_share,
+            held_against_producer_reuse,
             exchange_client: Arc::clone(self),
         })
     }

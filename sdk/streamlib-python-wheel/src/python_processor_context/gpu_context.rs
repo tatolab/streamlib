@@ -150,6 +150,36 @@ impl PythonGpuContextLimitedAccess {
             helper_process_exchange_client,
         }
     }
+
+    /// Take in the pooled GPU frame a read carried, so the claim its cast
+    /// takes is made in the pool's claim table.
+    pub(crate) fn note_the_pooled_gpu_frame_a_read_carries(
+        &self,
+        python: Python<'_>,
+        pooled_frame: streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody,
+    ) -> PyResult<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return python
+                .detach(|| exchange_client.note_the_pooled_gpu_frame_a_read_carries(pooled_frame));
+        }
+        let _ = (python, pooled_frame);
+        Ok(())
+    }
+
+    /// The descriptor a write naming the pooled GPU frame `published_frame_id`
+    /// carries, as this helper last read or acquired the frame.
+    pub(crate) fn descriptor_of_the_pooled_gpu_frame_named(
+        &self,
+        published_frame_id: &str,
+    ) -> Option<streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.descriptor_of_the_pooled_gpu_frame_named(published_frame_id);
+        }
+        let _ = published_frame_id;
+        None
+    }
 }
 
 #[pymethods]
@@ -342,7 +372,7 @@ impl PythonGpuContextLimitedAccess {
                 .detach(|| exchange_client.claim_surface_against_producer_reuse(surface_id))?;
             return Ok(PythonGpuSurfaceCheckOutLease {
                 claimed_surface_id: surface_id.to_string(),
-                release_check_out_to_surface_share: claimed,
+                held_against_producer_reuse: claimed,
             });
         }
         let _ = (python, surface_id);

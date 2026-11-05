@@ -201,8 +201,7 @@ pub(crate) struct EscalateResponseOk {
     /// `run_compute_kernel_batch`, `run_graphics_draw` and
     /// `run_ray_tracing_kernel` responses.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) texture_layouts_after_the_run:
-        Option<Vec<EscalateResponseTextureLayoutAfterTheRun>>,
+    pub(crate) texture_layouts_after_the_run: Option<Vec<EscalateResponseTextureLayoutAfterTheRun>>,
 
     /// Resolved usage tokens (set on acquire_texture responses). Array reflects
     /// the exact flags the host honored.

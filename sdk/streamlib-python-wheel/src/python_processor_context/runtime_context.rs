@@ -133,6 +133,7 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
             python,
             PythonLinkOutputDataWriter {
                 link_data_access: link_data_access.clone_ref(python),
+                gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
                 escalate_request_to_parent: escalate_request_to_parent
                     .map(|requester| requester.clone().unbind()),
             },

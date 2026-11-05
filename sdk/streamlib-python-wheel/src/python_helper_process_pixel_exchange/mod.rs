@@ -73,7 +73,10 @@ pub(crate) use linux::{
     OpaqueFdAllocationExportDescription, foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "linux")]
-use linux::{HelperPixelBufferPoolSlotImport, HelperPoolSlotImportsByPoolSlot};
+use linux::{
+    HelperGpuPoolClaimTables, HelperGpuPoolSlotFrameClaim, HelperPixelBufferPoolSlotImport,
+    HelperPoolSlotImportsByPoolSlot,
+};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
@@ -349,12 +352,13 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// import created is this surface's to remove; settled by its own Drop.
     #[cfg(target_os = "linux")]
     pub(crate) unregister_foreign_from_surface_share: Option<HelperForeignSurfaceUnregisterDebt>,
-    /// The checkout lease this surface owes, whoever owns the surface itself.
+    /// What holds this surface against producer reuse, whoever owns the
+    /// surface itself.
     #[expect(
         dead_code,
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
-    pub(crate) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    pub(crate) held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     /// The client this surface was checked out through, and the one its
     /// device export goes back to.
     #[cfg(target_os = "linux")]
@@ -529,6 +533,27 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
     }
 }
 
+/// What holds a surface still against producer reuse: a checkout lease, or —
+/// for a pooled frame its pool's claim table covers — a claim in that table.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) enum HelperSurfaceHeldAgainstProducerReuse {
+    CheckOutLease(
+        #[expect(
+            dead_code,
+            reason = "settled by its own Drop; nothing reads it, and that is the point"
+        )]
+        HelperSurfaceCheckOutLeaseDebt,
+    ),
+    #[cfg(target_os = "linux")]
+    GpuPoolClaim(
+        #[expect(
+            dead_code,
+            reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
+        )]
+        Arc<HelperGpuPoolSlotFrameClaim>,
+    ),
+}
+
 /// What memory crosses the surface-share channel as: a descriptor over
 /// SCM_RIGHTS on Linux.
 #[cfg(target_os = "linux")]
@@ -607,6 +632,10 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// engine retires on this helper's connection, which drops it here.
     #[cfg(target_os = "linux")]
     pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot,
+    /// The claim tables this helper was handed, mapped once per pool, and the
+    /// claims its frames hold in them.
+    #[cfg(target_os = "linux")]
+    gpu_pool_claim_tables: HelperGpuPoolClaimTables,
     /// The `deviceUUID` the runtime named at spawn, or why this child has
     /// none — what its import device is built on, and the refusal of every
     /// import when it is absent.
@@ -705,6 +734,8 @@ impl HelperProcessGpuExchangeClient {
             surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
             #[cfg(target_os = "linux")]
             pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot::default(),
+            #[cfg(target_os = "linux")]
+            gpu_pool_claim_tables: HelperGpuPoolClaimTables::default(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             vulkan_device_uuid_the_runtime_named_at_spawn,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -787,20 +818,27 @@ impl HelperProcessGpuExchangeClient {
     ///
     /// The cheap half of [`Self::resolve_surface`]: the checkout is what mints
     /// the lease, and a holder that only needs the frame to hold still owes no
-    /// Vulkan import for it. The plane fds the service delivers alongside the
-    /// claim close with this call.
+    /// Vulkan import for it. A pooled frame its pool's claim table covers is
+    /// claimed in that table with no request; any other is checked out, and the
+    /// plane fds the service delivers alongside the claim close with this call.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn claim_surface_against_producer_reuse(
         self: &Arc<Self>,
         surface_id: &str,
-    ) -> PyResult<HelperSurfaceCheckOutLeaseDebt> {
+    ) -> PyResult<HelperSurfaceHeldAgainstProducerReuse> {
+        #[cfg(target_os = "linux")]
+        if let Some(claimed) = self.claim_in_its_pool_claim_table(surface_id)? {
+            return Ok(HelperSurfaceHeldAgainstProducerReuse::GpuPoolClaim(claimed));
+        }
         let (response, _transferred_handles_released_by_scope) =
             self.check_out_surface(surface_id)?;
         refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
-        Ok(HelperSurfaceCheckOutLeaseDebt {
-            exchange_client: Arc::clone(self),
-            surface_id: surface_id.to_string(),
-        })
+        Ok(HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(
+            HelperSurfaceCheckOutLeaseDebt {
+                exchange_client: Arc::clone(self),
+                surface_id: surface_id.to_string(),
+            },
+        ))
     }
 
     /// `check_out` over the surface-share socket, then the import of

@@ -584,7 +584,7 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     held_kernel: &mut RayTracingKernelHeldForOneTrace<'_>,
     req: &EscalateRequestRunRayTracingKernel,
     push_constants: &[u8],
-) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     use crate::core::error::Error;
     use crate::core::rhi::RayTracingBindingKind;
     use crate::vulkan::rhi::{AccelerationStructureKind, VulkanStage};

@@ -387,7 +387,7 @@ pub(super) fn bind_and_render_graphics_kernel(
     held_kernel: &mut GraphicsKernelHeldForOneDraw<'_>,
     req: &EscalateRequestRunGraphicsDraw,
     push_constants: &[u8],
-) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     use crate::core::error::Error;
     use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
     use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};

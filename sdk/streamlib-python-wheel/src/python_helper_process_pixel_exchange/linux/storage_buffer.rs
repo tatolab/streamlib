@@ -16,7 +16,7 @@ use streamlib::sdk::rhi::TensorStorageBufferLayout;
 
 use super::super::storage_buffer::tensor_layout_of_a_check_out;
 use super::super::{
-    HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
+    HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse, HelperSurfaceReleaseDebt,
 };
 use super::export_staging::device_tensor_refused_on_a_software_device;
 use super::parse_device_uuid;
@@ -50,7 +50,7 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
         dead_code,
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
-    release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -182,7 +182,7 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
         storage_buffer_pool_slot_import: Arc<HelperStorageBufferPoolSlotImport>,
-        release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+        held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     ) -> HelperCheckedOutStorageBuffer {
         HelperCheckedOutStorageBuffer {
             surface_id: surface_id.to_string(),
@@ -190,7 +190,7 @@ impl HelperProcessGpuExchangeClient {
             writable: false,
             storage_buffer_pool_slot_import,
             release_to_parent: None,
-            release_check_out_to_surface_share,
+            held_against_producer_reuse,
             exchange_client: Arc::clone(self),
         }
     }

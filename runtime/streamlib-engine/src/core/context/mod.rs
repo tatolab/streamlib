@@ -90,7 +90,8 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 pub use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
 pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
 pub use gpu_pool_claim_table::{
-    GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimantProcessId,
+    GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
+    GpuPoolClaimantProcessId,
 };
 pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use stream_clock::{
@@ -100,7 +101,7 @@ pub use stream_clock::{
 };
 pub use streamlib_ipc_types::{
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
-    GpuPoolSlotFrameDescriptorBody,
+    GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest,
 };
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,

@@ -28,8 +28,9 @@ use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
-    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
+    ChannelEgressConfig, ChannelTrustTier, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody,
+    HelperProcessLossCountBoardWriter, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
     ReadMode, ResolvedAudioWindowContract, StreamClockBoardPublishListener,
@@ -333,6 +334,7 @@ impl PythonProcessorLinkDataAccess {
                 python,
                 port_name,
                 message.payload,
+                message.payload_descriptor,
                 into,
                 offered_gpu_limited_access,
             )
@@ -450,6 +452,7 @@ impl PythonProcessorLinkDataAccess {
             python,
             port_name,
             std::mem::take(&mut message.payload),
+            message.payload_descriptor,
             into,
             offered_gpu_limited_access,
         )?;
@@ -497,9 +500,20 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,
     payload: InputPortMessagePayload,
+    payload_descriptor: DataChannelPayloadDescriptor,
     into: Option<&Bound<'py, PyAny>>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
+        (payload_descriptor.known_kind(), offered_gpu_limited_access)
+    {
+        gpu_limited_access
+            .get()
+            .note_the_pooled_gpu_frame_a_read_carries(
+                python,
+                GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+            )?;
+    }
     let payload_borrow = Bound::new(python, PythonPortPayloadBorrow::holding(payload))?.into_any();
     match into {
         Some(read_target) => cast_payload_into_read_target(
@@ -1031,46 +1045,14 @@ impl PythonProcessorLinkDataAccess {
         timestamp_ns: Option<i64>,
         starts_group: bool,
     ) -> PyResult<()> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
-        let payload_bytes = payload_buffer.bytes();
-        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
-            return Ok(());
-        };
-        let timestamp_ns = timestamp_ns
-            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
-        let group_boundary = if starts_group {
-            MessageGroupBoundary::StartsGroup
-        } else {
-            MessageGroupBoundary::ContinuesGroup
-        };
-        match python.detach(|| {
-            output_writer.write_bytes_with_timestamp(
-                port_name,
-                payload_bytes,
-                timestamp_ns,
-                group_boundary,
-            )
-        }) {
-            Ok(()) => Ok(()),
-            Err(Error::PayloadExceedsChannelCeiling {
-                channel,
-                payload_bytes,
-                largest_admitted_frame_bytes,
-                tier,
-                refused_bags_on_the_output_port: refused_bags,
-                ..
-            }) => {
-                tracing::warn!(
-                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
-                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
-                     tier); the message was dropped, and the port has refused {refused_bags} so \
-                     far"
-                );
-                Ok(())
-            }
-            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
-        }
+        self.write_described_by(
+            python,
+            port_name,
+            payload,
+            timestamp_ns,
+            starts_group,
+            DataChannelPayloadDescriptor::bytes(),
+        )
     }
 
     /// Loan `payload_byte_len` bytes on `port_name` for its writer to fill in
@@ -1103,6 +1085,62 @@ impl PythonProcessorLinkDataAccess {
             timestamp_ns,
             group_boundary,
         )
+    }
+}
+
+impl PythonProcessorLinkDataAccess {
+    /// [`Self::write_to_output_port`], the message's header carrying
+    /// `payload_descriptor`.
+    pub(crate) fn write_described_by(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        payload: &Bound<'_, PyAny>,
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+        payload_descriptor: DataChannelPayloadDescriptor,
+    ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
+        let payload_bytes = payload_buffer.bytes();
+        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
+            return Ok(());
+        };
+        let timestamp_ns = timestamp_ns
+            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
+        let group_boundary = if starts_group {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        };
+        match python.detach(|| {
+            output_writer.write_bytes_described_by(
+                port_name,
+                payload_bytes,
+                timestamp_ns,
+                group_boundary,
+                payload_descriptor,
+            )
+        }) {
+            Ok(()) => Ok(()),
+            Err(Error::PayloadExceedsChannelCeiling {
+                channel,
+                payload_bytes,
+                largest_admitted_frame_bytes,
+                tier,
+                refused_bags_on_the_output_port: refused_bags,
+                ..
+            }) => {
+                tracing::warn!(
+                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
+                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
+                     tier); the message was dropped, and the port has refused {refused_bags} so \
+                     far"
+                );
+                Ok(())
+            }
+            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
+        }
     }
 }
 

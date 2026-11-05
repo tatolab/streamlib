@@ -416,7 +416,7 @@ pub(super) fn dispatch_compute_recording_and_publish_bound_surface_layouts(
     host_gpu_context: &crate::core::context::GpuContext,
     recording: &[BatchedComputeKernelDispatch],
     bound_surfaces: &[(String, TextureRegistration)],
-) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     host_gpu_context.dispatch_compute_kernel_batch(recording)?;
     Ok(publish_bound_surface_layouts_to_surface_share(
         host_gpu_context.surface_store(),
@@ -438,7 +438,7 @@ pub(super) fn bind_and_dispatch_compute_kernel(
     kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
     req: &EscalateRequestRunComputeKernel,
     push_constants: Vec<u8>,
-) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     let resolved = resolve_supplied_compute_bindings(host_gpu_context, &req.bindings, &kernel)?;
     let bound_surfaces = compute_bound_surface_layout_publish_pairs(&resolved);
     let dispatch = BatchedComputeKernelDispatch {
@@ -519,7 +519,7 @@ pub(super) fn bind_and_dispatch_compute_kernel_batch(
     host_gpu_context: &crate::core::context::GpuContext,
     req: &EscalateRequestRunComputeKernelBatch,
     push_constants_per_dispatch: Vec<Vec<u8>>,
-) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     use crate::core::error::Error;
 
     let mut bound_surfaces_across_the_batch: Vec<(String, TextureRegistration)> = Vec::new();

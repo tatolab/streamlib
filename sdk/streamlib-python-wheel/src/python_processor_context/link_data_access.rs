@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor;
 
 use crate::python_port_payload::PythonPortPayloadLoan;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -192,6 +193,8 @@ impl PythonLinkInputDataReader {
 #[pyclass(name = "LinkOutputDataWriter", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkOutputDataWriter {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
+    /// What names the descriptor of a pooled GPU frame a write carries.
+    pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
     /// The bridge's blocking round trip to the parent, which holds the
     /// catalog entries this processor's ports carry.
     pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
@@ -200,8 +203,17 @@ pub(crate) struct PythonLinkOutputDataWriter {
 #[pymethods]
 impl PythonLinkOutputDataWriter {
     /// Publish one message carrying a copy of `payload`, any contiguous buffer,
-    /// to every downstream link on `port_name`.
-    #[pyo3(signature = (port_name, payload, timestamp_ns = None, starts_group = true))]
+    /// to every downstream link on `port_name`. A message naming a pooled GPU
+    /// frame passes its published frame id as `pooled_gpu_frame`, and carries
+    /// the frame's descriptor for its readers to claim it by.
+    #[pyo3(signature = (
+        port_name,
+        payload,
+        timestamp_ns = None,
+        starts_group = true,
+        *,
+        pooled_gpu_frame = None,
+    ))]
     fn write(
         &self,
         python: Python<'_>,
@@ -209,13 +221,31 @@ impl PythonLinkOutputDataWriter {
         payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
         starts_group: bool,
+        pooled_gpu_frame: Option<&str>,
     ) -> PyResult<()> {
-        self.link_data_access.get().write_to_output_port(
+        let payload_descriptor = match pooled_gpu_frame {
+            None => DataChannelPayloadDescriptor::bytes(),
+            Some(published_frame_id) => DataChannelPayloadDescriptor::gpu_pool_slot_frame(
+                self.gpu_limited_access_context
+                    .get()
+                    .descriptor_of_the_pooled_gpu_frame_named(published_frame_id)
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "pooled_gpu_frame {published_frame_id:?} names no pooled GPU frame \
+                             this node acquired or read: a message carries the descriptor of a \
+                             frame from a pool a claim table covers, as its acquire or its \
+                             read handed it"
+                        ))
+                    })?,
+            ),
+        };
+        self.link_data_access.get().write_described_by(
             python,
             port_name,
             payload,
             timestamp_ns,
             starts_group,
+            payload_descriptor,
         )
     }
 

@@ -580,6 +580,8 @@ class LinkOutputDataWriter(Protocol):
         payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
+        *,
+        pooled_gpu_frame: str | None = None,
     ) -> None:
         """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
@@ -588,7 +590,10 @@ class LinkOutputDataWriter(Protocol):
         `starts_group=True` says the message stands alone; only encoded media
         passes `False`, for a message a decoder cannot enter at. A payload over
         the channel's ceiling is dropped and counted against this port, never
-        raised.
+        raised. A message naming a pooled GPU frame this node acquired or read
+        passes the frame's id as `pooled_gpu_frame`, so it carries the frame's
+        descriptor and every reader claims the frame with no request; an id
+        naming no such frame raises `ValueError`.
         """
         ...
 
