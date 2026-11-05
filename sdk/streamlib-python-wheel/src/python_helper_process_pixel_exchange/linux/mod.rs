@@ -607,13 +607,28 @@ impl HelperProcessGpuExchangeClient {
 
     /// Take in the pooled frame a read carried: the first frame of a pool, or
     /// of a slot this helper does not know yet, fetches the pool's claim table
-    /// and its slot keys once.
+    /// and its slot keys once. A pool whose table the service refuses, such as
+    /// one past its last claimant column, is read through checkouts.
     pub(crate) fn note_the_pooled_gpu_frame_a_read_carries(
         &self,
         pooled_frame: GpuPoolSlotFrameDescriptorBody,
     ) -> PyResult<()> {
-        if !self.gpu_pool_claim_tables.knows_the_slot_of(&pooled_frame) {
-            self.fetch_the_claim_table_of_gpu_pool(pooled_frame.pool)?;
+        if self
+            .gpu_pool_claim_tables
+            .the_hand_over_was_refused(&pooled_frame.pool)
+        {
+            return Ok(());
+        }
+        if !self.gpu_pool_claim_tables.knows_the_slot_of(&pooled_frame)
+            && let Err(refusal) = self.fetch_the_claim_table_of_gpu_pool(pooled_frame.pool)
+        {
+            tracing::warn!(
+                "GPU pool {}: {refusal}; this helper reads the pool's frames through checkouts",
+                gpu_pool_uuid_wire_name(&pooled_frame.pool)
+            );
+            self.gpu_pool_claim_tables
+                .note_a_refused_hand_over(pooled_frame.pool);
+            return Ok(());
         }
         if self
             .gpu_pool_claim_tables
@@ -690,6 +705,11 @@ impl HelperProcessGpuExchangeClient {
                     .note_the_layout_a_run_left(&surface_id, image_layout);
             }
         }
+    }
+
+    /// Whether this helper read or acquired any pooled frame a write could name.
+    pub(crate) fn knows_any_pooled_gpu_frame(&self) -> bool {
+        self.gpu_pool_claim_tables.knows_any_pooled_frame()
     }
 
     /// The descriptor a write of the pooled frame `published_frame_id` names

@@ -5,7 +5,7 @@
 //! its frames take in them: a pooled frame is held against producer reuse in
 //! shared memory, with no surface-share request per frame.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Weak};
 
@@ -70,12 +70,31 @@ pub(crate) enum HelperGpuPoolFrameClaimAttempt {
 #[derive(Default)]
 pub(crate) struct HelperGpuPoolClaimTables {
     claim_tables_by_pool: Mutex<HashMap<[u8; 16], Arc<HelperGpuPoolClaimTable>>>,
+    pools_whose_claim_table_was_refused: Mutex<HashSet<[u8; 16]>>,
     pool_slot_key_by_pool_and_row: Mutex<HashMap<([u8; 16], u32), String>>,
     newest_frame_by_pool_slot_key: Mutex<HashMap<String, GpuPoolSlotFrameDescriptorBody>>,
     live_claims_by_published_frame_id: Mutex<HashMap<String, Weak<HelperGpuPoolSlotFrameClaim>>>,
 }
 
 impl HelperGpuPoolClaimTables {
+    /// Remember that the service refused `pool`'s claim table, so its frames
+    /// are read through checkouts without asking again.
+    pub(crate) fn note_a_refused_hand_over(&self, pool: [u8; 16]) {
+        self.pools_whose_claim_table_was_refused.lock().insert(pool);
+    }
+
+    /// Whether the service refused `pool`'s claim table to this helper.
+    pub(crate) fn the_hand_over_was_refused(&self, pool: &[u8; 16]) -> bool {
+        self.pools_whose_claim_table_was_refused
+            .lock()
+            .contains(pool)
+    }
+
+    /// Whether this helper read or acquired any pooled frame.
+    pub(crate) fn knows_any_pooled_frame(&self) -> bool {
+        !self.newest_frame_by_pool_slot_key.lock().is_empty()
+    }
+
     /// Whether this helper holds `frame`'s pool table and knows its row's slot.
     pub(crate) fn knows_the_slot_of(&self, frame: &GpuPoolSlotFrameDescriptorBody) -> bool {
         self.claim_tables_by_pool.lock().contains_key(&frame.pool)

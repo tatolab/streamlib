@@ -176,3 +176,103 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
     assert!(recycled.to_string().contains("recycled"), "{recycled}");
     assert!(!row_lease.row().is_claimed());
 }
+
+/// A slot the pool grew after its claim table crossed is fetched the first
+/// time a frame names its row, and read through its own import while the
+/// first slot's import stays in use. Needs a Vulkan device; skips where none
+/// comes up.
+#[test]
+fn a_slot_the_pool_grew_crosses_the_first_time_a_frame_names_it() {
+    let host_device = match HostVulkanDevice::new() {
+        Ok(host_device) => host_device,
+        Err(unavailable) => {
+            tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+            return;
+        }
+    };
+    let (Some(first_slot), Some(grown_slot)) = (
+        a_stamped_pool_slot(&host_device, 0x11),
+        a_stamped_pool_slot(&host_device, 0x22),
+    ) else {
+        return;
+    };
+    const GROWN_POOL_SLOT_KEY: &str = "claim-table-read-grown-slot";
+    let share = SurfaceShareUnderTest::start("claim-table-grown");
+    let engine_surface_store = SurfaceStore::new(
+        share.socket_path.to_string_lossy().into_owned(),
+        "engine:claim-table-grown-under-test".to_string(),
+    );
+    engine_surface_store
+        .connect()
+        .expect("the engine's store connects");
+    engine_surface_store
+        .register_buffer(POOL_SLOT_KEY, &first_slot)
+        .expect("the engine registers the first slot");
+    let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("claim-table-grown");
+    let first_row = claim_tables_of_the_pool
+        .lease_a_row_for_a_slot(
+            share.check_out_leases().gpu_pool_claim_tables(),
+            POOL_SLOT_KEY,
+        )
+        .expect("the pool leases its first slot a row");
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "claim-table-grown-under-test",
+        Ok(host_device.physical_device_uuid()),
+    );
+    publish(&share, &first_row, 1);
+    exchange_client
+        .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&first_row, 1))
+        .expect("the first frame fetches the pool's claim table");
+    let first_frame = exchange_client
+        .check_out_and_import(&format!("{POOL_SLOT_KEY}#1"))
+        .expect("the first slot is imported");
+
+    engine_surface_store
+        .register_buffer(GROWN_POOL_SLOT_KEY, &grown_slot)
+        .expect("the engine registers the grown slot");
+    let grown_row = claim_tables_of_the_pool
+        .lease_a_row_for_a_slot(
+            share.check_out_leases().gpu_pool_claim_tables(),
+            GROWN_POOL_SLOT_KEY,
+        )
+        .expect("the pool leases its grown slot a row");
+    grown_row.row().publish_generation(1);
+    share.publish_frame_generation_over_a_registered_pool_slot(GROWN_POOL_SLOT_KEY, 1);
+    assert!(
+        !exchange_client
+            .gpu_pool_claim_tables
+            .knows_the_slot_of(&the_frame_of(&grown_row, 1)),
+        "the grown slot's row was not in the first hand-over"
+    );
+
+    exchange_client
+        .note_the_pooled_gpu_frame_a_read_carries(the_frame_of(&grown_row, 1))
+        .expect("a frame of the grown slot fetches the slot set again");
+    let grown_frame_id = format!("{GROWN_POOL_SLOT_KEY}#1");
+    let claimed = exchange_client
+        .claim_surface_against_producer_reuse(&grown_frame_id)
+        .unwrap_or_else(|refusal| panic!("frame {grown_frame_id} is claimed: {refusal}"));
+    let read = exchange_client
+        .check_out_and_import(&grown_frame_id)
+        .unwrap_or_else(|refusal| panic!("frame {grown_frame_id} is read: {refusal}"));
+
+    let HelperCheckedOutSurface::PixelBuffer(pixels) = &read else {
+        panic!("a pixel_buffer registration reads as a pixel buffer");
+    };
+    // SAFETY: the mapping spans the slot's bytes while `read` lives.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            pixels.host_mapped_base_address(),
+            PIXEL_BUFFER_BYTE_SIZE as usize,
+        )
+    };
+    assert!(bytes.iter().all(|byte| *byte == 0x22));
+    assert!(grown_row.row().is_claimed());
+    assert!(
+        first_row.row().is_claimed(),
+        "the first slot's read still holds its own frame"
+    );
+    drop((claimed, read, first_frame));
+    assert!(!grown_row.row().is_claimed());
+    assert!(!first_row.row().is_claimed());
+}

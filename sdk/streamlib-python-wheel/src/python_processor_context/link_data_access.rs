@@ -207,10 +207,12 @@ pub(crate) struct PythonLinkOutputDataWriter {
 #[pymethods]
 impl PythonLinkOutputDataWriter {
     /// Publish one message carrying a copy of `payload`, any contiguous buffer,
-    /// to every downstream link on `port_name`. A message naming a pooled GPU
-    /// frame passes its published frame id as `pooled_gpu_frame`, and carries
-    /// the frame's descriptor for its readers to claim it by; claim tables
-    /// cross processes only on Linux, so elsewhere it raises `ValueError`.
+    /// to every downstream link on `port_name`. A msgpack record whose
+    /// `surface_id` names a pooled GPU frame this node acquired or read, or any
+    /// payload passing that frame's id as `pooled_gpu_frame`, carries the
+    /// frame's descriptor for its readers to claim it by; claim tables
+    /// cross processes only on Linux, so elsewhere `pooled_gpu_frame` raises
+    /// `ValueError`.
     #[pyo3(signature = (
         port_name,
         payload,
@@ -228,12 +230,17 @@ impl PythonLinkOutputDataWriter {
         starts_group: bool,
         pooled_gpu_frame: Option<&str>,
     ) -> PyResult<()> {
-        let payload_descriptor = match pooled_gpu_frame {
-            None => DataChannelPayloadDescriptor::bytes(),
-            Some(published_frame_id) => DataChannelPayloadDescriptor::gpu_pool_slot_frame(
-                self.gpu_limited_access_context
-                    .get()
+        let gpu_limited_access = self.gpu_limited_access_context.get();
+        self.link_data_access.get().write_described_by(
+            python,
+            port_name,
+            payload,
+            timestamp_ns,
+            starts_group,
+            |payload_bytes| match pooled_gpu_frame {
+                Some(published_frame_id) => gpu_limited_access
                     .descriptor_of_the_pooled_gpu_frame_named(published_frame_id)
+                    .map(DataChannelPayloadDescriptor::gpu_pool_slot_frame)
                     .ok_or_else(|| {
                         PyValueError::new_err(format!(
                             "pooled_gpu_frame {published_frame_id:?} names no pooled GPU frame \
@@ -241,16 +248,13 @@ impl PythonLinkOutputDataWriter {
                              frame from a pool a claim table covers, as its acquire or its \
                              read handed it"
                         ))
-                    })?,
-            ),
-        };
-        self.link_data_access.get().write_described_by(
-            python,
-            port_name,
-            payload,
-            timestamp_ns,
-            starts_group,
-            payload_descriptor,
+                    }),
+                None => Ok(descriptor_of_the_pooled_frame_a_record_names(
+                    gpu_limited_access,
+                    payload_bytes,
+                )
+                .unwrap_or_else(DataChannelPayloadDescriptor::bytes)),
+            },
         )
     }
 
@@ -323,6 +327,70 @@ fn catalog_entry_round_trip_to_parent<'py>(
         })?
         .bind(python)
         .call1((op,))
+}
+
+/// The descriptor of the pooled frame a msgpack record's `surface_id` names,
+/// when this node read or acquired that frame: how a `VideoFrame` written
+/// back, or one naming a `NodeOutputTextureRing` slot, carries its frame.
+fn descriptor_of_the_pooled_frame_a_record_names(
+    gpu_limited_access: &PythonGpuContextLimitedAccess,
+    payload_bytes: &[u8],
+) -> Option<DataChannelPayloadDescriptor> {
+    if !gpu_limited_access.knows_any_pooled_gpu_frame() {
+        return None;
+    }
+    let surface_id = surface_id_a_msgpack_record_names(payload_bytes)?;
+    gpu_limited_access
+        .descriptor_of_the_pooled_gpu_frame_named(surface_id)
+        .map(DataChannelPayloadDescriptor::gpu_pool_slot_frame)
+}
+
+/// The `surface_id` string at the top level of a msgpack map, read in place.
+fn surface_id_a_msgpack_record_names(payload_bytes: &[u8]) -> Option<&str> {
+    let mut unread = payload_bytes;
+    let rmpv::ValueRef::Map(entries) = rmpv::decode::read_value_ref(&mut unread).ok()? else {
+        return None;
+    };
+    entries
+        .into_iter()
+        .find_map(|(key, value)| match (key, value) {
+            (rmpv::ValueRef::String(key), rmpv::ValueRef::String(value))
+                if key.as_str() == Some("surface_id") =>
+            {
+                value.into_str()
+            }
+            _ => None,
+        })
+}
+
+#[cfg(test)]
+mod surface_id_a_msgpack_record_names_tests {
+    use super::surface_id_a_msgpack_record_names;
+
+    fn packed(record: &rmpv::Value) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, record).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_video_frame_record_names_its_surface_id() {
+        let record = packed(&rmpv::Value::Map(vec![
+            ("width".into(), 1920.into()),
+            ("surface_id".into(), "slot-3#7".into()),
+        ]));
+
+        assert_eq!(surface_id_a_msgpack_record_names(&record), Some("slot-3#7"));
+    }
+
+    #[test]
+    fn a_record_without_a_surface_id_and_raw_bytes_name_none() {
+        let record = packed(&rmpv::Value::Map(vec![("width".into(), 1920.into())]));
+
+        assert_eq!(surface_id_a_msgpack_record_names(&record), None);
+        assert_eq!(surface_id_a_msgpack_record_names(b"hello"), None);
+        assert_eq!(surface_id_a_msgpack_record_names(&[]), None);
+    }
 }
 
 /// The typed cast's claim, over a real link and a real surface-share service.

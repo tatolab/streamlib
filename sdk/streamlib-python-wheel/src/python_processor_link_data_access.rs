@@ -1075,7 +1075,7 @@ impl PythonProcessorLinkDataAccess {
             payload,
             timestamp_ns,
             starts_group,
-            DataChannelPayloadDescriptor::bytes(),
+            |_| Ok(DataChannelPayloadDescriptor::bytes()),
         )
     }
 
@@ -1113,8 +1113,8 @@ impl PythonProcessorLinkDataAccess {
 }
 
 impl PythonProcessorLinkDataAccess {
-    /// [`Self::write_to_output_port`], the message's header carrying
-    /// `payload_descriptor`.
+    /// [`Self::write_to_output_port`], the message's header carrying the
+    /// descriptor `descriptor_of_the_payload` answers for the payload's bytes.
     pub(crate) fn write_described_by(
         &self,
         python: Python<'_>,
@@ -1122,11 +1122,12 @@ impl PythonProcessorLinkDataAccess {
         payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
         starts_group: bool,
-        payload_descriptor: DataChannelPayloadDescriptor,
+        descriptor_of_the_payload: impl FnOnce(&[u8]) -> PyResult<DataChannelPayloadDescriptor>,
     ) -> PyResult<()> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
         let payload_bytes = payload_buffer.bytes();
+        let payload_descriptor = descriptor_of_the_payload(payload_bytes)?;
         let Some(output_writer) = self.output_writer_reaching(port_name)? else {
             return Ok(());
         };

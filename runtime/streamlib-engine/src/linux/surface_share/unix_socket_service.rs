@@ -2881,11 +2881,24 @@ mod tests {
         service.stop();
     }
 
-    /// A claimant process whose connection the service drops is stopped,
-    /// and only once it has exited is its column cleared, freeing the slot
-    /// it left claimed for a rehand.
+    /// A claimant process that sends an oversized message has its connection
+    /// dropped, is stopped, and only once it has exited is its column
+    /// cleared, freeing the slot it left claimed for a rehand.
     #[test]
-    fn a_claimant_whose_connection_the_service_drops_is_stopped_and_its_column_cleared() {
+    fn a_claimant_sending_an_oversized_message_is_stopped_and_its_column_cleared() {
+        a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared("oversized");
+    }
+
+    /// A claimant process that sends a message that is not JSON is stopped
+    /// the same way, and its column cleared once it has exited.
+    #[test]
+    fn a_claimant_sending_a_malformed_message_is_stopped_and_its_column_cleared() {
+        a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared("malformed");
+    }
+
+    fn a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared(
+        how_it_breaks_the_protocol: &str,
+    ) {
         use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
         use std::io::{BufRead as _, Write as _};
         use streamlib_ipc_types::{
@@ -2893,9 +2906,10 @@ mod tests {
             GpuPoolSlotRehandTest,
         };
 
-        const CLAIMANT_THAT_SENDS_AN_OVERSIZED_MESSAGE: &str = r#"
+        const CLAIMANT_THAT_BREAKS_THE_PROTOCOL: &str = r#"
 import json, mmap, socket, struct, sys, time
 path, pool, row, row_bytes, counts_offset = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
+how_it_breaks_the_protocol = sys.argv[6]
 connection = socket.socket(socket.AF_UNIX)
 connection.connect(path)
 request = json.dumps({"op": "claim_table_of_gpu_pool", "pool": pool}).encode()
@@ -2908,7 +2922,11 @@ count_at = row * row_bytes + counts_offset + 4 * column
 table[count_at:count_at + 4] = struct.pack("<I", 1)
 print("claimed", flush=True)
 sys.stdin.readline()
-connection.sendall(struct.pack(">I", 0xFFFFFFFF))
+if how_it_breaks_the_protocol == "oversized":
+    connection.sendall(struct.pack(">I", 0xFFFFFFFF))
+else:
+    not_json = b"{not json"
+    connection.sendall(struct.pack(">I", len(not_json)) + not_json)
 time.sleep(30)
 "#;
         let state = SurfaceShareState::new();
@@ -2922,12 +2940,13 @@ time.sleep(30)
 
         let Ok(mut claimant) = std::process::Command::new("python3")
             .arg("-c")
-            .arg(CLAIMANT_THAT_SENDS_AN_OVERSIZED_MESSAGE)
+            .arg(CLAIMANT_THAT_BREAKS_THE_PROTOCOL)
             .arg(&socket_path)
             .arg(gpu_pool_uuid_wire_name(&leased_row.table().pool_uuid()))
             .arg(leased_row.row_index().to_string())
             .arg(GPU_POOL_CLAIM_TABLE_ROW_BYTES.to_string())
             .arg(GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET.to_string())
+            .arg(how_it_breaks_the_protocol)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
