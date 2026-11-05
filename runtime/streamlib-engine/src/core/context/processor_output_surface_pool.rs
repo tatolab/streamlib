@@ -14,11 +14,70 @@ use super::lease_aware_pool_slot_ring::{
     ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
     LeaseAwarePoolSlotResource, LeaseAwarePoolSlotRing,
 };
+use std::collections::HashMap;
+
+use parking_lot::Mutex;
+
 use crate::core::{Error, Result};
 
 /// The most slots one processor output pool grows to while consumers hold its
-/// frames.
+/// frames, unless the links on its outputs keep more.
 pub(crate) const PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY: usize = 16;
+
+/// The output frames the links on one processor's outputs may keep at once:
+/// queued in their mailboxes, where a frame holds no claim until its read, and
+/// borrowed past them, up to each link's borrow quota.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OutputFramesKeptByOutputLinks {
+    pub(crate) queued_in_their_mailboxes: usize,
+    pub(crate) borrowed_past_their_mailboxes: usize,
+}
+
+/// What each wired link on one processor's outputs keeps of its output frames,
+/// recorded at wiring and forgotten at unwiring, which its output pools are
+/// sized from.
+#[derive(Debug, Default)]
+pub struct OutputFramesKeptByTheOutputLinksOfOneProcessor {
+    kept_by_output_link_id: Mutex<HashMap<String, OutputFramesKeptByOutputLinks>>,
+}
+
+impl OutputFramesKeptByTheOutputLinksOfOneProcessor {
+    /// Record a wired link whose reader's mailbox holds `mailbox_depth` frames
+    /// and who may borrow `borrow_quota` past it; rewiring it replaces what it
+    /// kept.
+    pub(crate) fn note_a_wired_output_link(
+        &self,
+        link_id: &str,
+        mailbox_depth: usize,
+        borrow_quota: usize,
+    ) {
+        self.kept_by_output_link_id.lock().insert(
+            link_id.to_string(),
+            OutputFramesKeptByOutputLinks {
+                queued_in_their_mailboxes: mailbox_depth,
+                borrowed_past_their_mailboxes: borrow_quota,
+            },
+        );
+    }
+
+    /// Forget an unwired link; the pools shrink to the rest lazily.
+    pub(crate) fn forget_an_unwired_output_link(&self, link_id: &str) {
+        self.kept_by_output_link_id.lock().remove(link_id);
+    }
+
+    /// What every wired link on the processor's outputs keeps, summed.
+    pub(crate) fn kept_by_every_output_link(&self) -> OutputFramesKeptByOutputLinks {
+        self.kept_by_output_link_id.lock().values().fold(
+            OutputFramesKeptByOutputLinks::default(),
+            |sum, kept| OutputFramesKeptByOutputLinks {
+                queued_in_their_mailboxes: sum.queued_in_their_mailboxes
+                    + kept.queued_in_their_mailboxes,
+                borrowed_past_their_mailboxes: sum.borrowed_past_their_mailboxes
+                    + kept.borrowed_past_their_mailboxes,
+            },
+        )
+    }
+}
 
 /// What a processor output pool answers when asked for its next frame
 /// without allocating.
@@ -49,6 +108,8 @@ pub(crate) struct ProcessorOutputSurfacePoolRefusedLentSlot<Resource> {
 pub(crate) struct ProcessorOutputSurfacePool<Resource> {
     pool_key: String,
     ring: LeaseAwarePoolSlotRing<Resource>,
+    kept_by_its_output_links: OutputFramesKeptByOutputLinks,
+    slot_capacity: usize,
 }
 
 impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> {
@@ -57,20 +118,32 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         Self {
             pool_key,
             ring: LeaseAwarePoolSlotRing::default(),
+            kept_by_its_output_links: OutputFramesKeptByOutputLinks::default(),
+            slot_capacity: PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
         }
+    }
+
+    /// Size the next hand-offs for what the links on the producer's outputs
+    /// keep of its frames.
+    pub(crate) fn keep_room_for_what_its_output_links_keep(
+        &mut self,
+        kept_by_its_output_links: OutputFramesKeptByOutputLinks,
+    ) {
+        self.kept_by_its_output_links = kept_by_its_output_links;
     }
 
     /// Hand out the slot this frame publishes into when the pool needs no new
     /// one: an unheld slot republished under a freshly minted
     /// `<slot>#<generation>`.
     ///
-    /// The pool keeps `rotation_depth` slots nobody holds, so a frame nobody
-    /// claimed stays resolvable for that many publishes behind the newest
-    /// however many frames consumers hold. It reuses the unheld slot published
-    /// longest ago while that many are unheld and otherwise asks for a fresh
-    /// slot; at
-    /// [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`] it reuses any unheld slot,
-    /// and refuses when none is.
+    /// The pool keeps `rotation_depth` slots nobody holds, plus one for each
+    /// frame its output links' mailboxes queue, so a frame nobody claimed
+    /// stays resolvable for that many publishes behind the newest however many
+    /// frames consumers hold. It reuses the unheld slot published longest ago
+    /// while that many are unheld and otherwise asks for a fresh slot. It grows
+    /// to [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`], or to that reserve plus
+    /// its output links' borrow quotas when they are more; at that capacity it
+    /// reuses any unheld slot, and refuses when none is.
     pub(crate) fn hand_off_a_reusable_frame(
         &mut self,
         rotation_depth: usize,
@@ -85,14 +158,18 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
                 self.pool_key
             )));
         }
+        let unheld_slot_reserve =
+            rotation_depth + self.kept_by_its_output_links.queued_in_their_mailboxes;
+        self.slot_capacity = PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+            .max(unheld_slot_reserve + self.kept_by_its_output_links.borrowed_past_their_mailboxes);
         let slot_count = self.ring.slot_count();
-        let pool_is_at_its_cap = slot_count >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+        let pool_is_at_its_cap = slot_count >= self.slot_capacity;
         let unheld_slots_a_reuse_needs = if pool_is_at_its_cap {
             ANY_ONE_UNHELD_SLOT_IS_REUSABLE
         } else {
-            rotation_depth
+            unheld_slot_reserve
         };
-        if slot_count >= rotation_depth
+        if slot_count >= unheld_slot_reserve
             && let Some(slot_index) = self.ring.hand_off_a_reusable_slot(
                 unheld_slots_a_reuse_needs,
                 check_out_leases,
@@ -110,8 +187,8 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
     }
 
     /// Add a slot allocated after [`Self::hand_off_a_reusable_frame`] asked
-    /// for one, and hand it out under its first generation; at
-    /// [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`] the slot is handed back.
+    /// for one, and hand it out under its first generation; at the pool's
+    /// capacity the slot is handed back.
     pub(crate) fn hand_off_a_fresh_slot(
         &mut self,
         pool_slot_key: String,
@@ -122,7 +199,7 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         &LeaseAwarePoolSlot<Resource>,
         ProcessorOutputSurfacePoolRefusedFreshSlot<Resource>,
     > {
-        if self.ring.slot_count() >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+        if self.ring.slot_count() >= self.slot_capacity {
             return Err(ProcessorOutputSurfacePoolRefusedFreshSlot {
                 refusal: self.every_slot_in_use_refusal(),
                 pool_slot_key,
@@ -137,8 +214,8 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
 
     /// Add a slot its lender already republished under a fresh generation,
     /// after [`Self::hand_off_a_reusable_frame`] asked for one, and hand it
-    /// out under that generation; at [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`]
-    /// the slot is handed back.
+    /// out under that generation; at the pool's capacity the slot is handed
+    /// back.
     pub(crate) fn hand_off_a_slot_its_lender_already_republished(
         &mut self,
         slot: LeaseAwarePoolSlot<Resource>,
@@ -146,7 +223,7 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         &LeaseAwarePoolSlot<Resource>,
         ProcessorOutputSurfacePoolRefusedLentSlot<Resource>,
     > {
-        if self.ring.slot_count() >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+        if self.ring.slot_count() >= self.slot_capacity {
             return Err(ProcessorOutputSurfacePoolRefusedLentSlot {
                 refusal: self.every_slot_in_use_refusal(),
                 slot: Box::new(slot),
@@ -167,7 +244,7 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         );
         Error::EverySlotInTheProcessorOutputPoolIsInUse {
             pool_key: self.pool_key.clone(),
-            pool_capacity: PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+            pool_capacity: self.slot_capacity,
         }
     }
 

@@ -1564,6 +1564,9 @@ pub(crate) fn spawn_host_for_processor_node(
     processor_interpreter_lend_directory: &Path,
     the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
 ) -> ProcessorInterpreterSpawnHostProcessor {
+    let link_wiring = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+        child_execution_config.execution,
+    ));
     ProcessorInterpreterSpawnHostProcessor {
         processor_class_import_path: processor_class_import_path.to_string(),
         processor_display_name: node.display_name.clone(),
@@ -1580,9 +1583,6 @@ pub(crate) fn spawn_host_for_processor_node(
         child_is_gone: false,
         why_the_helper_process_died_on_its_own: None,
         shutdown_was_already_asked_of_this_helper: false,
-        link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-            child_execution_config.execution,
-        )),
         what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::clone(node.catalog_entries_of_output_ports()),
             upstream_catalog_entries_by_its_inbound_links: Arc::clone(
@@ -1590,7 +1590,10 @@ pub(crate) fn spawn_host_for_processor_node(
             ),
             shared_native_service_leases: Default::default(),
             failure_the_node_reported_of_itself: Default::default(),
+            output_frames_kept_by_its_output_links: link_wiring
+                .output_frames_kept_by_its_output_links(),
         },
+        link_wiring,
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
     }

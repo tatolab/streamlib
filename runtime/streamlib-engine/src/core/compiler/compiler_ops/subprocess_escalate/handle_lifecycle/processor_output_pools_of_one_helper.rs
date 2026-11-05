@@ -6,6 +6,7 @@
 //! its ring minted.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::RegisteredHandle;
 use crate::core::context::gpu_pool_claim_table::{
@@ -15,8 +16,8 @@ use crate::core::context::lease_aware_pool_slot_ring::{
     LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
 };
 use crate::core::context::processor_output_surface_pool::{
-    ProcessorOutputSurfacePool, ProcessorOutputSurfacePoolHandOff,
-    ProcessorOutputSurfacePoolRefusedFreshSlot,
+    OutputFramesKeptByTheOutputLinksOfOneProcessor, ProcessorOutputSurfacePool,
+    ProcessorOutputSurfacePoolHandOff, ProcessorOutputSurfacePoolRefusedFreshSlot,
 };
 use crate::core::context::{
     GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore, TextureRegistration,
@@ -128,6 +129,9 @@ pub(crate) struct ProcessorOutputPoolsOfOneHelper {
     /// Set by the helper's teardown drain: nothing drains the pools again, so
     /// a slot handed in after it would never be released.
     drained_at_the_helpers_teardown: bool,
+    /// What the links on the helper's outputs keep of its frames; every pool
+    /// keeps room for all of them, since no pool is bound to one port.
+    output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
 }
 
 /// What one helper's pools answer when asked for a pool's next frame without
@@ -194,6 +198,17 @@ pub(crate) struct ReleasedProcessorOutputPoolSlot {
 }
 
 impl ProcessorOutputPoolsOfOneHelper {
+    /// No pools yet, each sized for what `output_frames_kept_by_its_output_links`
+    /// records once it is.
+    pub(crate) fn sized_for_what_its_output_links_keep(
+        output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
+    ) -> Self {
+        Self {
+            output_frames_kept_by_its_output_links,
+            ..Self::default()
+        }
+    }
+
     /// Hand out the next frame of the pool under `pool_key` when it needs no
     /// fresh slot, answering — refused or not — every slot a descriptor change
     /// retired, each owed its release.
@@ -223,8 +238,12 @@ impl ProcessorOutputPoolsOfOneHelper {
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
         let released_slots =
             self.release_retiring_slots_nobody_holds(check_out_leases, minted_frame_generations);
-        let handed_off = self
-            .pool_under(pool_key, descriptor)
+        let kept_by_the_output_links = self
+            .output_frames_kept_by_its_output_links
+            .kept_by_every_output_link();
+        let pool = self.pool_under(pool_key, descriptor);
+        pool.keep_room_for_what_its_output_links_keep(kept_by_the_output_links);
+        let handed_off = pool
             .hand_off_a_reusable_frame(rotation_depth, check_out_leases, minted_frame_generations)
             .map(|handed_off| match handed_off {
                 ProcessorOutputSurfacePoolHandOff::ReusedSlot(slot) => {

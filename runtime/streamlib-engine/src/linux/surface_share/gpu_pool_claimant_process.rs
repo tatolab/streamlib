@@ -42,11 +42,6 @@ impl GpuPoolClaimantProcess {
         })
     }
 
-    /// The claimant this process claims as.
-    pub fn claimant(&self) -> GpuPoolClaimantProcessId {
-        self.claimant
-    }
-
     /// Stop the process: the service dropped its connection, and a claimant
     /// left running could still read a slot whose column was cleared.
     pub fn kill(&self) {
