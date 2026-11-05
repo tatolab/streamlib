@@ -1287,7 +1287,8 @@ class HelperProcessLifecycle:
         self._setup_raised_on_its_own = False
         self._running = False
         self._torn_down = False
-        self._stepped_stream_clock_board_service_name: "Optional[str]" = None
+        self._board_service_name_of_a_stream_clock_that_may_step: "Optional[str]" = None
+        self._last_step_handled: "Optional[int]" = None
         self._paused = False
 
     def run_until_the_parent_is_done(self) -> None:
@@ -1387,8 +1388,8 @@ class HelperProcessLifecycle:
                 self._link_data_access.adopt_the_stream_clock_board(
                     stream_clock_board_service_name
                 )
-                if stream_clock.get("mode") == "stepped" and not self._paced_by_real_time():
-                    self._stepped_stream_clock_board_service_name = (
+                if stream_clock.get("mode") in ("stepped", "scaled") and not self._paced_by_real_time():
+                    self._board_service_name_of_a_stream_clock_that_may_step = (
                         stream_clock_board_service_name
                     )
             wire_link_data_access(self._link_data_access, command.get("ports") or {})
@@ -1446,9 +1447,9 @@ class HelperProcessLifecycle:
             self._run_reactive()
         elif (
             execution_mode == "continuous"
-            and self._stepped_stream_clock_board_service_name is not None
+            and self._board_service_name_of_a_stream_clock_that_may_step is not None
         ):
-            self._run_continuous_on_steps(int(command.get("interval_ms") or 0))
+            self._run_continuous_on_its_stream_clock(int(command.get("interval_ms") or 0))
         elif execution_mode == "continuous" and self._paced_by_real_time():
             self._run_continuous(
                 int(command.get("interval_ms") or 0),
@@ -1469,7 +1470,7 @@ class HelperProcessLifecycle:
     def _run_reactive(self) -> None:
         assert self._hosted is not None
         while self._running and not self._torn_down:
-            if self._paused and self._stepped_stream_clock_board_service_name is not None:
+            if self._paused and self._stream_clock_steps_now():
                 # The step ledger leaves a paused node's inbound links off the
                 # balance, so it takes nothing until it resumes.
                 self._park_until_a_command_arrives()
@@ -1497,6 +1498,15 @@ class HelperProcessLifecycle:
                 self._park_until_a_command_arrives()
             self._drain_commands_arriving_mid_run()
 
+    def _stream_clock_steps_now(self) -> bool:
+        """Whether this node's stream clock runs behind the step barrier now:
+        stepped, or scaled above 1×."""
+        assert self._hosted is not None
+        return (
+            self._board_service_name_of_a_stream_clock_that_may_step is not None
+            and self._hosted.limited_access_context.stream_clock.step_ns is not None
+        )
+
     def _paced_by_real_time(self) -> bool:
         return getattr(self._processor_class, NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP, False) is True
 
@@ -1509,10 +1519,11 @@ class HelperProcessLifecycle:
         interval_ms: int,
         time_ns_the_loop_paces_on: "Callable[[], int]",
         machine_ns_until: "Callable[[int], int]",
+        leaves_when: "Callable[[], bool]" = lambda: False,
     ) -> None:
         """Call `process` on each deadline of the interval grid on the time
         `time_ns_the_loop_paces_on` reads: stream time, or the machine's for a
-        node paced by real time."""
+        node paced by real time; until `leaves_when` holds."""
         assert self._hosted is not None
         interval_ns = (
             interval_ms * 1_000_000
@@ -1521,7 +1532,7 @@ class HelperProcessLifecycle:
         )
         limited_access_context = self._hosted.limited_access_context
         next_deadline_ns = time_ns_the_loop_paces_on()
-        while self._running:
+        while self._running and not leaves_when():
             machine_ns_to_go = machine_ns_until(next_deadline_ns)
             if machine_ns_to_go > 0:
                 # Bounded so a live rescale reaches a wait already under way.
@@ -1544,28 +1555,44 @@ class HelperProcessLifecycle:
                 )
             self._drain_commands_arriving_mid_run()
 
+    def _run_continuous_on_its_stream_clock(self, interval_ms: int) -> None:
+        """Run `process` in steps while the stream clock runs behind the step
+        barrier, and on the interval grid of stream time while it runs free,
+        switching whenever the clock does."""
+        while self._running:
+            if self._stream_clock_steps_now():
+                self._run_continuous_on_steps(interval_ms)
+            else:
+                self._run_continuous(
+                    interval_ms,
+                    time_ns_the_loop_paces_on=self._hosted_limited_access_context_time,
+                    machine_ns_until=machine_nanoseconds_until_this_helpers_stream_clock_reaches,
+                    leaves_when=self._stream_clock_steps_now,
+                )
+
     def _run_continuous_on_steps(self, interval_ms: int) -> None:
-        """Run `process` in each step of a stepped stream its deadline falls
-        in, noting every step finished on the board the step barrier reads."""
+        """Run `process` in each step its deadline falls in, noting every step
+        finished on the board the step barrier reads; until the stream clock
+        runs free of the barrier."""
         assert self._hosted is not None
         interval_stream_ns = (
             interval_ms * 1_000_000
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
-        assert self._stepped_stream_clock_board_service_name is not None
+        assert self._board_service_name_of_a_stream_clock_that_may_step is not None
         limited_access_context = self._hosted.limited_access_context
         if self._link_data_access.stream_clock_board_publish_listener_fd() is None:
             self._link_data_access.listen_for_each_stream_clock_board_publish(
-                self._stepped_stream_clock_board_service_name
+                self._board_service_name_of_a_stream_clock_that_may_step
             )
         publish_listener_fd = (
             self._link_data_access.stream_clock_board_publish_listener_fd()
         )
         assert publish_listener_fd is not None
         next_deadline_stream_ns: "Optional[int]" = None
-        last_step_handled: "Optional[int]" = None
-        while self._running:
+        while self._running and self._stream_clock_steps_now():
+            last_step_handled = self._last_step_handled
             step_index = limited_access_context.stream_clock.step_index
             if step_index is None or (
                 last_step_handled is not None and step_index <= last_step_handled
@@ -1586,7 +1613,7 @@ class HelperProcessLifecycle:
             else:
                 self._link_data_access.note_a_step_callback_started()
                 self._link_data_access.note_a_step_callback_returned(step_index)
-            last_step_handled = step_index
+            self._last_step_handled = step_index
             self._drain_commands_arriving_mid_run()
 
     def _call_process_on_the_step_ledger(self, finished_step_index: "Optional[int]") -> None:
@@ -1596,9 +1623,9 @@ class HelperProcessLifecycle:
         self, hook_name: str, finished_step_index: "Optional[int]"
     ) -> None:
         """Call `hook_name`, counted in flight on the step ledger while it runs
-        when the stream steps."""
+        when the stream's clock may step."""
         assert self._hosted is not None
-        if self._stepped_stream_clock_board_service_name is None:
+        if self._board_service_name_of_a_stream_clock_that_may_step is None:
             self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
             return
         self._link_data_access.note_a_step_callback_started()

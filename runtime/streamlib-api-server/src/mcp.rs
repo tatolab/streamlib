@@ -969,7 +969,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Run a started stream's scaled clock at `scale` from now on: its stream time carries on from where it stands, never jumping or running backwards, and every node's `ctx.time`, write stamps and continuous pace follow the new scale. Refused for a stream on the real or a stepped clock, and for a scale above 1. Live only: the stream's next start runs the clock its stream function names."
+        description = "Run a started stream's scaled clock at `scale` from now on: its stream time carries on from where it stands, never jumping or running backwards, and every node's `ctx.time`, write stamps and continuous pace follow the new scale. Above 1 the clock runs in steps of its `step_ns`, paced at the scale, behind the step barrier every node runs on; back at or under 1 it runs free again. Refused for a stream on the real or a stepped clock, and for a scale above 1 while the stream holds a node that paces itself (execution = manual) and is not paced by real time. Live only: the stream's next start runs the clock its stream function names."
     )]
     async fn set_stream_clock_scale(
         &self,

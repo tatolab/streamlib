@@ -1175,7 +1175,7 @@ fn publish_loss_counts_on_processor_node(
 
 /// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link
 /// already did.
-fn insert_loss_counts_on_processor_node_once(
+pub(crate) fn insert_loss_counts_on_processor_node_once(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
     loss_counts: ProcessorLossCounts,

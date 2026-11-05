@@ -12,6 +12,7 @@ use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
 pub struct StepProgressOfOneNode {
     finishes_every_step: AtomicBool,
     stands_outside_the_step_barrier: AtomicBool,
+    paces_its_own_callbacks: AtomicBool,
     panicked_mid_callback: AtomicBool,
     steps_finished: AtomicU64,
     callbacks_in_flight: AtomicU32,
@@ -79,6 +80,18 @@ impl StepProgressOfOneNode {
     /// Whether this node paces itself on real time, outside the step barrier.
     pub fn stands_outside_the_step_barrier(&self) -> bool {
         self.stands_outside_the_step_barrier.load(Ordering::Acquire)
+    }
+
+    /// Note that this node runs its own callbacks (execution = manual) and
+    /// stands inside the step barrier, so its stream's clock never steps.
+    pub fn note_it_paces_its_own_callbacks(&self) {
+        self.paces_its_own_callbacks.store(true, Ordering::Release);
+    }
+
+    /// Whether this node runs its own callbacks inside the step barrier, so
+    /// its stream's clock never steps.
+    pub fn paces_its_own_callbacks(&self) -> bool {
+        self.paces_its_own_callbacks.load(Ordering::Acquire)
     }
 
     /// Note a callback started, until the returned guard drops; a step cannot

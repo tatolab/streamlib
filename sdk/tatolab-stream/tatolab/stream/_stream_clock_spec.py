@@ -53,7 +53,11 @@ class RealTimeStreamClock:
 
 @dataclass(frozen=True)
 class ScaledStreamClock:
-    """Stream time runs at `scale` stream seconds per machine second: slow motion below 1."""
+    """Stream time runs at `scale` stream seconds per machine second: slow motion below 1.
+
+    Above 1 it advances in steps of `step_ns` behind the step barrier, paced at
+    `scale`, as a stepped clock does.
+    """
 
     scale: float
     step_ns: int = DEFAULT_SCALED_STREAM_CLOCK_STEP_NS
