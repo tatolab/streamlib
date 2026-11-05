@@ -9,6 +9,7 @@ use std::os::fd::OwnedFd;
 use parking_lot::RwLock;
 
 use crate::core::compiler::ProcessorThreadKind;
+use crate::core::compiler::compiler_ops::open_iceoryx2_service_op::insert_loss_counts_on_processor_node_once;
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 
 use crate::core::context::{
@@ -19,9 +20,10 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::{ProcessExecution, run_processor_loop};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ObservableProcessorState,
-    ProcessorInstanceWithItsOutOfProcessLinkWiring, ProcessorPauseGateComponent,
-    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
-    StepProgressOfOneNodeComponent, ThreadHandleComponent,
+    ProcessorInstanceWithItsOutOfProcessLinkWiring, ProcessorLossCounts,
+    ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
+    ShutdownChannelComponent, StateComponent, StepProgressOfOneNodeComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 
@@ -262,9 +264,24 @@ fn spawn_dedicated_thread(
                 "[{}] Attaching ProcessorInstanceComponent to graph",
                 proc_id_clone
             );
-            let paced_by_real_time = processor_arc_clone.lock().is_paced_by_real_time();
+            let (paced_by_real_time, out_of_process_link_wiring) = {
+                let processor = processor_arc_clone.lock();
+                (
+                    processor.is_paced_by_real_time(),
+                    processor.out_of_process_link_wiring(),
+                )
+            };
             {
                 let mut graph = graph_arc_clone.write();
+                if let Some(out_of_process_link_wiring) = out_of_process_link_wiring {
+                    insert_loss_counts_on_processor_node_once(
+                        &mut graph,
+                        &proc_id_clone,
+                        ProcessorLossCounts::CountedInItsHelperProcess(
+                            out_of_process_link_wiring.helper_placed_processor_loss_counts(),
+                        ),
+                    );
+                }
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
                     if paced_by_real_time
                         && let Some(step_progress) = node.get::<StepProgressOfOneNodeComponent>()
