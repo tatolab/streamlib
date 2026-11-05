@@ -227,6 +227,14 @@ says otherwise:
 - **Latency is measured on the machine clock.** A stamp is stream time, so `monotonic_now_ns() −
   timestamp_ns` measures latency only in a real-time stream; a node measuring latency in a
   scaled or stepped stream compares two `monotonic_now_ns()` readings.
+- **A link into a continuous or paused node is left off the balance.** Such a node takes what
+  waits for it when it next runs, not within the step that wrote it, so holding the step open for
+  its inbound bags would never close it. A link into a reactive node is balanced as above.
+- **A link wired mid-run is balanced from the moment it is wired.** Bags its producer wrote before
+  its destination subscribed never reach it, so the ledger counts only bags written after.
+- **A native manual node fails at its start in a stepped stream**, naming it, rather than at load:
+  a native node's execution mode is known only once its instance exists. The stream then ends,
+  naming the node, as for any node that fails.
 - **A manual node blocks a live rescale above 1×.** `set_stream_clock_scale` above 1 is refused
   for a stream holding a manual node, naming it, as a stepped stream refuses one at load.
 

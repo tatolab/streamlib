@@ -32,6 +32,7 @@ mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
 mod stream_location_and_id;
+mod stream_step_coordinator;
 
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,

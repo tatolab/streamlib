@@ -22,7 +22,7 @@ use crate::core::context::{
     IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClock,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId};
+use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId, StepProgressOfOneNode};
 use crate::core::media_clock::MediaClock;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 /// Duration to sleep when paused (avoids busy-waiting).
@@ -34,7 +34,7 @@ const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_mill
 const NO_WAITER_FALLBACK_SLEEP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Run the processor thread main loop based on execution mode.
-#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
+#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
 pub fn run_processor_loop(
     id: ProcessorUniqueId,
     processor: Arc<Mutex<ProcessorInstance>>,
@@ -42,6 +42,7 @@ pub fn run_processor_loop(
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     state: Arc<ObservableProcessorState>,
     pause_gate: Arc<AtomicBool>,
+    step_progress: Arc<StepProgressOfOneNode>,
     exec_config: ExecutionConfig,
     runtime_ctx: RuntimeContext,
     isolation_tier: IsolationTier,
@@ -53,6 +54,17 @@ pub fn run_processor_loop(
     );
 
     match exec_config.execution {
+        ProcessExecution::Continuous { interval_ms } if runtime_ctx.stream_clock.is_stepped() => {
+            run_continuous_mode_on_steps(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &pause_gate,
+                interval_ms,
+                &runtime_ctx,
+                &step_progress,
+            );
+        }
         ProcessExecution::Continuous { interval_ms } => {
             run_continuous_mode(
                 &id,
@@ -72,6 +84,7 @@ pub fn run_processor_loop(
                 shutdown_wake_fd,
                 &pause_gate,
                 &runtime_ctx,
+                &step_progress,
             );
         }
         ProcessExecution::Manual => {
@@ -164,6 +177,63 @@ fn run_continuous_mode(
             interval_stream_ns,
             stream_clock.now_ns(),
         );
+    }
+}
+
+/// A continuous processor in a stepped stream: once in each step whose time
+/// reached its next deadline, and every step it sees open marked finished,
+/// whether or not it ran.
+fn run_continuous_mode_on_steps(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    shutdown_rx: &crossbeam_channel::Receiver<()>,
+    pause_gate: &Arc<AtomicBool>,
+    interval_ms: u32,
+    runtime_ctx: &RuntimeContext,
+    step_progress: &StepProgressOfOneNode,
+) {
+    let stream_clock = &runtime_ctx.stream_clock;
+    let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
+    let mut next_deadline_stream_ns: Option<i64> = None;
+    let mut last_step_handled: Option<u64> = None;
+    let mut was_paused = false;
+
+    loop {
+        if shutdown_rx.try_recv().is_ok() {
+            tracing::info!("[{}] Received shutdown signal", id);
+            break;
+        }
+        let Some(step_index) = stream_clock.wait_for_a_step_opened_after(
+            last_step_handled,
+            CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK,
+        ) else {
+            continue;
+        };
+
+        let is_paused = pause_gate.load(Ordering::Acquire);
+        if is_paused != was_paused {
+            let _callback_in_flight = step_progress.callback_in_flight();
+            if is_paused {
+                dispatch_on_pause(id, processor, runtime_ctx);
+            } else {
+                dispatch_on_resume(id, processor, runtime_ctx);
+            }
+            was_paused = is_paused;
+        }
+
+        let step_stream_ns = stream_clock.now_ns();
+        let deadline_stream_ns = *next_deadline_stream_ns.get_or_insert(step_stream_ns);
+        if !is_paused && deadline_stream_ns <= step_stream_ns {
+            dispatch_process_on_the_step_ledger(id, processor, runtime_ctx, step_progress);
+            next_deadline_stream_ns = Some(next_continuous_deadline_stream_ns(
+                deadline_stream_ns,
+                interval_stream_ns,
+                step_stream_ns,
+            ));
+        }
+        step_progress.note_step_finished(step_index);
+        stream_clock.note_step_progress();
+        last_step_handled = Some(step_index);
     }
 }
 
@@ -260,7 +330,9 @@ fn run_reactive_mode(
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
+    step_progress: &StepProgressOfOneNode,
 ) {
+    let counts_its_callbacks_on_the_step_ledger = runtime_ctx.stream_clock.is_stepped();
     run_reactive_scheduling_loop(
         id,
         processor,
@@ -268,15 +340,22 @@ fn run_reactive_mode(
         #[cfg(unix)]
         shutdown_wake_fd,
         pause_gate,
-        |callback| match callback {
-            ReactiveRunnerProcessorCallback::OnPause => {
-                dispatch_on_pause(id, processor, runtime_ctx)
+        |callback| {
+            let _callback_in_flight =
+                counts_its_callbacks_on_the_step_ledger.then(|| step_progress.callback_in_flight());
+            match callback {
+                ReactiveRunnerProcessorCallback::OnPause => {
+                    dispatch_on_pause(id, processor, runtime_ctx)
+                }
+                ReactiveRunnerProcessorCallback::OnResume => {
+                    dispatch_on_resume(id, processor, runtime_ctx)
+                }
+                ReactiveRunnerProcessorCallback::Process => {
+                    dispatch_process(id, processor, runtime_ctx)
+                }
             }
-            ReactiveRunnerProcessorCallback::OnResume => {
-                dispatch_on_resume(id, processor, runtime_ctx)
-            }
-            ReactiveRunnerProcessorCallback::Process => {
-                dispatch_process(id, processor, runtime_ctx)
+            if counts_its_callbacks_on_the_step_ledger {
+                runtime_ctx.stream_clock.note_step_progress();
             }
         },
     );
@@ -1159,6 +1238,21 @@ fn dispatch_process(
     if let Err(e) = guard.process(&limited_ctx) {
         tracing::warn!("[{}] process() failed: {}", id, e);
     }
+}
+
+/// [`dispatch_process`] counted in flight on the node's step-ledger entry, so
+/// no step closes while it runs.
+fn dispatch_process_on_the_step_ledger(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+    step_progress: &StepProgressOfOneNode,
+) {
+    {
+        let _callback_in_flight = step_progress.callback_in_flight();
+        dispatch_process(id, processor, runtime_ctx);
+    }
+    runtime_ctx.stream_clock.note_step_progress();
 }
 
 fn dispatch_on_resume(
