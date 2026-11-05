@@ -26,7 +26,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Buffer, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -745,11 +745,11 @@ class RecordingWhipSession:
         self.offered = (video, audio, audio_channels)
         self.is_connected = True
 
-    def write_video_media_frame(self, media_frame: bytes, timestamp_ns: int) -> None:
-        self.video_media_frames.append((media_frame, timestamp_ns))
+    def write_video_media_frame(self, media_frame: Buffer, timestamp_ns: int) -> None:
+        self.video_media_frames.append((bytes(media_frame), timestamp_ns))
 
-    def write_audio_media_frame(self, media_frame: bytes) -> None:
-        self.audio_media_frames.append(media_frame)
+    def write_audio_media_frame(self, media_frame: Buffer) -> None:
+        self.audio_media_frames.append(bytes(media_frame))
 
     def close(self) -> None:
         self.is_connected = False
