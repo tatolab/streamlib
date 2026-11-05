@@ -1184,6 +1184,9 @@ impl LoadedStreamInThisRuntime {
         lend_directory: Option<&Path>,
     ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
+        graph
+            .clock
+            .refusal_unless_this_runtime_runs_it(self.stream_id())?;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
                 graph.nodes.iter().map(|node| &node.processor_type),
@@ -1192,9 +1195,6 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         graph.validate(&self.node_types_this_stream_resolves)?;
-        graph
-            .clock
-            .refusal_unless_this_runtime_runs_it(self.stream_id())?;
         self.compiler
             .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 
