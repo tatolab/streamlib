@@ -55,40 +55,21 @@ pub fn run_processor_loop(
     );
 
     match exec_config.execution {
-        ProcessExecution::Continuous { interval_ms }
-            if step_progress.stands_outside_the_step_barrier() =>
-        {
-            run_continuous_mode(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &pause_gate,
-                interval_ms,
-                &runtime_ctx,
-                &StreamClock::starting_now(StreamClockSpec::Real),
-            );
-        }
-        ProcessExecution::Continuous { interval_ms } if runtime_ctx.stream_clock.is_stepped() => {
-            run_continuous_mode_on_steps(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &pause_gate,
-                interval_ms,
-                &runtime_ctx,
-                &step_progress,
-            );
-        }
         ProcessExecution::Continuous { interval_ms } => {
-            run_continuous_mode(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &pause_gate,
+            let continuous_runner = ContinuousRunnerOfOneProcessor {
+                id: &id,
+                processor: &processor,
+                shutdown_rx: &shutdown_rx,
+                pause_gate: &pause_gate,
                 interval_ms,
-                &runtime_ctx,
-                &runtime_ctx.stream_clock,
-            );
+                runtime_ctx: &runtime_ctx,
+            };
+            if step_progress.stands_outside_the_step_barrier() {
+                run_continuous_mode_on_real_time(&continuous_runner);
+            } else {
+                run_continuous_mode_on_its_stream_clock(&continuous_runner, &step_progress);
+            }
+            tracing::info!("[{}] Received shutdown signal", id);
         }
         ProcessExecution::Reactive => {
             run_reactive_mode(
@@ -143,43 +124,121 @@ pub fn run_processor_loop(
     tracing::info!("[{}] Thread stopped", id);
 }
 
-fn run_continuous_mode(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    pause_gate: &Arc<AtomicBool>,
+/// Why a continuous runner left the way it was running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContinuousRunnerLeftItsMode {
+    ShutdownRequested,
+    /// The stream clock moved behind the step barrier or out of it.
+    TheClockChangedHowItAdvances,
+}
+
+/// One continuous processor and what its runner reads: its callbacks, its
+/// shutdown and pause signals, its interval and its stream's context.
+#[derive(Clone, Copy)]
+struct ContinuousRunnerOfOneProcessor<'a> {
+    id: &'a ProcessorUniqueId,
+    processor: &'a Arc<Mutex<ProcessorInstance>>,
+    shutdown_rx: &'a crossbeam_channel::Receiver<()>,
+    pause_gate: &'a Arc<AtomicBool>,
     interval_ms: u32,
-    runtime_ctx: &RuntimeContext,
-    clock_it_paces_on: &StreamClock,
+    runtime_ctx: &'a RuntimeContext,
+}
+
+/// A continuous processor paced by real time: on the interval grid of the
+/// machine clock, whatever clock its stream runs, until a shutdown.
+fn run_continuous_mode_on_real_time(continuous_runner: &ContinuousRunnerOfOneProcessor<'_>) {
+    let machine_clock = StreamClock::starting_now(StreamClockSpec::Real);
+    let mut was_paused = false;
+    let why_the_runner_left =
+        run_continuous_mode(continuous_runner, &machine_clock, &mut was_paused, || false);
+    debug_assert_eq!(
+        why_the_runner_left,
+        ContinuousRunnerLeftItsMode::ShutdownRequested
+    );
+}
+
+/// A continuous processor on its stream's clock: in steps while the clock
+/// runs behind the step barrier, on the interval grid of stream time while it
+/// runs free, switching whenever the clock does; until a shutdown.
+fn run_continuous_mode_on_its_stream_clock(
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
+    step_progress: &StepProgressOfOneNode,
 ) {
+    let stream_clock = &continuous_runner.runtime_ctx.stream_clock;
+    let mut was_paused = false;
+    let mut last_step_handled: Option<u64> = None;
+    loop {
+        let why_the_runner_left_its_mode = if stream_clock.runs_behind_the_step_barrier() {
+            run_continuous_mode_on_steps(
+                continuous_runner,
+                step_progress,
+                &mut was_paused,
+                &mut last_step_handled,
+            )
+        } else {
+            run_continuous_mode(continuous_runner, stream_clock, &mut was_paused, || {
+                stream_clock.runs_behind_the_step_barrier()
+            })
+        };
+        if why_the_runner_left_its_mode == ContinuousRunnerLeftItsMode::ShutdownRequested {
+            return;
+        }
+    }
+}
+
+/// A continuous processor on the interval grid of `clock_it_paces_on`, until
+/// a shutdown or `leaves_when` holds.
+fn run_continuous_mode(
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
+    clock_it_paces_on: &StreamClock,
+    was_paused: &mut bool,
+    leaves_when: impl Fn() -> bool,
+) -> ContinuousRunnerLeftItsMode {
+    let ContinuousRunnerOfOneProcessor {
+        id,
+        processor,
+        shutdown_rx,
+        pause_gate,
+        interval_ms,
+        runtime_ctx,
+    } = *continuous_runner;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
     let mut next_deadline_ns = clock_it_paces_on.now_ns();
-    let mut was_paused = false;
 
     loop {
-        if wait_for_stream_time_or_shutdown(clock_it_paces_on, next_deadline_ns, shutdown_rx)
-            == ContinuousRunnerWaitOutcome::ShutdownRequested
-        {
-            tracing::info!("[{}] Received shutdown signal", id);
-            break;
+        match wait_for_stream_time_or_shutdown(
+            clock_it_paces_on,
+            next_deadline_ns,
+            shutdown_rx,
+            &leaves_when,
+        ) {
+            ContinuousRunnerWaitOutcome::ShutdownRequested => {
+                return ContinuousRunnerLeftItsMode::ShutdownRequested;
+            }
+            ContinuousRunnerWaitOutcome::StoppedWaitingEarly => {
+                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
+            }
+            ContinuousRunnerWaitOutcome::DeadlineReached => {}
         }
 
         let is_paused = pause_gate.load(Ordering::Acquire);
 
-        if is_paused && !was_paused {
+        if is_paused && !*was_paused {
             dispatch_on_pause(id, processor, runtime_ctx);
-            was_paused = true;
-        } else if !is_paused && was_paused {
+            *was_paused = true;
+        } else if !is_paused && *was_paused {
             dispatch_on_resume(id, processor, runtime_ctx);
-            was_paused = false;
+            *was_paused = false;
         }
 
         if is_paused {
             if wait_on_the_machine_clock_or_shutdown(PAUSE_CHECK_INTERVAL, shutdown_rx)
                 == ContinuousRunnerWaitOutcome::ShutdownRequested
             {
-                tracing::info!("[{}] Received shutdown signal", id);
-                break;
+                return ContinuousRunnerLeftItsMode::ShutdownRequested;
+            }
+            if leaves_when() {
+                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
             }
             next_deadline_ns = clock_it_paces_on.now_ns();
             continue;
@@ -195,45 +254,51 @@ fn run_continuous_mode(
     }
 }
 
-/// A continuous processor in a stepped stream: once in each step whose time
-/// reached its next deadline, and every step it sees open marked finished,
-/// whether or not it ran.
+/// A continuous processor on a clock behind the step barrier: once in each
+/// step whose time reached its next deadline, and every step it sees open
+/// marked finished, whether or not it ran; until a shutdown or the clock runs
+/// free of the barrier.
 fn run_continuous_mode_on_steps(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    pause_gate: &Arc<AtomicBool>,
-    interval_ms: u32,
-    runtime_ctx: &RuntimeContext,
+    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
     step_progress: &StepProgressOfOneNode,
-) {
+    was_paused: &mut bool,
+    last_step_handled: &mut Option<u64>,
+) -> ContinuousRunnerLeftItsMode {
+    let ContinuousRunnerOfOneProcessor {
+        id,
+        processor,
+        shutdown_rx,
+        pause_gate,
+        interval_ms,
+        runtime_ctx,
+    } = *continuous_runner;
     let stream_clock = &runtime_ctx.stream_clock;
     let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
     let mut next_deadline_stream_ns: Option<i64> = None;
-    let mut last_step_handled: Option<u64> = None;
-    let mut was_paused = false;
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
-            tracing::info!("[{}] Received shutdown signal", id);
-            break;
+            return ContinuousRunnerLeftItsMode::ShutdownRequested;
         }
         let Some(step_index) = stream_clock.wait_for_a_step_opened_after(
-            last_step_handled,
+            *last_step_handled,
             CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK,
         ) else {
+            if !stream_clock.runs_behind_the_step_barrier() {
+                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
+            }
             continue;
         };
 
         let is_paused = pause_gate.load(Ordering::Acquire);
-        if is_paused != was_paused {
+        if is_paused != *was_paused {
             let _callback_in_flight = step_progress.callback_in_flight();
             if is_paused {
                 dispatch_on_pause(id, processor, runtime_ctx);
             } else {
                 dispatch_on_resume(id, processor, runtime_ctx);
             }
-            was_paused = is_paused;
+            *was_paused = is_paused;
         }
 
         let step_stream_ns = stream_clock.now_ns();
@@ -248,7 +313,7 @@ fn run_continuous_mode_on_steps(
         }
         step_progress.note_step_finished(step_index);
         stream_clock.note_step_progress();
-        last_step_handled = Some(step_index);
+        *last_step_handled = Some(step_index);
     }
 }
 
@@ -286,6 +351,8 @@ enum ContinuousRunnerWaitOutcome {
     /// The wait ran its course.
     DeadlineReached,
     ShutdownRequested,
+    /// What the wait was told to stop early for held.
+    StoppedWaitingEarly,
 }
 
 /// Longest single wait before the continuous runner re-reads its stream clock,
@@ -293,15 +360,19 @@ enum ContinuousRunnerWaitOutcome {
 const CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK: Duration = Duration::from_millis(100);
 
 /// Wait on the shutdown channel until `stream_clock` reaches
-/// `deadline_stream_ns`.
+/// `deadline_stream_ns`, or `stops_waiting_early` holds.
 fn wait_for_stream_time_or_shutdown(
     stream_clock: &StreamClock,
     deadline_stream_ns: i64,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
+    stops_waiting_early: impl Fn() -> bool,
 ) -> ContinuousRunnerWaitOutcome {
     loop {
         if shutdown_rx.try_recv().is_ok() {
             return ContinuousRunnerWaitOutcome::ShutdownRequested;
+        }
+        if stops_waiting_early() {
+            return ContinuousRunnerWaitOutcome::StoppedWaitingEarly;
         }
         let machine_now_ns = MediaClock::now().as_nanos() as i64;
         let machine_ns_to_go = stream_clock
@@ -347,7 +418,7 @@ fn run_reactive_mode(
     runtime_ctx: &RuntimeContext,
     step_progress: &StepProgressOfOneNode,
 ) {
-    let counts_its_callbacks_on_the_step_ledger = runtime_ctx.stream_clock.is_stepped();
+    let counts_its_callbacks_on_the_step_ledger = !runtime_ctx.stream_clock.spec().is_real();
     run_reactive_scheduling_loop(
         id,
         processor,
@@ -2136,8 +2207,12 @@ mod tests {
         let machine_started = Instant::now();
         let deadline_stream_ns = stream_clock.now_ns() + 20_000_000;
 
-        let outcome =
-            wait_for_stream_time_or_shutdown(&stream_clock, deadline_stream_ns, &shutdown_rx);
+        let outcome = wait_for_stream_time_or_shutdown(
+            &stream_clock,
+            deadline_stream_ns,
+            &shutdown_rx,
+            || false,
+        );
 
         assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
         assert!(machine_started.elapsed() >= Duration::from_millis(40));
@@ -2158,8 +2233,12 @@ mod tests {
         });
         let machine_started = Instant::now();
 
-        let outcome =
-            wait_for_stream_time_or_shutdown(&stream_clock, deadline_stream_ns, &shutdown_rx);
+        let outcome = wait_for_stream_time_or_shutdown(
+            &stream_clock,
+            deadline_stream_ns,
+            &shutdown_rx,
+            || false,
+        );
 
         rescaler.join().expect("the rescaling thread finishes");
         assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
@@ -2176,6 +2255,7 @@ mod tests {
             &stream_clock,
             stream_clock.now_ns() + 1_000_000_000,
             &shutdown_rx,
+            || false,
         );
 
         assert_eq!(outcome, ContinuousRunnerWaitOutcome::ShutdownRequested);

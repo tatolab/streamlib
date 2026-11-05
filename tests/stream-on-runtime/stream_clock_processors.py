@@ -78,9 +78,11 @@ TICKS_TIMED_AT_EACH_SCALE = 20
 CONTINUOUS_TICK_COUNTER_INTERVAL_MS = 10
 
 
-@node(execution="continuous", interval_ms=CONTINUOUS_TICK_COUNTER_INTERVAL_MS)
-class ContinuousTickCounterSource:
-    """Times its ticks on both clocks at the scale it starts on, then at the next one."""
+class _TicksTimedOnBothClocksAtEachScale:
+    """Times its ticks on both clocks at the scale it starts on, then at each
+    next one, up to `SCALES_TIMED` scales."""
+
+    SCALES_TIMED = 2
 
     def __init__(self) -> None:
         self.scales_reported: "list[float]" = []
@@ -96,7 +98,9 @@ class ContinuousTickCounterSource:
         scale = ctx.stream_clock.scale
         if self.ticks_at_this_scale and self.ticks_at_this_scale[0]["scale"] != scale:
             self.ticks_at_this_scale = []
-        if len(self.scales_reported) >= 2 or scale in self.scales_reported:
+        if len(self.scales_reported) >= self.SCALES_TIMED or (
+            self.scales_reported and self.scales_reported[-1] == scale
+        ):
             return
         self.ticks_at_this_scale.append(
             {"scale": scale, "stream_time_ns": stream_time_ns, "machine_time_ns": monotonic_now_ns()}
@@ -115,6 +119,24 @@ class ContinuousTickCounterSource:
             },
         )
         self.scales_reported.append(scale)
+
+
+@node(execution="continuous", interval_ms=CONTINUOUS_TICK_COUNTER_INTERVAL_MS)
+class ContinuousTickCounterSource(_TicksTimedOnBothClocksAtEachScale):
+    """Times its ticks on both clocks at the scale it starts on, then at the next one."""
+
+
+#: The interval of the counter whose clock crosses 1×, in stream milliseconds,
+#: and its clock's step.
+CROSSING_TICK_COUNTER_INTERVAL_MS = 100
+
+
+@node(execution="continuous", interval_ms=CROSSING_TICK_COUNTER_INTERVAL_MS)
+class RealTimeCrossingTickCounterSource(_TicksTimedOnBothClocksAtEachScale):
+    """Times its ticks on both clocks at three scales in turn: below 1×, above
+    it in steps, and below it again."""
+
+    SCALES_TIMED = 3
 
 
 #: Stream milliseconds per step of the stepped stream, and the source's interval.

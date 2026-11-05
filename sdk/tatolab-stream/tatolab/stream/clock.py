@@ -132,10 +132,11 @@ class StreamClockReading(Protocol):
 
     @property
     def step_ns(self) -> int | None:
-        """Stream nanoseconds per step, or `None` when the clock does not step."""
+        """Stream nanoseconds per step, or `None` when the clock does not step: real,
+        or scaled at or under 1×."""
         ...
 
     @property
     def step_index(self) -> int | None:
-        """The step open now, or `None` when the clock does not step."""
+        """The step open now, or `None` when the clock does not step or none is open."""
         ...
