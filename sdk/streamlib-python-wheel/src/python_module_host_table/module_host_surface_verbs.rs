@@ -504,10 +504,10 @@ impl SurfacesLentToNativeCode {
         use crate::python_helper_process_pixel_exchange::CpuReadbackCopyDirection;
 
         let source_surface_id = self.surface_id_of_a_handle(source)?;
-        // SAFETY: the module lends the memory mutably for this verb's call,
-        // and this verb holds the only view of it.
+        // SAFETY: the module host table lends the memory to fill for this verb
+        // alone, and nothing else views it while the verb runs.
         let (destination_format, destination_bytes) =
-            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)? };
+            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(*pixels_to_fill) }?;
         let native_escalate_channel = self.native_escalate_channel()?;
         let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
             "this helper was started without its surface-share socket, so it reaches no \
@@ -560,10 +560,10 @@ impl SurfacesLentToNativeCode {
         use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 
         let source_surface_id = self.surface_id_of_a_handle(source)?;
-        // SAFETY: the module lends the memory mutably for this verb's call,
-        // and this verb holds the only view of it.
+        // SAFETY: the module host table lends the memory to fill for this verb
+        // alone, and nothing else views it while the verb runs.
         let (destination_format, destination_bytes) =
-            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(pixels_to_fill)? };
+            unsafe { four_byte_pixel_memory_handed_by_the_module_to_fill(*pixels_to_fill) }?;
         let surface_share_client = self.surface_share_client.as_ref().ok_or_else(|| {
             "this helper was started without its surface-share connection, so it reaches no \
              IOSurface to read host memory from"
@@ -742,16 +742,14 @@ fn four_byte_pixel_rows_handed_by_the_module(
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-/// The pixel format and the writable bytes a module handed to fill.
-///
 /// # Safety
-///
-/// The module's memory must stay live, and no other view of it may be used,
-/// for `'module_memory`: the verb's call.
-unsafe fn four_byte_pixel_memory_handed_by_the_module_to_fill<'module_memory>(
-    pixels_to_fill: &ModuleHostTableHostMemoryPixelsToFill,
-) -> Result<(streamlib::sdk::rhi::PixelFormat, &'module_memory mut [u8]), String> {
+/// The module lends `pixels_to_fill.pixels` mutably for the call, and no other
+/// view of those bytes is live while the returned slice is, which lives no
+/// longer than the call.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+unsafe fn four_byte_pixel_memory_handed_by_the_module_to_fill<'lent>(
+    pixels_to_fill: ModuleHostTableHostMemoryPixelsToFill,
+) -> Result<(streamlib::sdk::rhi::PixelFormat, &'lent mut [u8]), String> {
     // SAFETY: the SDK hands a view live for the call.
     let format_name = unsafe { pixels_to_fill.pixel_format.as_str() }
         .map_err(|_| "the pixel format name is not UTF-8".to_string())?;
