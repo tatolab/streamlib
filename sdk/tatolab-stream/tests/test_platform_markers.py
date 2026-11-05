@@ -35,6 +35,7 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "the CUDA Array Interface is CUDA",
     # A test whose body is a Linux mechanism.
     "v4l2loopback and udev are Linux",
+    "PipeWire is Linux",
     "the boot session is a Linux kernel file",
     "only Linux resolves the runtime directory from XDG_RUNTIME_DIR",
     "only Linux owns SIGHUP",
