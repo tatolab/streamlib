@@ -1111,6 +1111,7 @@ def wire_link_data_access(
             # binding was not given, rather than raising a bare `KeyError`.
             loss_count_slot=input_link.get("loss_count_slot"),
             wiring_generation=input_link.get("wiring_generation"),
+            input_port_borrow_quota=input_link.get("input_port_borrow_quota"),
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(

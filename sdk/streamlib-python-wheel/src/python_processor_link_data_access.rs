@@ -33,6 +33,7 @@ use streamlib::sdk::iceoryx2::{
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
     ReadMode, ResolvedAudioWindowContract,
+    input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
@@ -696,6 +697,7 @@ impl PythonProcessorLinkDataAccess {
         audio_window = None,
         loss_count_slot = None,
         wiring_generation = None,
+        input_port_borrow_quota = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn wire_input_link(
@@ -714,8 +716,12 @@ impl PythonProcessorLinkDataAccess {
         audio_window: Option<&Bound<'_, PyAny>>,
         loss_count_slot: Option<usize>,
         wiring_generation: Option<u64>,
+        input_port_borrow_quota: Option<usize>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
+        let input_port_borrow_quota =
+            resolve_input_port_borrow_quota(port_name, input_port_borrow_quota)
+                .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
         let read_mode = match read_mode {
             "skip_to_latest" => ReadMode::SkipToLatest,
             "read_next_in_order" => ReadMode::ReadNextInOrder,
@@ -755,6 +761,7 @@ impl PythonProcessorLinkDataAccess {
                         }
                     }
                 }
+                input_mailboxes.set_input_port_borrow_quota(port_name, input_port_borrow_quota)?;
                 let channel = node.open_or_create_service(
                     channel_service_name,
                     max_subscribers,
@@ -1226,6 +1233,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
         source
@@ -1486,6 +1494,7 @@ mod tests {
                     None,
                     Some(4),
                     Some(21),
+                    None,
                 )
                 .unwrap();
             destination
@@ -1620,6 +1629,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .expect_err("a helper with a board open is told where every link's counts go");
             assert!(
@@ -1694,6 +1704,7 @@ mod tests {
                     1,
                     "link-1",
                     Some(contract.as_any()),
+                    None,
                     None,
                     None,
                 )
@@ -1853,6 +1864,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                     None,
                     None,
                     None,

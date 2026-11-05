@@ -348,6 +348,7 @@ class NodeDeclarationDecorator:
         *,
         description: str = "",
         delivery_profile: Optional[str] = None,
+        borrow_quota: Optional[int] = None,
         audio_window: Optional[AudioWindowContract] = None,
     ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
         """Mark a method as declaring an input port.
@@ -361,6 +362,12 @@ class NodeDeclarationDecorator:
         decorated method is a declaration only: messages are read with
         `ctx.inputs.read(port_name)`.
 
+        `borrow_quota` is how many read messages each link into the port may
+        hold beyond its mailbox at once — a borrow, or a `memoryview` or DLPack
+        tensor over one, kept past the read. Past it, that link drops its newest
+        frame and counts it, and no other link is affected. It defaults to 2;
+        the runtime refuses one past its maximum at wiring.
+
         `audio_window` is optional and opt-in: an audio input may declare an
         [`AudioWindowContract`], stating the rate, dtype, window size and hop it
         wants, and a channel count only where it needs a particular one — absent,
@@ -371,6 +378,16 @@ class NodeDeclarationDecorator:
             raise ValueError(
                 f"invalid delivery_profile {delivery_profile!r}: must be one of "
                 f"{', '.join(_DELIVERY_PROFILES)}"
+            )
+
+        if borrow_quota is not None and (
+            isinstance(borrow_quota, bool)
+            or not isinstance(borrow_quota, int)
+            or borrow_quota < 0
+        ):
+            raise ValueError(
+                f"invalid borrow_quota {borrow_quota!r}: must be a whole number of messages, "
+                f"0 or more"
             )
 
         def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
@@ -389,6 +406,8 @@ class NodeDeclarationDecorator:
                 "description": description,
                 "delivery_profile": delivery_profile,
             }
+            if borrow_quota is not None:
+                marker["borrow_quota"] = borrow_quota
             # Present only when declared: a contract-less port's marker is what it
             # always was, which is what makes the contract opt-in in the tree and
             # not only in the prose.
@@ -613,6 +632,8 @@ def _collect_declared_ports(
                 "description": marker["description"],
                 "delivery_profile": marker["delivery_profile"],
             }
+            if "borrow_quota" in marker:
+                declared_input["borrow_quota"] = marker["borrow_quota"]
             if "audio_window" in marker:
                 declared_input["audio_window"] = marker["audio_window"]
             input_ports.append(declared_input)

@@ -589,12 +589,17 @@ fn generate_descriptor_from_schema(
                 None => quote! { ::std::option::Option::None },
             };
             let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
+            let borrow_quota_tokens = match p.borrow_quota {
+                Some(quota) => quote! { ::std::option::Option::Some(#quota) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 .with_input(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
                     required: true,
                     delivery_profile: #delivery_profile_tokens,
+                    borrow_quota: #borrow_quota_tokens,
                     audio_window: #audio_window_tokens,
                     catalog_entry: ::std::option::Option::None,
                 })
@@ -617,6 +622,7 @@ fn generate_descriptor_from_schema(
                     description: #port_desc.to_string(),
                     required: true,
                     delivery_profile: ::std::option::Option::None,
+                    borrow_quota: ::std::option::Option::None,
                     audio_window: #no_audio_window_tokens,
                     catalog_entry: #catalog_entry_tokens,
                 })
@@ -1110,6 +1116,7 @@ mod processor_struct_emit_tests {
             name: name.to_string(),
             description: None,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         };
@@ -1636,6 +1643,7 @@ mod processor_struct_emit_tests {
             cast_name: "videoout".to_string(),
             description: None,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         };

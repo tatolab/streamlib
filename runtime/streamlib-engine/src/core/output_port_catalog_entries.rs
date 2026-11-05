@@ -252,6 +252,7 @@ mod tests {
             description: String::new(),
             port_kind: Default::default(),
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry,
         }

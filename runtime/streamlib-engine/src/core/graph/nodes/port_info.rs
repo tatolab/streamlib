@@ -23,6 +23,11 @@ pub struct PortInfo {
     /// locking the processor instance.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+    /// Borrow quota declared by this input port, or `None` for the engine's
+    /// default. Mirrors the field on
+    /// [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrow_quota: Option<usize>,
     /// Window contract declared by this audio input port, or `None`. Mirrors
     /// the field on [`crate::core::descriptors::PortDescriptor`]; absent from
     /// the rendering entirely on a port that declares none, so a contract-less
@@ -43,6 +48,7 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             description: port.description.clone(),
             port_kind: PortKind::default(),
             delivery_profile: port.delivery_profile.clone(),
+            borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
         }

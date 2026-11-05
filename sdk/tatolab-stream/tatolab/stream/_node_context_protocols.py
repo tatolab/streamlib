@@ -170,6 +170,7 @@ class NodeLinkDataAccess(Protocol):
         audio_window: dict[str, Any] | None = None,
         loss_count_slot: int | None = None,
         wiring_generation: int | None = None,
+        input_port_borrow_quota: int | None = None,
     ) -> None:
         """Open this node's subscriber for one link into `port_name`.
 
@@ -179,6 +180,8 @@ class NodeLinkDataAccess(Protocol):
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and
         omitting either raises `ValueError`; with no board they are unused.
+        `input_port_borrow_quota` is what each link's reader may hold beyond the
+        mailbox, the engine's default when `None`.
         """
         ...
 

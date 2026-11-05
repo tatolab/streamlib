@@ -6,13 +6,9 @@
 
 use crate::core::error::{Error, Result};
 
-/// The borrow quota an input port takes when it states none.
-pub const DEFAULT_INPUT_PORT_BORROW_QUOTA: usize = 2;
-
-/// The largest borrow quota an input port may state. Every channel data
-/// service is created to admit it, because iceoryx2 fixes a service's borrow
-/// limit when the first opener creates it.
-pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
+pub use streamlib_processor_schema::{
+    DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA,
+};
 
 /// `declared` as an input port's borrow quota, or the default when it states
 /// none, refused past [`MAX_INPUT_PORT_BORROW_QUOTA`].

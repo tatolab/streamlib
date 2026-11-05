@@ -31,10 +31,10 @@
 
 use streamlib_processor_schema::{
     AudioWindowContract, AudioWindowContractDeclaredValues, CatalogEntry,
-    DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorPortSchema, ProcessorScheduling, ProcessorSchema,
-    ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, ThreadPriority,
-    cast_exposed_name_to_url_safe, refuse_audio_window_beside_a_skipping_delivery_profile,
-    render_declaration_values,
+    DELIVERY_PROFILE_DECLARATION_VALUES, MAX_INPUT_PORT_BORROW_QUOTA, ProcessorPortSchema,
+    ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions,
+    ThreadPriority, cast_exposed_name_to_url_safe,
+    refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -91,6 +91,9 @@ pub struct ParsedPort {
     /// Always `Some` on an input and always `None` on an output — the grammar
     /// requires it on the one and rejects it on the other.
     pub delivery_profile: Option<String>,
+    /// The `borrow_quota` an input port declares; `None` takes the engine's
+    /// default, and always `None` on an output.
+    pub borrow_quota: Option<usize>,
     /// The `audio_window` contract, on the audio inputs that declare one.
     /// `None` everywhere else — this is opt-in, and a port without one is
     /// unchanged in every respect.
@@ -134,6 +137,7 @@ impl ParsedProcessorAttr {
             name: p.cast_name.clone(),
             description: p.description.clone(),
             delivery_profile: p.delivery_profile.clone(),
+            borrow_quota: p.borrow_quota,
             audio_window: p.audio_window.clone(),
             catalog_entry: p.catalog_entry.clone(),
         };
@@ -354,7 +358,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 
 /// Parse an `input(...)` / `output(...)` port body.
 ///
-/// `<name-string>[, delivery_profile = "...", description = "...",
+/// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, catalog = <Section>Entry { … }]`.
 ///
 /// `delivery_profile` is a consumer-side setting: **required** on every
@@ -394,6 +398,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     let mut description = None;
     let mut delivery_profile = None;
+    let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut catalog_entry: Option<CatalogEntry> = None;
 
@@ -449,12 +454,36 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                 reject_delivery_profile_on_output(direction, &name, key_span)?;
                 delivery_profile = Some(lit.value());
             }
+            "borrow_quota" => {
+                let lit: syn::LitInt = content.parse()?;
+                if direction == PortDirection::Output {
+                    return Err(syn::Error::new(
+                        key_span,
+                        format!(
+                            "`borrow_quota` is declared by the destination input port, not \
+                             `output(\"{name}\", ...)` — each link's reader holds its own"
+                        ),
+                    ));
+                }
+                let quota: usize = lit.base10_parse()?;
+                if quota > MAX_INPUT_PORT_BORROW_QUOTA {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!(
+                            "input port `{name}` declares `borrow_quota = {quota}`, past the \
+                             most a link may hold beyond its mailbox, \
+                             {MAX_INPUT_PORT_BORROW_QUOTA}"
+                        ),
+                    ));
+                }
+                borrow_quota = Some(quota);
+            }
             other => {
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
-                         `description`, `audio_window`, or `catalog`"
+                         `borrow_quota`, `description`, `audio_window`, or `catalog`"
                     ),
                 ));
             }
@@ -485,6 +514,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         cast_name,
         description,
         delivery_profile,
+        borrow_quota,
         audio_window: audio_window.map(|(_, contract)| contract),
         catalog_entry,
     })

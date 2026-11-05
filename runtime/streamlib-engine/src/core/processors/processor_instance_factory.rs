@@ -842,6 +842,7 @@ mod tests {
             description: String::new(),
             required: true,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         }

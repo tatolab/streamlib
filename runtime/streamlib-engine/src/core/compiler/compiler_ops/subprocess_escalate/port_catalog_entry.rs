@@ -105,6 +105,7 @@ mod tests {
             description: String::new(),
             port_kind: PortKind::Data,
             delivery_profile: None,
+            borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
         }

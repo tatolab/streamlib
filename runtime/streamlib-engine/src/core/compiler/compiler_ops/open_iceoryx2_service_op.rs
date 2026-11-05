@@ -37,7 +37,8 @@ use crate::iceoryx2::{
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
-    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
+    effective_channel_chunk_ceiling_bytes, input_port_borrow_quota,
+    refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
 
@@ -822,23 +823,30 @@ fn destination_max_notifiers(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId
     Ok(MAX_INBOUND_LINKS_PER_DESTINATION)
 }
 
-/// The drain order and ring depth of one destination input port, from the
-/// delivery profile that port declares.
+/// The drain order, ring depth and borrow quota of one destination input port,
+/// from the delivery profile and borrow quota that port declares.
 ///
 /// Resolved per destination port, never per channel: consumers of one output
-/// port read it under whatever profiles they each declare.
+/// port read it under whatever profiles and quotas they each declare.
 fn delivery_resolution_of_input_port(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
 ) -> Result<DeliveryResolution> {
     let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
-    Ok(delivery_profile_for_input_port(
-        graph.node_types_this_stream_resolves(),
-        &dest_type,
-        dest_port,
-    )?
-    .resolve())
+    let node_types = graph.node_types_this_stream_resolves();
+    let declared_borrow_quota = node_types
+        .port_info(&dest_type)
+        .and_then(|(inputs, _outputs)| {
+            inputs
+                .into_iter()
+                .find(|port| port.name == dest_port)
+                .and_then(|port| port.borrow_quota)
+        });
+    Ok(DeliveryResolution {
+        borrow_quota: input_port_borrow_quota(dest_port, declared_borrow_quota)?,
+        ..delivery_profile_for_input_port(node_types, &dest_type, dest_port)?.resolve()
+    })
 }
 
 /// The class a processor in the graph was added as, refused by name when the
@@ -1071,6 +1079,7 @@ fn wire_rust_dest(
     let DeliveryResolution {
         drain_order,
         depth: input_port_ring_depth,
+        borrow_quota,
     } = dest_input_port_delivery;
     let subscriber_ring_depth =
         subscriber_ring_depth_of_input_port(dest_input_port_delivery, audio_windowing.as_ref());
@@ -1101,6 +1110,8 @@ fn wire_rust_dest(
             }
         }
     }
+
+    input_inner.set_input_port_borrow_quota(dest_port, borrow_quota)?;
 
     let subscriber = service.create_subscriber(subscriber_ring_depth)?;
     input_inner.add_channel_subscriber(
@@ -1292,6 +1303,7 @@ fn wire_subprocess_dest(
         "inbound_link_name": InboundLinkName::from(channel_service_name).as_str(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
+        "input_port_borrow_quota": dest_input_port_delivery.borrow_quota,
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
         "input_port_ring_depth": subscriber_ring_depth_of_input_port(
             dest_input_port_delivery,
@@ -2577,6 +2589,7 @@ mod tests {
             DeliveryResolution {
                 drain_order: crate::iceoryx2::ReadMode::ReadNextInOrder,
                 depth: DESTINATION_MAILBOX_DEPTH,
+                borrow_quota: crate::iceoryx2::DEFAULT_INPUT_PORT_BORROW_QUOTA,
             },
             crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         );
@@ -4532,6 +4545,74 @@ mod tests {
 
     /// A helper-placed windowed port is handed the windowed ring depth as its
     /// port depth; its mailbox is still sized from its contract in the child.
+    /// A port's declared borrow quota is what its resolution carries, a port
+    /// declaring none takes the default, and a helper is handed it with the
+    /// rest of the port's wiring.
+    #[test]
+    fn a_declared_borrow_quota_reaches_the_resolution_and_a_helpers_wiring() {
+        crate::core::test_support::ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        let borrowing_id = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockBorrowingConsumerProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .expect("the node is named")
+            .first()
+            .expect("the borrowing mock is registered")
+            .id
+            .to_string();
+        let windowed_id = add_mock_windowed_audio_consumer(&mut graph);
+
+        let declared =
+            delivery_resolution_of_input_port(&mut graph, &borrowing_id.as_str().into(), "frames")
+                .expect("the declared quota resolves");
+        assert_eq!(declared.borrow_quota, 5);
+        assert_eq!(declared.depth, DeliveryProfile::ORDERED_DEPTH);
+        let undeclared =
+            delivery_resolution_of_input_port(&mut graph, &windowed_id.as_str().into(), "audio")
+                .expect("an undeclared quota resolves");
+        assert_eq!(
+            undeclared.borrow_quota,
+            crate::iceoryx2::DEFAULT_INPUT_PORT_BORROW_QUOTA
+        );
+
+        let dest_instance = attach_processor_instance(
+            &mut graph,
+            &borrowing_id,
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        );
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &borrowing_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
+        wire_subprocess_dest(
+            &mut graph,
+            &dest_link_wiring,
+            &borrowing_id.as_str().into(),
+            "frames",
+            "pabc/out1",
+            "pdef/notify",
+            declared,
+            ChannelSizing {
+                max_subscribers: 2,
+                channel_service_creation_depth: DeliveryProfile::ORDERED_DEPTH,
+            },
+            1,
+            &"L-helper-borrow-quota".into(),
+            None,
+        )
+        .expect("a helper port wires");
+        let recorded = dest_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports();
+        assert_eq!(
+            recorded["inputs"][0]["input_port_borrow_quota"],
+            serde_json::json!(5)
+        );
+    }
+
     #[test]
     fn a_helper_placed_windowed_port_is_handed_the_windowed_ring_depth() {
         let mut graph = Graph::new();
