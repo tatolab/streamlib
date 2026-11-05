@@ -262,12 +262,17 @@ impl StreamClock {
     ///
     /// Refuses a real or stepped clock and a scale this runtime does not run,
     /// naming `stream_id`.
-    pub fn rescale(&self, stream_id: &str, scale: f64) -> Result<()> {
+    pub fn rescale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {
         self.rescale_at(stream_id, scale, machine_monotonic_now_ns())
     }
 
     /// [`Self::rescale`] at machine monotonic `machine_now_ns`.
-    pub fn rescale_at(&self, stream_id: &str, scale: f64, machine_now_ns: i64) -> Result<()> {
+    pub fn rescale_at(
+        &self,
+        stream_id: &str,
+        scale: f64,
+        machine_now_ns: i64,
+    ) -> Result<StreamClockReading> {
         let mut spec = self.spec.write();
         let StreamClockSpec::Scaled { step_ns, .. } = *spec else {
             return Err(Error::GraphError(format!(
@@ -290,7 +295,7 @@ impl StreamClock {
         }
         *published = rescaled;
         *spec = rescaled_spec;
-        Ok(())
+        Ok(stream_clock_reading_of_a_published_clock(&rescaled))
     }
 
     /// The machine monotonic time at which this clock reaches stream time

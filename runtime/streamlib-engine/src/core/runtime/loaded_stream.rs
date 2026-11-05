@@ -431,8 +431,9 @@ impl LoadedStreamInThisRuntime {
         self.runtime_context.lock().clone()
     }
 
-    /// Run this started stream's scaled clock at `scale` from now on, publish
-    /// it to the stream's helpers, and name the new scale in its graph.
+    /// Run this started stream's scaled clock at `scale` from now on and
+    /// publish it to the stream's helpers; its graph keeps the clock it
+    /// declared, which the next start runs.
     ///
     /// Refused naming the stream when it is not started, its clock is real or
     /// stepped, or `scale` is one this runtime does not run.
@@ -443,16 +444,14 @@ impl LoadedStreamInThisRuntime {
                 self.stream_id()
             )));
         };
-        let stream_clock = &this_streams_runtime_context.stream_clock;
-        stream_clock.rescale(self.stream_id(), scale)?;
-        let rescaled_spec = stream_clock.spec();
-        self.compiler
-            .scope(|graph, _tx| graph.set_stream_clock_spec(rescaled_spec));
+        let rescaled = this_streams_runtime_context
+            .stream_clock
+            .rescale(self.stream_id(), scale)?;
         tracing::info!(
             "the stream `{}` runs its clock at {scale}× from now on",
             self.stream_id()
         );
-        Ok(stream_clock.reading())
+        Ok(rescaled)
     }
 
     fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {

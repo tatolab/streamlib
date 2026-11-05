@@ -88,7 +88,8 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use stream_clock::{
     DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClock, StreamClockReading, StreamClockSpec,
-    stream_clock_reading_of_a_published_clock, stream_time_ns_on_a_published_clock,
+    machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,
+    stream_time_ns_on_a_published_clock,
 };
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,

@@ -225,9 +225,9 @@ fn wait_for_stream_time_or_shutdown(
         if machine_ns_to_go <= 0 {
             return ContinuousRunnerWaitOutcome::DeadlineReached;
         }
-        let wait = Duration::from_nanos(machine_ns_to_go as u64)
+        let machine_wait_before_recheck = Duration::from_nanos(machine_ns_to_go as u64)
             .min(CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK);
-        if wait_on_the_machine_clock_or_shutdown(wait, shutdown_rx)
+        if wait_on_the_machine_clock_or_shutdown(machine_wait_before_recheck, shutdown_rx)
             == ContinuousRunnerWaitOutcome::ShutdownRequested
         {
             return ContinuousRunnerWaitOutcome::ShutdownRequested;
@@ -235,18 +235,19 @@ fn wait_for_stream_time_or_shutdown(
     }
 }
 
-/// Wait `wait` on the machine's monotonic clock, waking early for a shutdown.
+/// Wait `machine_wait` on the machine's monotonic clock, waking early for a
+/// shutdown.
 fn wait_on_the_machine_clock_or_shutdown(
-    wait: Duration,
+    machine_wait: Duration,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
 ) -> ContinuousRunnerWaitOutcome {
-    match shutdown_rx.recv_timeout(wait) {
+    match shutdown_rx.recv_timeout(machine_wait) {
         Ok(()) => ContinuousRunnerWaitOutcome::ShutdownRequested,
         Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
             ContinuousRunnerWaitOutcome::DeadlineReached
         }
         Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-            let _ = crossbeam_channel::after(wait).recv();
+            let _ = crossbeam_channel::after(machine_wait).recv();
             ContinuousRunnerWaitOutcome::DeadlineReached
         }
     }

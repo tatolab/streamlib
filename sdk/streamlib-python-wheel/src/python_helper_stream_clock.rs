@@ -12,8 +12,8 @@ use std::sync::OnceLock;
 
 use pyo3::prelude::*;
 use streamlib::sdk::context::{
-    StreamClockReading, stream_clock_reading_of_a_published_clock,
-    stream_time_ns_on_a_published_clock,
+    StreamClockReading, machine_time_ns_a_published_clock_reaches,
+    stream_clock_reading_of_a_published_clock, stream_time_ns_on_a_published_clock,
 };
 use streamlib::sdk::iceoryx2::StreamClockBoardReader;
 
@@ -43,6 +43,24 @@ pub(crate) fn helper_stream_clock_now_ns() -> i64 {
         Some(board) => stream_time_ns_on_a_published_clock(&board.read(), machine_now_ns),
         None => machine_now_ns,
     }
+}
+
+/// Machine nanoseconds until this helper's stream clock reaches stream time
+/// `stream_deadline_ns`, as the clock runs now; zero or less once it has.
+#[pyfunction]
+pub(crate) fn machine_nanoseconds_until_this_helpers_stream_clock_reaches(
+    stream_deadline_ns: i64,
+) -> i64 {
+    let machine_now_ns = monotonic_clock_now_ns() as i64;
+    let machine_time_ns_reaching_the_deadline = match STREAM_CLOCK_BOARD_THIS_HELPER_READS.get() {
+        Some(board) => machine_time_ns_a_published_clock_reaches(
+            &board.read(),
+            stream_deadline_ns,
+            machine_now_ns,
+        ),
+        None => stream_deadline_ns,
+    };
+    machine_time_ns_reaching_the_deadline.saturating_sub(machine_now_ns)
 }
 
 /// Which clock this helper's stream runs on and where it stands.

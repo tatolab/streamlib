@@ -77,6 +77,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_class::<python_helper_stream_clock::PythonStreamClockReading>()?;
     module.add_function(wrap_pyfunction!(
+        python_helper_stream_clock::machine_nanoseconds_until_this_helpers_stream_clock_reaches,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module
     )?)?;

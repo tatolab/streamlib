@@ -231,7 +231,7 @@ enum TatolabVerb {
         long_about = "Stream time carries on from where it stands at the new scale — 0.5 runs the \
                       stream at half speed, 1 at real time — and every node's time, write stamps \
                       and continuous pace follow it. Refused for a stream on the real or a stepped \
-                      clock, and for a scale above 1. Live only: the stream's next load runs the \
+                      clock, and for a scale above 1. Live only: the stream's next start runs the \
                       clock its stream function names.",
         override_usage = "tatolab clock [STREAM] --scale <SCALE>"
     )]
@@ -239,7 +239,7 @@ enum TatolabVerb {
         #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
         /// Stream seconds per machine second from now on.
-        #[arg(long = "scale", required = true)]
+        #[arg(long = "scale", required = true, value_parser = finite_stream_clock_scale)]
         scale: f64,
     },
     /// List the relays the runtime joins: each one's adapter, state, settings and secrets set.
@@ -332,6 +332,18 @@ fn main() -> ExitCode {
 }
 
 /// Run `verb` to its outcome.
+/// `--scale`'s value as a finite number; JSON carries no infinity or NaN.
+fn finite_stream_clock_scale(scale_argument: &str) -> Result<f64, String> {
+    let scale: f64 = scale_argument
+        .parse()
+        .map_err(|parse_error| format!("`{scale_argument}` is not a number: {parse_error}"))?;
+    if scale.is_finite() {
+        Ok(scale)
+    } else {
+        Err(format!("`{scale_argument}` is not a finite number"))
+    }
+}
+
 fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
     match verb {
         TatolabVerb::New { directory } => {

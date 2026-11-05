@@ -458,6 +458,31 @@ fn clock_sends_the_scale_and_says_the_stream_runs_at_it() {
 }
 
 #[test]
+fn a_scale_that_is_not_finite_is_refused_before_any_call() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(&json!({ "stream": "cam", "scale": 0.25 }).to_string()),
+    );
+
+    for not_finite_scale in ["inf", "NaN"] {
+        let refused = isolated_machine_directories.run_tatolab(&[
+            "clock",
+            "cam",
+            "--scale",
+            not_finite_scale,
+        ]);
+
+        assert_eq!(refused.status.code(), Some(2));
+        assert!(standard_error_text(&refused).contains("is not a finite number"));
+    }
+    assert!(
+        stub_local_api_server
+            .recorded_arguments_of("set_stream_clock_scale")
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_scale_the_runtime_refused_exits_one_in_its_own_words() {
     let refusal = "the stream `cam` runs on a real clock; only a scaled clock's scale changes";
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
