@@ -134,7 +134,9 @@ ADR's Consequences with the claim table's ordering argument (§Claim table below
   Linux, and on macOS a Mach memory entry, crossing with the slot set. Each slot is one
   64-byte-aligned row: `published_generation: AtomicU64` and one `AtomicU32` claim count per
   claimant column, up to 64 columns. The service assigns a column to each interpreter at
-  hand-over and clears it as §failure isolation below states. The protocol is in §Claim
+  hand-over and clears it as §failure isolation below states. A 65th interpreter's hand-over
+  is refused with an error naming the pool and the limit, which surfaces when its link is
+  wired, never mid-stream and never by sharing a column. The protocol is in §Claim
   table, and it replaces the per-frame `check_out` and `release_check_out` for a
   `GpuPoolSlotFrame`. The retired-frame refusal becomes the generation re-check. The checkout
   socket path stays for non-pool surfaces (foreign adoptions, export stagings).
