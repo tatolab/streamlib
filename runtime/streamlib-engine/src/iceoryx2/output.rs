@@ -605,6 +605,25 @@ impl OutputWriterInner {
         timestamp_ns: i64,
         group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
+        self.write_bytes_described_by(
+            port,
+            payload_bytes,
+            timestamp_ns,
+            group_boundary,
+            DataChannelPayloadDescriptor::bytes(),
+        )
+    }
+
+    /// [`Self::write_bytes_with_timestamp`], the message's header carrying
+    /// `payload_descriptor` — a pooled GPU frame's, for one.
+    pub fn write_bytes_described_by(
+        &self,
+        port: &str,
+        payload_bytes: &[u8],
+        timestamp_ns: i64,
+        group_boundary: MessageGroupBoundary,
+        payload_descriptor: DataChannelPayloadDescriptor,
+    ) -> Result<()> {
         let mut channels = self.channels.lock();
         let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
             return Ok(());
@@ -622,7 +641,7 @@ impl OutputWriterInner {
                 timestamp_ns,
                 payload_bytes.len() as u32,
                 group_boundary,
-                DataChannelPayloadDescriptor::bytes(),
+                payload_descriptor,
             ),
         )
     }
@@ -911,11 +930,31 @@ impl OutputWriter {
         timestamp_ns: i64,
         group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
-        self.wired_inner_for_port(port)?.write_bytes_with_timestamp(
+        self.write_bytes_described_by(
+            port,
+            payload_bytes,
+            timestamp_ns,
+            group_boundary,
+            DataChannelPayloadDescriptor::bytes(),
+        )
+    }
+
+    /// [`Self::write_bytes_with_timestamp`], the message's header carrying
+    /// `payload_descriptor` — a pooled GPU frame's, for one.
+    pub fn write_bytes_described_by(
+        &self,
+        port: &str,
+        payload_bytes: &[u8],
+        timestamp_ns: i64,
+        group_boundary: MessageGroupBoundary,
+        payload_descriptor: DataChannelPayloadDescriptor,
+    ) -> Result<()> {
+        self.wired_inner_for_port(port)?.write_bytes_described_by(
             &cast_exposed_name_to_url_safe(port)?,
             payload_bytes,
             timestamp_ns,
             group_boundary,
+            payload_descriptor,
         )
     }
 

@@ -27,11 +27,9 @@
 //! bootstrap name, and validates each sender by the audit token the kernel
 //! appends.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gpu_pool_claim_table_hand_over;
 mod published_frame_id_grammar;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_pool_claim_table_hand_over::{
     GpuPoolClaimTableHandOver, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
     SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,

@@ -1191,13 +1191,10 @@ impl InputMailboxesInner {
             });
         }
         match channel_user_header.payload_descriptor.known_kind() {
-            Ok(DataChannelPayloadDescriptorKind::Bytes) => {}
-            Ok(unread_kind) => {
-                return Err(Error::Link(format!(
-                    "a message on input port '{port}' carries a {unread_kind:?} payload, which \
-                     this read does not take"
-                )));
-            }
+            Ok(
+                DataChannelPayloadDescriptorKind::Bytes
+                | DataChannelPayloadDescriptorKind::GpuPoolSlotFrame,
+            ) => {}
             Err(refusal) => {
                 return Err(Error::Link(format!(
                     "a message on input port '{port}' was refused: {refusal}"

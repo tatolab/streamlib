@@ -24,7 +24,7 @@ use crate::core::context::{
 };
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
-use streamlib_ipc_types::GpuPoolSlotRehandTest;
+use streamlib_ipc_types::{GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest};
 
 /// The allocation every slot of one processor output texture pool shares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,16 +134,47 @@ pub(crate) struct ProcessorOutputPoolsOfOneHelper {
 /// allocating.
 pub(crate) enum ProcessorOutputFrameHandOff {
     /// A reused slot's frame, under its published id.
-    Published(String),
+    Published(ProcessorOutputFramePublished),
     /// The pool must grow: allocate a slot and hand it to
     /// [`ProcessorOutputPoolsOfOneHelper::hand_off_a_fresh_slot`].
     NeedsAFreshSlot,
 }
 
+/// One frame a processor output pool published: its id, and the descriptor
+/// a reader claims it by when its pool shares a claim table.
+pub(crate) struct ProcessorOutputFramePublished {
+    pub(crate) published_frame_id: String,
+    pub(crate) gpu_pool_slot_frame: Option<GpuPoolSlotFrameDescriptorBody>,
+}
+
+impl ProcessorOutputFramePublished {
+    /// A one-off acquisition's handle, which no claim table covers.
+    pub(crate) fn of_a_one_off(handle_id: String) -> Self {
+        Self {
+            published_frame_id: handle_id,
+            gpu_pool_slot_frame: None,
+        }
+    }
+
+    fn of_the_slot(slot: &LeaseAwarePoolSlot<ProcessorOutputPoolSlot>) -> Self {
+        Self {
+            published_frame_id: slot.currently_published_frame_id(),
+            gpu_pool_slot_frame: slot.resource().claim_table_row().map(|claim_table_row| {
+                GpuPoolSlotFrameDescriptorBody {
+                    pool: claim_table_row.table().pool_uuid(),
+                    slot: claim_table_row.row_index(),
+                    generation: slot.published_frame_generation(),
+                    timeline_value: 0,
+                }
+            }),
+        }
+    }
+}
+
 /// What one helper's pools answer when handed a freshly allocated slot.
 pub(crate) enum ProcessorOutputFreshSlotHandOff {
     /// The fresh slot's first frame, under its published id.
-    Published(String),
+    Published(ProcessorOutputFramePublished),
     /// The pools refused the slot — the helper was torn down while it was
     /// allocated, the pool is at its capacity, or it is not a poolable
     /// resource — and it is owed its release.
@@ -196,7 +227,9 @@ impl ProcessorOutputPoolsOfOneHelper {
             .hand_off_a_reusable_frame(rotation_depth, check_out_leases, minted_frame_generations)
             .map(|handed_off| match handed_off {
                 ProcessorOutputSurfacePoolHandOff::ReusedSlot(slot) => {
-                    ProcessorOutputFrameHandOff::Published(slot.currently_published_frame_id())
+                    ProcessorOutputFrameHandOff::Published(
+                        ProcessorOutputFramePublished::of_the_slot(slot),
+                    )
                 }
                 ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot => {
                     ProcessorOutputFrameHandOff::NeedsAFreshSlot
@@ -258,9 +291,9 @@ impl ProcessorOutputPoolsOfOneHelper {
                 .and_then(SurfaceStore::check_out_lease_registry),
             host.lease_aware_pool_minted_frame_generations(),
         ) {
-            Ok(slot) => {
-                ProcessorOutputFreshSlotHandOff::Published(slot.currently_published_frame_id())
-            }
+            Ok(slot) => ProcessorOutputFreshSlotHandOff::Published(
+                ProcessorOutputFramePublished::of_the_slot(slot),
+            ),
             Err(ProcessorOutputSurfacePoolRefusedFreshSlot {
                 refusal,
                 pool_slot_key,

@@ -14,13 +14,14 @@ repository.workspace = true
 name = "streamlib_surface_client"
 path = "src/lib.rs"
 
+[dependencies]
+serde_json.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
-serde_json.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
-serde_json.workspace = true
 # The Mach message, port and bootstrap bindings the macOS arm rides on.
 mach2 = "0.7"
 # The shared-event handle's NSXPCCoder encoding: a Metal timeline's Mach send right.

@@ -11,9 +11,9 @@ mod tests;
 
 use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 pub(crate) use processor_output_pools_of_one_helper::{
-    ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff, ProcessorOutputPoolsOfOneHelper,
-    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor,
-    ReleasedProcessorOutputPoolSlot,
+    ProcessorOutputFrameHandOff, ProcessorOutputFramePublished, ProcessorOutputFreshSlotHandOff,
+    ProcessorOutputPoolsOfOneHelper, ProcessorOutputSlotDescriptor,
+    ProcessorOutputTextureDescriptor, ReleasedProcessorOutputPoolSlot,
 };
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
