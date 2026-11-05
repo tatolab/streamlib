@@ -253,7 +253,7 @@ impl RiveSourceFrameLoop {
     fn run_until_stopped(mut self, stop_requested: &AtomicBool) {
         let frame_interval = Duration::from_secs_f64(1.0 / f64::from(self.settings.frame_rate));
         let mut next_frame_due = Instant::now();
-        let mut previous_frame_drawn_at: Option<Instant> = None;
+        let mut previous_frame_stream_time_ns: Option<i64> = None;
         let mut frames_published: u64 = 0;
         let mut frames_failed: u64 = 0;
         let mut render_time_since_report = Duration::ZERO;
@@ -282,12 +282,22 @@ impl RiveSourceFrameLoop {
             self.apply_every_pending_data_message();
 
             let frame_started = Instant::now();
-            let elapsed_since_previous_frame = previous_frame_drawn_at
-                .map(|drawn_at| frame_started.duration_since(drawn_at))
+            let frame_stream_time_ns = self
+                .module_host
+                .stream_time_ns_of_a_machine_instant(self.module_host.monotonic_now_ns());
+            let elapsed_since_previous_frame = previous_frame_stream_time_ns
+                .map(|previous_ns| {
+                    Duration::from_nanos(
+                        frame_stream_time_ns.saturating_sub(previous_ns).max(0) as u64
+                    )
+                })
                 .unwrap_or_default()
                 .min(LONGEST_ANIMATION_STEP);
-            previous_frame_drawn_at = Some(frame_started);
-            match self.render_and_publish_one_frame(elapsed_since_previous_frame.as_secs_f32()) {
+            previous_frame_stream_time_ns = Some(frame_stream_time_ns);
+            match self.render_and_publish_one_frame(
+                elapsed_since_previous_frame.as_secs_f32(),
+                frame_stream_time_ns,
+            ) {
                 Ok(()) => frames_published += 1,
                 Err(failure) => {
                     frames_failed += 1;
@@ -347,7 +357,11 @@ impl RiveSourceFrameLoop {
         }
     }
 
-    fn render_and_publish_one_frame(&mut self, elapsed_seconds: f32) -> Result<(), String> {
+    fn render_and_publish_one_frame(
+        &mut self,
+        elapsed_seconds: f32,
+        frame_stream_time_ns: i64,
+    ) -> Result<(), String> {
         let output_texture = self
             .module_host
             .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
@@ -380,7 +394,7 @@ impl RiveSourceFrameLoop {
             surface_id: &surface_id,
             width: self.settings.width,
             height: self.settings.height,
-            timestamp_ns: self.module_host.monotonic_now_ns(),
+            timestamp_ns: frame_stream_time_ns,
             frames_per_second: self.settings.frame_rate,
             texture_layout: published_layout,
         };

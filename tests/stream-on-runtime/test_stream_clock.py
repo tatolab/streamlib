@@ -21,6 +21,7 @@ from stream_clock_processors import (
     CROSSING_TICK_COUNTER_INTERVAL_MS,
     REAL_TIME_PACED_MESSAGES_REPORTED,
     REAL_TIME_PACED_WRITER_INTERVAL_MS,
+    STEP_THE_RELAY_HELPER_DIES_IN,
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,
 )
@@ -32,6 +33,7 @@ from stream_clock_streams import (
     real_time_writes_beside_steps,
     step_times_through_a_slow_relay,
     step_times_through_a_slow_relay_in_fast_forward,
+    two_writes_per_step_through_a_relay_whose_helper_dies,
     stream_times_in_real_time,
     stream_times_in_slow_motion,
 )
@@ -304,3 +306,22 @@ def test_a_node_paced_by_real_time_writes_on_the_machine_clock_beside_steps_it_n
         f"{STEPPED_STREAM_STEPS} unpaced steps took {step_run['machine_elapsed_ns'] / 1e6:.0f} "
         f"machine ms beside a node paced by real time"
     )
+
+
+def test_a_helper_that_dies_with_a_message_unread_does_not_hold_its_step_open(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    """The relay's first helper takes the first of a step's two messages and
+    ends itself; the second dies with it. The engine starts a new helper, and
+    the step closes rather than waiting on a message nothing will read."""
+    tatolabd = start_tatolabd_running_stream(two_writes_per_step_through_a_relay_whose_helper_dies)
+    reported = tatolabd.await_marker("STEPS_PAST_A_HELPER_RESTART", timeout=REPORT_TIMEOUT_SECONDS)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    seen = reported["step_indices_seen"]
+    steps_after_the_restart = range(STEP_THE_RELAY_HELPER_DIES_IN + 1, STEPPED_STREAM_STEPS)
+    for step_index in steps_after_the_restart:
+        assert seen.count(step_index) == 2, (
+            f"both of step {step_index}'s messages reach the reporter after the restart: {seen}"
+        )
