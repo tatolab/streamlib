@@ -4,7 +4,9 @@
 //! Planning and resolving the surface-bound bindings a kernel invocation
 //! names, shared by the compute, graphics and ray-tracing families.
 
-use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseKernelBinding;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
+    EscalateResponseKernelBinding, EscalateResponseTextureLayoutAfterTheRun,
+};
 use crate::core::context::{SurfaceBoundKernelBindingResource, TextureRegistration};
 use crate::core::rhi::{StorageBuffer, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
@@ -17,26 +19,28 @@ use crate::host_rhi::HostTextureExt as _;
 ///
 /// Best-effort, escalate-path only: an id the service does not hold is an
 /// in-process-only surface, not an error, and a publish failure costs the
-/// consumer its content-preserving acquire, never the dispatch.
+/// consumer its content-preserving acquire, never the dispatch. Answers the
+/// layout each surface was left in, for the run's reply.
 pub(super) fn publish_bound_surface_layouts_to_surface_share(
     surface_store: Option<crate::core::context::SurfaceStore>,
     bound_surfaces: &[(String, TextureRegistration)],
-) {
-    let Some(store) = surface_store else {
-        return;
-    };
-    let mut published_surface_ids: Vec<&str> = Vec::with_capacity(bound_surfaces.len());
+) -> Vec<EscalateResponseTextureLayoutAfterTheRun> {
+    let mut layouts_after_the_run: Vec<EscalateResponseTextureLayoutAfterTheRun> =
+        Vec::with_capacity(bound_surfaces.len());
     // Walked back to front: a surface several dispatches of one batch bind
     // ends in the layout its *last* use required, and a cross-process
     // resolve holds a separate layout cell per occurrence — so the dedup
     // must keep the last one, not the first.
     for (surface_id, registration) in bound_surfaces.iter().rev() {
-        if published_surface_ids.contains(&surface_id.as_str()) {
+        if layouts_after_the_run
+            .iter()
+            .any(|already| already.surface_id == *surface_id)
+        {
             continue;
         }
-        published_surface_ids.push(surface_id);
-        if let Err(publish_failure) =
-            store.update_image_layout(surface_id, registration.current_layout())
+        let image_layout = registration.current_layout();
+        if let Some(store) = &surface_store
+            && let Err(publish_failure) = store.update_image_layout(surface_id, image_layout)
         {
             tracing::debug!(
                 "[escalate] layout publish for '{}' skipped: {}",
@@ -44,7 +48,12 @@ pub(super) fn publish_bound_surface_layouts_to_surface_share(
                 publish_failure
             );
         }
+        layouts_after_the_run.push(EscalateResponseTextureLayoutAfterTheRun {
+            surface_id: surface_id.clone(),
+            image_layout: image_layout.0,
+        });
     }
+    layouts_after_the_run
 }
 
 /// One binding a draw or a trace supplied, as the planner reads it — whichever

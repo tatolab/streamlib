@@ -360,11 +360,12 @@ pub(in super::super) fn handle_run_graphics_draw(
         });
 
     match drawn {
-        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(texture_layouts_after_the_run) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             // Echo the kernel_id back — the draw is sync host-side, so no
             // separate handle is allocated per draw.
             handle_id: req.kernel_id,
+            texture_layouts_after_the_run: Some(texture_layouts_after_the_run),
             ..Default::default()
         }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -386,7 +387,7 @@ pub(super) fn bind_and_render_graphics_kernel(
     held_kernel: &mut GraphicsKernelHeldForOneDraw<'_>,
     req: &EscalateRequestRunGraphicsDraw,
     push_constants: &[u8],
-) -> crate::core::error::Result<()> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>> {
     use crate::core::error::Error;
     use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
     use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};
@@ -534,25 +535,24 @@ pub(super) fn bind_and_render_graphics_kernel(
     // would otherwise keep claiming the pre-draw layout and the next consumer's
     // barrier would name the wrong oldLayout. A refused draw transitioned
     // nothing, so only a rendered one publishes.
-    if rendered.is_ok() {
-        for registration in &color_targets {
-            registration.update_layout(VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
-        }
-        let mut bound_surfaces = bound_surface_layout_publish_pairs(&bound_inputs);
-        bound_surfaces.extend(
-            req.color_target_uuids
-                .iter()
-                .cloned()
-                .zip(color_targets.iter().cloned()),
-        );
-        publish_bound_surface_layouts_to_surface_share(
-            host_gpu_context.surface_store(),
-            &bound_surfaces,
-        );
+    rendered?;
+    for registration in &color_targets {
+        registration.update_layout(VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
     }
+    let mut bound_surfaces = bound_surface_layout_publish_pairs(&bound_inputs);
+    bound_surfaces.extend(
+        req.color_target_uuids
+            .iter()
+            .cloned()
+            .zip(color_targets.iter().cloned()),
+    );
+    let texture_layouts_after_the_run = publish_bound_surface_layouts_to_surface_share(
+        host_gpu_context.surface_store(),
+        &bound_surfaces,
+    );
     drop(color_targets);
     drop(bound_inputs);
-    rendered
+    Ok(texture_layouts_after_the_run)
 }
 
 /// One arm-for-arm mapping from a wire blend-factor enum to the RHI's.

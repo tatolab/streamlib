@@ -998,6 +998,7 @@ mod tests {
             timestamp_ns: 1_000,
             group_boundary,
             lost_since_last_read,
+            payload_descriptor: streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::bytes(),
         }
     }
 

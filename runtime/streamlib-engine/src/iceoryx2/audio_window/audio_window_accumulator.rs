@@ -446,6 +446,7 @@ impl AudioWindowAccumulator {
                 timestamp_ns: first_sample_timestamp_ns,
                 group_boundary: MessageGroupBoundary::StartsGroup,
                 lost_since_last_read: 0,
+                payload_descriptor: crate::iceoryx2::DataChannelPayloadDescriptor::bytes(),
             },
             // A window is cut from bags rather than being one, so the stage has
             // no entry to read a link or its losses off. The port fills both
