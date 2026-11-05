@@ -32,7 +32,7 @@ pub fn gpu_pool_uuid_wire_name(pool_uuid: &[u8; 16]) -> String {
 
 /// The UUID a wire name spells, or `None` for anything but 32 hex digits.
 pub fn gpu_pool_uuid_of_its_wire_name(wire_name: &str) -> Option<[u8; 16]> {
-    if wire_name.len() != 32 || !wire_name.is_ascii() {
+    if wire_name.len() != 32 || !wire_name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let mut pool_uuid = [0u8; 16];

@@ -137,9 +137,10 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
     /// `<slot>#<generation>`.
     ///
     /// The pool keeps `rotation_depth` slots nobody holds, plus one for each
-    /// frame its output links' mailboxes queue, so a frame nobody claimed
-    /// stays resolvable for that many publishes behind the newest however many
-    /// frames consumers hold. It reuses the unheld slot published longest ago
+    /// frame its output links' mailboxes queue or lend out under their borrow
+    /// quotas — a borrowed frame is unclaimed until it is read as a GPU frame —
+    /// so a frame nobody claimed stays resolvable for that many publishes
+    /// behind the newest however many frames consumers hold. It reuses the unheld slot published longest ago
     /// while that many are unheld and otherwise asks for a fresh slot. It grows
     /// to [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`], or to that reserve plus
     /// its output links' borrow quotas when they are more; at that capacity it
@@ -158,8 +159,9 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
                 self.pool_key
             )));
         }
-        let unheld_slot_reserve =
-            rotation_depth + self.kept_by_its_output_links.queued_in_their_mailboxes;
+        let unheld_slot_reserve = rotation_depth
+            + self.kept_by_its_output_links.queued_in_their_mailboxes
+            + self.kept_by_its_output_links.borrowed_past_their_mailboxes;
         self.slot_capacity = PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
             .max(unheld_slot_reserve + self.kept_by_its_output_links.borrowed_past_their_mailboxes);
         let slot_count = self.ring.slot_count();

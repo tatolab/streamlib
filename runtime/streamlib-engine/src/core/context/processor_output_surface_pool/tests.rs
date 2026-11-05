@@ -478,22 +478,24 @@ fn kept(
 }
 
 #[test]
-fn a_frame_an_output_links_mailbox_queues_is_never_outwaited_by_its_slot() {
+fn a_frame_an_output_links_mailbox_queues_or_lends_is_never_outwaited_by_its_slot() {
     let mut pool = PoolUnderTest::new();
     pool.pool
         .keep_room_for_what_its_output_links_keep(kept(3, 2));
 
-    let published: Vec<_> = (0..10).map(|_| pool.next_frame(2).unwrap()).collect();
+    let published: Vec<_> = (0..12).map(|_| pool.next_frame(2).unwrap()).collect();
 
     assert_eq!(
-        &published[..5],
-        ["slot-0#1", "slot-1#1", "slot-2#1", "slot-3#1", "slot-4#1"],
-        "the pool grows to the rotation depth plus every frame the mailboxes queue"
+        &published[..7],
+        [
+            "slot-0#1", "slot-1#1", "slot-2#1", "slot-3#1", "slot-4#1", "slot-5#1", "slot-6#1"
+        ],
+        "the pool grows to the rotation depth plus every frame the mailboxes queue or lend"
     );
-    assert_eq!(pool.pool.slot_count(), 5);
+    assert_eq!(pool.pool.slot_count(), 7);
     assert_eq!(
-        published[5], "slot-0#2",
-        "a slot is reused only once as many publishes as the mailboxes queue passed it"
+        published[7], "slot-0#2",
+        "a slot is reused only once as many publishes as the mailboxes queue or lend passed it"
     );
 }
 
@@ -503,9 +505,10 @@ fn the_output_links_borrow_quotas_raise_the_pools_capacity_past_its_default() {
     let kept_by_the_links = kept(4, 16);
     pool.pool
         .keep_room_for_what_its_output_links_keep(kept_by_the_links);
-    let capacity = 2
+    let unheld_slot_reserve = 2
         + kept_by_the_links.queued_in_their_mailboxes
         + kept_by_the_links.borrowed_past_their_mailboxes;
+    let capacity = unheld_slot_reserve + kept_by_the_links.borrowed_past_their_mailboxes;
     assert!(capacity > PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY);
 
     for _ in 0..capacity {
@@ -526,7 +529,7 @@ fn an_unwired_links_room_is_given_back_lazily() {
     let mut pool = PoolUnderTest::new();
     pool.pool
         .keep_room_for_what_its_output_links_keep(kept(3, 2));
-    for _ in 0..5 {
+    for _ in 0..7 {
         pool.next_frame(2).unwrap();
     }
 
@@ -537,7 +540,7 @@ fn an_unwired_links_room_is_given_back_lazily() {
     assert_eq!(published, ["slot-0#2", "slot-1#2", "slot-2#2"]);
     assert_eq!(
         pool.pool.slot_count(),
-        5,
+        7,
         "no slot is freed by the unwiring"
     );
 }

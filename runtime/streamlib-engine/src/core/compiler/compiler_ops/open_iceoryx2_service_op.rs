@@ -1263,10 +1263,16 @@ fn wire_subprocess_source(
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
     entry["output_port_wiring_generation"] =
         serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
-    let wire_reply = link_wiring.record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
-        crate::core::PortDirection::Output,
-        entry,
-    )?;
+    let wire_reply = link_wiring
+        .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+            crate::core::PortDirection::Output,
+            entry,
+        )
+        .inspect_err(|_| {
+            link_wiring
+                .output_frames_kept_by_its_output_links()
+                .forget_an_unwired_output_link(link_id.as_str());
+        })?;
     insert_loss_counts_on_processor_node_once(
         graph,
         source_proc_id,

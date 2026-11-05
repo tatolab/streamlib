@@ -117,6 +117,15 @@ impl GpuPoolClaimTableRow {
         column: GpuPoolClaimantColumn,
         generation: u64,
     ) -> Result<(), GpuPoolFrameRecycled> {
+        if generation & GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT != 0 {
+            let published_generation = self.published_generation.load(Ordering::SeqCst);
+            return Err(GpuPoolFrameRecycled {
+                claimed_generation: generation,
+                published_generation: published_generation
+                    & !GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT,
+                slot_was_retiring: true,
+            });
+        }
         let column_count = &self.claim_count_by_claimant_column[column.index()];
         column_count.fetch_add(1, Ordering::SeqCst);
         fence(Ordering::SeqCst);
@@ -254,6 +263,23 @@ mod tests {
                 published_generation: 3,
                 slot_was_retiring: false,
             })
+        );
+        assert!(!row.is_claimed());
+    }
+
+    #[test]
+    fn a_claim_naming_the_retiring_bit_never_matches_a_retiring_slot() {
+        let row = GpuPoolClaimTableRow::unpublished();
+        let column = GpuPoolClaimantColumn::at(0).unwrap();
+        row.publish_generation(2);
+        assert_eq!(
+            row.retire_for_a_rehand(2),
+            GpuPoolSlotRehandTest::RetiredForTheRehand
+        );
+
+        assert!(
+            row.claim_frame(column, 2 | GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT)
+                .is_err()
         );
         assert!(!row.is_claimed());
     }

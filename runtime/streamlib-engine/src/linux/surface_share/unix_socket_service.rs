@@ -246,7 +246,7 @@ fn handle_client_connection(
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
     let mut pool_slot_keys_handed_memory = PoolSlotKeysHandedMemoryOnThisConnection::default();
-    let claimant = peer_process_id(&stream).map(GpuPoolClaimantProcessId);
+    let peer_pid = peer_process_id(&stream);
 
     loop {
         let mut len_buf = [0u8; 4];
@@ -298,11 +298,13 @@ fn handle_client_connection(
             ),
             "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
             SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP => {
-                if claimant_process_handed_a_column.is_none() {
-                    *claimant_process_handed_a_column =
-                        claimant.and_then(GpuPoolClaimantProcess::of_a_live_peer);
+                match the_claimant_handed_columns_on_this_connection(
+                    peer_pid,
+                    claimant_process_handed_a_column,
+                ) {
+                    Ok(claimant) => handle_claim_table_of_gpu_pool(&state, &request, claimant),
+                    Err(refusal) => (serde_json::json!({"error": refusal}), Vec::new()),
                 }
-                handle_claim_table_of_gpu_pool(&state, &request, claimant)
             }
             SURFACE_SHARE_IMPORT_POOL_SLOT_OP => {
                 handle_import_pool_slot(&state, &request, &mut pool_slot_keys_handed_memory)
@@ -327,12 +329,32 @@ fn handle_client_connection(
         let response_bytes = serde_json::to_vec(&response)
             .map_err(|e| std::io::Error::other(format!("Failed to serialize response: {}", e)))?;
 
-        send_message_with_fds(&stream, &response_bytes, &reply_fds)?;
+        let sent = send_message_with_fds(&stream, &response_bytes, &reply_fds);
 
         for fd in &reply_fds {
+            // SAFETY: each reply fd was dup'd for this reply and is owned here.
             unsafe { libc::close(*fd) };
         }
+        sent?;
     }
+}
+
+/// The claimant this connection's peer claims as, held the first time it is
+/// handed a column; refused when its process cannot be named or held.
+fn the_claimant_handed_columns_on_this_connection(
+    peer_pid: Option<u32>,
+    claimant_process_handed_a_column: &mut Option<GpuPoolClaimantProcess>,
+) -> Result<GpuPoolClaimantProcessId, String> {
+    if let Some(claimant_process) = claimant_process_handed_a_column {
+        return Ok(claimant_process.claimant());
+    }
+    let peer_pid = peer_pid.ok_or_else(|| {
+        "the peer's process could not be named, so it is given no claimant column".to_string()
+    })?;
+    let claimant_process = GpuPoolClaimantProcess::hold_the_peer(peer_pid)?;
+    let claimant = claimant_process.claimant();
+    *claimant_process_handed_a_column = Some(claimant_process);
+    Ok(claimant)
 }
 
 /// The raw-handle export contract an OPAQUE_FD producer states beside its
@@ -777,12 +799,11 @@ fn handle_check_out(
 
 /// Hand a peer the claim table a `GpuPoolSlotFrame` descriptor names: the
 /// table's memfd, the column the peer's process claims in, and the pool slot
-/// key leased to each row. A peer whose process cannot be named, or one past
-/// the table's last column, is refused.
+/// key leased to each row. A peer past the table's last column is refused.
 fn handle_claim_table_of_gpu_pool(
     state: &SurfaceShareState,
     request: &serde_json::Value,
-    claimant: Option<GpuPoolClaimantProcessId>,
+    claimant: GpuPoolClaimantProcessId,
 ) -> (serde_json::Value, Vec<RawFd>) {
     let Some(pool_uuid) = request
         .get(SURFACE_SHARE_GPU_POOL_FIELD)
@@ -791,13 +812,6 @@ fn handle_claim_table_of_gpu_pool(
     else {
         return (
             serde_json::json!({"error": "missing or malformed pool"}),
-            Vec::new(),
-        );
-    };
-    let Some(claimant) = claimant else {
-        return (
-            serde_json::json!({"error": "the peer's process could not be named, so it is \
-                                given no claimant column"}),
             Vec::new(),
         );
     };

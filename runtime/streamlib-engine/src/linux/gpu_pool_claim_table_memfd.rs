@@ -79,6 +79,19 @@ impl GpuPoolClaimTableMemfd {
                 memfd_status.st_size
             )));
         }
+        // SAFETY: F_GET_SEALS on a valid fd reads its seals.
+        let seals =
+            unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&memfd), libc::F_GET_SEALS) };
+        if seals < 0 {
+            return Err(claim_table_os_failure("F_GET_SEALS"));
+        }
+        if seals & libc::F_SEAL_SHRINK == 0 {
+            return Err(Error::Runtime(
+                "a GPU pool claim table fd is not sealed against shrinking; a mapping of it could \
+                 fault"
+                    .into(),
+            ));
+        }
         Self::mapping(memfd)
     }
 
@@ -162,5 +175,24 @@ mod tests {
         let refusal = GpuPoolClaimTableMemfd::adopt(wrong_size).err().unwrap();
 
         assert!(refusal.to_string().contains("4096 bytes"), "{refusal}");
+    }
+
+    #[test]
+    fn an_fd_not_sealed_against_shrinking_is_refused() {
+        // SAFETY: a NUL-terminated name and documented flags.
+        let raw =
+            unsafe { libc::memfd_create(c"unsealed-claim-table".as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(raw >= 0);
+        // SAFETY: memfd_create returned a fresh fd.
+        let unsealed = unsafe { OwnedFd::from_raw_fd(raw) };
+        // SAFETY: a valid fd and a non-negative length.
+        assert_eq!(
+            unsafe { libc::ftruncate(raw, GPU_POOL_CLAIM_TABLE_BYTES as libc::off_t) },
+            0
+        );
+
+        let refusal = GpuPoolClaimTableMemfd::adopt(unsealed).err().unwrap();
+
+        assert!(refusal.to_string().contains("shrinking"), "{refusal}");
     }
 }

@@ -26,9 +26,13 @@ pub(crate) type GpuPoolClaimTableSharedRows =
 #[cfg(not(target_os = "linux"))]
 pub(crate) type GpuPoolClaimTableSharedRows = GpuPoolClaimTableRowsOfThisProcessOnly;
 
-/// The process a claimant column is assigned to.
+/// The process a claimant column is assigned to: its pid and the time it
+/// started, so a later process that reuses the pid is a different claimant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct GpuPoolClaimantProcessId(pub u32);
+pub struct GpuPoolClaimantProcessId {
+    pub pid: u32,
+    pub start_time_in_clock_ticks_since_boot: u64,
+}
 
 /// Rows held in this process's heap, for a platform whose claim tables do
 /// not yet cross to another process.
@@ -104,6 +108,7 @@ impl GpuPoolClaimTable {
     }
 
     /// The shared rows, for handing the table to another process.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn shared_rows(&self) -> &GpuPoolClaimTableSharedRows {
         &self.shared_rows
     }
@@ -162,12 +167,14 @@ impl GpuPoolClaimTable {
     /// Clear and free `claimant`'s column: its process has been reaped, so
     /// nothing it claimed is still read. Answers whether it held one.
     fn clear_the_column_of_a_reaped_claimant(&self, claimant: GpuPoolClaimantProcessId) -> bool {
-        let Some(column) = self.bookkeeping().column_by_claimant.remove(&claimant) else {
+        let mut bookkeeping = self.bookkeeping();
+        let Some(column) = bookkeeping.column_by_claimant.remove(&claimant) else {
             return false;
         };
         for row in self.shared_rows.rows() {
             row.clear_claimant_column(column);
         }
+        drop(bookkeeping);
         true
     }
 
@@ -432,13 +439,19 @@ mod tests {
         for claimant in 0..GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS as u32 {
             lease
                 .table()
-                .claimant_column_of(GpuPoolClaimantProcessId(claimant))
+                .claimant_column_of(GpuPoolClaimantProcessId {
+                    pid: claimant,
+                    start_time_in_clock_ticks_since_boot: 0,
+                })
                 .unwrap();
         }
 
         let refusal = lease
             .table()
-            .claimant_column_of(GpuPoolClaimantProcessId(9_999))
+            .claimant_column_of(GpuPoolClaimantProcessId {
+                pid: 9_999,
+                start_time_in_clock_ticks_since_boot: 0,
+            })
             .unwrap_err()
             .to_string();
 
@@ -456,7 +469,10 @@ mod tests {
             .lease_a_row_for_a_slot(&every_claim_table, "slot")
             .unwrap();
         lease.row().publish_generation(3);
-        let reaped = GpuPoolClaimantProcessId(4242);
+        let reaped = GpuPoolClaimantProcessId {
+            pid: 4242,
+            start_time_in_clock_ticks_since_boot: 0,
+        };
         let column = lease.table().claimant_column_of(reaped).unwrap();
         lease.row().claim_frame(column, 3).unwrap();
         assert_eq!(
@@ -476,9 +492,34 @@ mod tests {
         assert_eq!(
             lease
                 .table()
-                .claimant_column_of(GpuPoolClaimantProcessId(1))
+                .claimant_column_of(GpuPoolClaimantProcessId {
+                    pid: 1,
+                    start_time_in_clock_ticks_since_boot: 0
+                })
                 .unwrap(),
             column
         );
+    }
+
+    #[test]
+    fn a_later_process_reusing_a_claimants_pid_is_handed_its_own_column() {
+        let every_claim_table = GpuPoolClaimTables::default();
+        let mut pool = GpuPoolClaimTablesOfOnePool::named("reused-pid");
+        let lease = pool
+            .lease_a_row_for_a_slot(&every_claim_table, "slot")
+            .unwrap();
+        let exited = GpuPoolClaimantProcessId {
+            pid: 4242,
+            start_time_in_clock_ticks_since_boot: 100,
+        };
+        let reusing_its_pid = GpuPoolClaimantProcessId {
+            pid: 4242,
+            start_time_in_clock_ticks_since_boot: 200,
+        };
+
+        let column_of_the_exited = lease.table().claimant_column_of(exited).unwrap();
+        let column_of_the_reuser = lease.table().claimant_column_of(reusing_its_pid).unwrap();
+
+        assert_ne!(column_of_the_exited, column_of_the_reuser);
     }
 }
