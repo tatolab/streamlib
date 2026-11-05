@@ -24,8 +24,10 @@ import pytest
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from microphone_device_edge_drops import assert_the_microphone_dropped_no_blocks_at_the_device_edge
 from microphone_source_streams import (
+    SLOW_MOTION_SCALE,
     UNOPENABLE_DEVICE_ID,
     microphone_into_an_audio_block_probe,
+    microphone_into_an_audio_block_probe_in_slow_motion,
     microphone_source_naming_an_unopenable_device,
     one_microphone_source_left_unnamed,
 )
@@ -129,6 +131,38 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
         f"{samples_between_first_and_last} samples at {sample_rate} Hz should span "
         f"{expected_ns} ns but the timestamps span {elapsed_ns} ns — a block went "
         f"missing, or one claimed an instant it did not cover"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_slow_motion_stream_stamps_each_block_on_its_stream_clock(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    """The device still captures in real time, but a block's stamp is the
+    stream's time at its first sample: at half speed, the stamps span half the
+    duration of the samples between them."""
+    tatolabd = start_tatolabd_running_stream(microphone_into_an_audio_block_probe_in_slow_motion)
+    readings = tatolabd.await_marker("BLOCKS_SEEN")
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert isinstance(readings, list), f"no parseable block report:\n{tatolabd.recent_stderr()}"
+    assert len(readings) >= 2, "the span assertion needs two blocks to subtract"
+    assert_the_microphone_dropped_no_blocks_at_the_device_edge(tatolabd)
+
+    stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
+    assert stamps == sorted(set(stamps)), f"block timestamps must advance: {stamps}"
+
+    sample_rate = readings[0]["sample_rate"]
+    samples_between_first_and_last = sum(reading["sample_count"] for reading in readings[:-1])
+    real_time_span_ns = samples_between_first_and_last * 1_000_000_000 // sample_rate
+    expected_ns = int(real_time_span_ns * SLOW_MOTION_SCALE)
+    elapsed_ns = stamps[-1] - stamps[0]
+    tolerance_ns = DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK * len(readings)
+    assert abs(elapsed_ns - expected_ns) <= tolerance_ns, (
+        f"{samples_between_first_and_last} samples at {sample_rate} Hz span {real_time_span_ns} ns "
+        f"of real time, so at {SLOW_MOTION_SCALE}x their stamps should span {expected_ns} ns, "
+        f"but they span {elapsed_ns} ns"
     )
 
 

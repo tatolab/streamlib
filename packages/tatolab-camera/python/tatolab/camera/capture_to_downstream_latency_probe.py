@@ -3,9 +3,10 @@
 
 """`CaptureToDownstreamLatencyProbe`: how late and how often camera frames reach a downstream node.
 
-A frame's `timestamp_ns` is its capture instant on the machine's monotonic
-clock, so the probe measures the clock when the frame is read, less the clock
-when it was captured.
+A frame's `timestamp_ns` is its capture instant on the stream's clock, which in
+a real-time stream is the machine's monotonic clock, so in a real-time stream
+the probe measures the clock when the frame is read, less the clock when it was
+captured.
 """
 
 from __future__ import annotations

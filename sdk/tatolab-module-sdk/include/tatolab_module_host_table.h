@@ -23,7 +23,8 @@
  * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
  * id minor 6 adds and the shared native service leases and node failure
  * minor 7 adds and the host-memory read minor 9 adds. The virtual camera
- * verbs minor 8 adds act in the helper itself.
+ * verbs minor 8 adds and the stream-time conversion minor 10 adds act in the
+ * helper itself.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -44,7 +45,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(9)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(10)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -82,7 +83,7 @@ typedef int32_t ModuleHostTableStatus;
 #define MODULE_HOST_TABLE_STATUS_REFUSED ((ModuleHostTableStatus)INT32_C(-1))
 
 /**
- * The timestamp a write passes to be stamped with the host's monotonic now.
+ * The timestamp a write passes to be stamped with its stream's clock now.
  */
 #define MODULE_HOST_TABLE_TIMESTAMP_NOW INT64_MIN
 
@@ -772,6 +773,13 @@ typedef struct ModuleHostTable {
      * surface's differs.
      */
     ModuleHostTableStatus (*surface_read_into_host_memory)(void *node_host, ModuleHostTableSurfaceHandle source, const ModuleHostTableHostMemoryPixelsToFill *host_memory_pixels_to_fill, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 10: the time on the node's stream clock at `machine_instant_ns`,
+     * a reading of `ModuleHostTable.monotonic_now_ns`'s clock; the instant
+     * itself in a real-time stream, and the open step's time while the
+     * stream's clock steps.
+     */
+    int64_t (*stream_time_ns_of_a_machine_instant)(void *node_host, int64_t machine_instant_ns);
 } ModuleHostTable;
 
 #ifdef __cplusplus

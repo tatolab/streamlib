@@ -38,10 +38,15 @@ pub(crate) fn adopt_the_stream_clock_board(board: StreamClockBoardReader) -> Res
 
 /// Stream time now, in nanoseconds.
 pub(crate) fn helper_stream_clock_now_ns() -> i64 {
-    let machine_now_ns = monotonic_clock_now_ns() as i64;
+    helper_stream_time_ns_of_a_machine_instant(monotonic_clock_now_ns() as i64)
+}
+
+/// Stream time at `machine_instant_ns`, a reading of the machine's monotonic
+/// clock, as the clock runs now.
+pub(crate) fn helper_stream_time_ns_of_a_machine_instant(machine_instant_ns: i64) -> i64 {
     match STREAM_CLOCK_BOARD_THIS_HELPER_READS.get() {
-        Some(board) => stream_time_ns_on_a_published_clock(&board.read(), machine_now_ns),
-        None => machine_now_ns,
+        Some(board) => stream_time_ns_on_a_published_clock(&board.read(), machine_instant_ns),
+        None => machine_instant_ns,
     }
 }
 

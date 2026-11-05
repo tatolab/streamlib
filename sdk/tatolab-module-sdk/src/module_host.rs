@@ -325,6 +325,19 @@ impl ModuleHost {
         unsafe { (self.module_host_table.monotonic_now_ns)(self.module_host_table.node_host) }
     }
 
+    /// The time on the node's stream clock at `machine_instant_ns`, a reading
+    /// of [`ModuleHost::monotonic_now_ns`]'s clock such as a device's capture
+    /// stamp.
+    pub fn stream_time_ns_of_a_machine_instant(&self, machine_instant_ns: i64) -> i64 {
+        // SAFETY: the node host is retained by `self`.
+        unsafe {
+            (self.module_host_table.stream_time_ns_of_a_machine_instant)(
+                self.module_host_table.node_host,
+                machine_instant_ns,
+            )
+        }
+    }
+
     /// Hand one record to the node's log under `target`.
     pub fn log(&self, level: ModuleHostLogLevel, target: &str, message: &str) {
         // SAFETY: the node host is retained by `self`; both views are live.
@@ -800,7 +813,7 @@ impl ModuleHostOutputPort {
     }
 
     /// Publish `payload` to every downstream link, stamped `timestamp_ns` or,
-    /// with `None`, the monotonic now.
+    /// with `None`, its stream's clock now.
     pub fn write(
         &self,
         payload: &[u8],

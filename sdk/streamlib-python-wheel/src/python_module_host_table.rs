@@ -52,7 +52,9 @@ use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateCh
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 use crate::python_bag_conversion::json_value_to_python_object;
-use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
+use crate::python_helper_stream_clock::{
+    helper_stream_clock_now_ns, helper_stream_time_ns_of_a_machine_instant,
+};
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
 
@@ -216,6 +218,7 @@ fn module_host_of_one_node(
                 virtual_camera_stream_liveness,
                 virtual_camera_stream_close,
                 surface_read_into_host_memory,
+                stream_time_ns_of_a_machine_instant,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -623,6 +626,13 @@ unsafe extern "C" fn stop_requested(node_host: *mut c_void) -> u32 {
 
 unsafe extern "C" fn monotonic_now_ns(_node_host: *mut c_void) -> i64 {
     monotonic_clock_now_ns() as i64
+}
+
+unsafe extern "C" fn stream_time_ns_of_a_machine_instant(
+    _node_host: *mut c_void,
+    machine_instant_ns: i64,
+) -> i64 {
+    helper_stream_time_ns_of_a_machine_instant(machine_instant_ns)
 }
 
 unsafe extern "C" fn log(

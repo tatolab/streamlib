@@ -108,7 +108,8 @@ _Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_write_yuyv_frame)
 _Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_liveness) == POINTER_SLOT(39), "ModuleHostTable.virtual_camera_stream_liveness");
 _Static_assert(offsetof(ModuleHostTable, virtual_camera_stream_close) == POINTER_SLOT(40), "ModuleHostTable.virtual_camera_stream_close");
 _Static_assert(offsetof(ModuleHostTable, surface_read_into_host_memory) == POINTER_SLOT(41), "ModuleHostTable.surface_read_into_host_memory");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(42), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, stream_time_ns_of_a_machine_instant) == POINTER_SLOT(42), "ModuleHostTable.stream_time_ns_of_a_machine_instant");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(43), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -140,6 +141,6 @@ _Static_assert(offsetof(ModuleHostTableSharedNativeServiceLease, tenant_stream_i
 _Static_assert(sizeof(ModuleHostTableSharedNativeServiceLease) == 8 + 4 * POINTER, "ModuleHostTableSharedNativeServiceLease size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 9, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 10, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");
