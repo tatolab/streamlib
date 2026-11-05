@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, stream-clocks; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -980,7 +980,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, linux-pool-slot-import-once; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, linux-pool-slot-import-once, stream-clocks; unbuilt: the five port families and their zero-copy data plane, subgraphs, stream clocks; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -2172,7 +2172,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ stream-clocks; unbuilt: `H264Encoder`'s CPU arm, the runtime's helper bundle credited for device permission)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -3746,7 +3746,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime]
   Rejected: running the runtime from inside the app bundle through an `SMAppService` agent — launchd keeps running the copy that registered first, and replacing the bundle leaves the old runtime running (owner, 2026-10-31).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart, stream-clocks)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3801,7 +3801,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009]
+  #2998, #3006, #3009; amended by stream-clocks: `set_stream_clock_scale` joins the served tool
+  set]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
