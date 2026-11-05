@@ -8,6 +8,7 @@
 //! paced by real time, and a node paced by real time never holds a step.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
@@ -133,17 +134,23 @@ pub struct SlowRealTimePacedTickSource;
 
 impl streamlib_engine::ContinuousProcessor for SlowRealTimePacedTickSource::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        self.outputs.write_msgpack("ticks", &0u64)?;
         std::thread::sleep(REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL);
-        self.outputs.write_msgpack("ticks", &0u64)
+        Ok(())
     }
 }
+
+/// How many ticks of the node paced by real time its sink took.
+static TICKS_THE_REAL_TIME_SINK_TOOK: AtomicU64 = AtomicU64::new(0);
 
 #[streamlib::sdk::processor(execution = reactive, input("ticks", delivery_profile = "ordered"))]
 pub struct RealTimePacedTickSink;
 
 impl streamlib_engine::ReactiveProcessor for RealTimePacedTickSink::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while self.inputs.read_raw("ticks")?.is_some() {}
+        while self.inputs.read_raw("ticks")?.is_some() {
+            TICKS_THE_REAL_TIME_SINK_TOOK.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -373,6 +380,7 @@ fn a_continuous_consumer_slower_than_the_steps_takes_what_waited_for_it_at_its_d
 fn nodes_paced_by_real_time_load_in_a_stepped_stream_and_never_hold_its_steps() {
     register_the_test_nodes();
     TICKS_THE_SINK_TOOK.lock().clear();
+    TICKS_THE_REAL_TIME_SINK_TOOK.store(0, Ordering::Relaxed);
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
 
@@ -425,5 +433,9 @@ fn nodes_paced_by_real_time_load_in_a_stepped_stream_and_never_hold_its_steps() 
             .collect::<Vec<_>>(),
         (0..STEPS_THE_STREAM_RUNS).collect::<Vec<_>>(),
         "the step chain runs every step: {ticks_the_sink_took:?}"
+    );
+    assert!(
+        TICKS_THE_REAL_TIME_SINK_TOOK.load(Ordering::Relaxed) >= 1,
+        "the tick of the node paced by real time reaches its sink"
     );
 }

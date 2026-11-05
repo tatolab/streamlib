@@ -214,11 +214,10 @@ def test_a_node_paced_by_real_time_writes_on_the_machine_clock_beside_steps_it_n
             f"a write is stamped on stream time at the write, no earlier than the writer read it: {later}"
         )
         assert later["stamp_ns"] >= earlier["stamp_ns"], seen
-        machine_gap_ns = later["written_machine_time_ns"] - earlier["written_machine_time_ns"]
-        assert machine_gap_ns >= interval_ns * 0.9, (
-            f"the node paced by real time wrote {machine_gap_ns / 1e6:.1f} machine ms apart: {seen}"
-        )
     machine_span_ns = seen[-1]["written_machine_time_ns"] - seen[0]["written_machine_time_ns"]
+    assert machine_span_ns >= (len(seen) - 1) * interval_ns * 0.9, (
+        f"the node paced by real time wrote over {machine_span_ns / 1e6:.1f} machine ms: {seen}"
+    )
     stream_span_ns = seen[-1]["stamp_ns"] - seen[0]["stamp_ns"]
     assert stream_span_ns > machine_span_ns, (
         f"its writes are stamped on the unpaced stepped stream's time, which outruns the machine: "

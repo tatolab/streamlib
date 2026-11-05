@@ -1534,7 +1534,8 @@ class HelperProcessLifecycle:
                         )
                         self._running = False
             else:
-                self._hosted.call_hook("process", limited_access_context)
+                if not self._paused:
+                    self._hosted.call_hook("process", limited_access_context)
                 next_deadline_ns = next_continuous_deadline_stream_ns(
                     next_deadline_ns,
                     interval_ns,
