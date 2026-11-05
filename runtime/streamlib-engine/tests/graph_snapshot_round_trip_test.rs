@@ -610,7 +610,7 @@ fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
     let runner = Runner::new().unwrap();
     for clock in [
         serde_json::json!({"mode": "stepped", "step_ns": 0}),
-        serde_json::json!({"mode": "scaled", "scale": 4.0}),
+        serde_json::json!({"mode": "scaled", "scale": -1.0}),
         serde_json::json!({"mode": "scaled", "scale": 0.0}),
     ] {
         let refusal = the_refusal_of(
