@@ -30,7 +30,7 @@ class FrameSomebodyElseWrote:
 
     @classmethod
     def from_bytes(cls, payload):
-        return cls(payload.decode('utf-8'))
+        return cls(bytes(payload).decode('utf-8'))
 ";
 
 /// One link, wired to itself, plus a reader carrying a capability that

@@ -24,6 +24,7 @@ mod python_logging;
 mod python_metal_framework_queue_synchronization;
 mod python_module_host_table;
 mod python_monotonic_timer;
+mod python_port_payload;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_link_data_access;
@@ -33,6 +34,8 @@ mod python_surface_share_service_for_tests;
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
+    module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
+    module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
     module.add_function(wrap_pyfunction!(
         python_processor_link_data_access::open_node_link_data_access_for_helper_process,
         module

@@ -35,7 +35,7 @@ extension-module = ["pyo3/extension-module"]
 # than deprecated. `abi3-py310` builds one wheel for CPython 3.10 and every
 # later GIL-enabled release — free-threaded builds wait for a stable ABI to
 # exist for them.
-pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
+pyo3 = { version = "0.29.0", features = ["abi3-py312"] }
 
 streamlib = { path = "../streamlib-sdk", version = "0.68.27" }
 

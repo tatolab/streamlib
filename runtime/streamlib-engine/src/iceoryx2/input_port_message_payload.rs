@@ -132,6 +132,12 @@ impl AsRef<[u8]> for InputPortMessagePayload {
     }
 }
 
+impl Default for InputPortMessagePayload {
+    fn default() -> Self {
+        Self::OwnedBytes(Vec::new())
+    }
+}
+
 impl From<Vec<u8>> for InputPortMessagePayload {
     fn from(bytes: Vec<u8>) -> Self {
         Self::OwnedBytes(bytes)

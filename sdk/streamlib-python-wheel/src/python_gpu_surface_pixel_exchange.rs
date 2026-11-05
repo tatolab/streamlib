@@ -389,6 +389,24 @@ fn single_plane_shape(format: PixelFormat) -> Option<(u32, DataType, Option<i64>
 }
 
 impl PixelExchangeTensorLayout {
+    /// A 1-D `uint8` run of `byte_len` bytes: a message payload's shape.
+    pub(crate) fn one_dimensional_bytes(byte_len: usize) -> PyResult<Self> {
+        let byte_len = i64::try_from(byte_len).map_err(|_| {
+            PyValueError::new_err(format!(
+                "a {byte_len}-byte payload is past what DLPack's int64 shape carries"
+            ))
+        })?;
+        Ok(Self {
+            shape: vec![byte_len],
+            strides: vec![1],
+            dtype: DataType {
+                code: DataTypeCode::UInt,
+                bits: 8,
+                lanes: 1,
+            },
+        })
+    }
+
     /// The contiguous row-major layout a tensor storage buffer declares:
     /// its own shape, element strides from the innermost dimension out.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -672,7 +690,7 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
 /// Wrap `address` in the negotiated DLPack exchange shape — the one
 /// place the shape selection and the read-only flag derivation live, so
 /// the host and device exports cannot drift.
-fn dlpack_capsule_over<'py>(
+pub(crate) fn dlpack_capsule_over<'py>(
     python: Python<'py>,
     address: u64,
     layout: PixelExchangeTensorLayout,

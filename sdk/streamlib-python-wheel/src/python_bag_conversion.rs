@@ -16,8 +16,9 @@ use rmpv::Value;
 
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
-/// Hand one message's payload bytes to the `from_bytes` of the target an author
-/// named with `read(port, into=T)`, and return what it built.
+/// Hand one message's payload, a `PortPayloadBorrow`, to the `from_bytes` of
+/// the target an author named with `read(port, into=T)`, and return what it
+/// built.
 ///
 /// Whatever `from_bytes` raises is what the author sees: a pydantic
 /// `ValidationError` or a dataclass's missing-argument `TypeError` says more
@@ -27,9 +28,9 @@ use crate::python_processor_context::PythonGpuContextLimitedAccess;
 /// [`gpu_limited_access_of_the_typed_read_in_progress`] — offered for the
 /// `from_bytes` call and withdrawn the moment it returns. Nothing here knows
 /// which targets want it or what they do with it.
-pub(crate) fn cast_payload_bytes_into_read_target<'py>(
+pub(crate) fn cast_payload_into_read_target<'py>(
     port_name: &str,
-    payload_bytes: &Bound<'py, PyBytes>,
+    payload: &Bound<'py, PyAny>,
     read_target: &Bound<'py, PyAny>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -47,7 +48,7 @@ pub(crate) fn cast_payload_bytes_into_read_target<'py>(
         )));
     };
     let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
-    from_bytes.call1((payload_bytes,))
+    from_bytes.call1((payload,))
 }
 
 /// The name a refusal gives an `into=` target: a class by its own name, any
@@ -568,9 +569,9 @@ class Detection:
                 DETECTION_CLASS_READ_FROM_ITS_LABEL_BYTES,
                 "Detection",
             );
-            let read = cast_payload_bytes_into_read_target(
+            let read = cast_payload_into_read_target(
                 "detections",
-                &PyBytes::new(python, b"cat"),
+                &PyBytes::new(python, b"cat").into_any(),
                 &target,
                 None,
             )
@@ -595,9 +596,9 @@ class Detection:
                  len(payload)\nlength_of_the_payload = LengthOfThePayload()\n",
                 "length_of_the_payload",
             );
-            let read = cast_payload_bytes_into_read_target(
+            let read = cast_payload_into_read_target(
                 "detections",
-                &PyBytes::new(python, b"four"),
+                &PyBytes::new(python, b"four").into_any(),
                 &target,
                 None,
             )
@@ -619,9 +620,9 @@ class Detection:
                  raise ValueError(f'no detection in {payload!r}')\n",
                 "Detection",
             );
-            let refusal = cast_payload_bytes_into_read_target(
+            let refusal = cast_payload_into_read_target(
                 "detections",
-                &PyBytes::new(python, b"\x00\x01"),
+                &PyBytes::new(python, b"\x00\x01").into_any(),
                 &target,
                 None,
             )
@@ -651,9 +652,9 @@ class Detection:
             );
             let not_a_class = "Detection".into_pyobject(python).unwrap().into_any();
             for target in [plain_dataclass, not_a_class] {
-                let refusal = cast_payload_bytes_into_read_target(
+                let refusal = cast_payload_into_read_target(
                     "detections",
-                    &PyBytes::new(python, b"cat"),
+                    &PyBytes::new(python, b"cat").into_any(),
                     &target,
                     None,
                 )
