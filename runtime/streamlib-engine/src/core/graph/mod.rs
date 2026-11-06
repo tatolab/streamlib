@@ -8,6 +8,7 @@ mod edges;
 mod graph_readiness;
 mod nodes;
 mod output_port_exposure;
+mod port_family_link_checks;
 mod processor_state_ecs_component;
 mod traits;
 mod traversal;
@@ -26,6 +27,10 @@ pub use graph_readiness::ObservableGraphReadiness;
 pub use output_port_exposure::{
     OutputPortExposureLevel, OutputPortReaderLocation, OutputPortReaderOutsideItsStream,
     output_port_exposure_allows_the_reader,
+};
+pub(crate) use port_family_link_checks::{
+    refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+    refuse_a_link_between_ports_whose_families_do_not_match,
 };
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
 pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;

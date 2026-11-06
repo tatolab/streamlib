@@ -10,8 +10,9 @@
 
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, CatalogEntry, PortDescriptor, ProcessorClassImportPath,
-    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    AudioWindowContractDeclaredValues, CatalogEntry, PortDescriptor, PortFamilyDeclaration,
+    PortFamilyDeclarationDirection, ProcessorClassImportPath, ProcessorClassShortName,
+    ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -263,9 +264,35 @@ fn read_port_descriptors(
             let catalog_entry = read_catalog_entry(catalog_entry, &port.name)?;
             port = port.with_catalog_entry(catalog_entry);
         }
+        if let Some(family) = declaration
+            .get("family")
+            .filter(|declared| !declared.is_null())
+        {
+            let family = read_port_family_declaration(family, &port.name, direction)?;
+            port = port.with_family(family);
+        }
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read one `family` declaration off a described port, refusing a key its
+/// family or its direction does not take.
+fn read_port_family_declaration(
+    family: &serde_json::Value,
+    port_name: &str,
+    direction: PortDirection,
+) -> std::result::Result<PortFamilyDeclaration, String> {
+    let declaration = serde_json::from_value::<PortFamilyDeclaration>(family.clone())
+        .map_err(|refusal| format!("port {port_name:?}: family {refusal}"))?;
+    let declaration_direction = match direction {
+        PortDirection::Input => PortFamilyDeclarationDirection::Input,
+        PortDirection::Output => PortFamilyDeclarationDirection::Output,
+    };
+    match declaration.refusal_of_its_keys(port_name, declaration_direction) {
+        Some(refusal) => Err(refusal),
+        None => Ok(declaration),
+    }
 }
 
 /// Read one `catalog_entry` declaration off a described port. Whether hang
@@ -638,6 +665,37 @@ mod tests {
             "entry": {},
         })));
         assert!(unknown_section.contains("levels"), "got {unknown_section}");
+    }
+
+    #[test]
+    fn a_ports_family_reads_into_its_descriptor_and_a_key_its_family_does_not_take_is_refused() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "signals",
+            "description": "",
+            "delivery_profile": "ordered",
+            "family": {"family": "channels", "requires": ["rpm"]},
+        }])))
+        .unwrap_or_else(|refusal| panic!("a Channels input requiring a name reads: {refusal}"));
+        let family = declaration.descriptor.inputs[0]
+            .family
+            .as_ref()
+            .expect("the family reaches the descriptor");
+        assert_eq!(
+            family.family,
+            crate::core::descriptors::PortFamily::Channels
+        );
+        assert_eq!(family.requires, vec!["rpm".to_string()]);
+
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "video",
+            "description": "",
+            "delivery_profile": "newest",
+            "family": {"family": "image", "requires": ["luma"]},
+        }])));
+        assert!(
+            refusal.contains("\"video\"") && refusal.contains("`requires=`"),
+            "got {refusal}"
+        );
     }
 
     #[test]

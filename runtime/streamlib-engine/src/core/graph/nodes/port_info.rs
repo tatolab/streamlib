@@ -39,6 +39,10 @@ pub struct PortInfo {
     /// carries now lives on the node, beside the ports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    /// The port family this port declares, or `None` on a decorator port.
+    /// Mirrors the field on [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
@@ -51,6 +55,7 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
+            family: port.family.clone(),
         }
     }
 }

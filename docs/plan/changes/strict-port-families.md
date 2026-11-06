@@ -94,7 +94,11 @@ No new ADR.
     surface with `__dlpack__`, `.cpu()`, `.writable()`, size, format and colour.
   - `Array`: `Output(Array, names=(…), residency="gpu" | "cpu")`. A read returns `ArrayFrame`,
     a mapping of name to a borrowed tensor (DLPack), each with its dtype and shape. An
-    attribute that did not change passes by reference.
+    attribute that did not change passes by reference. The payload starts with an attribute
+    table, one row per name: the name, dtype, shape, and either a byte offset into the payload
+    (CPU) or a GPU pool slot reference (GPU). An unchanged GPU attribute's row re-points at its
+    slot; CPU data is written each message. Owner, 2026-11-06. Rejected: one tensor per
+    message, which drops the mapping of names (owner, 2026-11-06).
   - `Channels`: `Output(Channels, names=(…) | from_config(…), rate=… | from_config(…),
     dtype="f32" | "f64")`. A read returns `ChannelsBlock`, planar `[channel][sample]` with
     `start_sample` and the rate. The input's `window=` takes today's `AudioWindowContract`.

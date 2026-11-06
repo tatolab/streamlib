@@ -852,6 +852,7 @@ mod tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         }
     }
 

@@ -985,12 +985,18 @@ impl LoadedStreamInThisRuntime {
         let config_json =
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
-        self.compiler.scope(|_graph, tx| {
+        self.compiler.scope(|graph, tx| -> Result<()> {
+            crate::core::graph::refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+                graph,
+                processor_id,
+                &config_json,
+            )?;
             tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
                 config_to_apply: config_json,
             });
-        });
+            Ok(())
+        })?;
 
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())

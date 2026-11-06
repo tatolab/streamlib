@@ -9,8 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioWindowContract, CatalogEntry, ProcessorClassImportPath, ProcessorClassShortName,
-    ProcessorScheduling,
+    AudioWindowContract, CatalogEntry, PortFamilyDeclaration, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorScheduling,
 };
 
 /// Runtime environment for a processor.
@@ -48,6 +48,10 @@ pub struct PortDescriptor {
     /// a port that declares none and on every input port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<CatalogEntry>,
+    /// The port family the port declares and its family's keys. `None` on a
+    /// decorator port, which reads as unchecked Records and takes any link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<PortFamilyDeclaration>,
 }
 
 impl PortDescriptor {
@@ -60,6 +64,7 @@ impl PortDescriptor {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         }
     }
 
@@ -88,6 +93,12 @@ impl PortDescriptor {
     /// output port.
     pub fn with_catalog_entry(mut self, catalog_entry: impl Into<CatalogEntry>) -> Self {
         self.catalog_entry = Some(catalog_entry.into());
+        self
+    }
+
+    /// Builder-style override for the port family declaration.
+    pub fn with_family(mut self, family: PortFamilyDeclaration) -> Self {
+        self.family = Some(family);
         self
     }
 }

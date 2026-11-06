@@ -31,8 +31,10 @@
 //! declaration flagged `built_in_node`, by its class in `tatolab.stream`.
 
 use streamlib_processor_schema::{
-    AudioWindowContract, AudioWindowContractDeclaredValues, CatalogEntry,
-    DELIVERY_PROFILE_DECLARATION_VALUES, MAX_INPUT_PORT_BORROW_QUOTA, ProcessorPortSchema,
+    ArrayOutputPortResidency, AudioWindowContract, AudioWindowContractDeclaredValues, CatalogEntry,
+    ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+    DELIVERY_PROFILE_DECLARATION_VALUES, MAX_INPUT_PORT_BORROW_QUOTA, OutputPortDeclaredNames,
+    PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection, ProcessorPortSchema,
     ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions,
     ThreadPriority, cast_exposed_name_to_url_safe,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
@@ -102,6 +104,9 @@ pub struct ParsedPort {
     /// The `catalog` entry an output port declares, read from its literals.
     /// `None` on every input and on an output that declares none.
     pub catalog_entry: Option<CatalogEntry>,
+    /// The port family the port declares with `family = …` and its family's
+    /// keys; `None` on a port that declares none.
+    pub family: Option<PortFamilyDeclaration>,
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
@@ -143,6 +148,7 @@ impl ParsedProcessorAttr {
             borrow_quota: p.borrow_quota,
             audio_window: p.audio_window.clone(),
             catalog_entry: p.catalog_entry.clone(),
+            family: p.family.clone(),
         };
 
         ProcessorSchema {
@@ -408,6 +414,9 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut catalog_entry: Option<CatalogEntry> = None;
+    let mut family: Option<PortFamily> = None;
+    let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
+    let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -485,12 +494,23 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                 }
                 borrow_quota = Some(quota);
             }
+            "family" => {
+                let family_ident: Ident = content.parse()?;
+                family = Some(parse_port_family(&family_ident, &name)?);
+            }
+            family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate" | "dtype"
+            | "formats" | "residency") => {
+                first_family_key_span.get_or_insert(key_span);
+                parse_port_family_key(&content, family_key, &name, &mut family_keys)?;
+            }
             other => {
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
-                         `borrow_quota`, `description`, `audio_window`, or `catalog`"
+                         `borrow_quota`, `description`, `audio_window`, `catalog`, `family`, \
+                         or one of the family keys `names`, `requires`, `codec`, \
+                         `requires_codec`, `rate`, `dtype`, `formats`, `residency`"
                     ),
                 ));
             }
@@ -516,6 +536,30 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
             .map_err(|refusal| syn::Error::new(*key_span, format!("port `{name}`: {refusal}")))?;
     }
 
+    let family = match (family, first_family_key_span) {
+        (Some(family), _) => {
+            family_keys.family = family;
+            let declaration_direction = match direction {
+                PortDirection::Input => PortFamilyDeclarationDirection::Input,
+                PortDirection::Output => PortFamilyDeclarationDirection::Output,
+            };
+            if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
+                return Err(syn::Error::new(name_lit.span(), refusal));
+            }
+            Some(family_keys)
+        }
+        (None, Some(family_key_span)) => {
+            return Err(syn::Error::new(
+                family_key_span,
+                format!(
+                    "port `{name}` states a family key without `family = …` — one of {}",
+                    rendered_port_family_names()
+                ),
+            ));
+        }
+        (None, None) => None,
+    };
+
     Ok(ParsedPort {
         declared_marker_ident,
         cast_name,
@@ -524,7 +568,144 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         borrow_quota,
         audio_window: audio_window.map(|(_, contract)| contract),
         catalog_entry,
+        family,
     })
+}
+
+fn rendered_port_family_names() -> String {
+    PortFamily::ALL
+        .iter()
+        .map(|family| format!("`{family}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Parse `family = <Family>`'s value.
+fn parse_port_family(family_ident: &Ident, port_name: &str) -> syn::Result<PortFamily> {
+    PortFamily::ALL
+        .into_iter()
+        .find(|family| family_ident == family.declaration_name())
+        .ok_or_else(|| {
+            syn::Error::new(
+                family_ident.span(),
+                format!(
+                    "port `{port_name}` declares `family = {family_ident}` — a port's family is \
+                     one of {}",
+                    rendered_port_family_names()
+                ),
+            )
+        })
+}
+
+/// Parse `["a", "b"]`, a list of string literals.
+fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<String>> {
+    let list: syn::ExprArray = content.parse().map_err(|_| {
+        syn::Error::new(
+            content.span(),
+            format!("`{key}` takes a list of string literals, `[\"a\", \"b\"]`"),
+        )
+    })?;
+    list.elems
+        .iter()
+        .map(|element| match element {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(literal),
+                ..
+            }) => Ok(literal.value()),
+            other => Err(syn::Error::new_spanned(
+                other,
+                format!("`{key}` takes a list of string literals"),
+            )),
+        })
+        .collect()
+}
+
+/// Parse `from_config("key")`, when that is what follows, into its key.
+fn parse_from_config_key(content: ParseStream<'_>) -> syn::Result<Option<String>> {
+    if !(content.peek(Ident) && content.peek2(syn::token::Paren)) {
+        return Ok(None);
+    }
+    let function: Ident = content.parse()?;
+    if function != "from_config" {
+        return Err(syn::Error::new(
+            function.span(),
+            format!("expected `from_config(\"<config key>\")`, found `{function}(…)`"),
+        ));
+    }
+    let arguments;
+    parenthesized!(arguments in content);
+    let config_key: LitStr = arguments.parse()?;
+    Ok(Some(config_key.value()))
+}
+
+/// Parse one family key's value into `family_keys`; which family and
+/// direction take it is checked once the whole port is read.
+fn parse_port_family_key(
+    content: ParseStream<'_>,
+    family_key: &str,
+    port_name: &str,
+    family_keys: &mut PortFamilyDeclaration,
+) -> syn::Result<()> {
+    match family_key {
+        "names" => {
+            family_keys.names = Some(match parse_from_config_key(content)? {
+                Some(config_key) => OutputPortDeclaredNames::FromConfig { config_key },
+                None => {
+                    OutputPortDeclaredNames::Stated(parse_string_literal_list(content, "names")?)
+                }
+            });
+        }
+        "requires" => family_keys.requires = parse_string_literal_list(content, "requires")?,
+        "requires_codec" => {
+            family_keys.requires_codec = parse_string_literal_list(content, "requires_codec")?
+        }
+        "formats" => family_keys.formats = parse_string_literal_list(content, "formats")?,
+        "codec" => family_keys.codec = Some(content.parse::<LitStr>()?.value()),
+        "rate" => {
+            family_keys.rate = Some(match parse_from_config_key(content)? {
+                Some(config_key) => ChannelsOutputPortSampleRate::FromConfig { config_key },
+                None => {
+                    let rate: LitInt = content.parse()?;
+                    ChannelsOutputPortSampleRate::Stated(rate.base10_parse()?)
+                }
+            });
+        }
+        "dtype" => {
+            let dtype: LitStr = content.parse()?;
+            family_keys.dtype = Some(match dtype.value().as_str() {
+                "f32" => ChannelsOutputPortSampleType::F32,
+                "f64" => ChannelsOutputPortSampleType::F64,
+                other => {
+                    return Err(syn::Error::new(
+                        dtype.span(),
+                        format!("port `{port_name}`: `dtype` is \"f32\" or \"f64\", not {other:?}"),
+                    ));
+                }
+            });
+        }
+        "residency" => {
+            let residency: LitStr = content.parse()?;
+            family_keys.residency = Some(match residency.value().as_str() {
+                "gpu" => ArrayOutputPortResidency::Gpu,
+                "cpu" => ArrayOutputPortResidency::Cpu,
+                other => {
+                    return Err(syn::Error::new(
+                        residency.span(),
+                        format!(
+                            "port `{port_name}`: `residency` is \"gpu\" or \"cpu\", not {other:?}"
+                        ),
+                    ));
+                }
+            });
+        }
+        other => {
+            return Err(syn::Error::new(
+                content.span(),
+                format!("port `{port_name}`: `{other}` is not a family key"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Parse the `audio_window` body — the call form carrying the values, or
@@ -1456,6 +1637,93 @@ mod tests {
         assert!(
             msg.contains("consumer-side") && msg.contains("audio_out"),
             "the refusal must name the port and say whose setting it is; got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_ports_family_and_its_keys_reach_the_schema() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
+            input("video", delivery_profile = "newest", family = Image, formats = ["rgba8"]),
+            output(
+                "telemetry",
+                family = Channels,
+                names = from_config("channel_names"),
+                rate = 48000,
+                dtype = "f32"
+            ),
+            output("packets", family = Packets, codec = "h264"),
+            output("tensor", family = Array, names = ["boxes"], residency = "gpu"),
+            output("legacy"),
+        });
+        let schema = parsed.to_processor_schema();
+
+        let signals = schema.inputs[0].family.as_ref().expect("Channels input");
+        assert_eq!(signals.family, PortFamily::Channels);
+        assert_eq!(signals.requires, vec!["rpm".to_string()]);
+        assert_eq!(
+            schema.inputs[1]
+                .family
+                .as_ref()
+                .map(|family| &family.formats),
+            Some(&vec!["rgba8".to_string()])
+        );
+        let telemetry = schema.outputs[0].family.as_ref().expect("Channels output");
+        assert_eq!(
+            telemetry.names,
+            Some(OutputPortDeclaredNames::FromConfig {
+                config_key: "channel_names".into()
+            })
+        );
+        assert_eq!(
+            telemetry.rate,
+            Some(ChannelsOutputPortSampleRate::Stated(48_000))
+        );
+        assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F32));
+        assert_eq!(
+            schema.outputs[1]
+                .family
+                .as_ref()
+                .and_then(|family| family.codec.as_deref()),
+            Some("h264")
+        );
+        assert_eq!(
+            schema.outputs[2]
+                .family
+                .as_ref()
+                .and_then(|family| family.residency),
+            Some(ArrayOutputPortResidency::Gpu)
+        );
+        assert_eq!(schema.outputs[3].family, None);
+    }
+
+    #[test]
+    fn a_family_key_the_family_does_not_take_is_refused_naming_the_port() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("video", family = Image, names = ["x"]),
+        });
+        assert!(
+            msg.contains("\"video\"") && msg.contains("`names=`"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_family_key_without_a_family_and_an_unknown_family_are_refused() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("video", formats = ["rgba8"]),
+        });
+        assert!(msg.contains("without `family = …`"), "got {msg}");
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("video", family = Picture),
+        });
+        assert!(
+            msg.contains("Picture") && msg.contains("`Image`"),
+            "got {msg}"
         );
     }
 

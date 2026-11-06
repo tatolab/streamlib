@@ -411,6 +411,10 @@ pub struct ProcessorPortSchema {
     /// `None` on an input port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::CatalogEntry>,
+    /// The port family this port declares and its family's keys, or `None`
+    /// on a port that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::PortFamilyDeclaration>,
 }
 
 /// Config definition within a processor schema.

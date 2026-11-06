@@ -15,6 +15,7 @@ use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent, node_named_or_refused,
+    refuse_a_link_between_ports_whose_families_do_not_match,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -250,9 +251,9 @@ async fn remove_processor_impl(
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
-/// A link is pure plumbing. Connect inspects no type, compares no type, and
-/// never warns — a mismatch surfaces as a decode failure at the consuming
-/// processor's read.
+/// Connect compares the two ports' families, names, codec and formats and
+/// refuses a mismatch by name before any channel exists; a link with a
+/// decorator port at either end is plumbing and wires without a check.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -323,6 +324,7 @@ fn apply_a_link(
             // defensively; this pre-validation is what gets the typed error out.
             refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
+            refuse_a_link_between_ports_whose_families_do_not_match(graph, &from, &to)?;
 
             // The one channel this link's source output port publishes to — keyed
             // on the SOURCE only (`{src_processor}/{src_output}`), so every link
@@ -643,11 +645,8 @@ mod inline_commit_thread_guard_tests {
 
 #[cfg(test)]
 mod connect_wires_without_inspecting_a_port_tests {
-    //! Connect-path revert lock: a link is pure plumbing. Connect inspects
-    //! nothing about either port beyond its existence, and wires in silence —
-    //! not even advisorily. A payload mismatch is the consumer's decode failure
-    //! at read, and nothing at wiring time hints at it. Reintroducing any
-    //! inspection or comparison in [`connect_impl`] fails this module.
+    //! A link between two decorator ports is plumbing: connect inspects
+    //! nothing about either port beyond its existence, and wires in silence.
 
     use std::sync::Arc;
 
@@ -777,7 +776,7 @@ mod connect_wires_without_inspecting_a_port_tests {
                 .block_on(connect_impl(a_fixture_graph_change(compiler), from, to))
         });
 
-        result.expect("connect must wire any two ports — a link is pure plumbing");
+        result.expect("connect wires two decorator ports with no check");
         assert!(
             captured.is_empty(),
             "connect must emit no WARN when wiring a link; captured: {captured:?}"
@@ -994,5 +993,283 @@ mod connect_wires_without_inspecting_a_port_tests {
             ),
             Err(Error::ProcessorPortNotFound { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod connect_refuses_ports_whose_families_do_not_match_tests {
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
+    use super::{LiveGraphChangeOnOneStream, connect_impl};
+    use crate::core::compiler::Compiler;
+    use crate::core::descriptors::{
+        OutputPortDeclaredNames, PortDescriptor, PortFamily, PortFamilyDeclaration,
+        ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    };
+    use crate::core::graph::{
+        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
+        refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+    };
+    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::pubsub::LoadedStreamIdentity;
+    use crate::core::{Error, Result};
+
+    const IMAGE_PRODUCER: &str = "FamilyCheckImageProducer";
+    const IMAGE_CONSUMER: &str = "FamilyCheckImageConsumer";
+    const ARRAY_CONSUMER: &str = "FamilyCheckArrayConsumer";
+    const CHANNELS_PRODUCER: &str = "FamilyCheckChannelsProducer";
+    const CHANNELS_CONSUMER: &str = "FamilyCheckChannelsConsumer";
+    const DECORATOR_CONSUMER: &str = "FamilyCheckDecoratorConsumer";
+
+    fn class_path(class_name: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
+    }
+
+    fn register_a_class(
+        class_name: &str,
+        inputs: Vec<PortDescriptor>,
+        outputs: Vec<PortDescriptor>,
+    ) {
+        let mut descriptor = ProcessorDescriptor::new(
+            ProcessorClassShortName::new(class_name).unwrap(),
+            class_path(class_name),
+            class_name,
+        );
+        descriptor.inputs = inputs;
+        descriptor.outputs = outputs;
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(descriptor)
+            .expect("register the fixture descriptor");
+    }
+
+    fn an_input(name: &str, family: Option<PortFamilyDeclaration>) -> PortDescriptor {
+        let port = PortDescriptor::new(name, "input", true).with_delivery_profile("newest");
+        match family {
+            Some(family) => port.with_family(family),
+            None => port,
+        }
+    }
+
+    fn an_output(name: &str, family: PortFamilyDeclaration) -> PortDescriptor {
+        PortDescriptor::new(name, "output", true).with_family(family)
+    }
+
+    fn register_the_family_fixture_classes() {
+        static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
+        REGISTERED_ONCE_PER_PROCESS.call_once(|| {
+            register_a_class(
+                IMAGE_PRODUCER,
+                Vec::new(),
+                vec![an_output(
+                    "video",
+                    PortFamilyDeclaration {
+                        formats: vec!["rgba16f".into()],
+                        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                    },
+                )],
+            );
+            register_a_class(
+                IMAGE_CONSUMER,
+                vec![an_input(
+                    "video",
+                    Some(PortFamilyDeclaration {
+                        formats: vec!["rgba8".into()],
+                        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                    }),
+                )],
+                Vec::new(),
+            );
+            register_a_class(
+                ARRAY_CONSUMER,
+                vec![an_input(
+                    "tensor",
+                    Some(PortFamilyDeclaration::of_family(PortFamily::Array)),
+                )],
+                Vec::new(),
+            );
+            register_a_class(
+                CHANNELS_PRODUCER,
+                Vec::new(),
+                vec![an_output(
+                    "signals",
+                    PortFamilyDeclaration {
+                        names: Some(OutputPortDeclaredNames::FromConfig {
+                            config_key: "channel_names".into(),
+                        }),
+                        ..PortFamilyDeclaration::of_family(PortFamily::Channels)
+                    },
+                )],
+            );
+            register_a_class(
+                CHANNELS_CONSUMER,
+                vec![an_input(
+                    "signals",
+                    Some(PortFamilyDeclaration {
+                        requires: vec!["rpm".into()],
+                        ..PortFamilyDeclaration::of_family(PortFamily::Channels)
+                    }),
+                )],
+                Vec::new(),
+            );
+            register_a_class(
+                DECORATOR_CONSUMER,
+                vec![an_input("video", None)],
+                Vec::new(),
+            );
+        });
+    }
+
+    fn a_node_of(compiler: &Compiler, class_name: &str, config: Value) -> ProcessorUniqueId {
+        compiler.scope(|graph, _tx| {
+            graph
+                .traversal_mut()
+                .add_v(ProcessorSpec::new(class_path(class_name), config))
+                .expect("the node is named")
+                .first()
+                .expect("the node is created")
+                .id
+                .clone()
+        })
+    }
+
+    fn connect_on_this_thread(
+        compiler: &Arc<Compiler>,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(connect_impl(
+                LiveGraphChangeOnOneStream {
+                    compiler: Arc::clone(compiler),
+                    live: None,
+                    stream: LoadedStreamIdentity {
+                        runtime_id: "Rfamilycheck".to_string(),
+                        stream_id: "main".to_string(),
+                        stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+                    },
+                },
+                from,
+                to,
+            ))
+    }
+
+    fn the_links_in(compiler: &Compiler) -> usize {
+        compiler.scope(|graph, _tx| graph.traversal().e(()).iter().count())
+    }
+
+    #[test]
+    fn a_family_mismatch_is_refused_before_any_link_exists() {
+        register_the_family_fixture_classes();
+        let compiler = Arc::new(Compiler::new());
+        let camera = a_node_of(&compiler, IMAGE_PRODUCER, Value::Null);
+        let model = a_node_of(&compiler, ARRAY_CONSUMER, Value::Null);
+
+        let refusal = connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(camera, "video"),
+            InputLinkPortRef::new(model, "tensor"),
+        )
+        .expect_err("an Image output never feeds an Array input");
+
+        let Error::InvalidLink(refusal) = refusal else {
+            panic!("a family mismatch is an invalid link: {refusal}");
+        };
+        assert!(refusal.contains(".video (Image)"), "{refusal}");
+        assert!(refusal.contains(".tensor (Array)"), "{refusal}");
+        assert!(refusal.contains("ImageToArray"), "{refusal}");
+        assert_eq!(
+            the_links_in(&compiler),
+            0,
+            "the refused link is never added"
+        );
+    }
+
+    #[test]
+    fn image_formats_that_do_not_overlap_are_refused_at_connect() {
+        register_the_family_fixture_classes();
+        let compiler = Arc::new(Compiler::new());
+        let render = a_node_of(&compiler, IMAGE_PRODUCER, Value::Null);
+        let compositor = a_node_of(&compiler, IMAGE_CONSUMER, Value::Null);
+
+        let refusal = connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(render, "video"),
+            InputLinkPortRef::new(compositor, "video"),
+        )
+        .expect_err("rgba16f never reaches an rgba8-only input")
+        .to_string();
+
+        assert!(
+            refusal.contains("rgba16f") && refusal.contains("rgba8"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_family_port_into_a_decorator_port_wires_with_no_check() {
+        register_the_family_fixture_classes();
+        let compiler = Arc::new(Compiler::new());
+        let camera = a_node_of(&compiler, IMAGE_PRODUCER, Value::Null);
+        let legacy = a_node_of(&compiler, DECORATOR_CONSUMER, Value::Null);
+
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(camera, "video"),
+            InputLinkPortRef::new(legacy, "video"),
+        )
+        .expect("a decorator port at either end skips every check");
+    }
+
+    #[test]
+    fn names_from_config_satisfy_requires_and_a_live_update_dropping_one_is_refused() {
+        register_the_family_fixture_classes();
+        let compiler = Arc::new(Compiler::new());
+        let engine = a_node_of(
+            &compiler,
+            CHANNELS_PRODUCER,
+            json!({ "channel_names": ["rpm", "torque"] }),
+        );
+        let gauge = a_node_of(&compiler, CHANNELS_CONSUMER, Value::Null);
+        let unnamed_engine = a_node_of(&compiler, CHANNELS_PRODUCER, json!({}));
+
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(engine.clone(), "signals"),
+            InputLinkPortRef::new(gauge.clone(), "signals"),
+        )
+        .expect("the names the config sets include rpm");
+        let refusal = connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(unnamed_engine, "signals"),
+            InputLinkPortRef::new(gauge, "signals"),
+        )
+        .expect_err("a config without the key resolves no names")
+        .to_string();
+        assert!(refusal.contains("channel_names"), "{refusal}");
+
+        compiler.scope(|graph, _tx| {
+            refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+                graph,
+                &engine,
+                &json!({ "channel_names": ["rpm"] }),
+            )
+            .expect("an update keeping rpm is taken");
+            let refusal = refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+                graph,
+                &engine,
+                &json!({ "channel_names": ["torque"] }),
+            )
+            .expect_err("an update dropping rpm is refused")
+            .to_string();
+            assert!(refusal.contains("\"rpm\""), "{refusal}");
+            assert!(
+                refusal.contains("signals"),
+                "the refusal names the link: {refusal}"
+            );
+        });
     }
 }
