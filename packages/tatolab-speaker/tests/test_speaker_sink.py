@@ -11,6 +11,7 @@ already in the format the speaker plays. The tests import `tatolab.runtime`
 from its lend, on `PYTHONPATH`.
 """
 
+import array
 import os
 import time
 
@@ -28,7 +29,6 @@ from tatolab.speaker import (
     SpeakerSinkConfig,
 )
 from tatolab.stream import RuntimeContextFullAccess, log
-from tatolab.stream.audio_block import AudioBlock
 
 #: Long enough for any arm to drain a few blocks, which first opens a device or
 #: starts the null backend's clock.
@@ -37,15 +37,11 @@ PLAYED_BLOCKS_DEADLINE_SECONDS = 5.0
 BLOCKS_WRITTEN_PER_TEST = 5
 
 
-def a_block_in_the_speakers_format(first_sample_timestamp_ns: int) -> bytes:
-    return AudioBlock(
-        samples=bytes(SPEAKER_WINDOW_SIZE * SPEAKER_CHANNELS * 4),
-        sample_rate=SPEAKER_SAMPLE_RATE,
-        channels=SPEAKER_CHANNELS,
-        sample_count=SPEAKER_WINDOW_SIZE,
-        first_sample_timestamp_ns=first_sample_timestamp_ns,
-        dtype=SPEAKER_SAMPLE_FORMAT,
-    ).to_bytes()
+def silent_planar_f32_samples(channel_count: int, samples_per_channel: int) -> memoryview:
+    """A C-contiguous `[channel][sample]` float32 buffer of silence."""
+    return memoryview(array.array("f", bytes(channel_count * samples_per_channel * 4))).cast(
+        "B"
+    ).cast("f", (channel_count, samples_per_channel))
 
 
 class SpeakerWiredToAWriter:
@@ -53,7 +49,7 @@ class SpeakerWiredToAWriter:
 
     def __init__(self, request: pytest.FixtureRequest) -> None:
         self.log_records: "list[str]" = []
-        self.next_first_sample_timestamp_ns = 1
+        self.next_start_sample = 0
         unique = f"spk{os.getpid()}_{request.node.name}"[:60]
         writer_outputs = _engine.open_node_link_data_access_for_helper_process()
         speaker_inputs = _engine.open_node_link_data_access_for_helper_process()
@@ -81,11 +77,21 @@ class SpeakerWiredToAWriter:
     def write(self, payload: bytes) -> None:
         self.writer.outputs.write(AUDIO_INPUT_PORT, payload)
 
+    def write_silent_channels_block(
+        self, channel_count: int, samples_per_channel: int, sample_rate: int
+    ) -> None:
+        self.writer.outputs.write_channels_block(
+            AUDIO_INPUT_PORT,
+            silent_planar_f32_samples(channel_count, samples_per_channel),
+            start_sample=self.next_start_sample,
+            sample_rate=sample_rate,
+        )
+        self.next_start_sample += samples_per_channel
+
     def write_blocks_in_the_speakers_format(self, block_count: int) -> None:
         for _ in range(block_count):
-            self.write(a_block_in_the_speakers_format(self.next_first_sample_timestamp_ns))
-            self.next_first_sample_timestamp_ns += SPEAKER_WINDOW_SIZE * 1_000_000_000 // (
-                SPEAKER_SAMPLE_RATE
+            self.write_silent_channels_block(
+                SPEAKER_CHANNELS, SPEAKER_WINDOW_SIZE, SPEAKER_SAMPLE_RATE
             )
 
 
@@ -151,17 +157,8 @@ def test_a_block_in_another_format_is_refused_and_counted_never_played(
     playback = speaker._opened_playback()
     speaker.start(context)
     try:
-        speaker_wired_to_a_writer.write(
-            AudioBlock(
-                samples=bytes(160 * 2),
-                sample_rate=16_000,
-                channels=1,
-                sample_count=160,
-                first_sample_timestamp_ns=1,
-                dtype="i16",
-            ).to_bytes()
-        )
-        speaker_wired_to_a_writer.write(b"not an audio block")
+        speaker_wired_to_a_writer.write_silent_channels_block(1, 160, 16_000)
+        speaker_wired_to_a_writer.write(b"not a channels block")
         await_count(lambda: playback.refused_block_count, 2, "blocks refused")
     finally:
         speaker.teardown(context)

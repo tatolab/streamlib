@@ -14,10 +14,10 @@ use tatolab_module_sdk::{
     ModuleHostInputPort, ModuleHostLogLevel,
 };
 
-use crate::audio_block_message::interleaved_sample_bytes_to_play;
 use crate::audio_samples_awaiting_playback_ring::{
     AudioSamplesAwaitingPlaybackRing, AudioSamplesHandOffOutcome,
 };
+use crate::channels_block_to_play::interleaved_sample_bytes_to_play;
 
 /// The target this module's records carry in the node's log.
 pub(crate) const SPEAKER_LOG_TARGET: &str = "tatolab.speaker";
@@ -73,10 +73,17 @@ impl AudioBlockDraining {
             match self.audio_input_port.read() {
                 Ok(Some(message)) => {
                     consecutive_failed_reads = 0;
-                    match interleaved_sample_bytes_to_play(
-                        message.payload(),
-                        self.playback_stream_format,
-                    ) {
+                    let to_play = message
+                        .payload_descriptor()
+                        .map_err(|refusal| refusal.to_string())
+                        .and_then(|payload_descriptor| {
+                            interleaved_sample_bytes_to_play(
+                                &payload_descriptor,
+                                message.payload(),
+                                self.playback_stream_format,
+                            )
+                        });
+                    match to_play {
                         Ok(interleaved_sample_bytes) => {
                             drop(message);
                             // The wait is this speaker pacing itself against

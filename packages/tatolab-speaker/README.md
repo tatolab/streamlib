@@ -9,9 +9,8 @@ speaker = stream_builder.add(SpeakerSink, config={"device_id": None})
 stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
 ```
 
-`SpeakerSink` plays the blocks it reads on `audio`, as messages
-`tatolab.stream.audio_block.AudioBlock` reads, at any rate, channel count and
-dtype: the engine converts every block to 48 kHz stereo `f32` on the way in,
+`SpeakerSink` plays the Channels blocks it reads on `audio`, at any rate,
+channel count and sample type: the engine converts every block to 48 kHz stereo `f32` on the way in,
 and the audio backend plays that on whatever format the device opened at. A
 period the graph had no samples for is played as silence and counted.
 
