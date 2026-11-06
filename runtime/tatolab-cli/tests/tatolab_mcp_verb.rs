@@ -277,7 +277,7 @@ mod against_an_isolated_machine {
         assert!(
             the_one_stderr_line(&refused).starts_with(&format!(
                 "error: no runtime is running on this machine: nothing answers at {}. Start one \
-                 by running `tatolabd` in a terminal.",
+                 by opening Tato Studio, or by running `tatolabd` in a terminal.",
                 isolated_machine_directories
                     .local_api_socket_path()
                     .display()

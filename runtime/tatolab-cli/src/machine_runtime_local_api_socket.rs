@@ -94,8 +94,8 @@ pub(crate) fn no_runtime_answers_refusal(
     holder_serving_another_user: Option<&MachineRuntimeLockHolder>,
 ) -> String {
     let mut refusal = format!(
-        "no runtime is running on this machine: nothing answers at {}. Start one by running \
-         `tatolabd` in a terminal.",
+        "no runtime is running on this machine: nothing answers at {}. Start one by opening \
+         Tato Studio, or by running `tatolabd` in a terminal.",
         local_api_socket_path.display()
     );
     if let Some(holder_serving_another_user) = holder_serving_another_user {
@@ -126,8 +126,8 @@ mod tests {
         assert_eq!(
             no_runtime_answers_refusal(Path::new("/run/user/1000/streamlib/local-api.sock"), None),
             "no runtime is running on this machine: nothing answers at \
-             /run/user/1000/streamlib/local-api.sock. Start one by running `tatolabd` in a \
-             terminal."
+             /run/user/1000/streamlib/local-api.sock. Start one by opening Tato Studio, or by \
+             running `tatolabd` in a terminal."
         );
     }
 
@@ -139,8 +139,8 @@ mod tests {
                 Some(&a_holder_running_as(1001))
             ),
             "no runtime is running on this machine: nothing answers at \
-             /run/user/1000/streamlib/local-api.sock. Start one by running `tatolabd` in a \
-             terminal. The machine's runtime is held by user other (uid 1001), pid 4242, \
+             /run/user/1000/streamlib/local-api.sock. Start one by opening Tato Studio, or by \
+             running `tatolabd` in a terminal. The machine's runtime is held by user other (uid 1001), pid 4242, \
              /opt/tatolab/bin/tatolabd; it serves that user's socket, not yours."
         );
     }

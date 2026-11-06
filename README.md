@@ -82,11 +82,35 @@ curl -fsSL https://get.tatolab.com/install.sh | sh
 
 On Linux x86_64 that installs **the runtime** — `tatolabd`, the native program that hosts this
 machine's streams, and `tatolab`, the CLI that loads, manages and inspects them — into a folder
-of its own per build under `~/.local/share/tatolab/`, links both into `~/.local/bin`, and runs
-`tatolabd` as the systemd user service `tatolabd.service`, restarted if it fails. Re-run it to
-upgrade: it waits until the new runtime answers, keeps the build before, and puts that back if the
-new one does not start. `sh -s -- --uninstall` in place of `sh` removes it and leaves your streams'
-records and logs.
+of its own per build under `~/.local/share/tatolab/`, and links both into `~/.local/bin`. It
+starts nothing: run `tatolabd` in a terminal of its own, and every `tatolab` verb talks to it.
+Re-run it to upgrade: it keeps the build before, and a runtime already running keeps its build
+until you restart it. `sh -s -- --uninstall` in place of `sh` removes it and leaves your streams'
+records and logs. On a desktop, Tato Studio carries the runtime and runs it while the app is open.
+
+### Keep the runtime running as a service
+
+To keep the runtime up on a machine nobody sits at, run it under a service manager of your own.
+As a systemd user service, save this as `~/.config/systemd/user/tatolabd.service`:
+
+```ini
+[Unit]
+Description=Tatolab runtime
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/share/tatolab/current/bin/tatolabd
+Restart=on-failure
+# tatolabd stops its own Python processes on SIGTERM; the rest is killed only if it outlives it.
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+```
+
+then `systemctl --user enable --now tatolabd`, and `loginctl enable-linger $USER` to keep it
+running while you are logged out. After an upgrade, `systemctl --user restart tatolabd` runs the
+new build.
 
 **Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
 `import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
@@ -134,7 +158,7 @@ release's pinned manylinux image, so it also needs Docker. On macOS it is `glslc
 CMake and Ninja, and the build first stages a Vulkan loader and MoltenVK into the lend, so the Mac
 that runs the result needs no Vulkan SDK.
 
-A runtime built from source has no service: start it with `tatolabd` in a terminal of its own.
+Start a runtime built from source with `tatolabd` in a terminal of its own.
 
 ## Quickstart
 
@@ -710,16 +734,14 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
 
 ## Troubleshooting
 
-- **`error: no runtime is running on this machine: nothing answers at …`** — installed on Linux,
-  `systemctl --user status tatolabd` says why the service is down and `systemctl --user start
-  tatolabd` starts it; built from source, start `tatolabd` in a terminal of its own. When another user's `tatolabd` holds the machine, the refusal names it: it
-  serves that user's socket, not yours.
+- **`error: no runtime is running on this machine: nothing answers at …`** — open Tato Studio,
+  or start `tatolabd` in a terminal of its own. When another user's `tatolabd` holds the machine,
+  the refusal names it: it serves that user's socket, not yours.
 - **`another runtime holds this machine: …`** — `tatolabd` is already running; the refusal names
   its user, pid and executable.
 - **`No display surface available: … neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is
   set`** — the runtime started with no desktop session to give it a display, and its log said so at
-  the start. Logging in to one restarts the installed service with it; a runtime started by hand
-  takes `systemctl --user restart tatolabd`, or a restart from a terminal inside the session.
+  the start. Restart it from a terminal inside the session.
 - **`<id> failed: … uv sync did not make …/.venv`** — the runtime makes a project's `.venv` with
   its own uv whenever `.venv/bin/python` does not run, and uv could not: the reason quotes uv's
   own words, usually a dependency that does not resolve. Fix `pyproject.toml` and run or save

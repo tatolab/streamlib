@@ -30,6 +30,7 @@ from helper_process_observation import (
     a_process_is_gone_within,
     every_process_still_alive_after,
     helper_process_ids_started_in,
+    helper_process_is_still_alive,
 )
 from interpreter_lifecycle_processors import TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
 from interpreter_lifecycle_streams import (
@@ -195,6 +196,40 @@ def test_sighup_tears_the_graph_down_gracefully(
 
     assert tatolabd.marker_payloads("ASLEEP_PROBE_TORE_DOWN"), (
         f"`teardown()` did not run after SIGHUP:\n{tatolabd.recent_stderr()}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_sigterm_from_the_app_that_started_tatolabd_stops_every_helper_gracefully(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+    tmp_path: Path,
+):
+    """Tato Studio's Quit: one `SIGTERM`, every helper's `teardown()`, a clean
+    exit, and no helper left behind."""
+    teardown_record_directory = tmp_path / "teardown-records"
+    teardown_record_directory.mkdir()
+    tatolabd = start_tatolabd_running_stream(
+        two_processors_asleep_recording_their_teardown,
+        extra_environment={TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE: str(teardown_record_directory)},
+    )
+    tatolabd.await_marker("ASLEEP_IN_PROCESS", occurrence=2)
+    helper_pids = sorted({report["pid"] for report in tatolabd.marker_payloads("ASLEEP_IN_PROCESS")})
+    assert len(helper_pids) == 2, f"expected two helpers asleep:\n{tatolabd.recent_stderr()}"
+    terminated_at = time.monotonic()
+    tatolabd.terminate()
+    tatolabd.await_clean_exit()
+    ended_in = time.monotonic() - terminated_at
+
+    tore_down = sorted(int(record.name) for record in teardown_record_directory.iterdir())
+    assert tore_down == helper_pids, (
+        f"helpers {helper_pids} were asleep; only {tore_down} ran `teardown()`:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
+    assert not [pid for pid in helper_pids if helper_process_is_still_alive(pid)], (
+        f"a helper outlived the SIGTERM'd tatolabd:\n{tatolabd.recent_stderr()}"
+    )
+    assert ended_in < ASLEEP_HELPER_EXIT_BUDGET_SECONDS, (
+        f"tatolabd took {ended_in:.1f}s to end after SIGTERM:\n{tatolabd.recent_stderr()}"
     )
 
 

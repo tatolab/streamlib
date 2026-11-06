@@ -2,20 +2,18 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# install.sh against releases this test makes, served over plain http, and
-# against runtime units it hands `--from-unit`, for a user whose systemd user
-# manager is real. Run as root inside the container installer/tests/Dockerfile
-# boots; run_install_sh_test_in_a_systemd_container.sh starts it.
+# install.sh against releases this test makes, served over plain http, for a
+# user whose home is a fresh directory. Needs curl and python3; no root and no
+# service manager, because install.sh registers no service.
 #
 # A unit's `tatolabd` is a stand-in that records which build is running and
 # under which pid, then sleeps; its `tatolab --version` answers for that build
-# while it runs, as the real one asks the runtime. The unit it runs under is the
-# real one.
+# while it runs, as the real one asks the runtime.
 
 set -euo pipefail
 
 installer_directory="$(cd "$(dirname "$0")/.." && pwd)"
-test_user_name="tatolab-install-test"
+test_user_home="$(mktemp -d)"
 release_server_root="$(mktemp -d)"
 release_server_port=8731
 release_server_base_url="http://127.0.0.1:$release_server_port"
@@ -38,25 +36,21 @@ commit_named() {
 
 # A runtime unit of version `$2` built from commit `$3`, written to `$1`. A
 # fourth argument shapes it: `without-the-bundled-vulkan-icd-manifest`,
-# `without-uv` and `without-the-streamlib-commit` leave that member out, and
-# `tatolabd-exits-at-start` makes its runtime exit failed whenever it starts.
+# `without-uv` and `without-the-streamlib-commit` leave that member out.
 make_runtime_unit() {
 	local unit_directory="$1"
 	local unit_version="$2"
 	local unit_commit="$3"
 	local unit_shape="${4:-whole}"
 	mkdir -p "$unit_directory/bin" "$unit_directory/lib/tatolab/lend/tatolab/runtime/_vulkan_driver" \
-		"$unit_directory/lib/tatolab/watch" "$unit_directory/lib/systemd/user"
-	local exits_at_start=no
-	[ "$unit_shape" = tatolabd-exits-at-start ] && exits_at_start=yes
+		"$unit_directory/lib/tatolab/watch"
 	sed -e "s/@UNIT_VERSION@/$unit_version/g" -e "s/@UNIT_COMMIT@/$unit_commit/g" \
-		-e "s/@EXITS_AT_START@/$exits_at_start/g" >"$unit_directory/bin/tatolabd" <<'EOF_TATOLABD'
+		>"$unit_directory/bin/tatolabd" <<'EOF_TATOLABD'
 #!/bin/sh
 if [ "${1:-}" = --version ]; then
 	echo "tatolabd @UNIT_VERSION@"
 	exit 0
 fi
-[ @EXITS_AT_START@ = yes ] && exit 1
 running_file="$HOME/stand-in-tatolabd-running"
 trap 'rm -f "$running_file"; exit 0' TERM
 printf '%s %s %s\n' @UNIT_VERSION@ @UNIT_COMMIT@ "$$" >"$running_file"
@@ -88,8 +82,6 @@ EOF_TATOLAB
 	if [ "$unit_shape" != without-the-streamlib-commit ]; then
 		printf '%s\n' "$unit_commit" >"$unit_directory/streamlib-commit"
 	fi
-	cp "$installer_directory/tatolabd.service" "$unit_directory/lib/systemd/user/"
-	chmod -R a+rX "$unit_directory"
 }
 
 # A release of version `$1` from commit `$2`, shaped as make_runtime_unit's `$3`.
@@ -114,11 +106,9 @@ publish_as_latest() {
 }
 
 as_the_test_user() {
-	runuser -u "$test_user_name" -- env \
+	env -i \
 		HOME="$test_user_home" \
 		PATH="$test_user_home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-		XDG_RUNTIME_DIR="/run/user/$test_user_uid" \
-		DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_user_uid/bus" \
 		TATOLAB_INSTALL_BASE_URL="$release_server_base_url" \
 		"$@"
 }
@@ -135,40 +125,29 @@ current_build() {
 	readlink "$(installed_builds_directory)/current" || true
 }
 
-running_build_and_pid() {
-	cat "$test_user_home/stand-in-tatolabd-running" 2>/dev/null || true
+stand_in_runtime_pid=""
+
+start_the_stand_in_runtime() {
+	as_the_test_user "$test_user_home/.local/bin/tatolabd" &
+	stand_in_runtime_pid=$!
+	for _ in $(seq 1 50); do
+		[ -e "$test_user_home/stand-in-tatolabd-running" ] && return 0
+		sleep 0.1
+	done
+	fail "the stand-in tatolabd never said it was running"
 }
 
-the_service_main_pid() {
-	as_the_test_user systemctl --user show tatolabd.service --property=MainPID --value
+stop_the_stand_in_runtime() {
+	[ -n "$stand_in_runtime_pid" ] || return 0
+	kill "$stand_in_runtime_pid" 2>/dev/null || true
+	wait "$stand_in_runtime_pid" 2>/dev/null || true
+	stand_in_runtime_pid=""
 }
-
-# The installer returns once the runtime answers, so the build is running by then.
-expect_the_running_build_to_be() {
-	local expected_version="$1"
-	local expected_commit="$2"
-	case "$(running_build_and_pid)" in
-	"$expected_version $expected_commit "*) ;;
-	*) fail "$expected_version at $expected_commit is not running; running: $(running_build_and_pid)" ;;
-	esac
-}
-
-# --- the machine: a user with a running user manager ------------------------
-
-useradd --create-home "$test_user_name"
-test_user_uid="$(id -u "$test_user_name")"
-test_user_home="$(getent passwd "$test_user_name" | cut -d: -f6)"
-loginctl enable-linger "$test_user_name"
-for _ in $(seq 1 100); do
-	[ -S "/run/user/$test_user_uid/bus" ] && as_the_test_user systemctl --user is-system-running --wait >/dev/null 2>&1 && break
-	sleep 0.2
-done
-as_the_test_user systemctl --user show-environment >/dev/null || fail "the test user's systemd user manager never answered"
 
 python3 -m http.server "$release_server_port" --bind 127.0.0.1 --directory "$release_server_root" \
 	>/dev/null 2>&1 &
 release_server_pid=$!
-trap 'kill "$release_server_pid" 2>/dev/null || true' EXIT
+trap 'stop_the_stand_in_runtime; kill "$release_server_pid" 2>/dev/null || true; rm -rf "$release_server_root" "$test_user_home"' EXIT
 for _ in $(seq 1 50); do
 	curl --silent --fail "$release_server_base_url/" >/dev/null && break
 	sleep 0.1
@@ -179,8 +158,7 @@ done
 commit_a="$(commit_named a)"
 make_release 1.0.0 "$commit_a"
 publish_as_latest 1.0.0
-run_the_installer
-expect_the_running_build_to_be 1.0.0 "$commit_a"
+first_install_output="$(run_the_installer)"
 
 [ "$(current_build)" = "1.0.0-$commit_a" ] || fail "current does not point at 1.0.0-$commit_a: $(current_build)"
 for executable_name in tatolab tatolabd; do
@@ -191,44 +169,32 @@ done
 [ ! -e "$test_user_home/.local/bin/uv" ] || fail "install.sh linked the runtime unit's uv into ~/.local/bin"
 [ -d "$(installed_builds_directory)/1.0.0-$commit_a/lib/tatolab/lend" ] ||
 	fail "lib/ is not a sibling of bin/ in the build"
-cmp -s "$installer_directory/tatolabd.service" "$test_user_home/.config/systemd/user/tatolabd.service" ||
-	fail "the tatolabd.service written is not the release's"
-[ "$(as_the_test_user systemctl --user is-enabled tatolabd.service)" = "enabled" ] ||
-	fail "tatolabd.service is not enabled"
-[ "$(as_the_test_user systemctl --user is-active tatolabd.service)" = "active" ] ||
-	fail "tatolabd.service is not active"
+[ ! -e "$test_user_home/.config/systemd" ] || fail "install.sh wrote a systemd user unit"
+[ ! -e "$test_user_home/stand-in-tatolabd-running" ] || fail "install.sh started a runtime"
 [ "$(as_the_test_user tatolab)" = "tatolab 1.0.0" ] || fail "tatolab on PATH is not the release's"
-pass "a first install unpacks the release into its build's folder, links both executables and starts the service"
+case "$first_install_output" in
+*"Start the runtime in a terminal of its own with:"*"tatolabd"*) ;;
+*) fail "the installer did not say how to start the runtime: $first_install_output" ;;
+esac
+pass "a first install unpacks the release into its build's folder, links both executables and starts nothing"
 
-# --- kill -9 is restarted --------------------------------------------------
+# --- an upgrade under a running runtime keeps the build before ---------------
 
-killed_main_pid="$(the_service_main_pid)"
-kill -9 "$killed_main_pid"
-for _ in $(seq 1 100); do
-	restarted_main_pid="$(the_service_main_pid)"
-	[ "$restarted_main_pid" != "0" ] && [ "$restarted_main_pid" != "$killed_main_pid" ] && break
-	sleep 0.1
-done
-if [ "$restarted_main_pid" = "0" ] || [ "$restarted_main_pid" = "$killed_main_pid" ]; then
-	fail "tatolabd was not restarted within 10 s of kill -9"
-fi
-[ "$(as_the_test_user systemctl --user is-active tatolabd.service)" = "active" ] ||
-	fail "tatolabd.service is not active after its restart"
-pass "a tatolabd killed with -9 is restarted within 10 s"
-
-# --- re-running upgrades and keeps the build before ------------------------
-
+start_the_stand_in_runtime
 commit_b="$(commit_named b)"
-pid_before_the_upgrade="$(the_service_main_pid)"
 make_release 1.0.1 "$commit_b"
 publish_as_latest 1.0.1
-run_the_installer
-expect_the_running_build_to_be 1.0.1 "$commit_b"
+upgrade_output="$(run_the_installer)"
 [ "$(current_build)" = "1.0.1-$commit_b" ] || fail "current does not point at 1.0.1-$commit_b after the upgrade"
 [ -d "$(installed_builds_directory)/1.0.0-$commit_a" ] || fail "the build before the upgrade was not kept"
-[ "$(the_service_main_pid)" != "$pid_before_the_upgrade" ] || fail "the upgrade did not restart the service"
 [ "$(as_the_test_user tatolab)" = "tatolab 1.0.1" ] || fail "tatolab on PATH is not the upgrade's"
-pass "re-running the installer upgrades, restarts the service and keeps the build before"
+kill -0 "$stand_in_runtime_pid" 2>/dev/null || fail "the upgrade stopped the running runtime"
+case "$upgrade_output" in
+*"A runtime is running (runtime 1.0.0 ("*"); it keeps that build until it is restarted"*) ;;
+*) fail "the installer did not say the running runtime keeps its build: $upgrade_output" ;;
+esac
+stop_the_stand_in_runtime
+pass "an upgrade leaves a running runtime alone, says it keeps its build, and keeps the build before"
 
 # --- a tarball that does not match its sha256 is refused -------------------
 
@@ -271,104 +237,49 @@ pass "a tarball that carries no uv is refused and changes nothing"
 refuses_a_release_shaped without-the-streamlib-commit streamlib-commit
 pass "a tarball that names no streamlib commit is refused and changes nothing"
 
-# --- a service that fails to start keeps the build before it ---------------
+# --- a third build removes the one two installs back -------------------------
 
 commit_d="$(commit_named d)"
 make_release 1.0.3 "$commit_d"
 publish_as_latest 1.0.3
-failing_start_directory="$(mktemp -d)"
-cat >"$failing_start_directory/systemctl" <<'EOF_SYSTEMCTL'
-#!/bin/sh
-for argument in "$@"; do
-	[ "$argument" = start ] && exit 1
-done
-exec /usr/bin/systemctl "$@"
-EOF_SYSTEMCTL
-chmod 755 "$failing_start_directory" "$failing_start_directory/systemctl"
-if as_the_test_user env PATH="$failing_start_directory:/usr/bin:/bin" \
-	sh "$installer_directory/install.sh" </dev/null 2>/dev/null; then
-	fail "an install whose service did not start reported success"
-fi
-[ "$(current_build)" = "1.0.1-$commit_b" ] || fail "an install whose service did not start left current on the new build"
-[ "$(as_the_test_user tatolab)" = "tatolab 1.0.1" ] ||
-	fail "an install whose service did not start left tatolab on PATH at the new build"
-[ ! -e "$(installed_builds_directory)/1.0.3-$commit_d" ] || fail "the build whose service did not start was kept"
-pass "a service that fails to start fails the install and puts the build before it back"
-
-# --- --from-unit: two units of one version at different commits -------------
-
-units_root="$(mktemp -d)"
-chmod 755 "$units_root"
-commit_e="$(commit_named e)"
-commit_f="$(commit_named f)"
-make_runtime_unit "$units_root/dev-e" 1.0.4 "$commit_e"
-make_runtime_unit "$units_root/dev-f" 1.0.4 "$commit_f"
-run_the_installer --from-unit "$units_root/dev-e"
-expect_the_running_build_to_be 1.0.4 "$commit_e"
+third_install_output="$(run_the_installer)"
+[ "$(current_build)" = "1.0.3-$commit_d" ] || fail "current does not point at 1.0.3-$commit_d"
+[ -d "$(installed_builds_directory)/1.0.1-$commit_b" ] || fail "the build before was not kept"
 [ ! -e "$(installed_builds_directory)/1.0.0-$commit_a" ] || fail "the build two installs back was not removed"
-from_unit_output="$(run_the_installer --from-unit "$units_root/dev-f")"
-expect_the_running_build_to_be 1.0.4 "$commit_f"
-[ "$(current_build)" = "1.0.4-$commit_f" ] || fail "current does not point at the second unit's build"
-[ -d "$(installed_builds_directory)/1.0.4-$commit_e" ] || fail "the first unit's build was not kept as the build before"
-[ ! -e "$(installed_builds_directory)/1.0.1-$commit_b" ] || fail "the build two installs back was not removed"
-for expected_step in "Copying the runtime unit from $units_root/dev-f" "Stopping the runtime" \
-	"Starting Tatolab 1.0.4-$commit_f" "Waiting for Tatolab 1.0.4-$commit_f to answer" \
-	"Tatolab 1.0.4-$commit_f answers" "Removing Tatolab 1.0.1-$commit_b"; do
-	case "$from_unit_output" in
+for expected_step in "Downloading Tatolab 1.0.3" "Installing Tatolab 1.0.3-$commit_d" \
+	"Removing Tatolab 1.0.0-$commit_a"; do
+	case "$third_install_output" in
 	*"$expected_step"*) ;;
-	*) fail "the installer did not say \"$expected_step\": $from_unit_output" ;;
+	*) fail "the installer did not say \"$expected_step\": $third_install_output" ;;
 	esac
 done
-pass "two units of one version at different commits leave the second running and the first kept"
+pass "a third install keeps the build before and removes the one two installs back, saying each step"
 
-# --- --from-unit: a unit whose tatolabd exits at start ----------------------
-
-commit_g="$(commit_named g)"
-make_runtime_unit "$units_root/exits" 1.0.5 "$commit_g" tatolabd-exits-at-start
-if exiting_unit_refusal="$(run_the_installer --from-unit "$units_root/exits" 2>&1)"; then
-	fail "a unit whose tatolabd exits at start was installed"
-fi
-case "$exiting_unit_refusal" in
-*"1.0.5-$commit_g's service did not start, so 1.0.4-$commit_f is back in place"*) ;;
-*) fail "the refusal does not name the build put back: $exiting_unit_refusal" ;;
-esac
-for _ in $(seq 1 100); do
-	case "$(running_build_and_pid)" in "1.0.4 $commit_f "*) break ;; esac
-	sleep 0.1
-done
-expect_the_running_build_to_be 1.0.4 "$commit_f"
-[ "$(current_build)" = "1.0.4-$commit_f" ] || fail "an exiting unit left current on its build"
-[ ! -e "$(installed_builds_directory)/1.0.5-$commit_g" ] || fail "the exiting unit's build was kept"
-pass "a unit whose tatolabd exits at start leaves the build before it running, and says which"
-
-# --- macOS is pointed at the app -------------------------------------------
+# --- macOS is pointed at Tato Studio -------------------------------------------
 
 macos_uname_directory="$(mktemp -d)"
 printf '#!/bin/sh\necho Darwin\n' >"$macos_uname_directory/uname"
 chmod +x "$macos_uname_directory/uname"
-chmod 755 "$macos_uname_directory"
 if macos_refusal="$(as_the_test_user env PATH="$macos_uname_directory:/usr/bin:/bin" \
 	sh "$installer_directory/install.sh" 2>&1)"; then
 	fail "install.sh did not refuse macOS"
 fi
 case "$macos_refusal" in
-*"Tatolab app"*"from source"*) ;;
-*) fail "the macOS refusal does not point at the app: $macos_refusal" ;;
+*"Tato Studio"*) ;;
+*) fail "the macOS refusal does not point at Tato Studio: $macos_refusal" ;;
 esac
-pass "on macOS the installer refuses, pointing at the app"
+rm -rf "$macos_uname_directory"
+pass "on macOS the installer refuses, pointing at Tato Studio"
 
 # --- --uninstall leaves the state directory --------------------------------
 
-as_the_test_user mkdir -p "$test_user_home/.local/state/tatolab/streams"
-as_the_test_user touch "$test_user_home/.local/state/tatolab/streams/a-recorded-stream"
+mkdir -p "$test_user_home/.local/state/tatolab/streams"
+touch "$test_user_home/.local/state/tatolab/streams/a-recorded-stream"
 run_the_installer --uninstall
-[ "$(as_the_test_user systemctl --user is-active tatolabd.service || true)" != "active" ] ||
-	fail "tatolabd.service still runs after --uninstall"
-[ ! -e "$test_user_home/.config/systemd/user/tatolabd.service" ] || fail "--uninstall left tatolabd.service"
 [ ! -e "$test_user_home/.local/share/tatolab" ] || fail "--uninstall left the installed releases"
 for executable_name in tatolab tatolabd; do
 	[ ! -L "$test_user_home/.local/bin/$executable_name" ] || fail "--uninstall left $test_user_home/.local/bin/$executable_name"
 done
 [ -e "$test_user_home/.local/state/tatolab/streams/a-recorded-stream" ] ||
 	fail "--uninstall removed the state directory"
-pass "--uninstall removes the service and the files and leaves the state directory"
+pass "--uninstall removes the files and leaves the state directory"

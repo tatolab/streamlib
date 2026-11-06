@@ -9,9 +9,7 @@
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
-# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus the systemd user units
-# in lib/systemd/user/, where install.sh takes them from, and
-# streamlib-commit, the commit it was built from, which names the build
+# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus streamlib-commit, the commit it was built from, which names the build
 # install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
@@ -108,9 +106,6 @@ for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.
 		exit 1
 	}
 done
-
-mkdir -p "$runtime_unit_root/lib/systemd/user"
-cp installer/tatolabd.service "$runtime_unit_root/lib/systemd/user/"
 
 uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
 uv venv --python 3.12 /tmp/runtime-unit-gate-venv

@@ -102,8 +102,9 @@ two in §Distribution.
 - REMOVED: launchctl
 - REMOVED: TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY
   `install.sh` writing, stopping and starting the systemd user unit.
-- REMOVED: enable-linger
-  the installer's offer to keep the runtime up without a login.
+- REMOVED: offer_to_keep_the_runtime_running_without_a_login
+  the installer's offer to keep the runtime up without a login; the README names
+  `loginctl enable-linger` beside the unit a person copies.
 - REMOVED: lib/systemd/user
   the unit the tarball carried for `install.sh` to copy.
 - REMOVED: installer/tatolabd.service
