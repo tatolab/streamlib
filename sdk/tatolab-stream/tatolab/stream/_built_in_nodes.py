@@ -20,6 +20,8 @@ __all__ = [
     "ChannelsToArrayConfig",
     "ChannelsToRecords",
     "ChannelsToRecordsConfig",
+    "ImageToArray",
+    "ImageToArrayConfig",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
     "RelayTrackSource",
@@ -121,6 +123,36 @@ class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
+
+
+class ImageToArrayConfig(TypedDict, total=False):
+    """`ImageToArray`'s config: the keys `stream_builder.add` takes."""
+
+
+class ImageToArray(BuiltInNode[ImageToArrayConfig]):
+    """Converts each Image frame on `image` into one Array frame on `array`, whose one
+    GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, 4]`
+    tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for `rgba16_float` and
+    `float32` for `rgba32_float`, its channels in the frame's own order. This node
+    copies nothing. A reader whose device maps the slot linearly reads the tensor in
+    place, at the slot's own address; one that cannot reads it through one GPU copy into
+    a linear staging buffer, as a read of the Image frame itself does. The tensor's rows
+    are the slot's rows, so a padded row pitch is a stride, never a copy. An `nv12`
+    frame has two planes and no one-tensor layout, and is refused and writes nothing. A
+    reader claims the slot when it reads the Array frame, so a producer that has
+    recycled the slot by then makes the read a counted loss, never another frame's
+    pixels.
+
+    Inputs:
+        `image` (newest): The Image frames to borrow as tensors.
+
+    Outputs:
+        `array`: One Array frame per Image frame, its slot as the `image` attribute.
+
+    Config: `ImageToArrayConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:ImageToArray"
 
 
 class _RecordsToChannelsConfigRequiredKeys(TypedDict):

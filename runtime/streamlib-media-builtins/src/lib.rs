@@ -21,7 +21,7 @@ pub mod video_frame;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use port_family_conversion::{
     ArrayToChannels, ArrayToChannelsConfig, ChannelsToArray, ChannelsToRecords,
-    ChannelsToRecordsConfig, RecordsToChannels, RecordsToChannelsConfig,
+    ChannelsToRecordsConfig, ImageToArray, RecordsToChannels, RecordsToChannelsConfig,
 };
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use video_frame::VideoFrame;
@@ -75,6 +75,7 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<port_family_conversion::ArrayToChannels::Processor>();
     PROCESSOR_REGISTRY.register::<port_family_conversion::ChannelsToRecords::Processor>();
     PROCESSOR_REGISTRY.register::<port_family_conversion::RecordsToChannels::Processor>();
+    PROCESSOR_REGISTRY.register::<port_family_conversion::ImageToArray::Processor>();
 
     for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
         match ProcessorClassImportPath::new(*module_node_type) {
