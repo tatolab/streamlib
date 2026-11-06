@@ -71,6 +71,16 @@ Records: Final[PortFamily["dict[str, Any]"]] = PortFamily("Records")
 _PORT_FAMILIES: Final = (Image, Array, Channels, Packets, Records)
 _FAMILIES_WITH_NAMES: Final = (Array, Channels, Records)
 _ARRAY_RESIDENCIES: Final = ("gpu", "cpu")
+_IMAGE_TEXTURE_FORMATS: Final = (
+    "rgba8_unorm",
+    "rgba8_unorm_srgb",
+    "bgra8_unorm",
+    "bgra8_unorm_srgb",
+    "rgba16_float",
+    "rgba32_float",
+    "nv12",
+)
+"""The engine's texture format wire names, the spellings `formats=` takes."""
 _CHANNELS_SAMPLE_TYPES: Final = ("f32", "f64")
 _DELIVERY_PROFILES: Final = ("newest", "ordered")
 
@@ -114,6 +124,17 @@ def _refuse_a_port_family_that_is_not_one(
             f"{', '.join(repr(each) for each in _PORT_FAMILIES)}"
         )
     return family
+
+
+def _image_texture_formats(value: object) -> "tuple[str, ...]":
+    formats = _tuple_of_strings(value, "formats")
+    for texture_format in formats:
+        if texture_format not in _IMAGE_TEXTURE_FORMATS:
+            raise ValueError(
+                f"`formats=` takes the engine's texture format names "
+                f"({', '.join(_IMAGE_TEXTURE_FORMATS)}), got {texture_format!r}"
+            )
+    return formats
 
 
 def _tuple_of_strings(value: object, key: str) -> "tuple[str, ...]":
@@ -203,7 +224,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         self.borrow_quota = borrow_quota
         self.requires = _tuple_of_strings(requires, "requires")
         self.requires_codec = _tuple_of_strings(requires_codec, "requires_codec")
-        self.formats = _tuple_of_strings(formats, "formats")
+        self.formats = _image_texture_formats(formats)
         self.window = window
 
     def _as_port_marker(self) -> "dict[str, Any]":
@@ -286,7 +307,7 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
                 f"got {dtype!r}"
             )
         self.dtype = dtype
-        self.formats = _tuple_of_strings(formats, "formats")
+        self.formats = _image_texture_formats(formats)
         if residency is not None and residency not in _ARRAY_RESIDENCIES:
             raise ValueError(
                 f"`residency=` is one of {', '.join(repr(each) for each in _ARRAY_RESIDENCIES)}, "

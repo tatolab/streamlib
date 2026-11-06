@@ -11,8 +11,8 @@ use streamlib::sdk::iceoryx2::{
 use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_port_payload::PythonPortPayloadLoan;
 use crate::python_processor_link_data_access::{
-    ChannelsOutputPortDeclaredShape, PortFamilyOfTheRead, PortPayloadReadShape,
-    PythonProcessorLinkDataAccess,
+    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, PortFamilyOfTheRead,
+    PortPayloadReadShape, PythonProcessorLinkDataAccess,
 };
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -631,17 +631,37 @@ impl PythonLinkOutputDataWriter {
                 python,
                 &port_name,
                 payload,
+                &port.getattr("formats")?.extract::<Vec<String>>()?,
                 self.gpu_limited_access_context.get(),
                 timestamp_ns,
                 starts_group,
             ),
             "Array" => {
                 let declared_names = names_the_output_port_attribute_states(port)?;
+                let declared_residency = match port
+                    .getattr("residency")?
+                    .extract::<Option<String>>()?
+                {
+                    None => None,
+                    Some(residency) if residency == "gpu" => {
+                        Some(ArrayOutputPortDeclaredResidency::Gpu)
+                    }
+                    Some(residency) if residency == "cpu" => {
+                        Some(ArrayOutputPortDeclaredResidency::Cpu)
+                    }
+                    Some(other) => {
+                        return Err(PyValueError::new_err(format!(
+                            "Array output port {port_name:?} declares residency {other:?}, which \
+                             is neither \"gpu\" nor \"cpu\""
+                        )));
+                    }
+                };
                 link_data_access.write_array_frame_to_output_port(
                     python,
                     &port_name,
                     payload,
                     &declared_names,
+                    declared_residency,
                     self.gpu_limited_access_context.get(),
                     timestamp_ns,
                     starts_group,
@@ -690,6 +710,34 @@ mod tests {
             assert!(
                 refusal.to_string().contains("got a EventsInput"),
                 "{refusal}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_python_surface_spells_image_formats_as_the_engine_does() {
+        Python::initialize();
+        Python::attach(|python| {
+            python
+                .import("sys")
+                .unwrap()
+                .getattr("path")
+                .unwrap()
+                .call_method1(
+                    "insert",
+                    (0, concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream")),
+                )
+                .unwrap();
+            let python_image_formats: Vec<String> = python
+                .import("tatolab.stream._port_family_declaration")
+                .unwrap()
+                .getattr("_IMAGE_TEXTURE_FORMATS")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(
+                python_image_formats,
+                streamlib::sdk::descriptors::IMAGE_TEXTURE_FORMAT_WIRE_NAMES
             );
         });
     }

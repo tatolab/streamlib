@@ -214,8 +214,32 @@ impl PortFamilyDeclaration {
                      which a {family} {direction_word} does not take"
                 )
             })
+            .or_else(|| {
+                self.formats
+                    .iter()
+                    .find(|format| !IMAGE_TEXTURE_FORMAT_WIRE_NAMES.contains(&format.as_str()))
+                    .map(|format| {
+                        format!(
+                            "{direction_word} port {port_name:?} states format {format:?}; \
+                             `formats=` takes the engine's texture format names: {}",
+                            IMAGE_TEXTURE_FORMAT_WIRE_NAMES.join(", ")
+                        )
+                    })
+            })
     }
 }
+
+/// The texture format wire names an Image port's `formats=` takes: every
+/// `TextureFormat` the engine's RHI defines, spelled as the escalate wire spells it.
+pub const IMAGE_TEXTURE_FORMAT_WIRE_NAMES: [&str; 7] = [
+    "rgba8_unorm",
+    "rgba8_unorm_srgb",
+    "bgra8_unorm",
+    "bgra8_unorm_srgb",
+    "rgba16_float",
+    "rgba32_float",
+    "nv12",
+];
 
 /// One end of a link, as a refusal names it.
 #[derive(Debug, Clone, Copy)]
@@ -563,11 +587,11 @@ mod tests {
     #[test]
     fn image_formats_that_do_not_overlap_are_refused() {
         let output = PortFamilyDeclaration {
-            formats: vec!["rgba16f".into()],
+            formats: vec!["rgba16_float".into()],
             ..PortFamilyDeclaration::of_family(PortFamily::Image)
         };
         let input = PortFamilyDeclaration {
-            formats: vec!["rgba8".into()],
+            formats: vec!["rgba8_unorm".into()],
             ..PortFamilyDeclaration::of_family(PortFamily::Image)
         };
         let refusal = refusal_of_a_link_between_port_families(
@@ -575,10 +599,10 @@ mod tests {
             None,
             endpoint("compositor", "video", Some(&input)),
         )
-        .expect("rgba16f never reaches an rgba8-only input");
-        assert!(refusal.contains("rgba16f") && refusal.contains("rgba8"));
+        .expect("rgba16_float never reaches an rgba8_unorm-only input");
+        assert!(refusal.contains("rgba16_float") && refusal.contains("rgba8_unorm"));
         let input_reading_both = PortFamilyDeclaration {
-            formats: vec!["rgba8".into(), "rgba16f".into()],
+            formats: vec!["rgba8_unorm".into(), "rgba16_float".into()],
             ..PortFamilyDeclaration::of_family(PortFamily::Image)
         };
         assert_eq!(
@@ -589,6 +613,18 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_format_that_is_no_engine_texture_name_is_refused() {
+        let image_in_shorthand = PortFamilyDeclaration {
+            formats: vec!["rgba8".into()],
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        };
+        let refusal = image_in_shorthand
+            .refusal_of_its_keys("video", PortFamilyDeclarationDirection::Output)
+            .expect("rgba8 is no engine texture name");
+        assert!(refusal.contains("\"rgba8\"") && refusal.contains("rgba8_unorm"));
     }
 
     #[test]

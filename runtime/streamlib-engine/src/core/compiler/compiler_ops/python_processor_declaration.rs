@@ -543,6 +543,18 @@ fn json_kind_name(value: &serde_json::Value) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn image_formats_spell_every_engine_texture_format() {
+        let mut engine_texture_formats: Vec<&str> = (0..=u32::from(u8::MAX))
+            .filter_map(crate::core::rhi::TextureFormat::from_repr_value)
+            .map(|texture_format| texture_format.wire_name())
+            .collect();
+        engine_texture_formats.sort_unstable();
+        let mut image_formats = crate::core::descriptors::IMAGE_TEXTURE_FORMAT_WIRE_NAMES.to_vec();
+        image_formats.sort_unstable();
+        assert_eq!(engine_texture_formats, image_formats);
+    }
+
     fn requested(import_path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(import_path).expect("the test path names a class")
     }

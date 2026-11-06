@@ -1645,7 +1645,7 @@ mod tests {
         let parsed = parse_ok(quote! {
             execution = manual,
             input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
-            input("video", delivery_profile = "newest", family = Image, formats = ["rgba8"]),
+            input("video", delivery_profile = "newest", family = Image, formats = ["rgba8_unorm"]),
             output(
                 "telemetry",
                 family = Channels,
@@ -1667,7 +1667,7 @@ mod tests {
                 .family
                 .as_ref()
                 .map(|family| &family.formats),
-            Some(&vec!["rgba8".to_string()])
+            Some(&vec!["rgba8_unorm".to_string()])
         );
         let telemetry = schema.outputs[0].family.as_ref().expect("Channels output");
         assert_eq!(
@@ -1714,7 +1714,7 @@ mod tests {
     fn a_family_key_without_a_family_and_an_unknown_family_are_refused() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("video", formats = ["rgba8"]),
+            output("video", formats = ["rgba8_unorm"]),
         });
         assert!(msg.contains("without `family = …`"), "got {msg}");
         let msg = parse_err(quote! {

@@ -250,9 +250,15 @@ pub(crate) fn records_message_dict_of<'py>(
             "a Records message on {port_name:?} does not decode: {decode_failure}"
         ))
     })?;
-    if !matches!(value, Value::Map(_)) {
+    let Value::Map(entries) = &value else {
         return Err(PyValueError::new_err(format!(
             "a Records message on {port_name:?} carries no dict"
+        )));
+    };
+    if let Some((key, _)) = entries.iter().find(|(key, _)| !key.is_str()) {
+        return Err(PyValueError::new_err(format!(
+            "a Records message on {port_name:?} carries key {key}, and a record's keys are \
+             strings"
         )));
     }
     if !remaining.is_empty() {
@@ -487,6 +493,16 @@ mod tests {
             let refusal = records_message_dict_of(python, "events", &payload)
                 .expect_err("a byte past the map is no part of the record");
             assert!(refusal.to_string().contains("1 bytes past"), "{refusal}");
+
+            let mut integer_keyed = Vec::new();
+            rmpv::encode::write_value(
+                &mut integer_keyed,
+                &Value::Map(vec![(Value::from(7), Value::from(1))]),
+            )
+            .unwrap();
+            let refusal = records_message_dict_of(python, "events", &integer_keyed)
+                .expect_err("a record's keys are strings");
+            assert!(refusal.to_string().contains("key 7"), "{refusal}");
         });
     }
 

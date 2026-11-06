@@ -1506,6 +1506,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'_>,
         port_name: &str,
         image: &Bound<'_, PyAny>,
+        declared_formats: &[String],
         gpu_limited_access: &PythonGpuContextLimitedAccess,
         timestamp_ns: Option<i64>,
         starts_group: bool,
@@ -1537,6 +1538,12 @@ impl PythonProcessorLinkDataAccess {
                  is no texture format an Image frame carries"
             ))
         })?;
+        if !declared_formats.is_empty() && !declared_formats.contains(&format_name) {
+            return Err(PyValueError::new_err(format!(
+                "a write on Image output port {port_name:?} carries format {format_name:?}, and \
+                 the port declares formats={declared_formats:?}"
+            )));
+        }
         let image_frame = ImageFrameDescriptorBody {
             slot,
             width: image.getattr("width")?.extract()?,
@@ -1563,6 +1570,7 @@ impl PythonProcessorLinkDataAccess {
         port_name: &str,
         attributes: &Bound<'_, PyAny>,
         declared_names: &[String],
+        declared_residency: Option<ArrayOutputPortDeclaredResidency>,
         gpu_limited_access: &PythonGpuContextLimitedAccess,
         timestamp_ns: Option<i64>,
         starts_group: bool,
@@ -1674,6 +1682,27 @@ impl PythonProcessorLinkDataAccess {
                         rows.len() - 1,
                         ArrayAttributeCpuBytesHeldForOneWrite::PythonBuffer(held),
                     ));
+                }
+            }
+        }
+        if let Some(declared_residency) = declared_residency {
+            for row in &rows {
+                let row_is_on_the_gpu =
+                    matches!(row.residency, ArrayFrameAttributeResidency::GpuPoolSlot(_));
+                if row_is_on_the_gpu
+                    != (declared_residency == ArrayOutputPortDeclaredResidency::Gpu)
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "Array attribute {:?} on {port_name:?} is {}, and the port declares \
+                         residency={:?}",
+                        row.name,
+                        if row_is_on_the_gpu {
+                            "a GPU tensor surface"
+                        } else {
+                            "CPU memory"
+                        },
+                        declared_residency.wire_name()
+                    )));
                 }
             }
         }
@@ -1875,6 +1904,23 @@ pub(crate) struct ChannelsOutputPortDeclaredShape {
     pub(crate) sample_type: Option<ChannelsBlockSampleType>,
     /// How many `names=` the port states.
     pub(crate) channel_count: Option<u32>,
+}
+
+/// Where an `Output(Array, residency=)` says every attribute it writes lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArrayOutputPortDeclaredResidency {
+    Gpu,
+    Cpu,
+}
+
+impl ArrayOutputPortDeclaredResidency {
+    /// The spelling `residency=` takes.
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Gpu => "gpu",
+            Self::Cpu => "cpu",
+        }
+    }
 }
 
 /// The bytes of one CPU attribute an Array write copies into its sample: a
@@ -2455,6 +2501,7 @@ mod tests {
                     "frames_to_downstream",
                     &attributes,
                     &["boxes".to_string()],
+                    None,
                     &no_gpu,
                     Some(42),
                     true,
@@ -2500,6 +2547,7 @@ mod tests {
                     "frames_to_downstream",
                     &received,
                     &["boxes".to_string()],
+                    None,
                     &no_gpu,
                     Some(43),
                     true,
@@ -2516,6 +2564,23 @@ mod tests {
                 &(0u8..24).collect::<Vec<_>>()[..]
             );
 
+            let residency_refusal = source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &attributes,
+                    &[],
+                    Some(ArrayOutputPortDeclaredResidency::Gpu),
+                    &no_gpu,
+                    None,
+                    true,
+                )
+                .expect_err("a CPU attribute is refused on a GPU-resident port");
+            assert!(
+                residency_refusal.to_string().contains("residency=\"gpu\""),
+                "{residency_refusal}"
+            );
+
             let missing_boxes = python
                 .eval(c"{'labels': memoryview(bytes([1]))}", None, None)
                 .unwrap();
@@ -2525,6 +2590,7 @@ mod tests {
                     "frames_to_downstream",
                     &missing_boxes,
                     &["boxes".to_string()],
+                    None,
                     &no_gpu,
                     None,
                     true,
@@ -2541,6 +2607,7 @@ mod tests {
                     "frames_to_downstream",
                     &float64,
                     &[],
+                    None,
                     &no_gpu,
                     None,
                     true,
@@ -2686,11 +2753,31 @@ mod tests {
             assert!(row_lease.row().is_claimed(), "a read frame holds its slot");
 
             let (source_on, destination_on) = one_wired_link(python, "image-frame-write-on");
+            let format_refusal = source_on
+                .write_image_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &frame,
+                    &["nv12".to_string()],
+                    gpu.get(),
+                    None,
+                    true,
+                )
+                .expect_err("the frame's format is not the one the port declares");
+            assert!(
+                format_refusal.to_string().contains("formats="),
+                "{format_refusal}"
+            );
             source_on
                 .write_image_frame_to_output_port(
                     python,
                     "frames_to_downstream",
                     &frame,
+                    &[frame
+                        .getattr("format")
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap()],
                     gpu.get(),
                     None,
                     true,
@@ -2766,6 +2853,7 @@ mod tests {
                     "frames_to_downstream",
                     &empty_boxes,
                     &[],
+                    None,
                     &no_gpu,
                     None,
                     true,

@@ -578,6 +578,21 @@ pub fn array_frame_attribute_table_of(
                     ),
                 });
             }
+            if let ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                byte_len,
+            } = row.residency
+                && byte_len != 0
+                && payload_byte_offset < table_byte_len as u64
+            {
+                return Err(ArrayFrameAttributeTableRefusal {
+                    reason: format!(
+                        "Array attribute {:?} states data at offset {payload_byte_offset}, inside \
+                         the {table_byte_len}-byte attribute table",
+                        row.name
+                    ),
+                });
+            }
             Ok(row)
         })
         .collect()
@@ -845,6 +860,16 @@ mod tests {
             )
             .is_err()
         );
+
+        let mut over_the_table = rows[1].clone();
+        over_the_table.residency = ArrayFrameAttributeResidency::Cpu {
+            payload_byte_offset: 16,
+            byte_len: 3,
+        };
+        payload[ARRAY_FRAME_ATTRIBUTE_ROW_BYTES..2 * ARRAY_FRAME_ATTRIBUTE_ROW_BYTES]
+            .copy_from_slice(&over_the_table.to_row_bytes().unwrap());
+        let refusal = array_frame_attribute_table_of(body, &payload).unwrap_err();
+        assert!(refusal.reason.contains("inside"), "{}", refusal.reason);
     }
 
     #[test]

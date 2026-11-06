@@ -28,8 +28,8 @@ def _the_port_named(ports: "list[dict[str, Any]]", port_name: str) -> "dict[str,
 def test_an_image_port_pair_declares_its_family_and_formats_under_the_attribute_name():
     @node
     class Tonemap:
-        video_in = Input(Image, delivery="newest", formats=("rgba16f", "rgba8"))
-        video_out = Output(Image, formats=("rgba8",), description="tonemapped")
+        video_in = Input(Image, delivery="newest", formats=("rgba16_float", "rgba8_unorm"))
+        video_out = Output(Image, formats=("rgba8_unorm",), description="tonemapped")
 
     (declared_input,) = Tonemap.__tatolab_node_input_ports__
     (declared_output,) = Tonemap.__tatolab_node_output_ports__
@@ -37,12 +37,12 @@ def test_an_image_port_pair_declares_its_family_and_formats_under_the_attribute_
         "name": "video_in",
         "description": "",
         "delivery_profile": "newest",
-        "family": {"family": "image", "formats": ["rgba16f", "rgba8"]},
+        "family": {"family": "image", "formats": ["rgba16_float", "rgba8_unorm"]},
     }
     assert declared_output == {
         "name": "video_out",
         "description": "tonemapped",
-        "family": {"family": "image", "formats": ["rgba8"]},
+        "family": {"family": "image", "formats": ["rgba8_unorm"]},
     }
 
 
@@ -153,7 +153,7 @@ def test_a_mistyped_key_is_refused_at_import():
             "ImageRequiringNames", (), {"video": Input(Image, delivery="newest", requires=("x",))}
         ),
         lambda: type(
-            "RecordsWithFormats", (), {"events": Input(Records, delivery="ordered", formats=("rgba8",))}
+            "RecordsWithFormats", (), {"events": Input(Records, delivery="ordered", formats=("rgba8_unorm",))}
         ),
     ],
 )
@@ -177,3 +177,8 @@ def test_a_family_that_is_not_one_of_the_five_is_refused():
 def test_names_given_as_a_bare_string_are_refused():
     with pytest.raises(TypeError, match="tuple of strings"):
         Output(Records, names="kind")  # pyright: ignore[reportArgumentType]
+
+
+def test_an_image_format_that_is_no_engine_texture_name_is_refused():
+    with pytest.raises(ValueError, match="rgba8_unorm"):
+        Output(Image, formats=("rgba8",))
