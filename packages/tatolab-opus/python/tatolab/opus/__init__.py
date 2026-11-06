@@ -19,21 +19,25 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated, Literal
 
+import numpy
+
 from tatolab.stream import (
-    AudioBlock,
     AudioWindowContract,
+    Channels,
+    Input,
+    Output,
+    Packets,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.stream.catalog import AudioEntry, BinaryEntry
+from tatolab.stream.catalog import AudioEntry
 
 from . import _native
 
 __all__ = ["OpusDecoder", "OpusEncoder", "OpusEncoderConfig"]
 
-AUDIO_PORT = "audio"
 ENCODED_AUDIO_PORT = "encoded_audio"
 
 #: Opus's own clock, which the encoder's window contract resamples to.
@@ -112,9 +116,10 @@ class OpusEncoder:
         )
         self._audio_entry_owed_to_the_port: "_native.OpusEncoderPortAudioEntry | None" = None
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=OPUS_SAMPLE_RATE_HZ,
             dtype="f32",
             window_size=SAMPLES_IN_ONE_OPUS_WINDOW,
@@ -125,21 +130,21 @@ class OpusEncoder:
             "source's own channel count"
         ),
     )
-    def audio(self) -> None: ...
-
-    @node.output(description="Opus media frames, one packet each")
-    def encoded_audio(self) -> None: ...
+    encoded_audio = Output(
+        Packets, codec=OPUS_CATALOG_CODEC_STRING, description="Opus media frames, one packet each"
+    )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while (window := ctx.inputs.read(AUDIO_PORT, into=AudioBlock)) is not None:
+        while (window := ctx.inputs.read(self.audio)) is not None:
+            interleaved_samples = numpy.ascontiguousarray(numpy.from_dlpack(window).T)
             try:
                 media_frame = self._encoder.encode_one_window(
-                    window.interleaved_sample_bytes,
+                    interleaved_samples.tobytes(),
                     window.sample_rate,
-                    window.channels,
-                    window.sample_count,
+                    window.channel_count,
+                    window.samples_per_channel,
                     window.dtype,
-                    window.first_sample_timestamp_ns,
+                    window.timestamp_ns,
                 )
             finally:
                 _log_codec_notices(self._encoder.take_notices())
@@ -164,9 +169,9 @@ class OpusEncoder:
             # Stamped with the instant the packet's first sample was captured,
             # never the moment it was published.
             ctx.outputs.write(
-                ENCODED_AUDIO_PORT,
+                self.encoded_audio,
                 media_frame,
-                timestamp_ns=window.first_sample_timestamp_ns,
+                timestamp_ns=window.timestamp_ns,
                 starts_group=True,
             )
 
@@ -191,7 +196,7 @@ class OpusEncoder:
         "trimmed. A message that is not a media frame, an upstream entry that is not an "
         "`opus` audio entry, an `OpusHead` that does not read, and a `pre_skip` past the "
         "5 760 samples one Opus packet can span are refused by name. `audio` publishes "
-        "`AudioBlock` messages — `f32` at 48 000 Hz in the stream's own channel count.\n\n"
+        "Channels blocks — `f32` at 48 000 Hz in the stream's own channel count.\n\n"
         "The entry is read as it stands when each packet decodes. When the upstream "
         "re-mints for a new channel count, packets still queued on the link decode under "
         "the new entry until the first packet written in the new count arrives.\n\n"
@@ -210,15 +215,20 @@ class OpusDecoder:
 
     def __init__(self) -> None:
         self._decoder = _native.EncodedPacketToAudioBlockDecoder()
+        self._next_start_sample = 0
 
-    @node.input(delivery_profile="ordered", description="Opus media frames to decode")
-    def encoded_audio(self) -> None: ...
-
-    @node.output(
-        description="Decoded audio blocks at 48 kHz in the stream's own channel count",
-        catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"),
+    encoded_audio = Input(
+        Packets,
+        delivery="ordered",
+        requires_codec=(OPUS_CATALOG_CODEC_STRING,),
+        description="Opus media frames to decode",
     )
-    def audio(self) -> None: ...
+    audio = Output(
+        Channels,
+        rate=OPUS_SAMPLE_RATE_HZ,
+        dtype="f32",
+        description="Decoded audio blocks at 48 kHz in the stream's own channel count",
+    )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         while (message := ctx.inputs.read_message(ENCODED_AUDIO_PORT)) is not None:
@@ -237,18 +247,18 @@ class OpusDecoder:
                 _log_codec_notices(self._decoder.take_notices())
             if block is None:
                 continue
-            ctx.outputs.write(
-                AUDIO_PORT,
-                AudioBlock(
-                    samples=block.interleaved_sample_bytes,
-                    sample_rate=block.sample_rate,
-                    channels=block.channels,
-                    sample_count=block.sample_count,
-                    first_sample_timestamp_ns=block.first_sample_timestamp_ns,
-                    dtype="f32",
-                ).to_bytes(),
-                timestamp_ns=block.first_sample_timestamp_ns,
+            planar_samples = numpy.ascontiguousarray(
+                numpy.frombuffer(block.interleaved_sample_bytes, dtype=numpy.float32)
+                .reshape(block.sample_count, block.channels)
+                .T
             )
+            ctx.outputs.write(
+                self.audio,
+                planar_samples,
+                timestamp_ns=block.first_sample_timestamp_ns,
+                start_sample=self._next_start_sample,
+            )
+            self._next_start_sample += block.sample_count
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
