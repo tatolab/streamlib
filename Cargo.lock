@@ -5844,6 +5844,7 @@ name = "streamlib-ipc-types"
 version = "0.68.29"
 dependencies = [
  "iceoryx2",
+ "loom",
  "tracing",
 ]
 

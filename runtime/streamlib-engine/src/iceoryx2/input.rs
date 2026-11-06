@@ -47,7 +47,10 @@ use super::loss_counters::{
 };
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
-use super::{ChannelDataServiceSubscriber, DataChannelPayloadDescriptorKind, MessageGroupBoundary};
+use super::{
+    ChannelDataServiceSubscriber, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+    MessageGroupBoundary,
+};
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -82,6 +85,8 @@ pub struct MessageReadFromInputPort {
     /// those it was cut from. Each loss is told once, and the link's cumulative
     /// count `graph` renders is never zeroed.
     pub lost_since_last_read: u64,
+    /// What the payload is: its bytes, or a pooled GPU frame the reader claims.
+    pub payload_descriptor: DataChannelPayloadDescriptor,
 }
 
 /// Where a bag taken off a port's mailbox goes.
@@ -1191,13 +1196,10 @@ impl InputMailboxesInner {
             });
         }
         match channel_user_header.payload_descriptor.known_kind() {
-            Ok(DataChannelPayloadDescriptorKind::Bytes) => {}
-            Ok(unread_kind) => {
-                return Err(Error::Link(format!(
-                    "a message on input port '{port}' carries a {unread_kind:?} payload, which \
-                     this read does not take"
-                )));
-            }
+            Ok(
+                DataChannelPayloadDescriptorKind::Bytes
+                | DataChannelPayloadDescriptorKind::GpuPoolSlotFrame,
+            ) => {}
             Err(refusal) => {
                 return Err(Error::Link(format!(
                     "a message on input port '{port}' was refused: {refusal}"
@@ -1217,6 +1219,7 @@ impl InputMailboxesInner {
                 timestamp_ns: channel_user_header.timestamp_ns,
                 group_boundary: channel_user_header.group_boundary(),
                 lost_since_last_read,
+                payload_descriptor: channel_user_header.payload_descriptor,
             },
             inbound_link_name,
         }))
@@ -2319,6 +2322,7 @@ mod tests {
                 timestamp_ns: 111,
                 group_boundary: MessageGroupBoundary::ContinuesGroup,
                 lost_since_last_read: 0,
+                payload_descriptor: DataChannelPayloadDescriptor::bytes(),
             })
         );
         assert_eq!(
@@ -2329,6 +2333,7 @@ mod tests {
                     timestamp_ns: 222,
                     group_boundary: MessageGroupBoundary::StartsGroup,
                     lost_since_last_read: 0,
+                    payload_descriptor: DataChannelPayloadDescriptor::bytes(),
                 },
                 InboundLinkName::from("psource/out"),
             ))

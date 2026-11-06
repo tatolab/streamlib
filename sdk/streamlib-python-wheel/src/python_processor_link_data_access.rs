@@ -28,8 +28,9 @@ use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
-    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
+    ChannelEgressConfig, ChannelTrustTier, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody,
+    HelperProcessLossCountBoardWriter, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
     ReadMode, ResolvedAudioWindowContract, StreamClockBoardPublishListener,
@@ -333,11 +334,44 @@ impl PythonProcessorLinkDataAccess {
                 python,
                 port_name,
                 message.payload,
+                message.payload_descriptor,
                 into,
                 offered_gpu_limited_access,
             )
             .map(Some),
             None => Ok(None),
+        }
+    }
+
+    /// The next message's payload on `port_name` with its stamp, or
+    /// `(None, None)` when the mailbox is empty, offering
+    /// `offered_gpu_limited_access` the pooled frame the message carries.
+    pub(crate) fn read_from_input_port_with_timestamp_offering_gpu_access<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Ok((None, None));
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        match read {
+            Some(message) => Ok((
+                Some(payload_borrowed_into_the_read_target_when_named(
+                    python,
+                    port_name,
+                    message.payload,
+                    message.payload_descriptor,
+                    None,
+                    offered_gpu_limited_access,
+                )?),
+                Some(message.timestamp_ns),
+            )),
+            None => Ok((None, None)),
         }
     }
 
@@ -450,6 +484,7 @@ impl PythonProcessorLinkDataAccess {
             python,
             port_name,
             std::mem::take(&mut message.payload),
+            message.payload_descriptor,
             into,
             offered_gpu_limited_access,
         )?;
@@ -497,10 +532,34 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,
     payload: InputPortMessagePayload,
+    payload_descriptor: DataChannelPayloadDescriptor,
     into: Option<&Bound<'py, PyAny>>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let payload_borrow = Bound::new(python, PythonPortPayloadBorrow::holding(payload))?.into_any();
+    let mut pooled_gpu_frame_claim = None;
+    if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
+        (payload_descriptor.known_kind(), offered_gpu_limited_access)
+    {
+        let claimed = gpu_limited_access
+            .get()
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(
+                python,
+                GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+            );
+        match (claimed, into) {
+            (Ok(claim), _) => pooled_gpu_frame_claim = claim,
+            (Err(refusal), Some(_)) => return Err(refusal),
+            (Err(refusal), None) => tracing::warn!(
+                "a read on {port_name:?} kept its payload, though the pooled GPU frame it \
+                 carries could not be claimed by its claim table: {refusal}"
+            ),
+        }
+    }
+    let payload_borrow = Bound::new(
+        python,
+        PythonPortPayloadBorrow::holding(payload, pooled_gpu_frame_claim),
+    )?
+    .into_any();
     match into {
         Some(read_target) => cast_payload_into_read_target(
             port_name,
@@ -965,23 +1024,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'py>,
         port_name: &str,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
-            return Ok((None, None));
-        };
-        let read = python
-            .detach(|| input_mailboxes.read_raw(port_name))
-            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        match read {
-            Some(message) => Ok((
-                Some(
-                    Bound::new(python, PythonPortPayloadBorrow::holding(message.payload))?
-                        .into_any(),
-                ),
-                Some(message.timestamp_ns),
-            )),
-            None => Ok((None, None)),
-        }
+        self.read_from_input_port_with_timestamp_offering_gpu_access(python, port_name, None)
     }
 
     /// Whether a message is waiting on `port_name`, without consuming it.
@@ -1031,46 +1074,14 @@ impl PythonProcessorLinkDataAccess {
         timestamp_ns: Option<i64>,
         starts_group: bool,
     ) -> PyResult<()> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
-        let payload_bytes = payload_buffer.bytes();
-        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
-            return Ok(());
-        };
-        let timestamp_ns = timestamp_ns
-            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
-        let group_boundary = if starts_group {
-            MessageGroupBoundary::StartsGroup
-        } else {
-            MessageGroupBoundary::ContinuesGroup
-        };
-        match python.detach(|| {
-            output_writer.write_bytes_with_timestamp(
-                port_name,
-                payload_bytes,
-                timestamp_ns,
-                group_boundary,
-            )
-        }) {
-            Ok(()) => Ok(()),
-            Err(Error::PayloadExceedsChannelCeiling {
-                channel,
-                payload_bytes,
-                largest_admitted_frame_bytes,
-                tier,
-                refused_bags_on_the_output_port: refused_bags,
-                ..
-            }) => {
-                tracing::warn!(
-                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
-                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
-                     tier); the message was dropped, and the port has refused {refused_bags} so \
-                     far"
-                );
-                Ok(())
-            }
-            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
-        }
+        self.write_described_by(
+            python,
+            port_name,
+            payload,
+            timestamp_ns,
+            starts_group,
+            |_| Ok(DataChannelPayloadDescriptor::bytes()),
+        )
     }
 
     /// Loan `payload_byte_len` bytes on `port_name` for its writer to fill in
@@ -1103,6 +1114,63 @@ impl PythonProcessorLinkDataAccess {
             timestamp_ns,
             group_boundary,
         )
+    }
+}
+
+impl PythonProcessorLinkDataAccess {
+    /// [`Self::write_to_output_port`], the message's header carrying the
+    /// descriptor `descriptor_of_the_payload` answers for the payload's bytes.
+    pub(crate) fn write_described_by(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        payload: &Bound<'_, PyAny>,
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+        descriptor_of_the_payload: impl FnOnce(&[u8]) -> PyResult<DataChannelPayloadDescriptor>,
+    ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let payload_buffer = PythonBufferHeldForOneWrite::of(port_name, payload)?;
+        let payload_bytes = payload_buffer.bytes();
+        let payload_descriptor = descriptor_of_the_payload(payload_bytes)?;
+        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
+            return Ok(());
+        };
+        let timestamp_ns = timestamp_ns
+            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
+        let group_boundary = if starts_group {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        };
+        match python.detach(|| {
+            output_writer.write_bytes_described_by(
+                port_name,
+                payload_bytes,
+                timestamp_ns,
+                group_boundary,
+                payload_descriptor,
+            )
+        }) {
+            Ok(()) => Ok(()),
+            Err(Error::PayloadExceedsChannelCeiling {
+                channel,
+                payload_bytes,
+                largest_admitted_frame_bytes,
+                tier,
+                refused_bags_on_the_output_port: refused_bags,
+                ..
+            }) => {
+                tracing::warn!(
+                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
+                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
+                     tier); the message was dropped, and the port has refused {refused_bags} so \
+                     far"
+                );
+                Ok(())
+            }
+            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
+        }
     }
 }
 

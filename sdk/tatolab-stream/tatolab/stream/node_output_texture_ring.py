@@ -13,11 +13,13 @@ consumer in another process can resolve it.
 The engine, not this class, decides which slot is next: one a consumer still
 holds — claimed by a typed cast, or resolved — is skipped and never rewritten,
 so a downstream node holding an earlier output keeps seeing its pixels.
-The pool rotates through `depth` slots while nobody holds anything, grows while
-consumers hold frames, and at its cap refuses by name: the producer drops its
-own frame, and never waits on a consumer. A frame nobody claimed stays
-resolvable for `depth` publishes; after that its id is refused as recycled,
-never answered with newer pixels.
+While nobody holds anything the pool rotates through `depth` slots plus, for
+every link out of the node, that link's mailbox depth and borrow quota, so a
+frame a mailbox queued is never recycled under it. It grows while consumers
+hold frames, and at its cap refuses by name: the producer drops its own frame,
+and never waits on a consumer. A frame nobody claimed stays resolvable for
+that many publishes; after that its id is refused as recycled, never answered
+with newer pixels.
 """
 
 from __future__ import annotations
@@ -66,7 +68,7 @@ class NodeOutputTextureRing:
 
     @property
     def depth(self) -> int:
-        """How many published frames nobody claimed stay resolvable behind the newest one."""
+        """How many slots the pool rotates through before its links' mailboxes and borrow quotas."""
         return self._depth
 
     def next_texture_for_this_frame(

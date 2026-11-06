@@ -46,6 +46,7 @@ class InMemoryPortStandingInForTheRuntimes:
     def __init__(self, queued_payload: bytes) -> None:
         self.queued_payload = queued_payload
         self.written: "list[tuple[str, bytes, int | None, bool]]" = []
+        self.pooled_gpu_frames_written: "list[str | None]" = []
 
     def read(self, port_name: str, *, into: Any = None) -> Any:
         return self.queued_payload if into is None else into.from_bytes(self.queued_payload)
@@ -71,8 +72,11 @@ class InMemoryPortStandingInForTheRuntimes:
         payload: bytes,
         timestamp_ns: "int | None" = None,
         starts_group: bool = True,
+        *,
+        pooled_gpu_frame: "str | None" = None,
     ) -> None:
         self.written.append((port_name, payload, timestamp_ns, starts_group))
+        self.pooled_gpu_frames_written.append(pooled_gpu_frame)
 
 
 def read_every_spelling(inputs: LinkInputDataReader) -> None:
@@ -114,7 +118,14 @@ def write_every_spelling(outputs: LinkOutputDataWriter, frame: VideoFrame) -> No
     outputs.write("video", pack(FRAME_ENTRIES), timestamp_ns=5)
     outputs.write("video", b"\x00", timestamp_ns=6, starts_group=False)
     outputs.write("video", memoryview(bytearray(b"\x01")))
+    outputs.write("video", frame.to_bytes(), pooled_gpu_frame=frame.surface_id)
     outputs.write("video", FRAME_ENTRIES)  # type: ignore[arg-type]
+
+
+def refuse_a_pooled_gpu_frame_passed_by_position(
+    outputs: LinkOutputDataWriter, frame: VideoFrame
+) -> None:
+    outputs.write("video", b"\x00", 7, True, frame.surface_id)  # type: ignore[misc]
 
 
 def refuse_a_read_target_without_from_bytes(inputs: LinkInputDataReader) -> None:
@@ -144,5 +155,7 @@ def test_every_write_spelling_hands_the_payload_on_as_bytes():
         (6, False),
         (None, True),
         (None, True),
+        (None, True),
     ]
+    assert port.pooled_gpu_frames_written == [None, None, None, None, frame.surface_id, None]
     assert VideoFrame.from_bytes(port.written[0][1]) == frame

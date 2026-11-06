@@ -466,3 +466,93 @@ fn a_lent_slot_is_handed_out_under_the_generation_its_lender_minted() {
         Some(Err(Error::SurfaceFrameRecycled { .. }))
     ));
 }
+
+fn kept(
+    queued_in_their_mailboxes: usize,
+    borrowed_past_their_mailboxes: usize,
+) -> OutputFramesKeptByOutputLinks {
+    OutputFramesKeptByOutputLinks {
+        queued_in_their_mailboxes,
+        borrowed_past_their_mailboxes,
+    }
+}
+
+#[test]
+fn a_frame_an_output_links_mailbox_queues_or_lends_is_never_outwaited_by_its_slot() {
+    let mut pool = PoolUnderTest::new();
+    pool.pool
+        .keep_room_for_what_its_output_links_keep(kept(3, 2));
+
+    let published: Vec<_> = (0..12).map(|_| pool.next_frame(2).unwrap()).collect();
+
+    assert_eq!(
+        &published[..7],
+        [
+            "slot-0#1", "slot-1#1", "slot-2#1", "slot-3#1", "slot-4#1", "slot-5#1", "slot-6#1"
+        ],
+        "the pool grows to the rotation depth plus every frame the mailboxes queue or lend"
+    );
+    assert_eq!(pool.pool.slot_count(), 7);
+    assert_eq!(
+        published[7], "slot-0#2",
+        "a slot is reused only once as many publishes as the mailboxes queue or lend passed it"
+    );
+}
+
+#[test]
+fn the_output_links_borrow_quotas_raise_the_pools_capacity_past_its_default() {
+    let mut pool = PoolUnderTest::new();
+    let kept_by_the_links = kept(4, 16);
+    pool.pool
+        .keep_room_for_what_its_output_links_keep(kept_by_the_links);
+    let unheld_slot_reserve = 2
+        + kept_by_the_links.queued_in_their_mailboxes
+        + kept_by_the_links.borrowed_past_their_mailboxes;
+    let capacity = unheld_slot_reserve + kept_by_the_links.borrowed_past_their_mailboxes;
+    assert!(capacity > PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY);
+
+    for _ in 0..capacity {
+        let frame = pool.next_frame(2).unwrap();
+        pool.check_out(&frame);
+    }
+    assert_eq!(pool.pool.slot_count(), capacity);
+
+    assert!(matches!(
+        pool.next_frame(2),
+        Err(Error::EverySlotInTheProcessorOutputPoolIsInUse { pool_capacity, .. })
+            if pool_capacity == capacity
+    ));
+}
+
+#[test]
+fn an_unwired_links_room_is_given_back_lazily() {
+    let mut pool = PoolUnderTest::new();
+    pool.pool
+        .keep_room_for_what_its_output_links_keep(kept(3, 2));
+    for _ in 0..7 {
+        pool.next_frame(2).unwrap();
+    }
+
+    pool.pool
+        .keep_room_for_what_its_output_links_keep(OutputFramesKeptByOutputLinks::default());
+    let published: Vec<_> = (0..3).map(|_| pool.next_frame(2).unwrap()).collect();
+
+    assert_eq!(published, ["slot-0#2", "slot-1#2", "slot-2#2"]);
+    assert_eq!(
+        pool.pool.slot_count(),
+        7,
+        "no slot is freed by the unwiring"
+    );
+}
+
+#[test]
+fn what_each_output_link_keeps_is_summed_and_an_unwired_link_is_forgotten() {
+    let kept_by_the_links = OutputFramesKeptByTheOutputLinksOfOneProcessor::default();
+    kept_by_the_links.note_a_wired_output_link("link-a", 4, 2);
+    kept_by_the_links.note_a_wired_output_link("link-b", 1, 8);
+    kept_by_the_links.note_a_wired_output_link("link-b", 1, 3);
+    assert_eq!(kept_by_the_links.kept_by_every_output_link(), kept(5, 5));
+
+    kept_by_the_links.forget_an_unwired_output_link("link-a");
+    assert_eq!(kept_by_the_links.kept_by_every_output_link(), kept(1, 3));
+}

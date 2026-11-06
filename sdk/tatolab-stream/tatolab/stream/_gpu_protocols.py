@@ -74,8 +74,9 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
 
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
-        pool rotates through `rotation_depth` slots, grows while consumers hold
-        frames, and at its cap, or growing past the device's memory budget,
+        pool rotates through `rotation_depth` slots plus each output link's
+        mailbox depth and borrow quota, grows while consumers hold frames, and
+        at its cap, or growing past the device's memory budget,
         raises by name — the producer drops its own frame rather than wait.
         `NodeOutputTextureRing` is the spelling a node reaches for.
         """

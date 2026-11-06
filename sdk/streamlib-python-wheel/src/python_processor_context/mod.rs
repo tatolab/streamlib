@@ -28,7 +28,8 @@ mod runtime_context;
 
 pub(crate) use format_vocabulary::parse_pixel_format_name;
 pub(crate) use gpu_context::{
-    PythonGpuContextFullAccess, PythonGpuContextLimitedAccess, gpu_operation_error,
+    PooledGpuFrameClaimHeldByARead, PythonGpuContextFullAccess, PythonGpuContextLimitedAccess,
+    gpu_operation_error,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use gpu_surface_check_out_lease::ExportedVkImageCreationRecipe;

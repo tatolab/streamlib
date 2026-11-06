@@ -19,12 +19,16 @@ use std::sync::Arc;
 use std::thread;
 
 use streamlib_surface_client::{
-    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
-    SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, recv_message_with_fds, send_message_with_fds,
+    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+    SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,
+    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+    SURFACE_SHARE_POOL_SLOT_ROW_FIELD, SURFACE_SHARE_POOL_SLOTS_FIELD,
+    SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, gpu_pool_uuid_of_its_wire_name,
+    gpu_pool_uuid_wire_name, recv_message_with_fds, send_message_with_fds,
     split_pool_slot_and_frame_generation,
 };
 
-use crate::core::context::SurfaceCheckOutLeaseHolderId;
+use super::gpu_pool_claimant_process::GpuPoolClaimantProcess;
 use crate::core::context::surface_share_wire_verbs::{
     SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
@@ -34,6 +38,7 @@ use crate::core::context::surface_share_wire_verbs::{
     requested_surface_id, stated_vk_memory_type_index,
     tensor_layout_of_a_storage_buffer_registration,
 };
+use crate::core::context::{GpuPoolClaimantProcessId, SurfaceCheckOutLeaseHolderId};
 
 use super::state::{SurfacePlaneCheckout, SurfaceRegistration, SurfaceShareState};
 #[cfg(test)]
@@ -151,12 +156,15 @@ fn run_listener(
                     // connection is the only identity its leases can be
                     // charged to.
                     let lease_holder = state.check_out_leases().mint_holder_id();
+                    let mut claimant_process_handed_a_column: Option<GpuPoolClaimantProcess> = None;
                     let conn_result = handle_client_connection(
                         stream,
                         state.clone(),
                         &mut connection_runtime_id,
                         lease_holder,
+                        &mut claimant_process_handed_a_column,
                     );
+                    let the_service_dropped_the_connection = conn_result.is_err();
                     if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
                     }
@@ -174,6 +182,15 @@ fn run_listener(
                             .as_deref()
                             .map(|runtime_id| (&state as _, runtime_id)),
                     );
+                    // Every connection the service drops is its claimant's
+                    // fail-stop, and a column clears only once its process has
+                    // exited, never on a connection closing alone.
+                    if let Some(claimant_process) = claimant_process_handed_a_column {
+                        claimant_process.clear_its_columns_once_it_has_exited(
+                            state.check_out_leases().gpu_pool_claim_tables(),
+                            the_service_dropped_the_connection,
+                        );
+                    }
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -225,9 +242,11 @@ fn handle_client_connection(
     state: SurfaceShareState,
     observed_runtime_id: &mut Option<String>,
     lease_holder: SurfaceCheckOutLeaseHolderId,
+    claimant_process_handed_a_column: &mut Option<GpuPoolClaimantProcess>,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
     let mut pool_slot_keys_handed_memory = PoolSlotKeysHandedMemoryOnThisConnection::default();
+    let peer_pid = peer_process_id(&stream);
 
     loop {
         let mut len_buf = [0u8; 4];
@@ -278,6 +297,18 @@ fn handle_client_connection(
                 &mut pool_slot_keys_handed_memory,
             ),
             "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
+            SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP => {
+                match the_claimant_handed_columns_on_this_connection(
+                    peer_pid,
+                    claimant_process_handed_a_column,
+                ) {
+                    Ok(claimant) => handle_claim_table_of_gpu_pool(&state, &request, claimant),
+                    Err(refusal) => (serde_json::json!({"error": refusal}), Vec::new()),
+                }
+            }
+            SURFACE_SHARE_IMPORT_POOL_SLOT_OP => {
+                handle_import_pool_slot(&state, &request, &mut pool_slot_keys_handed_memory)
+            }
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
             "update_layout" => handle_update_layout(&state, &request, lease_holder),
@@ -298,12 +329,32 @@ fn handle_client_connection(
         let response_bytes = serde_json::to_vec(&response)
             .map_err(|e| std::io::Error::other(format!("Failed to serialize response: {}", e)))?;
 
-        send_message_with_fds(&stream, &response_bytes, &reply_fds)?;
+        let sent = send_message_with_fds(&stream, &response_bytes, &reply_fds);
 
         for fd in &reply_fds {
+            // SAFETY: each reply fd was dup'd for this reply and is owned here.
             unsafe { libc::close(*fd) };
         }
+        sent?;
     }
+}
+
+/// The claimant this connection's peer claims as, held the first time it is
+/// handed a column; refused when its process cannot be named or held.
+fn the_claimant_handed_columns_on_this_connection(
+    peer_pid: Option<u32>,
+    claimant_process_handed_a_column: &mut Option<GpuPoolClaimantProcess>,
+) -> Result<GpuPoolClaimantProcessId, String> {
+    if let Some(claimant_process) = claimant_process_handed_a_column {
+        return Ok(claimant_process.claimant());
+    }
+    let peer_pid = peer_pid.ok_or_else(|| {
+        "the peer's process could not be named, so it is given no claimant column".to_string()
+    })?;
+    let claimant_process = GpuPoolClaimantProcess::hold_the_peer(peer_pid)?;
+    let claimant = claimant_process.claimant();
+    *claimant_process_handed_a_column = Some(claimant_process);
+    Ok(claimant)
 }
 
 /// The raw-handle export contract an OPAQUE_FD producer states beside its
@@ -746,6 +797,115 @@ fn handle_check_out(
     )
 }
 
+/// Hand a peer the claim table a `GpuPoolSlotFrame` descriptor names: the
+/// table's memfd, the column the peer's process claims in, and the pool slot
+/// key leased to each row. A peer past the table's last column is refused.
+fn handle_claim_table_of_gpu_pool(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+    claimant: GpuPoolClaimantProcessId,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(pool_uuid) = request
+        .get(SURFACE_SHARE_GPU_POOL_FIELD)
+        .and_then(|value| value.as_str())
+        .and_then(gpu_pool_uuid_of_its_wire_name)
+    else {
+        return (
+            serde_json::json!({"error": "missing or malformed pool"}),
+            Vec::new(),
+        );
+    };
+    let Some(table) = state
+        .check_out_leases()
+        .gpu_pool_claim_tables()
+        .table_named(&pool_uuid)
+    else {
+        return (
+            serde_json::json!({"error": "no GPU pool holds that claim table"}),
+            Vec::new(),
+        );
+    };
+    let claimant_column = match table.claimant_column_of(claimant) {
+        Ok(column) => column,
+        Err(refusal) => {
+            return (
+                serde_json::json!({"error": refusal.to_string()}),
+                Vec::new(),
+            );
+        }
+    };
+    // SAFETY: a valid memfd the table keeps open for its life.
+    let duplicated_memfd = unsafe {
+        libc::fcntl(
+            table.shared_rows().memfd().as_raw_fd(),
+            libc::F_DUPFD_CLOEXEC,
+            0,
+        )
+    };
+    if duplicated_memfd < 0 {
+        return (
+            serde_json::json!({"error": "failed to dup the claim table memfd"}),
+            Vec::new(),
+        );
+    }
+    let pool_slots: Vec<serde_json::Value> = table
+        .pool_slot_keys_by_row()
+        .into_iter()
+        .map(|(row_index, pool_slot_key)| {
+            serde_json::json!({
+                SURFACE_SHARE_POOL_SLOT_ROW_FIELD: row_index,
+                "surface_id": pool_slot_key,
+            })
+        })
+        .collect();
+    (
+        serde_json::json!({
+            SURFACE_SHARE_GPU_POOL_FIELD: gpu_pool_uuid_wire_name(&pool_uuid),
+            SURFACE_SHARE_CLAIMANT_COLUMN_FIELD: claimant_column.index(),
+            SURFACE_SHARE_POOL_SLOTS_FIELD: pool_slots,
+        }),
+        vec![duplicated_memfd],
+    )
+}
+
+/// Hand a peer one pool slot's memory under its pool slot key, with no lease:
+/// what keeps the slot from reuse is the peer's claim in the pool's claim
+/// table, per frame.
+fn handle_import_pool_slot(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+    pool_slot_keys_handed_memory: &mut PoolSlotKeysHandedMemoryOnThisConnection,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(pool_slot_key) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+    if pool_slot_of_a_published_frame_id(pool_slot_key).is_some() {
+        return (
+            serde_json::json!({"error": "import_pool_slot names a pool slot key, never a \
+                                published frame id"}),
+            Vec::new(),
+        );
+    }
+    let Some(checkout) = state.get_surface_planes(pool_slot_key) else {
+        return (
+            serde_json::json!({"error": "surface not found"}),
+            Vec::new(),
+        );
+    };
+    let reply_fds = match duplicate_the_handles_of_a_check_out(&checkout) {
+        Ok(duplicated_fds) => duplicated_fds,
+        Err(refusal) => return (refusal, Vec::new()),
+    };
+    pool_slot_keys_handed_memory.remember(pool_slot_key);
+    (
+        surface_share_check_out_metadata(state, pool_slot_key, checkout),
+        reply_fds,
+    )
+}
+
 fn handle_release_check_out(
     state: &SurfaceShareState,
     request: &serde_json::Value,
@@ -1069,8 +1229,18 @@ fn handle_check_in(
 /// we conservatively classify the peer as a subprocess so the watchdog
 /// does not silently skip a real cleanup.
 fn is_out_of_process_peer(stream: &UnixStream) -> bool {
+    let Some(peer_pid) = peer_process_id(stream) else {
+        return true;
+    };
+    let host_pid = unsafe { libc::getpid() };
+    peer_pid != host_pid as u32
+}
+
+/// The pid of the process on the other end of `stream`, per `SO_PEERCRED`.
+fn peer_process_id(stream: &UnixStream) -> Option<u32> {
     let mut ucred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: a valid socket fd and an out-parameter sized to `ucred`.
     let ret = unsafe {
         libc::getsockopt(
             stream.as_raw_fd(),
@@ -1080,11 +1250,7 @@ fn is_out_of_process_peer(stream: &UnixStream) -> bool {
             &mut len,
         )
     };
-    if ret != 0 {
-        return true;
-    }
-    let host_pid = unsafe { libc::getpid() };
-    ucred.pid != host_pid
+    (ret == 0).then_some(ucred.pid as u32)
 }
 
 unsafe impl Send for UnixSocketSurfaceService {}
@@ -2652,6 +2818,240 @@ mod tests {
                 "holds_pool_slot_import={holds_pool_slot_import}: {refused:?}"
             );
         }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A peer handed a pool's claim table gets the table's memfd, a column for
+    /// its process, and every leased row's key; its claim through the mapped
+    /// fd holds the slot in the engine's own table.
+    #[test]
+    fn a_claim_table_hand_over_maps_the_engines_rows_and_names_every_leased_slot() {
+        use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+        use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
+        use std::os::fd::OwnedFd;
+        use streamlib_ipc_types::GpuPoolClaimantColumn;
+        use streamlib_surface_client::GpuPoolClaimTableHandOver;
+
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let mut claim_tables = GpuPoolClaimTablesOfOnePool::named("handed-over");
+        let leased_rows: Vec<_> = ["slot-a", "slot-b"]
+            .into_iter()
+            .map(|pool_slot_key| {
+                claim_tables
+                    .lease_a_row_for_a_slot(check_out_leases.gpu_pool_claim_tables(), pool_slot_key)
+                    .unwrap()
+            })
+            .collect();
+        let pool_uuid = leased_rows[0].table().pool_uuid();
+        leased_rows[1].row().publish_generation(4);
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let (reply, reply_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+                SURFACE_SHARE_GPU_POOL_FIELD: gpu_pool_uuid_wire_name(&pool_uuid),
+            }),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect("claim table request");
+
+        assert!(reply.get("error").is_none(), "{reply:?}");
+        let hand_over = GpuPoolClaimTableHandOver::from_reply(&reply).unwrap();
+        assert_eq!(
+            hand_over.pool_slot_key_by_row,
+            vec![(0, "slot-a".to_string()), (1, "slot-b".to_string())]
+        );
+        let [memfd] = reply_fds.as_slice() else {
+            panic!("one memfd, got {reply_fds:?}");
+        };
+        // SAFETY: the fd arrived over SCM_RIGHTS and is owned by nothing else.
+        let mapped =
+            GpuPoolClaimTableMemfd::adopt(unsafe { OwnedFd::from_raw_fd(*memfd) }).unwrap();
+        let column = GpuPoolClaimantColumn::at(hand_over.claimant_column_index).unwrap();
+        mapped.rows()[1].claim_frame(column, 4).unwrap();
+        assert!(leased_rows[1].row().is_claimed());
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A claimant process that sends an oversized message has its connection
+    /// dropped, is stopped, and only once it has exited is its column
+    /// cleared, freeing the slot it left claimed for a rehand.
+    #[test]
+    fn a_claimant_sending_an_oversized_message_is_stopped_and_its_column_cleared() {
+        a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared("oversized");
+    }
+
+    /// A claimant process that sends a message that is not JSON is stopped
+    /// the same way, and its column cleared once it has exited.
+    #[test]
+    fn a_claimant_sending_a_malformed_message_is_stopped_and_its_column_cleared() {
+        a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared("malformed");
+    }
+
+    fn a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared(
+        how_it_breaks_the_protocol: &str,
+    ) {
+        use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+        use std::io::{BufRead as _, Write as _};
+        use streamlib_ipc_types::{
+            GPU_POOL_CLAIM_TABLE_ROW_BYTES, GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,
+            GpuPoolSlotRehandTest,
+        };
+
+        const CLAIMANT_THAT_BREAKS_THE_PROTOCOL: &str = r#"
+import json, mmap, socket, struct, sys, time
+path, pool, row, row_bytes, counts_offset = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
+how_it_breaks_the_protocol = sys.argv[6]
+connection = socket.socket(socket.AF_UNIX)
+connection.connect(path)
+request = json.dumps({"op": "claim_table_of_gpu_pool", "pool": pool}).encode()
+connection.sendall(struct.pack(">I", len(request)) + request)
+(reply_len,) = struct.unpack(">I", connection.recv(4))
+reply, fds, _, _ = socket.recv_fds(connection, reply_len, 1)
+column = json.loads(reply)["claimant_column"]
+table = mmap.mmap(fds[0], 0)
+count_at = row * row_bytes + counts_offset + 4 * column
+table[count_at:count_at + 4] = struct.pack("<I", 1)
+print("claimed", flush=True)
+sys.stdin.readline()
+if how_it_breaks_the_protocol == "oversized":
+    connection.sendall(struct.pack(">I", 0xFFFFFFFF))
+else:
+    not_json = b"{not json"
+    connection.sendall(struct.pack(">I", len(not_json)) + not_json)
+time.sleep(30)
+"#;
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let mut claim_tables = GpuPoolClaimTablesOfOnePool::named("fail-stop");
+        let leased_row = claim_tables
+            .lease_a_row_for_a_slot(check_out_leases.gpu_pool_claim_tables(), "fail-stop-slot")
+            .unwrap();
+        leased_row.row().publish_generation(1);
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+
+        let Ok(mut claimant) = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(CLAIMANT_THAT_BREAKS_THE_PROTOCOL)
+            .arg(&socket_path)
+            .arg(gpu_pool_uuid_wire_name(&leased_row.table().pool_uuid()))
+            .arg(leased_row.row_index().to_string())
+            .arg(GPU_POOL_CLAIM_TABLE_ROW_BYTES.to_string())
+            .arg(GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET.to_string())
+            .arg(how_it_breaks_the_protocol)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            tracing::warn!("skipping: no python3 to stand in for a claimant process");
+            service.stop();
+            return;
+        };
+        let mut claimant_says = String::new();
+        std::io::BufReader::new(claimant.stdout.take().unwrap())
+            .read_line(&mut claimant_says)
+            .unwrap();
+        assert_eq!(claimant_says.trim(), "claimed");
+        assert_eq!(
+            leased_row.row().retire_for_a_rehand(1),
+            GpuPoolSlotRehandTest::HeldByAClaim
+        );
+
+        writeln!(claimant.stdin.take().unwrap()).unwrap();
+        let exit = claimant.wait().unwrap();
+        assert!(
+            std::os::unix::process::ExitStatusExt::signal(&exit) == Some(libc::SIGKILL),
+            "the service stopped the claimant: {exit:?}"
+        );
+        let column_cleared_within = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while leased_row.row().is_claimed() && std::time::Instant::now() < column_cleared_within {
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            leased_row.row().retire_for_a_rehand(1),
+            GpuPoolSlotRehandTest::RetiredForTheRehand
+        );
+
+        service.stop();
+    }
+
+    /// A pool the engine holds no table for, or a malformed pool name, is
+    /// refused with no fd.
+    #[test]
+    fn a_claim_table_hand_over_of_an_unknown_or_malformed_pool_is_refused() {
+        let (_socket_dir, socket_path, mut service) = started_service(SurfaceShareState::new());
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        for pool in ["00112233445566778899aabbccddeeff", "not-a-pool"] {
+            let (reply, reply_fds) = send_request_with_fds(
+                &stream,
+                &serde_json::json!({
+                    "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+                    SURFACE_SHARE_GPU_POOL_FIELD: pool,
+                }),
+                &[],
+                MAX_SCM_RIGHTS_FDS,
+            )
+            .expect("claim table request");
+            assert!(reply.get("error").is_some(), "{pool}: {reply:?}");
+            assert!(reply_fds.is_empty());
+        }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A slot imported by its key carries its memory and takes no lease, and
+    /// its retirement is listed on the importing connection like a check-out's.
+    #[test]
+    fn importing_a_pool_slot_carries_its_memory_and_takes_no_lease() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        register_pool_slot(&stream, "pool-slot-imported");
+
+        let (imported, imported_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+                "surface_id": "pool-slot-imported",
+            }),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect("import request");
+        close_every_fd(&imported_fds);
+
+        assert!(imported.get("error").is_none(), "{imported:?}");
+        assert_eq!(imported_fds.len(), 1);
+        assert_eq!(imported.get("width").and_then(|v| v.as_u64()), Some(64));
+        assert_eq!(
+            lease_count_settling_to(&check_out_leases, "pool-slot-imported", 0),
+            0
+        );
+        let (refused, _) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+                "surface_id": "pool-slot-imported#1",
+            }),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect("import request");
+        assert!(
+            wire_error_of(&refused).contains("pool slot key"),
+            "{refused:?}"
+        );
 
         drop(stream);
         service.stop();

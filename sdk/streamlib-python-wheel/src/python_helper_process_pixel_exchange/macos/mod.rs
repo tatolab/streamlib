@@ -10,9 +10,9 @@ use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
 
 use super::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
-    HelperSurfaceCheckOutLeaseDebt, SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer,
-    SurfaceShareTransferredHandle, refuse_check_out_the_service_declined,
-    required_positive_u32_check_out_metadata_field,
+    HelperSurfaceCheckOutLeaseDebt, HelperSurfaceHeldAgainstProducerReuse,
+    SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer, SurfaceShareTransferredHandle,
+    refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
 };
 
 mod foreign_iosurface;
@@ -524,7 +524,9 @@ impl HelperProcessGpuExchangeClient {
                 format,
                 bytes_per_row,
                 release_to_parent: None,
-                release_check_out_to_surface_share,
+                held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(
+                    release_check_out_to_surface_share,
+                ),
             },
         ))
     }

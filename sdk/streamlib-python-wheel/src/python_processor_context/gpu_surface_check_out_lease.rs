@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::python_helper_process_pixel_exchange::HelperSurfaceCheckOutLeaseDebt;
+use crate::python_helper_process_pixel_exchange::HelperSurfaceHeldAgainstProducerReuse;
 
 /// A claim on a published surface, held for exactly as long as this object is.
 ///
@@ -23,7 +23,7 @@ pub(crate) struct PythonGpuSurfaceCheckOutLease {
     /// Settled by its own `Drop`; nothing reads it, and that is the point.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[expect(dead_code, reason = "the field is the claim; its Drop is the release")]
-    pub(super) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    pub(super) held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
 }
 
 #[pymethods]

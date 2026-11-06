@@ -336,6 +336,7 @@ pub(crate) fn open_the_source_side_of_a_link(
                 channel_ceiling_bytes,
                 channel_sizing,
                 destination.max_notifiers,
+                destination.input_port_delivery,
                 link_id,
             )?;
             (
@@ -1235,8 +1236,16 @@ fn wire_subprocess_source(
     channel_ceiling_bytes: usize,
     channel_sizing: ChannelSizing,
     notify_max_notifiers: usize,
+    destination_input_port_delivery: DeliveryResolution,
     link_id: &LinkUniqueId,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
+    link_wiring
+        .output_frames_kept_by_its_output_links()
+        .note_a_wired_output_link(
+            link_id.as_str(),
+            destination_input_port_delivery.depth,
+            destination_input_port_delivery.borrow_quota,
+        );
     let mut entry = serde_json::json!({
         "name": source_port,
         "link_id": link_id.to_string(),
@@ -1254,10 +1263,16 @@ fn wire_subprocess_source(
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
     entry["output_port_wiring_generation"] =
         serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
-    let wire_reply = link_wiring.record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
-        crate::core::PortDirection::Output,
-        entry,
-    )?;
+    let wire_reply = link_wiring
+        .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+            crate::core::PortDirection::Output,
+            entry,
+        )
+        .inspect_err(|_| {
+            link_wiring
+                .output_frames_kept_by_its_output_links()
+                .forget_an_unwired_output_link(link_id.as_str());
+        })?;
     insert_loss_counts_on_processor_node_once(
         graph,
         source_proc_id,
@@ -1521,6 +1536,7 @@ mod tests {
             1 << 20,
             sizing_of_a_two_subscriber_test_channel(),
             1,
+            DeliveryProfile::Newest.resolve(),
             link_id,
         )
         .expect("recording source wiring must succeed");
@@ -1935,6 +1951,58 @@ mod tests {
     /// leak — a live helper child keeps the notifier and appends another on
     /// reconnect, until the notify service's create-time `max_notifiers` cap
     /// is exhausted (`ExceedsMaxSupportedNotifiers`).
+    /// A helper's output pools are sized from what its wired output links
+    /// keep: each link's mailbox depth and borrow quota from wiring until its
+    /// disconnect.
+    #[test]
+    fn a_wired_output_link_keeps_room_in_its_helpers_pools_until_it_is_disconnected() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        for processor_id in [&source_id, &dest_id] {
+            attach_processor_instance(
+                &mut graph,
+                processor_id,
+                ProcessorInstance::new(Box::new(
+                    OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery::default(),
+                        ProcessExecution::Reactive,
+                    ),
+                )),
+            );
+        }
+        let link_id = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&source_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            )
+            .first()
+            .expect("the link must exist")
+            .id
+            .clone();
+        let kept_by_the_sources_output_links =
+            out_of_process_link_wiring_of(&graph, &source_id.as_str().into())
+                .expect("a helper stub's node carries its link wiring")
+                .output_frames_kept_by_its_output_links();
+
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
+        let newest_delivery = DeliveryProfile::Newest.resolve();
+        assert_eq!(
+            kept_by_the_sources_output_links.kept_by_every_output_link(),
+            crate::core::context::processor_output_surface_pool::OutputFramesKeptByOutputLinks {
+                queued_in_their_mailboxes: newest_delivery.depth,
+                borrowed_past_their_mailboxes: newest_delivery.borrow_quota,
+            }
+        );
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
+        assert_eq!(
+            kept_by_the_sources_output_links.kept_by_every_output_link(),
+            Default::default()
+        );
+    }
+
     #[test]
     fn disconnecting_an_out_of_process_link_reclaims_both_endpoints() {
         let mut graph = Graph::new();

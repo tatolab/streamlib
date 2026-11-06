@@ -580,6 +580,8 @@ class LinkOutputDataWriter(Protocol):
         payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
+        *,
+        pooled_gpu_frame: str | None = None,
     ) -> None:
         """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
@@ -588,7 +590,13 @@ class LinkOutputDataWriter(Protocol):
         `starts_group=True` says the message stands alone; only encoded media
         passes `False`, for a message a decoder cannot enter at. A payload over
         the channel's ceiling is dropped and counted against this port, never
-        raised.
+        raised. A record whose `surface_id` names a pooled GPU frame this node
+        acquired or read — a `VideoFrame` read and written on, or one naming a
+        `NodeOutputTextureRing` slot — carries the frame's descriptor, so every
+        reader claims the frame with no request. `pooled_gpu_frame` names the
+        frame explicitly for any other payload; an id naming no such frame
+        raises `ValueError`. Claim tables cross processes only on Linux, so on
+        macOS every `pooled_gpu_frame` raises `ValueError`.
         """
         ...
 

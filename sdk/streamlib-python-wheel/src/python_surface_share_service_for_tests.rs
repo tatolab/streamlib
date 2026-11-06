@@ -139,6 +139,11 @@ impl SurfaceShareUnderTest {
             .to_string()
     }
 
+    /// The lease table the service keeps, and the claim tables it hands over.
+    pub(crate) fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
+        &self.check_out_leases
+    }
+
     /// Publish `frame_generation` as the current frame of a pool slot the
     /// test registered itself.
     pub(crate) fn publish_frame_generation_over_a_registered_pool_slot(

@@ -557,11 +557,12 @@ pub(in super::super) fn handle_run_ray_tracing_kernel(
         });
 
     match traced {
-        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(texture_layouts_after_the_run) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             // Echo the kernel_id back — the trace is sync host-side, so no
             // separate handle is allocated per trace.
             handle_id: req.kernel_id,
+            texture_layouts_after_the_run: Some(texture_layouts_after_the_run),
             ..Default::default()
         }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -583,7 +584,7 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     held_kernel: &mut RayTracingKernelHeldForOneTrace<'_>,
     req: &EscalateRequestRunRayTracingKernel,
     push_constants: &[u8],
-) -> crate::core::error::Result<()> {
+) -> crate::core::error::Result<Vec<crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseTextureLayoutAfterTheRun>>{
     use crate::core::error::Error;
     use crate::core::rhi::RayTracingBindingKind;
     use crate::vulkan::rhi::{AccelerationStructureKind, VulkanStage};
@@ -723,15 +724,13 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
         kernel.set_push_constants(push_constants)?;
     }
 
-    let traced = kernel.trace_rays(req.width, req.height, req.depth);
-    if traced.is_ok() {
-        publish_bound_surface_layouts_to_surface_share(
-            host_gpu_context.surface_store(),
-            &bound_surface_layout_publish_pairs(&bound_inputs),
-        );
-    }
+    kernel.trace_rays(req.width, req.height, req.depth)?;
+    let texture_layouts_after_the_run = publish_bound_surface_layouts_to_surface_share(
+        host_gpu_context.surface_store(),
+        &bound_surface_layout_publish_pairs(&bound_inputs),
+    );
     drop(bound_inputs);
-    traced
+    Ok(texture_layouts_after_the_run)
 }
 
 /// Convert a sentinel-encoded wire stage index back into an

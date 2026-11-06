@@ -18,6 +18,15 @@
 
 use iceoryx2::prelude::*;
 
+mod gpu_pool_claim_table;
+pub use gpu_pool_claim_table::{
+    GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS,
+    GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT, GPU_POOL_CLAIM_TABLE_ROW_BYTES,
+    GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,
+    GPU_POOL_CLAIM_TABLE_ROW_PUBLISHED_GENERATION_OFFSET, GPU_POOL_CLAIM_TABLE_ROWS,
+    GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled, GpuPoolSlotRehandTest,
+};
+
 /// The initial iceoryx2 slot capacity every channel publisher is primed at.
 ///
 /// This is a HINT, never a cap. Publishers open under
@@ -682,13 +691,15 @@ pub const GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET: usize = 16;
 pub const GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET: usize = 20;
 /// Byte offset of [`GpuPoolSlotFrameDescriptorBody::timeline_value`] in a descriptor body.
 pub const GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET: usize = 28;
+/// Byte offset of [`GpuPoolSlotFrameDescriptorBody::image_layout`] in a descriptor body.
+pub const GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET: usize = 36;
 /// Bytes of a descriptor body the GPU pool slot frame uses; the rest are
 /// reserved zero.
-pub const GPU_POOL_SLOT_FRAME_BODY_USED_BYTES: usize = 36;
+pub const GPU_POOL_SLOT_FRAME_BODY_USED_BYTES: usize = 40;
 
 /// The body of a [`DataChannelPayloadDescriptorKind::GpuPoolSlotFrame`]
-/// descriptor: which pool, which slot, which hand-out of it, and the timeline
-/// value its writes signal. Packed little-endian into the descriptor body at
+/// descriptor: which pool, which slot, which hand-out of it, the timeline
+/// value its writes signal, and the image layout it is left in. Packed little-endian into the descriptor body at
 /// the `GPU_POOL_SLOT_FRAME_BODY_*_OFFSET` offsets, because the body is a byte
 /// array at a 4-byte offset and cannot hold an 8-byte-aligned field in place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -701,6 +712,9 @@ pub struct GpuPoolSlotFrameDescriptorBody {
     pub generation: u64,
     /// The timeline semaphore value the frame's writes signal.
     pub timeline_value: u64,
+    /// The `VkImageLayout` the producer left the slot's image in, as its raw
+    /// value; `VK_IMAGE_LAYOUT_UNDEFINED` (0) for a buffer slot.
+    pub image_layout: i32,
 }
 
 impl GpuPoolSlotFrameDescriptorBody {
@@ -714,8 +728,11 @@ impl GpuPoolSlotFrameDescriptorBody {
         body[GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET
             ..GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET]
             .copy_from_slice(&self.generation.to_le_bytes());
-        body[GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET..GPU_POOL_SLOT_FRAME_BODY_USED_BYTES]
+        body[GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET
+            ..GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET]
             .copy_from_slice(&self.timeline_value.to_le_bytes());
+        body[GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET..GPU_POOL_SLOT_FRAME_BODY_USED_BYTES]
+            .copy_from_slice(&self.image_layout.to_le_bytes());
         body
     }
 
@@ -742,6 +759,11 @@ impl GpuPoolSlotFrameDescriptorBody {
         let mut timeline_value = [0u8; 8];
         timeline_value.copy_from_slice(field(
             GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET,
+            GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET,
+        ));
+        let mut image_layout = [0u8; 4];
+        image_layout.copy_from_slice(field(
+            GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET,
             GPU_POOL_SLOT_FRAME_BODY_USED_BYTES,
         ));
         Self {
@@ -749,6 +771,7 @@ impl GpuPoolSlotFrameDescriptorBody {
             slot: u32::from_le_bytes(slot),
             generation: u64::from_le_bytes(generation),
             timeline_value: u64::from_le_bytes(timeline_value),
+            image_layout: i32::from_le_bytes(image_layout),
         }
     }
 }
@@ -1017,15 +1040,17 @@ mod tests {
                 GPU_POOL_SLOT_FRAME_BODY_SLOT_OFFSET,
                 GPU_POOL_SLOT_FRAME_BODY_GENERATION_OFFSET,
                 GPU_POOL_SLOT_FRAME_BODY_TIMELINE_VALUE_OFFSET,
+                GPU_POOL_SLOT_FRAME_BODY_IMAGE_LAYOUT_OFFSET,
                 GPU_POOL_SLOT_FRAME_BODY_USED_BYTES,
             ],
-            [0, 16, 20, 28, 36]
+            [0, 16, 20, 28, 36, 40]
         );
         let frame = GpuPoolSlotFrameDescriptorBody {
             pool: *b"0123456789abcdef",
             slot: 0x0403_0201,
             generation: 0x0c0b_0a09_0807_0605,
             timeline_value: u64::MAX - 1,
+            image_layout: 1_000_001_002,
         };
         let descriptor = DataChannelPayloadDescriptor::gpu_pool_slot_frame(frame);
         assert_eq!(
@@ -1036,7 +1061,8 @@ mod tests {
         assert_eq!(&descriptor.body[16..20], &[1, 2, 3, 4]);
         assert_eq!(&descriptor.body[20..28], &[5, 6, 7, 8, 9, 10, 11, 12]);
         assert_eq!(&descriptor.body[28..36], &(u64::MAX - 1).to_le_bytes());
-        assert!(descriptor.body[36..].iter().all(|&reserved| reserved == 0));
+        assert_eq!(&descriptor.body[36..40], &1_000_001_002i32.to_le_bytes());
+        assert!(descriptor.body[40..].iter().all(|&reserved| reserved == 0));
         assert_eq!(
             GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&descriptor.body),
             frame

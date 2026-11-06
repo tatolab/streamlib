@@ -242,6 +242,14 @@ pub enum Error {
         pool_capacity: usize,
     },
 
+    #[error(
+        "GPU pool '{pool}' already has {claimant_column_limit} interpreters claiming its frames,          the most its claim table holds, so this interpreter's link to it is refused"
+    )]
+    GpuPoolClaimantColumnsExhausted {
+        pool: String,
+        claimant_column_limit: usize,
+    },
+
     /// A node's one-off acquisition refused because the node already holds
     /// as many of that shape as one node may.
     #[error(

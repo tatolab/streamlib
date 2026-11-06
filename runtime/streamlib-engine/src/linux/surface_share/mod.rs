@@ -8,6 +8,7 @@
 //! spawned by the runtime receive the socket path through
 //! `STREAMLIB_SURFACE_SOCKET` and exchange DMA-BUF fds via `SCM_RIGHTS`.
 
+pub mod gpu_pool_claimant_process;
 pub mod state;
 pub mod surface_share_sockets_left_by_dead_runtimes;
 pub mod unix_socket_service;

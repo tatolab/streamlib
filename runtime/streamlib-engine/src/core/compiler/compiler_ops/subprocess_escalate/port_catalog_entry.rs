@@ -16,6 +16,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
+use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::descriptors::CatalogEntry;
 use crate::core::output_port_catalog_entries::{
     CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
@@ -23,8 +24,9 @@ use crate::core::output_port_catalog_entries::{
 
 /// What the node a helper-placed processor runs for reaches beside the GPU: its
 /// own output ports' catalog entries, the upstream ones its inbound links
-/// reach, the helper's leases on the runtime's shared native services, and
-/// the failure the node reported of itself.
+/// reach, the helper's leases on the runtime's shared native services, the
+/// failure the node reported of itself, and what its output links keep of its
+/// output frames.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) catalog_entries_of_its_output_ports: Arc<CatalogEntriesOfOutputPorts>,
@@ -32,6 +34,8 @@ pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
         Arc<UpstreamCatalogEntriesByInboundLink>,
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
+    pub(crate) output_frames_kept_by_its_output_links:
+        Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
 }
 
 /// Replace the entry the helper's output port carries.

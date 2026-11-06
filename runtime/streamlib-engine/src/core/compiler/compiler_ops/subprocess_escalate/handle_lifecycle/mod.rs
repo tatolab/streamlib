@@ -11,9 +11,9 @@ mod tests;
 
 use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 pub(crate) use processor_output_pools_of_one_helper::{
-    ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff, ProcessorOutputPoolsOfOneHelper,
-    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor,
-    ReleasedProcessorOutputPoolSlot,
+    ProcessorOutputFrameHandOff, ProcessorOutputFramePublished, ProcessorOutputFreshSlotHandOff,
+    ProcessorOutputPoolsOfOneHelper, ProcessorOutputSlotDescriptor,
+    ProcessorOutputTextureDescriptor, ReleasedProcessorOutputPoolSlot,
 };
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -154,8 +154,26 @@ pub(crate) struct EscalateHandleRegistry {
 }
 
 impl EscalateHandleRegistry {
+    #[cfg(test)]
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// A registry whose processor output pools are sized for what
+    /// `output_frames_kept_by_its_output_links` records.
+    pub(crate) fn for_a_helper_whose_output_links_keep(
+        output_frames_kept_by_its_output_links: Arc<
+            crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor,
+        >,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            processor_output_pools: Mutex::new(
+                ProcessorOutputPoolsOfOneHelper::sized_for_what_its_output_links_keep(
+                    output_frames_kept_by_its_output_links,
+                ),
+            ),
+            ..Self::default()
+        })
     }
 
     /// This helper's colour-conversion session, taken for one conversion or

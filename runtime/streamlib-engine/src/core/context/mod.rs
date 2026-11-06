@@ -10,6 +10,7 @@ mod device_backend_probe_chain;
 mod device_stream_liveness_report;
 pub(crate) mod escalate_gate;
 mod gpu_context;
+pub(crate) mod gpu_pool_claim_table;
 pub(crate) mod isolation;
 pub(crate) mod lease_aware_pool_slot_ring;
 mod one_off_acquisitions_counted_for_one_native_node;
@@ -85,11 +86,22 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
+#[cfg(target_os = "linux")]
+pub use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
+pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
+pub use gpu_pool_claim_table::{
+    GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
+    GpuPoolClaimantProcessId,
+};
 pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use stream_clock::{
     DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClock, StreamClockReading, StreamClockSpec,
     machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,
     stream_time_ns_on_a_published_clock,
+};
+pub use streamlib_ipc_types::{
+    GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
+    GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest,
 };
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,

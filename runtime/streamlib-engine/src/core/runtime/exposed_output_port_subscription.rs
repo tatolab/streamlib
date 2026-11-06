@@ -421,6 +421,7 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
             lost_since_last_read: std::mem::take(
                 &mut self.lost_ahead_of_the_next_message_forwarded,
             ),
+            payload_descriptor: channel_user_header.payload_descriptor,
         })
     }
 
@@ -580,6 +581,7 @@ mod tests {
             timestamp_ns,
             group_boundary,
             lost_since_last_read,
+            payload_descriptor: crate::iceoryx2::DataChannelPayloadDescriptor::bytes(),
         }
     }
 

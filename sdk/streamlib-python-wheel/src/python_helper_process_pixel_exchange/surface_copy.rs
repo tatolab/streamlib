@@ -22,7 +22,12 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("op", "copy_surface_to_surface")?;
         op.set_item("source_surface_id", source_surface_id)?;
         op.set_item("destination_surface_id", destination_surface_id)?;
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let settled_response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        #[cfg(target_os = "linux")]
+        self.note_the_texture_layouts_a_run_left(&settled_response);
+        #[cfg(not(target_os = "linux"))]
+        let _ = settled_response;
         Ok(())
     }
 }

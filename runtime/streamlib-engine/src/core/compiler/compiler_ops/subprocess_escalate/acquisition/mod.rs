@@ -31,9 +31,9 @@ use neither_linux_nor_macos::{
 };
 
 use super::handle_lifecycle::{
-    EscalateHandleRegistry, ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff,
-    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor, RegisteredHandle,
-    release_processor_output_pool_slot,
+    EscalateHandleRegistry, ProcessorOutputFrameHandOff, ProcessorOutputFramePublished,
+    ProcessorOutputFreshSlotHandOff, ProcessorOutputSlotDescriptor,
+    ProcessorOutputTextureDescriptor, RegisteredHandle, release_processor_output_pool_slot,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -41,7 +41,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
-    EscalateResponseErr, EscalateResponseOk,
+    EscalateResponseErr, EscalateResponseGpuPoolSlotFrame, EscalateResponseOk,
 };
 use crate::core::context::{GpuContextLimitedAccess, OneOffAcquisitionShape};
 use crate::core::rhi::{
@@ -140,24 +140,26 @@ pub(super) fn handle_acquire_texture(
         }
     };
     let acquired = match processor_output_pool {
-        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
-            sandbox,
-            OneOffAcquisitionShape::Texture {
-                width,
-                height,
-                format: parsed_format,
-                usage: parsed_usage,
-            },
-            |full| {
-                allocate_registered_texture_for_helper(
-                    full,
+        None => registry
+            .acquire_a_one_off_for_the_helper_counted_under_its_shape(
+                sandbox,
+                OneOffAcquisitionShape::Texture {
                     width,
                     height,
-                    parsed_format,
-                    parsed_usage,
-                )
-            },
-        ),
+                    format: parsed_format,
+                    usage: parsed_usage,
+                },
+                |full| {
+                    allocate_registered_texture_for_helper(
+                        full,
+                        width,
+                        height,
+                        parsed_format,
+                        parsed_usage,
+                    )
+                },
+            )
+            .map(ProcessorOutputFramePublished::of_a_one_off),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
@@ -171,9 +173,14 @@ pub(super) fn handle_acquire_texture(
         ),
     };
     match acquired {
-        Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(ProcessorOutputFramePublished {
+            published_frame_id: handle_id,
+            gpu_pool_slot_frame,
+        }) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id,
+            gpu_pool_slot_frame: gpu_pool_slot_frame
+                .map(EscalateResponseGpuPoolSlotFrame::of_the_body),
             width: Some(width),
             height: Some(height),
             format: Some(parsed_format.wire_name().to_string()),
@@ -213,13 +220,15 @@ pub(super) fn handle_acquire_storage_buffer(
         }
     };
     let acquired = match processor_output_pool {
-        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
-            sandbox,
-            OneOffAcquisitionShape::StorageBuffer {
-                tensor_layout: tensor_layout.clone(),
-            },
-            |full| allocate_registered_storage_buffer_for_helper(full, &tensor_layout),
-        ),
+        None => registry
+            .acquire_a_one_off_for_the_helper_counted_under_its_shape(
+                sandbox,
+                OneOffAcquisitionShape::StorageBuffer {
+                    tensor_layout: tensor_layout.clone(),
+                },
+                |full| allocate_registered_storage_buffer_for_helper(full, &tensor_layout),
+            )
+            .map(ProcessorOutputFramePublished::of_a_one_off),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
@@ -228,9 +237,14 @@ pub(super) fn handle_acquire_storage_buffer(
         ),
     };
     match acquired {
-        Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(ProcessorOutputFramePublished {
+            published_frame_id: handle_id,
+            gpu_pool_slot_frame,
+        }) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id,
+            gpu_pool_slot_frame: gpu_pool_slot_frame
+                .map(EscalateResponseGpuPoolSlotFrame::of_the_body),
             shape: Some(tensor_layout.shape().to_vec()),
             dtype: Some(tensor_layout.element_type().wire_name().to_string()),
             ..Default::default()
@@ -301,7 +315,7 @@ fn hand_off_processor_output_frame(
         rotation_depth,
     }: EscalateRequestProcessorOutputPool,
     descriptor: &ProcessorOutputSlotDescriptor,
-) -> crate::core::error::Result<String> {
+) -> crate::core::error::Result<ProcessorOutputFramePublished> {
     let host = sandbox.host_inner();
     let (handed_off, slots_a_descriptor_change_released) = registry
         .processor_output_pools()
@@ -309,8 +323,8 @@ fn hand_off_processor_output_frame(
     for released_slot in slots_a_descriptor_change_released {
         release_processor_output_pool_slot(sandbox, released_slot);
     }
-    if let ProcessorOutputFrameHandOff::Published(published_frame_id) = handed_off? {
-        return Ok(published_frame_id);
+    if let ProcessorOutputFrameHandOff::Published(published) = handed_off? {
+        return Ok(published);
     }
     let (pool_slot_key, registered_handle) =
         sandbox.escalate(|full| allocate_registered_processor_output_slot(full, descriptor))?;
@@ -322,7 +336,7 @@ fn hand_off_processor_output_frame(
         registered_handle,
     );
     match fresh_slot_handed_off {
-        ProcessorOutputFreshSlotHandOff::Published(published_frame_id) => Ok(published_frame_id),
+        ProcessorOutputFreshSlotHandOff::Published(published) => Ok(published),
         ProcessorOutputFreshSlotHandOff::Refused {
             refusal,
             slot_owed_its_release,

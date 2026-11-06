@@ -430,7 +430,9 @@ impl SubprocessBridge {
             stream,
             processor_id,
         )?);
-        let registry = EscalateHandleRegistry::new();
+        let registry = EscalateHandleRegistry::for_a_helper_whose_output_links_keep(Arc::clone(
+            &what_the_node_reaches.output_frames_kept_by_its_output_links,
+        ));
         let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
 
         let dispatch_registry = Arc::clone(&registry);

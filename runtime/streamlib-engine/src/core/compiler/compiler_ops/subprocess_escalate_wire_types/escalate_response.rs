@@ -51,6 +51,36 @@ pub(crate) struct EscalateResponseKernelBinding {
     pub(crate) name: String,
 }
 
+/// The descriptor a pooled frame is claimed by, as an acquire response states
+/// it: the pool's claim table UUID in hex, the slot's row, and the frame's
+/// generation as a decimal string, because JSON has no 64-bit integer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateResponseGpuPoolSlotFrame {
+    pub(crate) pool: String,
+    pub(crate) slot: u32,
+    pub(crate) generation: String,
+}
+
+impl EscalateResponseGpuPoolSlotFrame {
+    pub(crate) fn of_the_body(body: streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody) -> Self {
+        Self {
+            pool: streamlib_surface_client::gpu_pool_uuid_wire_name(&body.pool),
+            slot: body.slot,
+            generation: body.generation.to_string(),
+        }
+    }
+}
+
+/// The `VkImageLayout` a run left one bound texture in, as its raw value: what
+/// a producer stamps on the frame descriptor of a pooled texture it publishes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateResponseTextureLayoutAfterTheRun {
+    pub(crate) surface_id: String,
+    pub(crate) image_layout: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseOk {
@@ -109,6 +139,11 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exporting_device_uuid: Option<String>,
 
+    /// The descriptor a reader claims the frame by. Set on an acquire from a
+    /// processor output pool whose slots a claim table covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gpu_pool_slot_frame: Option<EscalateResponseGpuPoolSlotFrame>,
+
     /// Resolved pixel or texture format identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) format: Option<String>,
@@ -161,6 +196,12 @@ pub(crate) struct EscalateResponseOk {
     /// `acquire_shared_native_service_lease` responses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tenant_stream_id: Option<String>,
+
+    /// The layout each bound texture was left in. Set on `run_compute_kernel`,
+    /// `run_compute_kernel_batch`, `run_graphics_draw` and
+    /// `run_ray_tracing_kernel` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) texture_layouts_after_the_run: Option<Vec<EscalateResponseTextureLayoutAfterTheRun>>,
 
     /// Resolved usage tokens (set on acquire_texture responses). Array reflects
     /// the exact flags the host honored.

@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
+use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
@@ -98,8 +99,8 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
 
     /// Forget every link handed over past the setup command that its far side
     /// never opened, so a new far side is never handed a link `graph` reads
-    /// `error`.
-    fn forget_every_link_its_far_side_never_opened(&mut self) {
+    /// `error`; answers the forgotten links' ids.
+    fn forget_every_link_its_far_side_never_opened(&mut self) -> Vec<String> {
         let never_opened: Vec<String> = self
             .answer_cells_of_links_handed_over_past_the_setup_command
             .drain(..)
@@ -116,6 +117,7 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
             .retain(|link| !never_opened_by_its_far_side(link));
         self.output_links
             .retain(|link| !never_opened_by_its_far_side(link));
+        never_opened
     }
 
     fn as_setup_command_ports(&self) -> JsonValue {
@@ -166,6 +168,7 @@ pub struct OutOfProcessLinkWiringEnvelope {
     recorded_links_and_how_the_next_reaches_the_far_side:
         Mutex<RecordedLinksAndHowTheNextReachesTheFarSide>,
     loss_counts: Arc<HelperPlacedProcessorLossCounts>,
+    output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
     far_side_process_execution: ProcessExecution,
 }
 
@@ -204,8 +207,17 @@ impl OutOfProcessLinkWiringEnvelope {
                 },
             ),
             loss_counts: Arc::default(),
+            output_frames_kept_by_its_output_links: Arc::default(),
             far_side_process_execution,
         }
+    }
+
+    /// What the links on this processor's outputs keep of its output frames,
+    /// shared with the pools its far side publishes from.
+    pub(crate) fn output_frames_kept_by_its_output_links(
+        &self,
+    ) -> Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor> {
+        Arc::clone(&self.output_frames_kept_by_its_output_links)
     }
 
     /// The mode the far side drives its processor in.
@@ -333,6 +345,8 @@ impl OutOfProcessLinkWiringEnvelope {
             .answer_cells_of_links_handed_over_past_the_setup_command
             .retain(|(handed_over_link_id, _)| handed_over_link_id.as_deref() != Some(link_id));
         self.loss_counts.forget_link(link_id);
+        self.output_frames_kept_by_its_output_links
+            .forget_an_unwired_output_link(link_id);
         match &mut recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => {
                 waiting.retain(|waiting_link| !carries_link(&waiting_link.link_wiring));
@@ -505,7 +519,10 @@ impl OutOfProcessLinkWiringEnvelope {
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => {}
         }
-        recorded.forget_every_link_its_far_side_never_opened();
+        for never_opened_link_id in recorded.forget_every_link_its_far_side_never_opened() {
+            self.output_frames_kept_by_its_output_links
+                .forget_an_unwired_output_link(&never_opened_link_id);
+        }
     }
 
     /// The `ports` payload a setup command sent now would carry.

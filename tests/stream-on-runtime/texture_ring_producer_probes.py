@@ -29,7 +29,18 @@ from tatolab.stream.msgpack import pack, unpack
 FRAME_WIDTH = 64
 FRAME_HEIGHT = 32
 RING_DEPTH = 2
-FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD = 3 * RING_DEPTH
+# The engine's mailbox depth of an `ordered` input port and the default borrow
+# quota of every input port: the pool keeps that many more slots unheld for
+# the one link out of the ring, so a frame its mailbox queued is never
+# recycled under it.
+ORDERED_INPUT_PORT_MAILBOX_DEPTH = 16
+DEFAULT_INPUT_PORT_BORROW_QUOTA = 2
+SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK = (
+    RING_DEPTH + ORDERED_INPUT_PORT_MAILBOX_DEPTH + DEFAULT_INPUT_PORT_BORROW_QUOTA
+)
+FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD = (
+    SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK + RING_DEPTH
+)
 MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS = 150_000_000
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "

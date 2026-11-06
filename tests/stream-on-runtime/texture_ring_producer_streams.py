@@ -9,6 +9,7 @@ from texture_ring_producer_probes import (
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS,
     RING_DEPTH,
+    SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK,
     ClaimedFrameHoldingSink,
     PublishedFrameIdRecordingSink,
     PublishedFramePixelReadingSink,
@@ -19,8 +20,8 @@ from texture_ring_producer_probes import (
 
 @stream
 def ring_rotation(stream_builder: StreamBuilder) -> None:
-    """One frame more than the ring is deep, so the last one wraps onto the
-    slot the first published from.
+    """One frame more than the ring rotates through with its one link, so the
+    last one wraps onto the slot the first published from.
 
     The sink is here because an output port with no link refuses the write —
     a source alone is not a graph. It resolves nothing: frame 0's id is
@@ -28,7 +29,7 @@ def ring_rotation(stream_builder: StreamBuilder) -> None:
     """
     source = stream_builder.add(
         TextureRingPublishingVideoSource,
-        config={"frames_to_publish": RING_DEPTH + 1},
+        config={"frames_to_publish": SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK + 1},
     )
     sink = stream_builder.add(PublishedFrameIdRecordingSink)
     stream_builder.connect(
@@ -75,7 +76,7 @@ def _add_a_source_holding_its_first_frame_downstream(
 @stream
 def a_claimed_frame_holds_still(stream_builder: StreamBuilder) -> None:
     """The consumer claims the first frame and holds it while the source
-    publishes several times the ring's depth past it."""
+    publishes past the ring's whole rotation."""
     _add_a_source_holding_its_first_frame_downstream(stream_builder, ClaimedFrameHoldingSink)
 
 

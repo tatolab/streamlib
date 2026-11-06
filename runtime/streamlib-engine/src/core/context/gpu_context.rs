@@ -45,6 +45,10 @@ impl RhiBlitter for NoOpBlitter {
     fn clear_cache(&self) {}
 }
 
+use super::gpu_pool_claim_table::{
+    GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool,
+    gpu_pool_claim_table_row_for_a_shared_slot,
+};
 use super::lease_aware_pool_slot_ring::{
     ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
     LeaseAwarePoolSlotResource, LeaseAwarePoolSlotRing, PoolSlotReuse,
@@ -71,13 +75,19 @@ pub(super) struct PixelBufferPoolKey {
 pub(super) struct PixelBufferPoolSlot {
     pub(super) buffer: PixelBuffer,
     pub(super) freeing_record: SharedPoolEntryFreeingRecord,
+    gpu_pool_claim_table_row: Option<GpuPoolClaimTableRowLease>,
 }
 
 impl PixelBufferPoolSlot {
-    fn allocated_for(buffer: PixelBuffer, acquiring_stream: Option<LoadedStreamTag>) -> Self {
+    fn allocated_for(
+        buffer: PixelBuffer,
+        acquiring_stream: Option<LoadedStreamTag>,
+        gpu_pool_claim_table_row: Option<GpuPoolClaimTableRowLease>,
+    ) -> Self {
         Self {
             buffer,
             freeing_record: SharedPoolEntryFreeingRecord::handed_out_to(acquiring_stream),
+            gpu_pool_claim_table_row,
         }
     }
 }
@@ -91,6 +101,10 @@ impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
     /// that is a live reader.
     fn is_held_in_this_process(&self) -> bool {
         self.buffer.strong_count() > 2
+    }
+
+    fn gpu_pool_claim_table_row(&self) -> Option<&GpuPoolClaimTableRowLease> {
+        self.gpu_pool_claim_table_row.as_ref()
     }
 
     fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
@@ -134,6 +148,8 @@ struct PixelBufferRingPool {
     /// each until the slot is freed.
     pool: RhiPixelBufferPool,
     ring: LeaseAwarePoolSlotRing<PixelBufferPoolSlot>,
+    /// The claim tables the ring's slots lease their rows from.
+    claim_tables: GpuPoolClaimTablesOfOnePool,
     /// Slots out on loan to native nodes' output pools; the ring is dropped
     /// only once it is empty and none is out.
     slots_lent_to_native_node_output_pools: usize,
@@ -887,6 +903,9 @@ impl PixelBufferPoolManager {
 
         // Pre-allocate all buffers at once (hold them simultaneously)
         let mut ring = LeaseAwarePoolSlotRing::default();
+        let mut claim_tables = GpuPoolClaimTablesOfOnePool::named(format!(
+            "pixel-buffers-{width}x{height}-{format:?}"
+        ));
         let mut registered_count = 0;
 
         tracing::debug!(
@@ -926,9 +945,18 @@ impl PixelBufferPoolManager {
                     // The global cache gets an entry per *published
                     // frame*, at hand-off — a slot that has published
                     // nothing has no id anybody could resolve.
+                    let gpu_pool_claim_table_row = gpu_pool_claim_table_row_for_a_shared_slot(
+                        &mut claim_tables,
+                        surface_store,
+                        pool_id.as_str(),
+                    );
                     ring.push_fresh_slot(
                         pool_id.as_str().to_string(),
-                        PixelBufferPoolSlot::allocated_for(buffer, acquiring_stream),
+                        PixelBufferPoolSlot::allocated_for(
+                            buffer,
+                            acquiring_stream,
+                            gpu_pool_claim_table_row,
+                        ),
                     );
                 }
                 Err(e) => {
@@ -951,6 +979,7 @@ impl PixelBufferPoolManager {
         Ok(entry.insert(PixelBufferRingPool {
             pool: underlying_pool,
             ring,
+            claim_tables,
             slots_lent_to_native_node_output_pools: 0,
         }))
     }
@@ -974,9 +1003,14 @@ impl PixelBufferPoolManager {
                 e
             );
         }
+        let gpu_pool_claim_table_row = gpu_pool_claim_table_row_for_a_shared_slot(
+            &mut ring_pool.claim_tables,
+            surface_store,
+            pool_id.as_str(),
+        );
         Ok(ring_pool.ring.push_fresh_slot(
             pool_id.as_str().to_string(),
-            PixelBufferPoolSlot::allocated_for(buffer, acquiring_stream),
+            PixelBufferPoolSlot::allocated_for(buffer, acquiring_stream, gpu_pool_claim_table_row),
         ))
     }
 
