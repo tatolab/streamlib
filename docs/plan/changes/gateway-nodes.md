@@ -130,9 +130,10 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - **The relay verbs go.** A gateway's URL and credential are its config (decision 2), so the runtime stores
   no relay instance: `relays.json`, the OS relay secret store, the four relay verbs, `tatolab
   relays` and `relay`, and `/api/relay-adapters` with `streamlib://relay-adapter-catalog` are
-  removed. A gateway kind's config schema marks its credential keys secret, and `graph`, the logs
-  and the node catalog print a secret key's value as `set` or `unset`, never the value (session
-  assumption). The in-flight `relay-setting-fields` change is orphaned and retires without
+  removed. No config key is a special secret type: a credential that comes from a secret store
+  reaches the gateway on the wire, from a node that reads the store and writes the gateway's
+  settings as a Records message to its `settings` input, which replaces the config's values.
+  The in-flight `relay-setting-fields` change is orphaned and retires without
   shipping.
 - **The MCP instructions** tell an agent to look at a port through the viewer read path and
   to send it off the machine with gateway nodes. They do not mention `expose_port`.
@@ -219,7 +220,7 @@ imports them, so a preview is zero-copy and never touches a relay. Settled in th
 ## Tickets (as few tracer bullets as the change needs)
 
 1. **`tatolab-moq` with the gateway, track, send and receive nodes**, the reference edge, the
-   interface nodes, and secret config keys, proven by a rig stream that sends to and receives from a fixture
+   interface nodes, and the gateway's `settings` input, proven by a rig stream that sends to and receives from a fixture
    `moq-relay`. `RelayTrackSource` and the relay adapters leave the runtime.
 2. **The automatic path is ripped out:** the publisher, exposure, `expose`, `expose_port`,
    `tatolab expose`, the local relay, the relay verbs and their records, and the preview page. The rigs and the stream-on-runtime suite

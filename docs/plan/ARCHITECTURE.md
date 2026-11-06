@@ -3184,7 +3184,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, secret config keys, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3501,16 +3501,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   drafts, `moq-relay` on moq-lite), how a machine authenticates and refreshes its credential,
   the root the relay assigns or leaves the gateway to name, and how often the broadcast's catalog
   is written again whole for a relay that hands a late subscriber only newer objects —
-  Cloudflare's, every second. A credential's value is never printed (the entry below). Signing in
+  Cloudflare's, every second. Signing in
   to a provider and provisioning a relay live in the app or a separate service, never the
   runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes]
   Rejected: relay adapters compiled into `tatolabd` — networking is a module, and the runtime
   carries no relay code (owner, 2026-11-06).
 - **DECIDED** — A gateway's URL and credential are config on the gateway node, as every node's
   settings are: the relay kind, `relay_url` and the kind's credential keys. The runtime stores no
-  relay instance and no relay secret, and has no relay verbs. A gateway kind's config schema marks
-  its credential keys secret, and `graph`, the logs and the node catalog print such a key as `set`
-  or `unset`, never its value. Owner, 2026-11-06. [gateway-nodes]
+  relay instance and no relay secret, and has no relay verbs. No config key is a special secret
+  type: a credential kept in a secret store reaches the gateway on the wire, from a node that
+  reads the store and writes the gateway's settings as a Records message to its `settings` input,
+  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes]
+  Rejected: a secret config type that `graph` and the logs redact — a special type for one case,
+  where a node on the wire already does it (owner, 2026-11-06).
   Rejected: the runtime storing named connections in `relays.json` and the OS secret store for
   gateway nodes to name — a second home for a node's settings (owner, 2026-11-06).
 - **DECIDED** — Reading a track is a receive node. `MoqTrackReceive`, in `tatolab-moq`, takes a
