@@ -20,11 +20,14 @@ from tatolab.stream import (
     ComputeKernel,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
-    msgpack,
     node,
 )
 
@@ -32,8 +35,6 @@ ALPHA_OVER_LAYER_COUNT = 8
 """How many `layer_N` inputs an `AlphaOverCompositor` has, `layer_0` the backmost."""
 
 LAYER_INPUT_PORT_NAMES = tuple(f"layer_{index}" for index in range(ALPHA_OVER_LAYER_COUNT))
-
-COMPOSITE_OUTPUT_PORT_NAME = "video"
 
 _COMPOSITE_TEXTURE_FORMAT = "rgba8_unorm"
 _COMPOSITE_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
@@ -209,7 +210,7 @@ class _LayerLandingTexture:
         )
         self.newest_frame_texture: "GpuSurfaceHandle | None" = None
 
-    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: VideoFrame, port_name: str) -> None:
+    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: ImageFrame, port_name: str) -> None:
         landing_texture = self._landing_ring.next_texture_for_this_frame(
             gpu_limited_access, frame.width, frame.height
         )
@@ -243,32 +244,35 @@ class AlphaOverCompositor:
         )
         self._compute_kernel: "ComputeKernel | None" = None
 
-    @node.input(delivery_profile="newest", description="The backmost layer; each frame yields one composite")
-    def layer_0(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_0; its newest frame is held")
-    def layer_1(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_1; its newest frame is held")
-    def layer_2(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_2; its newest frame is held")
-    def layer_3(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_3; its newest frame is held")
-    def layer_4(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_4; its newest frame is held")
-    def layer_5(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="Layered over layer_5; its newest frame is held")
-    def layer_6(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest", description="The frontmost layer; its newest frame is held")
-    def layer_7(self) -> VideoFrame: ...
-
-    @node.output(description="The composite, premultiplied RGBA at the configured canvas size")
-    def video(self) -> VideoFrame: ...
+    layer_0 = Input(
+        Image, delivery="newest", description="The backmost layer; each frame yields one composite"
+    )
+    layer_1 = Input(
+        Image, delivery="newest", description="Layered over layer_0; its newest frame is held"
+    )
+    layer_2 = Input(
+        Image, delivery="newest", description="Layered over layer_1; its newest frame is held"
+    )
+    layer_3 = Input(
+        Image, delivery="newest", description="Layered over layer_2; its newest frame is held"
+    )
+    layer_4 = Input(
+        Image, delivery="newest", description="Layered over layer_3; its newest frame is held"
+    )
+    layer_5 = Input(
+        Image, delivery="newest", description="Layered over layer_4; its newest frame is held"
+    )
+    layer_6 = Input(
+        Image, delivery="newest", description="Layered over layer_5; its newest frame is held"
+    )
+    layer_7 = Input(
+        Image, delivery="newest", description="The frontmost layer; its newest frame is held"
+    )
+    video = Output(
+        Image,
+        formats=(_COMPOSITE_TEXTURE_FORMAT,),
+        description="The composite, premultiplied RGBA at the configured canvas size",
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         bindings = {
@@ -290,18 +294,14 @@ class AlphaOverCompositor:
         gpu_limited_access = ctx.gpu_limited_access
         for layer_index in range(1, ALPHA_OVER_LAYER_COUNT):
             self._land_newest_frame_of_layer(ctx, gpu_limited_access, layer_index)
-        backmost_frame = ctx.inputs.read(LAYER_INPUT_PORT_NAMES[0], into=VideoFrame)
+        backmost_frame = ctx.inputs.read(self.layer_0)
         if backmost_frame is None:
             return
         self._layer_landing_textures[0].land(
             gpu_limited_access, backmost_frame, LAYER_INPUT_PORT_NAMES[0]
         )
-        composite_record = self._composite(gpu_limited_access, backmost_frame)
-        ctx.outputs.write(
-            COMPOSITE_OUTPUT_PORT_NAME,
-            msgpack.pack(composite_record),
-            timestamp_ns=backmost_frame.timestamp_ns,
-        )
+        composite = self._composite(gpu_limited_access, backmost_frame)
+        ctx.outputs.write(self.video, composite, timestamp_ns=backmost_frame.timestamp_ns)
 
     def _land_newest_frame_of_layer(
         self,
@@ -310,13 +310,13 @@ class AlphaOverCompositor:
         layer_index: int,
     ) -> None:
         port_name = LAYER_INPUT_PORT_NAMES[layer_index]
-        frame = ctx.inputs.read(port_name, into=VideoFrame)
+        frame = ctx.inputs.read(getattr(self, port_name))
         if frame is not None:
             self._layer_landing_textures[layer_index].land(gpu_limited_access, frame, port_name)
 
     def _composite(
-        self, gpu_limited_access: GpuContextLimitedAccess, backmost_frame: VideoFrame
-    ) -> "dict[str, Any]":
+        self, gpu_limited_access: GpuContextLimitedAccess, backmost_frame: ImageFrame
+    ) -> ImageFrameToWrite:
         assert self._compute_kernel is not None, "setup() builds the kernel before any process()"
         newest_frame_textures = [
             landing.newest_frame_texture for landing in self._layer_landing_textures
@@ -344,18 +344,4 @@ class AlphaOverCompositor:
                 self._config, [texture is not None for texture in newest_frame_textures]
             ),
         )
-        composite_record: "dict[str, Any]" = {
-            "surface_id": composite_texture.surface_id,
-            "width": canvas_width,
-            "height": canvas_height,
-            "timestamp_ns": backmost_frame.timestamp_ns,
-        }
-        if backmost_frame.fps is not None:
-            composite_record["fps"] = backmost_frame.fps
-        if backmost_frame.color_info is not None:
-            composite_record["color_info"] = {
-                axis: value
-                for axis, value in dataclasses.asdict(backmost_frame.color_info).items()
-                if value is not None
-            }
-        return composite_record
+        return ImageFrameToWrite.of_texture(composite_texture, backmost_frame.colour)
