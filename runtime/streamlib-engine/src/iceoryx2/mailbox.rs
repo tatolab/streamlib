@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_queue::ArrayQueue;
 
-use super::DataChannelSampleUserHeader;
 use super::channel_name::InboundLinkName;
 use super::input_port_message_payload::InputPortMessagePayload;
 use super::loss_counters::InboundLinkDroppedBagCounter;
 use super::read_mode::ReadMode;
+use super::{DataChannelPayloadDescriptor, DataChannelSampleUserHeader};
 
 /// A per-frame measure a port may install so it can ask what its mailbox holds
 /// without consuming any of it.
@@ -22,7 +22,8 @@ use super::read_mode::ReadMode;
 /// as the frame arrives, and the mailbox keeps the running total across every
 /// push, pop and eviction. Only the audio window contract's readiness gate
 /// installs one; a port without one pays nothing.
-pub type PortMailboxQueuedFrameMeasure = Arc<dyn Fn(&[u8]) -> u64 + Send + Sync>;
+pub type PortMailboxQueuedFrameMeasure =
+    Arc<dyn Fn(&DataChannelPayloadDescriptor) -> u64 + Send + Sync>;
 
 /// A notice a port may install to explain a loss the per-link count cannot.
 ///
@@ -184,7 +185,7 @@ impl PortMailbox {
         dropped_bag_counter: &InboundLinkDroppedBagCounter,
         inbound_link_name: &InboundLinkName,
     ) {
-        let measure = self.measure_of(&payload);
+        let measure = self.measure_of(&channel_user_header.payload_descriptor);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             channel_user_header,
@@ -196,10 +197,10 @@ impl PortMailbox {
         });
     }
 
-    fn measure_of(&self, payload: &[u8]) -> u64 {
+    fn measure_of(&self, payload_descriptor: &DataChannelPayloadDescriptor) -> u64 {
         self.measure
             .as_ref()
-            .map(|measure| measure(payload))
+            .map(|measure| measure(payload_descriptor))
             .unwrap_or(0)
     }
 
@@ -310,7 +311,7 @@ impl PortMailbox {
     /// a burst would be.
     pub fn hand_every_queued_frame_over_to(&self, replacement: &PortMailbox) {
         while let Some(frame) = self.pop_frame() {
-            let measure = replacement.measure_of(&frame.payload);
+            let measure = replacement.measure_of(&frame.channel_user_header.payload_descriptor);
             replacement.push_frame(PortMailboxQueuedFrame { measure, ..frame });
         }
     }
@@ -447,9 +448,9 @@ mod tests {
         );
 
         let replacement = PortMailbox::new(4, ReadMode::ReadNextInOrder)
-            .measuring_every_queued_frame_with(Arc::new(|payload: &[u8]| {
-                payload.len() as u64 * 10
-            }));
+            .measuring_every_queued_frame_with(Arc::new(
+                |_payload_descriptor: &DataChannelPayloadDescriptor| 10,
+            ));
         settling.hand_every_queued_frame_over_to(&replacement);
 
         assert_eq!(

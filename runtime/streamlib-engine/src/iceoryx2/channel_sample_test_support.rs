@@ -16,6 +16,7 @@ pub(crate) struct TestChannelSample {
     pub(crate) timestamp_ns: i64,
     pub(crate) stamped_payload_bytes: u32,
     pub(crate) group_boundary: MessageGroupBoundary,
+    pub(crate) payload_descriptor: DataChannelPayloadDescriptor,
     pub(crate) carried_body: Vec<u8>,
 }
 
@@ -35,7 +36,33 @@ impl TestChannelSample {
             timestamp_ns,
             stamped_payload_bytes,
             group_boundary: MessageGroupBoundary::StartsGroup,
+            payload_descriptor: DataChannelPayloadDescriptor::bytes(),
             carried_body: carried_body.to_vec(),
+        }
+    }
+
+    /// One mono f32 Channels block of `frames` samples at `sample_rate`, a
+    /// ramp from 0 towards 1, its first sample stamped at
+    /// `first_sample_timestamp_ns`: the shape a microphone publishes.
+    pub(crate) fn of_a_mono_channels_block(
+        frames: usize,
+        sample_rate: u32,
+        first_sample_timestamp_ns: i64,
+    ) -> Self {
+        let ramp: Vec<f32> = (0..frames)
+            .map(|index| index as f32 / frames as f32)
+            .collect();
+        let (payload_descriptor, planar_payload) = super::channels_block_of_one_window(
+            &ramp,
+            sample_rate,
+            1,
+            frames as u32,
+            super::ChannelsBlockSampleType::F32,
+            0,
+        );
+        Self {
+            payload_descriptor,
+            ..Self::carrying(first_sample_timestamp_ns, &planar_payload)
         }
     }
 
@@ -47,7 +74,7 @@ impl TestChannelSample {
                 self.timestamp_ns,
                 self.stamped_payload_bytes,
                 self.group_boundary,
-                DataChannelPayloadDescriptor::bytes(),
+                self.payload_descriptor,
             )
         }
     }

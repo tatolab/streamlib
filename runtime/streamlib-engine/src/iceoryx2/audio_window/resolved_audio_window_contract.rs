@@ -13,7 +13,6 @@
 
 use streamlib_processor_schema::ProcessorClassImportPath;
 
-use super::audio_block_bag_wire_codec::AudioBlockSampleDtype;
 use super::audio_window_accumulator::SourceAudioFormat;
 use super::device_matched_audio_window_contracts::AudioWindowContractMatchingADeviceStream;
 use crate::core::context::AudioSampleFormat;
@@ -23,7 +22,7 @@ use crate::core::descriptors::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::processors::NodeTypesOneStreamResolves;
-use crate::iceoryx2::DeliveryProfile;
+use crate::iceoryx2::{ChannelsBlockSampleType, DeliveryProfile};
 
 /// A window contract with every value settled — what the stage reads.
 ///
@@ -42,8 +41,8 @@ pub struct ResolvedAudioWindowContract {
     /// than of the contract, which is why the stage reads it off each block
     /// and re-anchors when it changes.
     pub(crate) channels: Option<u32>,
-    /// How an emitted window's scalars are written.
-    pub(crate) dtype: AudioBlockSampleDtype,
+    /// The sample type every emitted window's Channels block carries.
+    pub(crate) dtype: ChannelsBlockSampleType,
     /// Per-channel samples in one emitted window.
     pub(crate) window_size: u32,
     /// Per-channel samples between the starts of consecutive windows.
@@ -113,12 +112,13 @@ impl ResolvedAudioWindowContract {
         // declaration vocabulary, so this cannot fail — but the stage reads the
         // parsed value rather than the string, and an unwrap here would be a
         // panic in the wiring path if that ever stopped being true.
-        let dtype = AudioBlockSampleDtype::from_wire_str(&values.dtype).ok_or_else(|| {
-            format!(
-                "`audio_window` dtype `\"{}\"` names no encoding the stage can read",
-                values.dtype
-            )
-        })?;
+        let dtype =
+            audio_window_sample_type_of_the_declared_dtype(&values.dtype).ok_or_else(|| {
+                format!(
+                    "`audio_window` dtype `\"{}\"` names no encoding the stage can read",
+                    values.dtype
+                )
+            })?;
 
         Ok(Self {
             sample_rate: values.sample_rate,
@@ -210,7 +210,7 @@ impl ResolvedAudioWindowContract {
         AudioWindowContractDeclaredValues {
             sample_rate: self.sample_rate,
             channels: self.channels,
-            dtype: self.dtype.as_wire_str().to_string(),
+            dtype: audio_window_declared_dtype_of(self.dtype).to_string(),
             window_size: self.window_size,
             hop: self.hop,
         }
@@ -238,15 +238,32 @@ impl ResolvedAudioWindowContract {
     }
 }
 
-/// How a wire dtype is spelled for a device stream's scalar encoding.
-///
-/// The two vocabularies are the same two encodings under different names, and
-/// this is the one place they meet — a declaration's `dtype` string is the
-/// contract, and a device format is what a `match_device` port resolves from.
+/// The declared `dtype` a window of a device stream's samples is written in:
+/// a Channels block carries f32 or f64, so an integer device stream's windows
+/// are f32.
 fn audio_window_dtype_of(sample_format: AudioSampleFormat) -> &'static str {
     match sample_format {
-        AudioSampleFormat::F32 => AudioBlockSampleDtype::F32.as_wire_str(),
-        AudioSampleFormat::I16 => AudioBlockSampleDtype::I16.as_wire_str(),
+        AudioSampleFormat::F32 | AudioSampleFormat::I16 => {
+            audio_window_declared_dtype_of(ChannelsBlockSampleType::F32)
+        }
+    }
+}
+
+/// The sample type a declaration's `dtype` names, or `None` for one outside
+/// the declaration vocabulary.
+fn audio_window_sample_type_of_the_declared_dtype(dtype: &str) -> Option<ChannelsBlockSampleType> {
+    match dtype {
+        "f32" => Some(ChannelsBlockSampleType::F32),
+        "f64" => Some(ChannelsBlockSampleType::F64),
+        _ => None,
+    }
+}
+
+/// How a declaration spells `sample_type`.
+fn audio_window_declared_dtype_of(sample_type: ChannelsBlockSampleType) -> &'static str {
+    match sample_type {
+        ChannelsBlockSampleType::F32 => "f32",
+        ChannelsBlockSampleType::F64 => "f64",
     }
 }
 
@@ -360,7 +377,7 @@ mod tests {
 
         assert_eq!(resolved.sample_rate, 16_000);
         assert_eq!(resolved.channels, Some(1));
-        assert_eq!(resolved.dtype, AudioBlockSampleDtype::F32);
+        assert_eq!(resolved.dtype, ChannelsBlockSampleType::F32);
         assert_eq!(resolved.window_size, 512);
         assert_eq!(resolved.hop, 512);
     }
@@ -433,7 +450,7 @@ mod tests {
 
         assert_eq!(resolved.sample_rate, 48_000);
         assert_eq!(resolved.channels, Some(2));
-        assert_eq!(resolved.dtype, AudioBlockSampleDtype::I16);
+        assert_eq!(resolved.dtype, ChannelsBlockSampleType::F32);
         assert_eq!(resolved.window_size, 512);
         assert_eq!(resolved.hop, 512);
     }

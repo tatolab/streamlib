@@ -56,7 +56,7 @@ NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 _DELIVERY_PROFILES = ("newest", "ordered")
-_AUDIO_WINDOW_DTYPES = ("f32", "i16")
+_AUDIO_WINDOW_DTYPES = ("f32", "f64")
 
 AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE = "source"
 """How an omitted channel count is spelled on the wire the native half reads.
@@ -88,10 +88,10 @@ class AudioWindowContract:
     """The rate, dtype, window size and hop an audio input port wants, and the
     channel count only if it needs a particular one.
 
-    Declared beside `delivery_profile` on a `@node.input`, which must be
+    Declared as a Channels input's `window=`, whose delivery must be
     `"ordered"`. Every argument is keyword-only. `window_size` counts
-    per-channel samples — the unit `AudioBlock.sample_count` uses — so one
-    window carries `window_size * channels` scalars. `hop` may be omitted and
+    per-channel samples — the unit `ChannelsBlock.samples_per_channel` uses —
+    so one window carries `window_size * channels` samples. `hop` may be omitted and
     then resolves to `window_size`: contiguous, non-overlapping windows by
     default, a rolling window below that. The attribute always holds the
     resolved hop, never `None`, which is why the constructor takes the
@@ -154,7 +154,7 @@ class AudioWindowContract:
         if dtype not in _AUDIO_WINDOW_DTYPES:
             raise ValueError(
                 f"AudioWindowContract field 'dtype' is {dtype!r} — must be one of "
-                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an AudioBlock legalises"
+                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two a ChannelsBlock carries"
             )
 
         if resolved_hop > window_size:

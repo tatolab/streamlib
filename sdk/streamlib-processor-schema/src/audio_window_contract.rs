@@ -17,12 +17,12 @@
 use serde::{Deserialize, Serialize};
 
 /// The values an `audio_window` declaration's `dtype` may take — the two
-/// `AudioBlock` legalises.
+/// sample types a Channels block carries.
 ///
 /// The single Rust-side list: [`AudioWindowContractDeclaredValues::refuse_if_unhonourable`]
 /// renders its refusal from it, and that is the one validator both the
 /// `#[processor]` grammar and the wheel's declaration bridge call.
-pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "i16"];
+pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "f64"];
 
 /// How an undeclared channel count renders wherever a contract is written
 /// down — `graph`, the parent→child wiring envelope, and the dict a Python
@@ -102,12 +102,12 @@ pub struct AudioWindowContractDeclaredValues {
         schema(schema_with = audio_window_channels_openapi_schema)
     )]
     pub channels: Option<u32>,
-    /// How to read the scalars an emitted window carries — `"f32"` or
-    /// `"i16"`.
+    /// The sample type an emitted window's Channels block carries — `"f32"`
+    /// or `"f64"`.
     pub dtype: String,
-    /// Per-channel samples in one emitted window, the unit
-    /// `AudioBlock.sample_count` uses: a window carries
-    /// `window_size × channels` scalars.
+    /// Per-channel samples in one emitted window, the unit a Channels block's
+    /// `samples_per_channel` uses: a window carries `window_size × channels`
+    /// samples.
     pub window_size: u32,
     /// Per-channel samples between the starts of consecutive windows. Equal to
     /// `window_size` for contiguous windows, below it for a rolling one, and
@@ -144,8 +144,8 @@ impl AudioWindowContractDeclaredValues {
 
         if !AUDIO_WINDOW_DTYPE_DECLARATION_VALUES.contains(&self.dtype.as_str()) {
             return Err(format!(
-                "`audio_window` field `dtype` is `\"{}\"` — expected one of {}, the two an \
-                 audio block legalises",
+                "`audio_window` field `dtype` is `\"{}\"` — expected one of {}, the two a \
+                 Channels block carries",
                 self.dtype,
                 render_declaration_values(&AUDIO_WINDOW_DTYPE_DECLARATION_VALUES),
             ));
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn an_unknown_dtype_is_refused_listing_the_legal_values() {
         let values = AudioWindowContractDeclaredValues {
-            dtype: "f64".to_string(),
+            dtype: "i16".to_string(),
             ..declared_values()
         };
 
@@ -512,7 +512,7 @@ mod tests {
             .refuse_if_unhonourable()
             .expect_err("an unknown dtype is refused");
         assert!(
-            refusal.contains("f64") && refusal.contains("f32") && refusal.contains("i16"),
+            refusal.contains("i16") && refusal.contains("f32") && refusal.contains("f64"),
             "the refusal must name the value and the legal ones; got {refusal}"
         );
     }

@@ -32,7 +32,7 @@ mod read_mode;
 mod stream_clock_board;
 
 #[cfg(test)]
-pub(crate) use audio_window::{AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire};
+pub(crate) use audio_window::channels_block_of_one_window;
 pub use audio_window::{
     AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
     ResolvedAudioWindowContract,

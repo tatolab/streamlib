@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Publishes the known signal as `AudioBlock` messages, for a speaker to play.
+"""Publishes the known signal as Channels blocks, for a speaker to play.
 
 The signal itself is `known_audio_signal.generate_signal()` — the same samples
 `e2e_audio_loopback.sh` plays through `pw-play`, `afplay` or a Core Audio
@@ -34,8 +34,7 @@ import os
 import numpy
 
 import known_audio_signal
-from tatolab.stream import RuntimeContextLimitedAccess, monotonic_now_ns, node
-from tatolab.stream.msgpack import pack
+from tatolab.stream import Channels, Output, RuntimeContextLimitedAccess, monotonic_now_ns, node
 
 # PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
 # asks for `F32_LE`; a Mac's built-in speakers are two channels, and the
@@ -71,18 +70,18 @@ THE_SIGNAL_PLAYS_OVER_AND_OVER = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS"
 FAULT_INJECTED_INTO_THE_SIGNAL = os.environ.get("STREAMLIB_KNOWN_SIGNAL_INJECT") or None
 
 
-def _interleaved_stereo_f32_bytes(mono_samples):
-    """The same mono signal in both channels, interleaved little-endian."""
-    stereo = numpy.repeat(mono_samples.astype("<f4"), CHANNELS)
-    return stereo.tobytes()
+def _stereo_planar_f32(mono_samples):
+    """The same mono signal in both channels, as a `[channel][sample]` array."""
+    return numpy.ascontiguousarray(
+        numpy.tile(mono_samples.astype("<f4"), (CHANNELS, 1))
+    )
 
 
 @node(execution="continuous", interval_ms=1)
 class KnownAudioSignalSource:
     """Plays the known signal once, then silence — or over and over."""
 
-    @node.output()
-    def audio(self) -> None: ...
+    audio = Output(Channels, names=("left", "right"), rate=SAMPLE_RATE, dtype=DTYPE)
 
     def __init__(self) -> None:
         signal = known_audio_signal.generate_signal()
@@ -125,19 +124,12 @@ class KnownAudioSignalSource:
         # stamps describe one gapless stream even though the publishing runs
         # ahead of the device.
         ctx.outputs.write(
-            "audio",
-            pack(
-                {
-                    "samples": _interleaved_stereo_f32_bytes(block),
-                    "sample_rate": SAMPLE_RATE,
-                    "channels": CHANNELS,
-                    "sample_count": len(block),
-                    "dtype": DTYPE,
-                    "first_sample_timestamp_ns": (
-                        self._first_sample_timestamp_ns
-                        + self._samples_published * 1_000_000_000 // SAMPLE_RATE
-                    ),
-                }
+            self.audio,
+            _stereo_planar_f32(block),
+            timestamp_ns=(
+                self._first_sample_timestamp_ns
+                + self._samples_published * 1_000_000_000 // SAMPLE_RATE
             ),
+            start_sample=self._samples_published,
         )
         self._samples_published += len(block)

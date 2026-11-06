@@ -1274,7 +1274,7 @@ impl InputMailboxesInner {
             else {
                 return Ok(None);
             };
-            let flush = stage.lock().accept(&bag.message.payload)?;
+            let flush = stage.lock().accept(&bag.message)?;
             if let Some(flush) = flush {
                 Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
             }
@@ -2136,17 +2136,9 @@ mod tests {
             "a bag read reaches the slot as taken as it is read"
         );
 
-        publish_one_frame(
-            &windowed_publisher,
-            "src_out",
-            &mono_audio_block_body(300, 16_000, 0),
-        );
+        publish_one_mono_channels_block(&windowed_publisher, 300, 16_000, 0);
         assert!(mailboxes.read_raw("audio").unwrap().is_none());
-        publish_one_frame(
-            &windowed_publisher,
-            "src_out",
-            &mono_audio_block_body(300, 16_000, 1_000_000_000),
-        );
+        publish_one_mono_channels_block(&windowed_publisher, 300, 16_000, 1_000_000_000);
         let _ = mailboxes.read_raw("audio").unwrap();
         assert_eq!(
             board.inbound_link_slot(1).map(|slot| (
@@ -3212,10 +3204,11 @@ mod tests {
         );
 
         for block in 0..4u64 {
-            publish_one_frame(
+            publish_one_mono_channels_block(
                 &publisher,
-                "mic_out",
-                &mono_audio_block_body(160, 16_000, (block * 160 * 1_000_000_000 / 16_000) as i64),
+                160,
+                16_000,
+                (block * 160 * 1_000_000_000 / 16_000) as i64,
             );
         }
 
@@ -3254,11 +3247,7 @@ mod tests {
             &InboundLinkName::from("pfirst/audio_out"),
             first_subscriber,
         );
-        publish_one_frame(
-            &first_publisher,
-            "audio_out",
-            &mono_audio_block_body(300, 16_000, 0),
-        );
+        publish_one_mono_channels_block(&first_publisher, 300, 16_000, 0);
         assert!(
             mailboxes
                 .read_raw("in")
@@ -3285,11 +3274,7 @@ mod tests {
             second_subscriber,
         );
         let a_second_later_ns = 1_000_000_000;
-        publish_one_frame(
-            &second_publisher,
-            "audio_out",
-            &mono_audio_block_body(300, 16_000, a_second_later_ns),
-        );
+        publish_one_mono_channels_block(&second_publisher, 300, 16_000, a_second_later_ns);
         mailboxes.receive_pending();
 
         assert!(
@@ -3309,10 +3294,11 @@ mod tests {
             std::collections::BTreeMap::from([("L-second".to_string(), 0)]),
         );
 
-        publish_one_frame(
+        publish_one_mono_channels_block(
             &second_publisher,
-            "audio_out",
-            &mono_audio_block_body(300, 16_000, a_second_later_ns + 18_750_000),
+            300,
+            16_000,
+            a_second_later_ns + 18_750_000,
         );
         assert!(
             mailboxes
@@ -3379,14 +3365,11 @@ mod tests {
 
         let mut windows = 0;
         for block in 0..24u64 {
-            publish_one_frame(
+            publish_one_mono_channels_block(
                 &publisher,
-                "mic_out",
-                &mono_audio_block_body(
-                    SOURCE_FRAMES_PER_BLOCK as usize,
-                    48_000,
-                    (block * SOURCE_FRAMES_PER_BLOCK * 1_000_000_000 / 48_000) as i64,
-                ),
+                SOURCE_FRAMES_PER_BLOCK as usize,
+                48_000,
+                (block * SOURCE_FRAMES_PER_BLOCK * 1_000_000_000 / 48_000) as i64,
             );
             while mailboxes.any_port_has_data() {
                 assert!(
@@ -3405,35 +3388,19 @@ mod tests {
         );
     }
 
-    /// One audio-block bag body carrying `frames` per-channel mono samples at
+    /// Publish one mono f32 Channels block of `frames` samples at
     /// `sample_rate`, the shape a microphone publishes.
-    fn mono_audio_block_body(
+    fn publish_one_mono_channels_block(
+        publisher: &TestChannelPublisherNumberingItsSends,
         frames: usize,
         sample_rate: u32,
         first_sample_timestamp_ns: i64,
-    ) -> Vec<u8> {
-        #[derive(serde::Serialize)]
-        struct AudioBlockBag<'a> {
-            #[serde(rename = "samples", with = "serde_bytes")]
-            interleaved_sample_bytes: &'a [u8],
-            sample_rate: u32,
-            channels: u32,
-            sample_count: u32,
-            dtype: &'a str,
-            first_sample_timestamp_ns: i64,
-        }
-        let payload: Vec<u8> = (0..frames)
-            .flat_map(|index| (index as f32 / frames as f32).to_le_bytes())
-            .collect();
-        rmp_serde::to_vec_named(&AudioBlockBag {
-            interleaved_sample_bytes: &payload,
+    ) {
+        publisher.send_numbered(&TestChannelSample::of_a_mono_channels_block(
+            frames,
             sample_rate,
-            channels: 1,
-            sample_count: frames as u32,
-            dtype: "f32",
             first_sample_timestamp_ns,
-        })
-        .expect("an audio block bag encodes")
+        ));
     }
 
     /// One device stream's format, as a processor's own `setup()` reads it off
@@ -3454,26 +3421,20 @@ mod tests {
         }
     }
 
-    /// The scalars one emitted window carries, read back out of the bag body
-    /// the stage wrote.
-    fn scalars_of_one_window(body: &[u8]) -> (Vec<f32>, u32, u32) {
-        #[derive(serde::Deserialize)]
-        struct AudioBlockBag {
-            #[serde(rename = "samples", with = "serde_bytes")]
-            interleaved_sample_bytes: Vec<u8>,
-            sample_rate: u32,
-            channels: u32,
-        }
-        let bag: AudioBlockBag =
-            rmp_serde::from_slice(body).expect("the stage writes an audio block bag");
-        let scalars = bag
-            .interleaved_sample_bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|scalar| f32::from_le_bytes(*scalar))
-            .collect();
-        (scalars, bag.sample_rate, bag.channels)
+    /// The samples one emitted window carries, interleaved, with its rate and
+    /// channel count, read back out of the Channels block the stage wrote.
+    fn scalars_of_one_window(window: &MessageReadFromInputPort) -> (Vec<f32>, u32, u32) {
+        let block = crate::iceoryx2::audio_window::read_a_channels_block_for_the_window_stage(
+            &window.payload_descriptor,
+            &window.payload,
+            window.timestamp_ns,
+        )
+        .expect("the stage writes a Channels block");
+        (
+            block.interleaved_samples_as_f32().collect(),
+            block.sample_rate,
+            block.channels,
+        )
     }
 
     /// The whole gap the sentinel opens, held at the seam that has to survive
@@ -3502,11 +3463,7 @@ mod tests {
         );
 
         for block in 0..4u64 {
-            publish_one_frame(
-                &publisher,
-                "mic_out",
-                &mono_audio_block_body(480, 16_000, (block * 30_000_000) as i64),
-            );
+            publish_one_mono_channels_block(&publisher, 480, 16_000, (block * 30_000_000) as i64);
         }
 
         assert!(
@@ -3667,10 +3624,11 @@ mod tests {
                 subscriber,
             );
             for block in 0..4u64 {
-                publish_one_frame(
+                publish_one_mono_channels_block(
                     &publisher,
-                    "mic_out",
-                    &mono_audio_block_body(480, 16_000, (block * 30_000_000) as i64),
+                    480,
+                    16_000,
+                    (block * 30_000_000) as i64,
                 );
             }
             mailboxes.receive_pending();
@@ -3681,7 +3639,7 @@ mod tests {
         fn windows_read_out_of(mailboxes: &InputMailboxesInner) -> Vec<Vec<f32>> {
             let mut windows = Vec::new();
             while let Some(message) = mailboxes.read_raw("in").expect("the port reads") {
-                let (scalars, sample_rate, channels) = scalars_of_one_window(&message.payload);
+                let (scalars, sample_rate, channels) = scalars_of_one_window(&message);
                 assert_eq!(sample_rate, 48_000, "the window is at the device's rate");
                 assert_eq!(channels, 2, "the window is in the device's channel count");
                 assert_eq!(
@@ -3900,11 +3858,7 @@ mod tests {
         );
 
         // A third of a window is not a window.
-        publish_one_frame(
-            &publisher,
-            "mic_out",
-            &mono_audio_block_body(160, 16_000, 0),
-        );
+        publish_one_mono_channels_block(&publisher, 160, 16_000, 0);
         assert!(
             !mailboxes.has_data("in"),
             "160 of 512 samples is not a window, and a wake here would dispatch a \
@@ -3914,10 +3868,11 @@ mod tests {
 
         // Enough to complete one.
         for block in 1..4u64 {
-            publish_one_frame(
+            publish_one_mono_channels_block(
                 &publisher,
-                "mic_out",
-                &mono_audio_block_body(160, 16_000, (block * 160 * 1_000_000_000 / 16_000) as i64),
+                160,
+                16_000,
+                (block * 160 * 1_000_000_000 / 16_000) as i64,
             );
         }
         assert!(
@@ -3953,11 +3908,7 @@ mod tests {
             &InboundLinkName::from("ponly/out"),
             subscriber,
         );
-        publish_one_frame(
-            &publisher,
-            "mic_out",
-            &mono_audio_block_body(1024, 16_000, 0),
-        );
+        publish_one_mono_channels_block(&publisher, 1024, 16_000, 0);
 
         let mut windows = 0;
         while mailboxes.any_port_has_data() {
@@ -3990,8 +3941,8 @@ mod tests {
             subscriber,
         );
 
-        let published = mono_audio_block_body(1024, 16_000, 77);
-        publish_one_frame(&publisher, "mic_out", &published);
+        let published = TestChannelSample::of_a_mono_channels_block(1024, 16_000, 77);
+        publisher.send_numbered(&published);
 
         assert!(
             mailboxes.has_data("in"),
@@ -4002,7 +3953,7 @@ mod tests {
             .expect("reads")
             .expect("a bag")
             .payload;
-        assert_eq!(read_back, published);
+        assert_eq!(read_back, published.carried_body);
     }
 
     /// A loss declared upstream reaches an `audio_window` port's reader on the
@@ -4026,12 +3977,15 @@ mod tests {
         );
         let output_writer = output_writer_publishing_onto(&channel, "audio");
         let write_block_at = |first_sample_timestamp_ns: i64| {
+            let block =
+                TestChannelSample::of_a_mono_channels_block(512, 16_000, first_sample_timestamp_ns);
             output_writer
-                .write_bytes_with_timestamp(
+                .write_bytes_described_by(
                     "audio",
-                    &mono_audio_block_body(512, 16_000, first_sample_timestamp_ns),
+                    &block.carried_body,
                     first_sample_timestamp_ns,
                     MessageGroupBoundary::StartsGroup,
+                    block.payload_descriptor,
                 )
                 .unwrap();
         };
@@ -4080,10 +4034,11 @@ mod tests {
             );
 
             for block in 0..published_bags {
-                publish_one_frame(
+                publish_one_mono_channels_block(
                     &publisher,
-                    "mic_out",
-                    &mono_audio_block_body(160, 16_000, (block as i64) * 10_000_000),
+                    160,
+                    16_000,
+                    (block as i64) * 10_000_000,
                 );
                 // One at a time so the subscriber ring never overflows and every
                 // loss lands at the mailbox, where it is counted.
@@ -4137,11 +4092,7 @@ mod tests {
 
         // Deeper than ORDERED_DEPTH: publishing that many must lose nothing.
         for block in 0..(crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH + 8) {
-            publish_one_frame(
-                &publisher,
-                "mic_out",
-                &mono_audio_block_body(160, 16_000, (block as i64) * 10_000_000),
-            );
+            publish_one_mono_channels_block(&publisher, 160, 16_000, (block as i64) * 10_000_000);
             mailboxes.receive_pending();
         }
 

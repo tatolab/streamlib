@@ -3774,13 +3774,9 @@ mod tests {
 
     /// The window contract crosses the parent→child envelope and the child's
     /// own stage honours it: a 48 kHz stereo source published on the wired
-    /// output as msgpack `AudioBlock`s reaches the wired input as
-    /// exactly-512-sample 16 kHz mono windows, in this process, through the
-    /// same engine code the parent's mailboxes run.
-    ///
-    /// The wheel crate's own test target is the only place this is provable
-    /// without a device: everything above it is either a Python-level refusal
-    /// or a rig-gated graph.
+    /// output as Channels blocks reaches the wired input as exactly-512-sample
+    /// 16 kHz mono Channels blocks, in this process, through the same engine
+    /// code the parent's mailboxes run.
     #[test]
     fn a_windowed_input_link_hands_the_child_windows_rather_than_the_blocks_it_was_sent() {
         Python::initialize();
@@ -3831,48 +3827,51 @@ mod tests {
                 )
                 .unwrap();
 
-            const SOURCE_FRAMES_PER_BLOCK: usize = 512;
-            const SOURCE_RATE: i64 = 48_000;
-            for block in 0..8i64 {
-                let source_block = streamlib_media_builtins::AudioBlock {
-                    interleaved_sample_bytes: (0..SOURCE_FRAMES_PER_BLOCK * 2)
-                        .flat_map(|scalar| (scalar as f32 / 1024.0).to_le_bytes())
-                        .collect(),
-                    sample_rate: SOURCE_RATE as u32,
-                    channels: 2,
-                    sample_count: SOURCE_FRAMES_PER_BLOCK as u32,
-                    dtype: streamlib_media_builtins::AudioSampleDtype::F32,
-                    first_sample_timestamp_ns: block
-                        * SOURCE_FRAMES_PER_BLOCK as i64
-                        * 1_000_000_000
-                        / SOURCE_RATE,
-                };
-                let payload = rmp_serde::to_vec_named(&source_block).unwrap();
+            const SOURCE_FRAMES_PER_BLOCK: u64 = 512;
+            const SOURCE_RATE: u64 = 48_000;
+            let stereo_block = python
+                .eval(
+                    c"memoryview(__import__('array').array('f', [i / 1024.0 for i in range(1024)])).cast('B').cast('f', [2, 512])",
+                    None,
+                    None,
+                )
+                .unwrap();
+            for block in 0..8u64 {
                 source
-                    .write_to_output_port(
+                    .write_channels_block_to_output_port(
                         python,
                         "audio",
-                        PyBytes::new(python, &payload).as_any(),
-                        None,
+                        &stereo_block,
+                        block * SOURCE_FRAMES_PER_BLOCK,
+                        SOURCE_RATE as u32,
+                        ChannelsOutputPortDeclaredShape::default(),
+                        Some(
+                            (block * SOURCE_FRAMES_PER_BLOCK * 1_000_000_000 / SOURCE_RATE) as i64,
+                        ),
                         true,
                     )
                     .unwrap();
             }
 
-            let window_payload = destination
-                .read_from_input_port(python, "audio_from_upstream", None)
+            let window = destination
+                .read_from_input_port_offering_gpu_access(
+                    python,
+                    "audio_from_upstream",
+                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Channels),
+                    None,
+                )
                 .unwrap()
                 .expect("the windowed input received nothing");
-            let window: streamlib_media_builtins::AudioBlock = rmp_serde::from_slice(
-                &PythonPortPayloadBorrow::bytes_the_read_borrowed(&window_payload),
-            )
-            .expect("the stage emits a msgpack AudioBlock");
+            let attribute = |name: &str| window.getattr(name).unwrap();
             assert_eq!(
-                window.sample_count, 512,
+                attribute("samples_per_channel").extract::<u32>().unwrap(),
+                512,
                 "the child's stage owes exactly what the contract declared"
             );
-            assert_eq!(window.sample_rate, 16_000);
-            assert_eq!(window.channels, 1);
+            assert_eq!(attribute("sample_rate").extract::<u32>().unwrap(), 16_000);
+            assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 1);
+            assert_eq!(attribute("dtype").extract::<String>().unwrap(), "f32");
+            assert_eq!(attribute("start_sample").extract::<u64>().unwrap(), 0);
         });
     }
 
