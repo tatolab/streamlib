@@ -4152,18 +4152,29 @@ mod tests {
             .channel_service_creation_depth()
     }
 
-    /// `frames` of mono audio at 16 kHz, stamped at `first_sample_timestamp_ns`,
-    /// as the bag body a source writes.
-    fn a_mono_16k_audio_block(frames: usize, first_sample_timestamp_ns: i64) -> Vec<u8> {
-        crate::iceoryx2::encode_an_audio_block_onto_the_wire(
+    /// Write `frames` of mono f32 audio at 16 kHz on `source_output`'s `out1`
+    /// as one Channels block, its first sample stamped at
+    /// `first_sample_timestamp_ns`.
+    fn write_a_mono_16k_audio_block_on_out1(
+        source_output: &crate::iceoryx2::OutputWriterInner,
+        frames: usize,
+        first_sample_timestamp_ns: i64,
+    ) -> Result<()> {
+        let (payload_descriptor, planar_payload) = crate::iceoryx2::channels_block_of_one_window(
             &vec![0.25; frames],
             16_000,
             1,
             frames as u32,
-            crate::iceoryx2::AudioBlockSampleDtype::F32,
+            crate::iceoryx2::ChannelsBlockSampleType::F32,
+            0,
+        );
+        source_output.write_bytes_described_by(
+            "out1",
+            &planar_payload,
             first_sample_timestamp_ns,
+            MessageGroupBoundary::StartsGroup,
+            payload_descriptor,
         )
-        .expect("an audio block encodes")
     }
 
     /// An app-process windowed consumer added to the graph and linked, unwired,
@@ -4472,13 +4483,7 @@ mod tests {
         let link = NativeLinkIntoAWindowedPort::wire();
 
         let write_one_block = || {
-            link.source_output
-                .write_bytes_with_timestamp(
-                    "out1",
-                    &a_mono_16k_audio_block(160, 0),
-                    0,
-                    MessageGroupBoundary::StartsGroup,
-                )
+            write_a_mono_16k_audio_block_on_out1(&link.source_output, 160, 0)
                 .expect("the source publishes onto the windowed channel");
         };
         write_one_block();
@@ -4507,14 +4512,12 @@ mod tests {
         const WINDOW_DURATION_NS: i64 = 32_000_000;
         let link = NativeLinkIntoAWindowedPort::wire();
         let write_block = |block_index: usize| {
-            link.source_output
-                .write_bytes_with_timestamp(
-                    "out1",
-                    &a_mono_16k_audio_block(WINDOW_FRAMES, block_index as i64 * WINDOW_DURATION_NS),
-                    0,
-                    MessageGroupBoundary::StartsGroup,
-                )
-                .expect("the source publishes onto the windowed channel");
+            write_a_mono_16k_audio_block_on_out1(
+                &link.source_output,
+                WINDOW_FRAMES,
+                block_index as i64 * WINDOW_DURATION_NS,
+            )
+            .expect("the source publishes onto the windowed channel");
         };
 
         write_block(0);
@@ -4561,13 +4564,7 @@ mod tests {
             "a link into a windowed port renders a zero before it has lost anything"
         );
 
-        link.source_output
-            .write_bytes_with_timestamp(
-                "out1",
-                &a_mono_16k_audio_block(300, 0),
-                0,
-                MessageGroupBoundary::StartsGroup,
-            )
+        write_a_mono_16k_audio_block_on_out1(&link.source_output, 300, 0)
             .expect("the source publishes");
         assert!(
             link.dest_input
@@ -4576,13 +4573,7 @@ mod tests {
                 .is_none(),
             "300 of 512 samples is not a window"
         );
-        link.source_output
-            .write_bytes_with_timestamp(
-                "out1",
-                &a_mono_16k_audio_block(300, 1_000_000_000),
-                0,
-                MessageGroupBoundary::StartsGroup,
-            )
+        write_a_mono_16k_audio_block_on_out1(&link.source_output, 300, 1_000_000_000)
             .expect("the source publishes");
         let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
             link.dest_input

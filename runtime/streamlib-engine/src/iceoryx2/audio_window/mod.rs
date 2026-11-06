@@ -23,8 +23,8 @@
 //!
 //! [`InputMailboxesInner::next_bag_for_the_reader`]: crate::iceoryx2::InputMailboxesInner::next_bag_for_the_reader
 
-mod audio_block_bag_wire_codec;
 mod audio_window_accumulator;
+mod channels_block_of_the_window_stage;
 mod device_matched_audio_window_contracts;
 mod resolved_audio_window_contract;
 
@@ -46,16 +46,17 @@ pub(crate) use resolved_audio_window_contract::{
 };
 
 #[cfg(test)]
-pub(crate) use audio_block_bag_wire_codec::{
-    AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire,
+pub(crate) use channels_block_of_the_window_stage::{
+    channels_block_of_one_window, read_a_channels_block_for_the_window_stage,
 };
 
-use audio_block_bag_wire_codec::read_an_audio_block_off_the_wire;
+use channels_block_of_the_window_stage::channels_block_body_of;
 
+use super::DataChannelPayloadDescriptor;
 use super::mailbox::PortMailboxQueuedFrameMeasure;
 
-/// A measure over one queued payload: what the audio block it carries is
-/// worth in frames at `contract`'s rate, and the format it stated.
+/// A measure over one queued message: what the Channels block its descriptor
+/// states is worth in frames at `contract`'s rate, and the format it stated.
 ///
 /// Installed on a windowed port's mailbox so the readiness gate can ask how
 /// much is queued without consuming any of it. `crossbeam`'s `ArrayQueue`
@@ -74,19 +75,21 @@ pub(crate) fn queued_audio_window_frame_measure(
     contract: ResolvedAudioWindowContract,
     latest_source_audio_format: Arc<LatestQueuedSourceAudioFormat>,
 ) -> PortMailboxQueuedFrameMeasure {
-    Arc::new(move |body: &[u8]| -> u64 {
-        let Ok(block) = read_an_audio_block_off_the_wire(body) else {
-            return 0;
-        };
-        if block.sample_rate == 0 || block.channels == 0 {
-            return 0;
-        }
-        latest_source_audio_format.record(SourceAudioFormat {
-            sample_rate: block.sample_rate,
-            channels: block.channels,
-        });
-        // Per-channel frames on both sides, so the measure needs no count.
-        u64::from(block.sample_count) * u64::from(contract.sample_rate)
-            / u64::from(block.sample_rate)
-    })
+    Arc::new(
+        move |payload_descriptor: &DataChannelPayloadDescriptor| -> u64 {
+            let Some(block) = channels_block_body_of(payload_descriptor) else {
+                return 0;
+            };
+            if block.sample_rate == 0 || block.channel_count == 0 {
+                return 0;
+            }
+            latest_source_audio_format.record(SourceAudioFormat {
+                sample_rate: block.sample_rate,
+                channels: block.channel_count,
+            });
+            // Per-channel frames on both sides, so the measure needs no count.
+            u64::from(block.samples_per_channel) * u64::from(contract.sample_rate)
+                / u64::from(block.sample_rate)
+        },
+    )
 }

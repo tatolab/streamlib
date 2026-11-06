@@ -38,9 +38,9 @@ use rubato::{
 
 use super::super::MessageGroupBoundary;
 use super::super::input::{BagBodyForTheReader, MessageReadFromInputPort};
-use super::audio_block_bag_wire_codec::{
-    AudioBlockReadFromTheWire, encode_an_audio_block_onto_the_wire,
-    read_an_audio_block_off_the_wire,
+use super::channels_block_of_the_window_stage::{
+    ChannelsBlockReadByTheWindowStage, channels_block_of_one_window,
+    read_a_channels_block_for_the_window_stage,
 };
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 use crate::core::error::{Error, Result};
@@ -224,7 +224,7 @@ impl std::fmt::Display for AudioWindowStageFlushCause {
 pub(crate) struct AudioWindowStageFlush {
     pub(crate) cause: AudioWindowStageFlushCause,
     /// The samples no reader had received, in per-channel samples at the
-    /// declared rate — `AudioBlock`'s `sample_count` unit: the remainder past
+    /// declared rate — a Channels block's `samples_per_channel` unit: the remainder past
     /// the last emitted window's overlap, plus the staged source frames scaled
     /// by the rate ratio and rounded down.
     pub(crate) discarded_per_channel_samples_at_the_declared_rate: u64,
@@ -273,6 +273,12 @@ pub(crate) struct AudioWindowAccumulator {
     /// The device stamp anchoring the current contiguous run; `None` between
     /// runs.
     run_anchor_timestamp_ns: Option<i64>,
+    /// The anchor of the stage's first run, from which each run's first
+    /// sample is counted at the declared rate.
+    first_run_anchor_timestamp_ns: Option<i64>,
+    /// The sample, counted from the first run's first, at which the current
+    /// run's frame zero sits.
+    run_start_sample: u64,
     /// Output frames, since the anchor, at which the next window starts.
     next_window_start_output_frame: u64,
     /// Where the next source block's first sample is expected, derived from
@@ -308,6 +314,8 @@ impl AudioWindowAccumulator {
             warned_that_a_full_mailbox_still_cannot_fill_a_window: false,
             priming_output_frames_still_to_discard: 0,
             run_anchor_timestamp_ns: None,
+            first_run_anchor_timestamp_ns: None,
+            run_start_sample: 0,
             next_window_start_output_frame: 0,
             expected_next_source_timestamp_ns: None,
             gap_tolerance_ns: 0,
@@ -317,15 +325,21 @@ impl AudioWindowAccumulator {
     /// Take one bag consumed from the port's mailbox through the stage, handing
     /// back the flush it caused, if it caused one.
     ///
-    /// Refuses by name rather than reshaping: a dtype it does not know, a
-    /// payload whose length disagrees with the count beside it, a bag with no
-    /// audio-block keys, or a channel pair with neither side at one.
-    pub(crate) fn accept(&mut self, bag_body: &[u8]) -> Result<Option<AudioWindowStageFlush>> {
-        let block = read_an_audio_block_off_the_wire(bag_body).map_err(|refusal| {
-            Error::AudioWindowStageCannotReadTheBag {
-                port: self.port_name.clone(),
-                refusal: refusal.to_string(),
-            }
+    /// Refuses by name rather than reshaping: a sample type it does not know, a
+    /// payload whose length disagrees with its descriptor, a message described
+    /// as another kind, or a channel pair with neither side at one.
+    pub(crate) fn accept(
+        &mut self,
+        message: &MessageReadFromInputPort,
+    ) -> Result<Option<AudioWindowStageFlush>> {
+        let block = read_a_channels_block_for_the_window_stage(
+            &message.payload_descriptor,
+            &message.payload,
+            message.timestamp_ns,
+        )
+        .map_err(|refusal| Error::AudioWindowStageCannotReadTheBag {
+            port: self.port_name.clone(),
+            refusal: refusal.to_string(),
         })?;
 
         let arriving = SourceAudioFormat {
@@ -370,6 +384,8 @@ impl AudioWindowAccumulator {
 
         if self.run_anchor_timestamp_ns.is_none() {
             self.run_anchor_timestamp_ns = Some(block.first_sample_timestamp_ns);
+            self.run_start_sample =
+                self.start_sample_of_a_run_anchored_at(block.first_sample_timestamp_ns);
             self.next_window_start_output_frame = 0;
             self.priming_output_frames_still_to_discard =
                 self.rate_conversion.priming_output_frames();
@@ -392,7 +408,7 @@ impl AudioWindowAccumulator {
         Ok(flush)
     }
 
-    /// The next full window, encoded as an ordinary audio-block bag, with the
+    /// The next full window, written as a Channels block, with the
     /// timestamp its first sample derives.
     ///
     /// `None` means the stage holds less than one window — the caller feeds it
@@ -424,15 +440,15 @@ impl AudioWindowAccumulator {
                 self.contract.sample_rate,
             );
 
-        let bag = encode_an_audio_block_onto_the_wire(
+        let start_sample = self.run_start_sample + self.next_window_start_output_frame;
+        let (payload_descriptor, planar_payload) = channels_block_of_one_window(
             &self.window_scratch,
             self.contract.sample_rate,
             channels,
             self.contract.window_size,
             self.contract.dtype,
-            first_sample_timestamp_ns,
-        )
-        .map_err(|encode_failure| Error::BagEncodeFailed(encode_failure.to_string()))?;
+            start_sample,
+        );
 
         // A hop below the window size leaves the overlap in place for the next
         // window; a hop equal to it drains the whole one.
@@ -442,11 +458,11 @@ impl AudioWindowAccumulator {
 
         Ok(Some(BagBodyForTheReader {
             message: MessageReadFromInputPort {
-                payload: bag.into(),
+                payload: planar_payload.into(),
                 timestamp_ns: first_sample_timestamp_ns,
                 group_boundary: MessageGroupBoundary::StartsGroup,
                 lost_since_last_read: 0,
-                payload_descriptor: crate::iceoryx2::DataChannelPayloadDescriptor::bytes(),
+                payload_descriptor,
             },
             // A window is cut from bags rather than being one, so the stage has
             // no entry to read a link or its losses off. The port fills both
@@ -454,6 +470,20 @@ impl AudioWindowAccumulator {
             // answer.
             inbound_link_name: None,
         }))
+    }
+
+    /// Where a run anchored at `run_anchor_timestamp_ns` starts, in samples at
+    /// the declared rate counted from the first run's first, so a gap advances
+    /// every later window's start sample by the samples lost.
+    fn start_sample_of_a_run_anchored_at(&mut self, run_anchor_timestamp_ns: i64) -> u64 {
+        let first_run_anchor_timestamp_ns = *self
+            .first_run_anchor_timestamp_ns
+            .get_or_insert(run_anchor_timestamp_ns);
+        let nanoseconds_since_the_first_run = run_anchor_timestamp_ns
+            .saturating_sub(first_run_anchor_timestamp_ns)
+            .max(0) as u128;
+        ((nanoseconds_since_the_first_run * u128::from(self.contract.sample_rate) + 500_000_000)
+            / 1_000_000_000) as u64
     }
 
     /// Whether this port has already been told its mailbox cannot fill a
@@ -741,7 +771,7 @@ impl AudioWindowAccumulator {
     /// scalars nor the converted ones need a buffer of their own first.
     fn append_the_blocks_samples_in_the_count_windows_are_emitted_in(
         &mut self,
-        block: &AudioBlockReadFromTheWire<'_>,
+        block: &ChannelsBlockReadByTheWindowStage<'_>,
         contract_channels: u32,
     ) {
         let source_channels = block.channels;

@@ -2736,9 +2736,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (`AudioWindowContract(...)` in Python, `audio_window(...)` in the Rust grammar).
   `sample_rate`, `channels` and `dtype` reuse the device vocabulary `AudioStreamFormat`
   and `AudioSampleFormat` already state, never a parallel spelling; `dtype` takes the two
-  `AudioBlock` legalises, `f32` and `i16`. `window_size` counts per-channel samples — the
-  unit `AudioBlock.sample_count` already uses — so an emitted window carries
-  `window_size × channels` scalars, and `hop` defaults to `window_size`: contiguous,
+  a Channels block carries, `f32` and `f64`. The stage reads Channels blocks and emits each
+  window as one, its `start_sample` counted in the contract's rate. `window_size` counts
+  per-channel samples — the unit of `ChannelsBlock.samples_per_channel` — so an emitted
+  window carries `window_size × channels` scalars, and `hop` defaults to `window_size`: contiguous,
   non-overlapping windows, with a hop below it a legal rolling window. A port with no
   contract is unchanged in every respect; this is opt-in, and an output port declares no
   contract at all — only a consumer states what it needs.
@@ -2785,13 +2786,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   contract exists for. The contract reaches a helper child over the same parent→child
   wiring envelope that already carries `read_mode`. The order of operations is fixed:
   decode to f32 → channel-convert → resample → frame → encode to the declared dtype, with
-  internal arithmetic in f32 always and an `i16` contract encoded back saturating rather
-  than wrapping. The stage owns its own decode of the six `AudioBlock` wire keys and
-  re-encodes each emitted window as an ordinary `AudioBlock` message, so `read(into=AudioBlock)`
-  and Rust's `read::<AudioBlock>` work unchanged. A message the stage cannot read is refused by
-  name at the read — an unknown `dtype`, a payload whose length is not
-  `sample_count × channels × itemsize`, a message with no `AudioBlock` keys at all — never
-  reshaped into a plausible wrong answer, and the refusal names the port.
+  internal arithmetic in f32 always. The stage reads each message's Channels block
+  descriptor and planar payload, and writes each emitted window as a Channels block of the
+  declared dtype. A message the stage cannot read is refused by name at the read — an
+  unknown sample type, a payload whose length is not `samples_per_channel × channels ×
+  itemsize`, a message described as another kind — never reshaped into a plausible wrong
+  answer, and the refusal names the port.
   [audio-port-window-contract — SHIPPED #2033]
 - **DECIDED** — Readiness on a windowed port means a full window, not an arrived message.
   Windowing is N-in → M-out — one 1024-sample quantum satisfies two 512-sample windows, a

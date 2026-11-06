@@ -561,11 +561,11 @@ def test_every_numeric_field_is_refused_at_zero_or_below_naming_the_field_and_th
 def test_an_unknown_dtype_is_refused_listing_the_legal_values():
     with pytest.raises(ValueError) as refusal:
         AudioWindowContract(
-            sample_rate=16_000, channels=1, dtype="f64", window_size=512
+            sample_rate=16_000, channels=1, dtype="i16", window_size=512
         )
 
     message = str(refusal.value)
-    assert "f64" in message and "f32" in message and "i16" in message
+    assert "i16" in message and "f32" in message and "f64" in message
 
 
 def test_a_partial_contract_is_refused_naming_the_missing_fields():

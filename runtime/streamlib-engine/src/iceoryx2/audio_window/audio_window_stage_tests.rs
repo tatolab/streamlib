@@ -9,12 +9,15 @@ use std::sync::Arc;
 
 use streamlib_processor_schema::AudioWindowContractDeclaredValues;
 
-use super::audio_block_bag_wire_codec::{
-    AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire, read_an_audio_block_off_the_wire,
-};
+use super::super::input::MessageReadFromInputPort;
+use super::super::{ChannelsBlockSampleType, DataChannelPayloadDescriptor, MessageGroupBoundary};
 use super::audio_window_accumulator::{
     AudioWindowAccumulator, AudioWindowStageFlushCause, LatestQueuedSourceAudioFormat,
     SourceAudioFormat,
+};
+use super::channels_block_of_the_window_stage::{
+    ChannelsBlockReadByTheWindowStage, channels_block_body_of, channels_block_of_one_window,
+    read_a_channels_block_for_the_window_stage,
 };
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 
@@ -85,26 +88,45 @@ fn stage_and_the_format_its_mailbox_reports(
     )
 }
 
-/// One source block on the wire, as the stage receives it: `frames` per-channel
-/// samples interleaved by `channels`, stamped at `first_sample_timestamp_ns`.
+/// One source block as the stage receives it: `frames` per-channel samples
+/// interleaved by `channels` written as a planar f32 Channels block, stamped at
+/// `first_sample_timestamp_ns`.
 fn source_block(
     interleaved: &[f32],
     sample_rate: u32,
     channels: u32,
     first_sample_timestamp_ns: i64,
-) -> Vec<u8> {
-    encode_an_audio_block_onto_the_wire(
+) -> MessageReadFromInputPort {
+    let (payload_descriptor, planar_payload) = channels_block_of_one_window(
         interleaved,
         sample_rate,
         channels,
         interleaved.len() as u32 / channels,
-        AudioBlockSampleDtype::F32,
-        first_sample_timestamp_ns,
-    )
-    .expect("a source block encodes")
+        ChannelsBlockSampleType::F32,
+        0,
+    );
+    MessageReadFromInputPort {
+        payload: planar_payload.into(),
+        timestamp_ns: first_sample_timestamp_ns,
+        group_boundary: MessageGroupBoundary::StartsGroup,
+        lost_since_last_read: 0,
+        payload_descriptor,
+    }
 }
 
-/// One emitted window, read back as the audio block it is.
+/// An emitted window read back as the Channels block it is.
+fn channels_block_of_the_window(
+    window: &MessageReadFromInputPort,
+) -> ChannelsBlockReadByTheWindowStage<'_> {
+    read_a_channels_block_for_the_window_stage(
+        &window.payload_descriptor,
+        &window.payload,
+        window.timestamp_ns,
+    )
+    .expect("an emitted window reads back")
+}
+
+/// One emitted window, read back as the Channels block it is.
 struct EmittedWindow {
     scalars: Vec<f32>,
     sample_rate: u32,
@@ -116,12 +138,7 @@ struct EmittedWindow {
 fn drain_every_ready_window(stage: &mut AudioWindowAccumulator) -> Vec<EmittedWindow> {
     let mut windows = Vec::new();
     while let Some(window) = stage.next_ready_window().expect("a window emits") {
-        let block = read_an_audio_block_off_the_wire(&window.message.payload)
-            .expect("an emitted window reads back");
-        assert_eq!(
-            block.first_sample_timestamp_ns, window.message.timestamp_ns,
-            "the stamp beside the bag is the one inside it"
-        );
+        let block = channels_block_of_the_window(&window.message);
         windows.push(EmittedWindow {
             scalars: block.interleaved_samples_as_f32().collect(),
             sample_rate: block.sample_rate,
@@ -746,23 +763,25 @@ fn a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped() {
     let contract = contract(16_000, 1, "f32", 256, 256);
     let mut stage = stage_on(contract);
 
-    let not_an_audio_block =
-        rmp_serde::to_vec_named(&serde_json::json!({ "width": 1920 })).expect("encodes");
+    let not_a_channels_block = MessageReadFromInputPort {
+        payload_descriptor: DataChannelPayloadDescriptor::bytes(),
+        ..source_block(&[0.0; 256], 16_000, 1, 0)
+    };
     let refusal = stage
-        .accept(&not_an_audio_block)
-        .expect_err("a bag with no audio-block keys is refused");
+        .accept(&not_a_channels_block)
+        .expect_err("a message of another kind is refused");
     let rendered = refusal.to_string();
     assert!(
-        rendered.contains("audio") && rendered.contains("audio block"),
+        rendered.contains("audio") && rendered.contains("Channels blocks only"),
         "the refusal must name the port and what it could not read; got {rendered}"
     );
 }
 
-/// An `i16` contract is the same stage with a different encode, so the windows
-/// stay exact and the scalars come back as the wire says they were written.
+/// An `f64` contract is the same stage with a different sample type, so the
+/// windows stay exact and their samples come back as the block says.
 #[test]
-fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
-    let contract = contract(16_000, 1, "i16", 256, 256);
+fn an_f64_contract_emits_windows_whose_samples_are_f64() {
+    let contract = contract(16_000, 1, "f64", 256, 256);
     let mut stage = stage_on(contract);
 
     let interleaved: Vec<f32> = (0..256).map(|_| 0.5f32).collect();
@@ -774,12 +793,49 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
         .next_ready_window()
         .expect("a window emits")
         .expect("a full window");
-    let block = read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
-    assert_eq!(block.dtype, AudioBlockSampleDtype::I16);
-    assert_eq!(block.interleaved_sample_bytes.len(), 256 * 2);
-    for scalar in block.interleaved_sample_bytes.as_chunks::<2>().0.iter() {
-        assert_eq!(i16::from_le_bytes([scalar[0], scalar[1]]), 16_384);
+    let body = channels_block_body_of(&window.message.payload_descriptor)
+        .expect("a window is a Channels block");
+    assert_eq!(body.sample_type, ChannelsBlockSampleType::F64 as u32);
+    assert_eq!(window.message.payload.len(), 256 * 8);
+    for scalar in window.message.payload.as_chunks::<8>().0.iter() {
+        assert_eq!(f64::from_le_bytes(*scalar), 0.5);
     }
+}
+
+/// Each window's start sample counts the declared rate from the first window,
+/// so consecutive windows step by the hop and a gap advances it by what it
+/// lost.
+#[test]
+fn a_windows_start_sample_steps_by_the_hop_and_a_gap_advances_it() {
+    let contract = contract(16_000, 1, "f32", 256, 128);
+    let mut stage = stage_on(contract);
+    stage
+        .accept(&source_block(&[0.0; 512], 16_000, 1, 0))
+        .expect("accepted");
+    let start_samples_of = |stage: &mut AudioWindowAccumulator| -> Vec<u64> {
+        std::iter::from_fn(|| stage.next_ready_window().expect("asked"))
+            .map(|window| {
+                channels_block_body_of(&window.message.payload_descriptor)
+                    .expect("a window is a Channels block")
+                    .start_sample
+            })
+            .collect()
+    };
+    assert_eq!(start_samples_of(&mut stage), [0, 128, 256]);
+
+    stage
+        .accept(&source_block(
+            &[0.0; 256],
+            16_000,
+            1,
+            NANOSECONDS_PER_SECOND,
+        ))
+        .expect("accepted after a gap");
+    assert_eq!(
+        start_samples_of(&mut stage),
+        [16_000],
+        "the run after a one-second gap starts a second's samples on"
+    );
 }
 
 /// Drive the readiness floor over one source format, asserting the two things
@@ -843,8 +899,7 @@ fn assert_the_readiness_floor_holds_for(
                      {source_channels} channels that the read could not produce"
                 )
             });
-        let emitted =
-            read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
+        let emitted = channels_block_of_the_window(&window.message);
         assert_eq!(
             emitted.channels, channels_each_window_carries,
             "the window the floor promised carries the count the contract resolves to"
@@ -892,7 +947,7 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
     });
 
     // Three 160-sample bags — 480 of the 512 a window needs.
-    let mut queued: Vec<Vec<u8>> = (0..3u64)
+    let mut queued: Vec<MessageReadFromInputPort> = (0..3u64)
         .map(|block| {
             source_block(
                 &interleaved_sine(block * 160, 160, 1, 16_000, 300.0),
@@ -946,7 +1001,7 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
         .next_ready_window()
         .expect("a window emits")
         .expect("the run after the gap fills its own window");
-    let block = read_an_audio_block_off_the_wire(&window.message.payload).expect("reads back");
+    let block = channels_block_of_the_window(&window.message);
     assert_eq!(
         block.first_sample_timestamp_ns, NANOSECONDS_PER_SECOND,
         "the window after the gap is anchored on its own run's first block"

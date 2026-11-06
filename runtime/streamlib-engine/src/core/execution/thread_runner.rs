@@ -1487,32 +1487,10 @@ mod tests {
         frames: usize,
         first_sample_timestamp_ns: i64,
     ) -> crate::iceoryx2::channel_sample_test_support::TestChannelSample {
-        #[derive(serde::Serialize)]
-        struct AudioBlockBag<'a> {
-            #[serde(rename = "samples", with = "serde_bytes")]
-            interleaved_sample_bytes: &'a [u8],
-            sample_rate: u32,
-            channels: u32,
-            sample_count: u32,
-            dtype: &'a str,
-            first_sample_timestamp_ns: i64,
-        }
-        let payload: Vec<u8> = (0..frames)
-            .flat_map(|index| (index as f32 / frames as f32).to_le_bytes())
-            .collect();
-        let body = rmp_serde::to_vec_named(&AudioBlockBag {
-            interleaved_sample_bytes: &payload,
-            sample_rate: 16_000,
-            channels: 1,
-            sample_count: frames as u32,
-            dtype: "f32",
+        crate::iceoryx2::channel_sample_test_support::TestChannelSample::of_a_mono_channels_block(
+            frames,
+            16_000,
             first_sample_timestamp_ns,
-        })
-        .expect("an audio block bag encodes");
-
-        crate::iceoryx2::channel_sample_test_support::TestChannelSample::carrying(
-            first_sample_timestamp_ns,
-            &body,
         )
     }
 
