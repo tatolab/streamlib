@@ -13,16 +13,16 @@ and when someone asks why `Lerp` is not a process.
 ## Decision
 
 A node has one of three kinds, declared by a contract about what its code does: a
-**shader**, a Slang function from Images to an Image; a **pure** function, written in Python
-(`@node.pure`) or Rust (`#[pure_node]` in `tatolab-module-sdk`), that computes its outputs from
+**shader**, a Slang function from Images to an Image; a **function** node, written in Python
+(`@node.function`) or Rust (`#[function_node]` in `tatolab-module-sdk`), that computes its outputs from
 its inputs with time and state handed in; or a **class** (`@node`) that may do anything. Every
 kind has the same ports, families, links and `type`; the runtime derives where each runs. The
-compiler groups connected shader and pure nodes into evaluation islands, where a link is a
-function call. Pure nodes run inside the read of the node that reads them; shaders run on one
-native evaluator per stream, and stateful pure nodes feeding several readers in one helper per
+compiler groups connected shader and function nodes into evaluation islands, where a link is a
+function call. Function nodes run inside the read of the node that reads them; shaders run on one
+native evaluator per stream, and stateful function nodes feeding several readers in one helper per
 stream. A class runs in its own process, and every helper runs the engine's one Rust run loop.
-Numeric pure Python is compiled to native code by Numba, so the runtime's own small nodes
-(`Lerp`, `Lfo`) are ordinary `@node.pure` functions in the bundled module `tatolab-ops`, written
+Numeric Python in a function node is compiled to native code by Numba, so the runtime's own small nodes
+(`Lerp`, `Lfo`) are ordinary `@node.function` functions in the bundled module `tatolab-ops`, written
 the way a user writes one.
 
 ## Why
@@ -37,7 +37,7 @@ TouchDesigner cooks a chain in one process; Houdini cooks in-process, out-of-pro
 pool. One mode was where StreamLib started, not where it stops.
 
 **The cheapest host already exists.** Nearly every node that reads data runs in a helper, and
-every helper reads through one Rust seam with the GIL detached. Calling a compiled pure node
+every helper reads through one Rust seam with the GIL detached. Calling a compiled function node
 inside that read needs no new process, thread or scheduler, which is why they ship first.
 
 **Islands, not lighter processors.** Green threads or a rayon pool make many processors cheaper
@@ -51,7 +51,7 @@ the helper writes them once.
 **Cheap isolation exists only for code the runtime controls.** No OS or runtime gives arbitrary
 CPython with C extensions a crash boundary cheaper than a process. So the kinds draw the line at
 what the code may do, not at the language: a class may do anything and keeps a process; a
-function with no hidden state may run anywhere. A pure function that crashes its reader is
+function with no hidden state may run anywhere. A function node that crashes its reader is
 moved to its own process after one restart, found by a breadcrumb written before each call.
 
 **Rules do not dictate architecture.** The process-per-Python-node shape was held by a rule
@@ -74,14 +74,14 @@ Python are the user path's own proof.
   would later need to be migrated onto (owner, 2026-11-06).
 - **The built-in ops in Rust** — fast, but written in a way users mostly will not, so the box's
   nodes would not exercise the path users take.
-- **Ops as a fourth kind beside pure** — the same contract under a second name, which leaves an
+- **Ops as a fourth kind beside function nodes** — the same contract under a second name, which leaves an
   author unsure which to reach for (owner, 2026-11-06).
 - **A separate control-rate graph with its own value ports** — it reintroduces the two-graph
   problem (Blueprint beside Material, visual scripting beside shader graph).
 - **A placement setting on each node** — it names where a node runs, which becomes wrong the day
   a pool or promotion moves it; a contract stays true and an agent can check its code against it.
-- **Pure Python and the pool first** — the costliest piece with the least certain payoff; Rust
-  pure nodes at the read seam carry the editor's whole math vocabulary with none of its failure
+- **Python function nodes and the pool first** — the costliest piece with the least certain payoff; Rust
+  function nodes at the read seam carry the editor's whole math vocabulary with none of its failure
   modes.
 - **CPython subinterpreters** — one crash domain, no kill, and no numpy or pyo3 extensions, so
   not StreamLib's own wheel.
@@ -89,7 +89,7 @@ Python are the user path's own proof.
   compile takes seconds; compiling numeric Python with Numba gives native speed with no new
   language.
 - **Wasm for user code** — cheap and killable, but Python in Wasm is several times slower with no
-  numpy; pure nodes in Rust or Python and Slang shaders cover the editor's node list.
+  numpy; function nodes in Rust or Python and Slang shaders cover the editor's node list.
 
 ## Consequences
 
@@ -98,9 +98,9 @@ Python are the user path's own proof.
   off the step ledger and cannot drop.
 - State lives on a per-stream board keyed by node name, so it survives a restart, a re-island and
   a reload, and can be shown.
-- A pure function's time and state are parameters, so evaluation is reproducible in stepped mode.
+- A function node's time and state are parameters, so evaluation is reproducible in stepped mode.
 - Purity is linted at decoration but cannot be enforced in Python; a function that cheats computes
   wrong values without crashing anything outside its interpreter.
-- One crash of a reader is the accepted cost of finding a crashing pure function.
+- One crash of a reader is the accepted cost of finding a crashing function node.
 - Shader nodes need asynchronous GPU submission before they scale across streams.
 - The editor gets two signals: wire colour from the family, node style from the kind.

@@ -20,22 +20,28 @@ native processor gets its own OS thread. There is nothing smaller.
   | Kind | Author writes | Contract | Runs |
   | --- | --- | --- | --- |
   | shader | a Slang function, `@node.shader` | Images and values in, an Image out, no side effects | on the GPU; a chain fuses into one kernel |
-  | pure | a function in Python (`@node.pure`) or Rust (`#[pure_node]`, `tatolab-module-sdk`) | outputs from inputs only; state and time are parameters | inside the node that reads it |
+  | function | a function in Python (`@node.function`) or Rust (`#[function_node]`, `tatolab-module-sdk`) | outputs from inputs only; state and time are parameters | inside the node that reads it |
   | class | a class with a lifecycle, `@node` | anything: devices, network, files, threads, GPU | its own process, as today |
 
+- **Two contracts underneath.** Shader and function nodes have no side effects: they use only
+  their inputs, config, `now` and, if they declare one, their own `State`. A function node with
+  no `State` is stateless (`Lerp`, `Add`); one that declares it is stateful (`Lfo`, `Lag`,
+  `Random` with its seed in state), receiving the last state and returning the next, which the
+  runtime keeps. State the runtime holds is not a side effect, so a stateful node still replays
+  the same. A class may have side effects: anything the runtime does not hand it.
 - **Which to reach for:** pixels in and an Image out is a shader. Computing from inputs (maths,
-  logic, a join, a curve, a custom lerp of numbers) is a pure function, written in Python; a
+  logic, a join, a curve, a custom lerp of numbers) is a function node, written in Python; a
   numeric body is compiled to native code for you, and Rust is there for code outside that
   subset that still needs native speed. Touching the world, or holding a resource across calls,
   is a class.
-- **Language is not a kind.** Every pure node meets one contract, and underneath the read seam
+- **Language is not a kind.** Every function node meets one contract, and underneath the read seam
   calls one thing: a C function pointer with a fixed signature. Numba-compiled Python and Rust
   are two ways to produce it. Only where a node can run differs: a compiled node runs inside any
   reader; Python that does not compile runs inside a Python reader, or the pool in phase 4.
-- **The runtime's own small nodes** (`Lerp`, `Lfo`, `Clamp`, …) are ordinary `@node.pure`
+- **The runtime's own small nodes** (`Lerp`, `Lfo`, `Clamp`, …) are ordinary `@node.function`
   Python in the bundled first-party module `tatolab-ops`, written the way a user writes one and
   compiled to native code.
-- **The rule an agent needs:** a class is a process; a function, shader or pure, runs wherever
+- **The rule an agent needs:** a class is a process; a function node or a shader runs wherever
   the runtime puts it, and never gets a process of its own unless it crashes its reader.
 - **The kind travels in the graph and the catalog**, so an agent reads it and an editor draws it.
 - **One run loop.** A helper runs the engine's own Rust runner and calls Python's `process()`
@@ -80,11 +86,11 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Node kind
 
-- Every graph node and catalog entry carries `kind`: `shader`, `pure` or `class`, and a pure
+- Every graph node and catalog entry carries `kind`: `shader`, `function` or `class`, and a function
   node its `language`, `python` or `rust`.
   `graph` and `/api/registry` render it, beside each port's `family`. Kind and family are
   separate axes: a family says what flows on a wire, a kind says how a node's code runs.
-- Linking rules: a shader takes Images and values and returns an Image; a pure function takes
+- Linking rules: a shader takes Images and values and returns an Image; a function node takes
   values, Records and Arrays and may pass an Image along without reading its pixels; a class
   takes anything.
 
@@ -94,31 +100,31 @@ The order is: the families, then variables, then the gateway and track nodes.
   instance's `process()` in-process. The bootstrap keeps the lifecycle commands, imports and
   describe; it no longer schedules. Every rule below is written once, in Rust.
 
-### The pure-node contract
+### The function-node contract
 
-- **One entry the read seam calls:** per pure node, a descriptor (ports, families, config,
+- **One entry the read seam calls:** per function node, a descriptor (ports, families, config,
   state) and a C evaluate function taking the input values, config, `now` and its state and
   returning its outputs. It extends the module host table: the one place the engine calls
   module code, versioned with the table, and loaded only in a helper. No node code, first-party
   or not, runs in `tatolabd`.
-- **Two producers.** A `@node.pure` Python function whose body is typed numeric code (floats,
-  ints, numpy arrays, loops) is compiled by Numba to that entry. A `#[pure_node]` Rust function
+- **Two producers.** A `@node.function` Python function whose body is typed numeric code (floats,
+  ints, numpy arrays, loops) is compiled by Numba to that entry. A `#[function_node]` Rust function
   in `tatolab-module-sdk` exports it directly, for code outside Numba's subset that still needs
-  native speed. A Python body that does not compile runs as Python (§`@node.pure` in Python).
+  native speed. A Python body that does not compile runs as Python (§`@node.function` in Python).
 - **Compilation** happens at load and is cached by a hash of the source, the signature and the
   Numba version, so a reload or a live edit of another node pays nothing; a module ships its
-  pure nodes pre-compiled in its wheel. `graph` shows whether each pure node ran compiled.
+  function nodes pre-compiled in its wheel. `graph` shows whether each function node ran compiled.
 - **Compiled state** is a typed record Numba can lower (`State[T]` with `T` a record of numbers
   and arrays); a state outside that keeps the node in Python.
 - **Measured** (2026-11-06, one scalar ease function and a 10M-element loop, C `-O2` as the
   native baseline): 2.8 ns a call against 2.4 ns native and 155 ns plain Python; the loop
   within 10% of native; 140 ms to compile a scalar function, about 0.5 s an array loop.
-- A pure node's type is its import path in its module's `tatolab.nodes` entry points, like any
+- A function node's type is its import path in its module's `tatolab.nodes` entry points, like any
   node, so two modules may both ship a `Lerp`, told apart by import path.
 
 ### `tatolab-ops`
 
-- A first-party module of `@node.pure` functions, bundled with the runtime, pre-compiled in its
+- A first-party module of `@node.function` functions, bundled with the runtime, pre-compiled in its
   wheel, and built exactly the way a third party builds one; nothing in the engine knows their
   names (`tatolab.ops:Lerp`). It carries:
   - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`, `Absolute`,
@@ -135,20 +141,20 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Evaluation islands
 
-- The compiler groups each connected run of shader and pure nodes into an **island**.
+- The compiler groups each connected run of shader and function nodes into an **island**.
   Inside an island a link is a function call; at its edge a link is an ordinary channel with
   its family. The graph stays flat: an island is a compile result, never a container.
 - **Where an island runs:**
-  - **Pure nodes read by a helper** run inside that helper's read: an island output is a
+  - **Function nodes read by a helper** run inside that helper's read: an island output is a
     synthetic port in `InputMailboxesInner`, and a read evaluates it. No process, no thread, no
-    processor instance. A compiled pure node runs inside any reader's read, a module's native
+    processor instance. A compiled function node runs inside any reader's read, a module's native
     half included.
   - **Shaders** run on one native evaluator per stream in `tatolabd`, which owns the device,
     and publish on a channel. A shader's code is Slang the engine compiles, never module code.
-  - **A stateful pure node that feeds several readers** runs in one pure-node helper per
+  - **A stateful function node that feeds several readers** runs in one function-node helper per
     stream, spawned only when the stream has such a node, and publishes on a channel. One
     state never has two copies.
-  - **An uncompiled Python pure island read by a module's native half** runs on the pool
+  - **An uncompiled Python function island read by a module's native half** runs on the pool
     (phase 4) or the
     port is refused by name, since that read holds no GIL.
 - **The island pass** runs between plan and PREPARE: union-find over lightweight nodes, a host
@@ -185,7 +191,7 @@ The order is: the families, then variables, then the gateway and track nodes.
 ### The state board
 
 - Each stream has a board of fixed-size state slots, modelled on the loss-count board: the
-  parent creates it, the host writes it. A stateful pure node keeps its state there,
+  parent creates it, the host writes it. A stateful function node keeps its state there,
   keyed by node name, so it survives a helper restart and a re-island, is persisted in the
   stream record on reload, and `graph` can show it.
 
@@ -216,10 +222,10 @@ def blend(a: ImageFrame, b: ImageFrame, amount: float) -> ImageFrame: ...
 - **Prerequisite:** dispatch moves from the shared host fence to asynchronous submission with
   timeline signalling, so one stream's shaders do not serialise every other's.
 
-### `@node.pure` in Python
+### `@node.function` in Python
 
 ```python
-@node.pure
+@node.function
 def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
     return low + x * (high - low)
 
@@ -227,7 +233,7 @@ def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
 class SmoothedValue:
     value: float
 
-@node.pure
+@node.function
 def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) -> Stateful[float, SmoothedValue]:
     ...
 ```
@@ -238,15 +244,15 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
 - `Time` is integer nanoseconds. `State[T]` comes in and `Stateful[Out, T]` names what goes out,
   so the state is visible in the type. The state lives on the board.
 - `add` takes a function through its own overload, and the zero-argument hole is closed.
-- **The purity lint** runs at decoration, an `ast` reader in the shape of `_cross_floor_check.py`.
+- **The side-effect lint** runs at decoration, an `ast` reader in the shape of `_cross_floor_check.py`.
   It refuses by name calls to `time.*`, `random.*`, `open`, `socket`, `threading`,
   `os.urandom` and `datetime.now`, `global` and `nonlocal`, closures, and referenced mutable
   globals. It cannot see aliased, dynamic or transitive access; a function that cheats computes
-  wrong values but cannot crash anything outside its interpreter. A Rust pure node is held to
+  wrong values but cannot crash anything outside its interpreter. A Rust function node is held to
   the same contract by review, not a lint.
-- A body that compiles runs as native code (§The pure-node contract); the rest of this section
+- A body that compiles runs as native code (§The function-node contract); the rest of this section
   is how a body that does not compile runs.
-- **A crash breadcrumb.** Before each pure call, in either language, the helper writes the node's
+- **A crash breadcrumb.** Before each function-node call, in either language, the helper writes the node's
   name to its board.
   When a helper dies with the breadcrumb set, its restart moves that node out to its own
   process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
@@ -254,8 +260,8 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
 
 ### The pool and promotion (phase 4)
 
-- Built only if real graphs carry pure Python that no Python class reads. One pool interpreter
-  per stream hosts such nodes as plain calls. A pure node that runs past its island's frame
+- Built only if real graphs carry Python function nodes that no Python class reads. One pool interpreter
+  per stream hosts such nodes as plain calls. A function node that runs past its island's frame
   interval three times running is promoted to its own process; a hung call cannot be
   pre-empted, so the pool is respawned with state handed over through the board.
 
@@ -283,23 +289,23 @@ both and defines neither.
     reference to its gateway node, and a track the same way; neither is ever a record on a link.
   - A get with no setter, two setters of one name, or a get read as the wrong family or node type
     is refused by name at `connect`.
-- **Inside an island** a resolved variable is the link it resolved to, so a get feeding a pure node is
+- **Inside an island** a resolved variable is the link it resolved to, so a get feeding a function node is
   a function call like any other.
 
 ### Viewers
 
 An island holds its latest values, so a viewer of a lightweight node's output reads them through
 whatever read path `gateway-nodes` settles, at no process cost. Relays, gateways, tracks and
-previews are class nodes a person places, never pure nodes, because they touch the network or
+previews are class nodes a person places, never function nodes, because they touch the network or
 the device.
 
 ### What Tato Studio reads
 
 - `kind` and `family` on every `graph` node and port, from the real runtime.
-- A palette: category per node type, every installed module's pure nodes, `tatolab-ops`
-  included, and a project's shader and pure nodes listed without running their code.
+- A palette: category per node type, every installed module's function nodes, `tatolab-ops`
+  included, and a project's shader and function nodes listed without running their code.
 - Where each lightweight node runs: its host node, its fused group, promoted or not.
-- The source-writing edit verbs accept shader and pure types and write an idiomatic
+- The source-writing edit verbs accept shader and function types and write an idiomatic
   `stream.py` line.
 - Log records and state attribute a lightweight node by its own name, not its host's process.
 
@@ -307,18 +313,18 @@ the device.
 
 - **The placement entry** (`ARCHITECTURE.md:1529-1546`). It reads: a Python **class** node runs
   in its own child process, exec'd from the stream's venv, never fork; shaders and compiled
-  pure nodes run without a process; pure Python that does not compile runs inside its Python reader, in a pool only in phase 4, and
+  function nodes run without a process; a Python function node that does not compile runs inside its Python reader, in a pool only in phase 4, and
   in its own process after a crash or a stall. "No processor may ever block another" holds
   between class nodes.
-- **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.pure` and
-  `@node.shader`, and a module's `#[pure_node]` is a node type too; a function's type is its
+- **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.function` and
+  `@node.shader`, and a module's `#[function_node]` is a node type too; a function's type is its
   import path, as a class's is.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
 - **The built-ins entry** (`ARCHITECTURE.md:539-549`). `tatolab-ops` is a first-party module of
-  pure nodes, bundled with the runtime and built on the SDK any module uses, so the runtime
+  function nodes, bundled with the runtime and built on the SDK any module uses, so the runtime
   still ships no node of its own.
-- **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the pure-node entry, the one
+- **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the function-node entry, the one
   place the engine calls module code, and only in a helper.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
@@ -353,7 +359,7 @@ Each carries a recommendation that is built if nobody overrules it.
   wired `Constant`? *Recommendation:* config, else default, as Blueprint's pins do.
 - **[NEEDS DECISION 4] A control value on a wire.** Channels with an irregular control rate, or
   Records? *Recommendation:* Channels, which keeps control values where the plan puts them.
-- **[NEEDS DECISION 5] A crash in inline pure code.** Breadcrumb and promotion on crash, or
+- **[NEEDS DECISION 5] A crash in an inline function node.** Breadcrumb and promotion on crash, or
   always isolate? *Recommendation:* the breadcrumb; it bounds the damage to one restart of the
   reader without a pool.
 - **[NEEDS DECISION 6] The class kind's spelling.** *Recommendation:* keep `@node`; the
@@ -368,7 +374,7 @@ Assumed unless overruled:
 - Blueprint's execution wire ("do A, then B") is not part of this change; gates cover streams.
 - Numba ships in the runtime's Python environment; the size (about 40 MB with llvmlite) is
   accepted, as Slang's was. Numba supports a new CPython some months after its release; in that
-  gap pure nodes run as Python, slower, and a native reader of one is refused by name.
+  gap function nodes run as Python, slower, and a native reader of one is refused by name.
 - Wasm is out of scope.
 
 ## Proof
@@ -378,18 +384,18 @@ Assumed unless overruled:
 - `connect` and `disconnect` re-island live, and a cycle without a delay node is refused by name.
 - `Lfo → Remap` from `tatolab-ops` runs compiled, from the wheel's pre-compiled code, and is
   read by a module's native half with no GIL.
-- A user's numeric `@node.pure` compiles on load, is cached, and matches its Python output; a
+- A user's numeric `@node.function` compiles on load, is cached, and matches its Python output; a
   non-numeric one runs as Python, and `graph` shows which.
-- A fixture module's Rust pure node joins an island beside `tatolab-ops`'.
-- A stateful pure node keeps its state across a helper restart and a stream reload.
-- A stateful pure node feeding two readers gives both the same value.
+- A fixture module's Rust function node joins an island beside `tatolab-ops`'.
+- A stateful function node keeps its state across a helper restart and a stream reload.
+- A stateful function node feeding two readers gives both the same value.
 - Two streams' shader dispatches no longer serialise on one host fence.
 - One `@node.shader` runs Image in, Image out, with no Python process.
 - A three-node point-wise shader chain records one submission per frame, matches the unfused
   output, and a blur in the middle splits it.
-- `@node.pure` with `State` keeps its state across a reload; the lint refuses `time.time()`,
+- `@node.function` with `State` keeps its state across a reload; the lint refuses `time.time()`,
   `random.random()` and `open()` by name.
-- A pure node that aborts its reader is promoted after one restart, and `graph` counts it.
+- A function node that aborts its reader is promoted after one restart, and `graph` counts it.
 - One `SetVariable` of an Image output read by two `GetVariable` nodes yields two links from the
   setter's source and no variable node at run time; a variable holding a gateway reference yields
   reference edges in `graph`; a missing setter, a duplicate setter and a wrong-family get are each
@@ -397,22 +403,22 @@ Assumed unless overruled:
 
 ## Tickets (expected)
 
-1. Compiled pure nodes at the read seam:
-   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the pure-node contract;
-      `@node.pure` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
+1. Compiled function nodes at the read seam:
+   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the function-node contract;
+      `@node.function` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
       `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
    2. The island pass on live edits, with cycle refusal.
    3. Literal pins and the full `tatolab-ops` set.
-   4. Stateful pure nodes on the state board.
-   5. Fan-out of a stateful pure node in the per-stream pure-node helper.
-   6. Rust `#[pure_node]` in `tatolab-module-sdk`, proven by a fixture module.
+   4. Stateful function nodes on the state board.
+   5. Fan-out of a stateful function node in the per-stream function-node helper.
+   6. Rust `#[function_node]` in `tatolab-module-sdk`, proven by a fixture module.
 2. Shaders:
    1. Asynchronous GPU submission.
    2. One `@node.shader` on the native evaluator.
    3. Fusion under the split rule.
-3. Pure Python that does not compile:
+3. Python function nodes that do not compile:
    1. Inline in a Python reader.
-   2. The purity lint.
+   2. The side-effect lint.
    3. The crash breadcrumb and promotion on crash.
 4. The pool and promotion, only if graphs need it.
 5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
@@ -421,7 +427,7 @@ Assumed unless overruled:
 ## Notes (not in scope)
 
 - Measure a helper's real cost (wheel import, idle memory, iceoryx2 and Vulkan setup) and the
-  per-message hop before phase 3; phase 1 removes the hop for compiled pure nodes.
+  per-message hop before phase 3; phase 1 removes the hop for compiled function nodes.
 - The shader examples in `examples/` and the scaffold's `HalftoneLensEffect` move to
   `@node.shader` as consumer backlog. Retiring `GlslPixelEffect` is a separate owner call.
 - A thread pool for native class nodes is a separate change.
