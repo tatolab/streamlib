@@ -212,6 +212,23 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   interval three times running is promoted to its own process; a hung call cannot be
   pre-empted, so the pool is respawned with state handed over through the board.
 
+### What explicit I/O nodes rely on
+
+Relays, gateways, tracks and previews become nodes a person places, not automatic behaviour.
+Those nodes touch the network or the device, so they are class or runtime-supplied nodes, never
+ops; this change gives them three things.
+
+- **Graph variables.** `SetVariable` takes one input under a name; `GetVariable` reads it
+  anywhere in the stream with no wire drawn. The compiler resolves each get to a link from the
+  setter's source, so a variable has no runtime of its own and keeps its family. A get with no
+  setter, or two setters of one name, is refused by name at `connect`.
+- **Handle values.** A gateway's configured connection, or a track with its catalog info,
+  travels as a Records value held as the latest value, so one gateway node feeds any number of
+  send nodes, as in Unreal's WebRTC nodes.
+- **Viewers.** A viewer reads one port of any family and the runtime serves its latest value to
+  Tato Studio. An island already holds its latest values, so viewing a lightweight node's output
+  costs no process. Where viewers live is settled with the relay-node change.
+
 ### What Tato Studio reads
 
 - `kind` and `family` on every `graph` node and port, from the real runtime.
@@ -275,6 +292,7 @@ Assumed unless overruled:
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
 - Blueprint's execution wire ("do A, then B") is not part of this change; gates cover streams.
+- Graph variables compile to links rather than holding a value of their own.
 - Wasm is out of scope.
 
 ## Proof
