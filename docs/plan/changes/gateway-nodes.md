@@ -17,8 +17,8 @@ Rationale: `docs/decisions/gateway-nodes.md`.
 **The direction, in five sentences:**
 1. Nothing leaves a stream on its own: the exposed-port publisher, exposure, the routing policy,
    the supervised local relay and the preview page are removed, and `expose` with them.
-2. Networking is a module: a gateway node holds one connection to a relay, built from a
-   connection the runtime stores with its credential.
+2. Networking is a module: a gateway node holds one connection to a relay, its URL and
+   credential set in the node's own config.
 3. A track node declares one outgoing track on a gateway, with its catalog entry, and the stream
    holds it as a graph variable; track send nodes elsewhere in the graph write to it by reference,
    and a track receive node reads a remote track through a gateway.
@@ -32,7 +32,7 @@ Rationale: `docs/decisions/gateway-nodes.md`.
 ```python
 from tatolab.moq import MoqGateway, MoqTrack, MoqTrackSend, MoqTrackReceive
 
-cloudflare = stream_builder.add(MoqGateway, connection="cloudflare-main", broadcast="desk")
+cloudflare = stream_builder.add(MoqGateway, kind="cloudflare", relay_url=CLOUDFLARE_URL, broadcast="desk")
 camera_track = stream_builder.add(MoqTrack, gateway=cloudflare, track="camera")
 send = stream_builder.add(MoqTrackSend, track=camera_track)
 stream_builder.connect(encoder.encoded_video, send.content)
@@ -89,7 +89,8 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   credential is held and refreshed, the root, the catalog rewrite cadence — as one gateway
   implementation per relay kind: a plain `moq-relay`, Cloudflare and moq.pro.
 - **`MoqGateway`** — `execution = "manual"`, `paced_by_real_time`. Opens and holds one session to a
-  relay, from a stored connection (decision 2), and publishes one broadcast it names (`broadcast`,
+  relay, from its own config (decision 2): the relay kind, `relay_url` and the kind's credential
+  keys. It publishes one broadcast it names (`broadcast`,
   under the connection's root). It writes the broadcast's catalog from its tracks' entries, the way
   the publisher did, and drops what no subscriber asked for. It has no data ports.
 - **`MoqTrack`** — declares one outgoing track on a gateway (`gateway`, `track`, optional `catalog`
@@ -126,13 +127,13 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   does: the stream under test adds `MoqGateway` → `MoqTrack` → `MoqTrackSend` onto a `moq-relay` the
   rig starts as a fixture, and `tatolab-read-track` reads it. `codec_roundtrip_stream.py`'s receiver
   reads with `MoqTrackReceive`.
-- **The relay verbs become connection verbs** (assuming decision 2's recommendation). `add_relay`, `configure_relay`, `remove_relay` and
-  `list_relays` keep their behaviour but now store *connections*: each is a gateway kind's settings
-  plus a secret kept in the OS secret store. A connection kind's settings come from its module's
-  gateway node declaration, in the field list `relay-setting-fields` defines, read from the node
-  catalog, not from adapters compiled into `tatolabd`. A gateway node names a connection, and
-  `tatolabd` hands the gateway's helper process the resolved settings at `setup()` through the
-  node's context, never through the graph (decision 2).
+- **The relay verbs go.** A gateway's URL and credential are its config (decision 2), so the runtime stores
+  no relay instance: `relays.json`, the OS relay secret store, the four relay verbs, `tatolab
+  relays` and `relay`, and `/api/relay-adapters` with `streamlib://relay-adapter-catalog` are
+  removed. A gateway kind's config schema marks its credential keys secret, and `graph`, the logs
+  and the node catalog print a secret key's value as `set` or `unset`, never the value (session
+  assumption). The in-flight `relay-setting-fields` change is orphaned and retires without
+  shipping.
 - **The MCP instructions** tell an agent to look at a port through the viewer read path and
   to send it off the machine with gateway nodes. They do not mention `expose_port`.
 - **The scaffold** drops `H264Encoder` and `expose`. `TestPatternSource` → `HalftoneLensEffect`,
@@ -157,6 +158,18 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - REMOVED: runtime/streamlib-relay-adapter-cloudflare
 - REMOVED: runtime/streamlib-relay-adapter-moqpro
 - REMOVED: runtime/tatolabd/src/local_relay_adapter_of_this_runtime.rs
+- REMOVED: runtime/tatolabd/src/relay_instances_of_this_runtime.rs
+- REMOVED: runtime/tatolabd/src/relay_instances_record.rs
+- REMOVED: runtime/tatolabd/src/relay_secret_store.rs
+- REMOVED: runtime/tatolabd/src/os_relay_secret_store.rs
+- REMOVED: runtime/tatolabd/src/secret_holding_test_relay_adapter.rs
+- REMOVED: runtime/tatolabd/tests/tatolabd_holds_the_machines_relays.rs
+- REMOVED: runtime/streamlib-api-server/src/relay_tools_tests.rs
+- REMOVED: add_relay
+- REMOVED: configure_relay
+- REMOVED: remove_relay
+- REMOVED: list_relays
+- REMOVED: relay-adapter-catalog
 - REMOVED: runtime/tatolabd/tests/tatolabd_runs_the_local_relay.rs
 - REMOVED: runtime/tatolabd/tests/tatolabd_publishes_exposed_ports_at_the_local_relay.rs
 - REMOVED: xtask/src/stage_local_relay.rs
@@ -177,11 +190,9 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 Rejected: a named variable string resolved at load; a connection carried on a special port and
 wired with `connect` (owner, 2026-11-06).
 
-**[NEEDS DECISION] 2 — where a gateway's URL and credential live.**
-(a) The runtime stores named connections, with the secret in the OS secret store, and the gateway
-names one. (b) The gateway node's config carries them, read from the environment by the stream's
-code. Recommendation: (a). No secret appears in a graph, a log or `graph`'s render, and the
-settings form `relay-setting-fields` built is reused.
+**Decided 2 — a gateway's URL and credential are config on the gateway node (owner, 2026-11-06).**
+"It would become a config variable in the node for gateways." Rejected: the runtime storing
+named connections in `relays.json` and the OS secret store (owner, 2026-11-06).
 
 **Decided 3 — the bundled local relay is removed (owner, 2026-11-06).** `tatolabd` runs no
 relay; a rig or a person runs `moq-relay`. Rejected: keeping it, started only when a gateway names
@@ -208,11 +219,10 @@ imports them, so a preview is zero-copy and never touches a relay. Settled in th
 ## Tickets (as few tracer bullets as the change needs)
 
 1. **`tatolab-moq` with the gateway, track, send and receive nodes**, the reference edge, the
-   interface nodes, and
-   stored connections, proven by a rig stream that sends to and receives from a fixture
+   interface nodes, and secret config keys, proven by a rig stream that sends to and receives from a fixture
    `moq-relay`. `RelayTrackSource` and the relay adapters leave the runtime.
 2. **The automatic path is ripped out:** the publisher, exposure, `expose`, `expose_port`,
-   `tatolab expose`, the local relay and the preview page. The rigs and the stream-on-runtime suite
+   `tatolab expose`, the local relay, the relay verbs and their records, and the preview page. The rigs and the stream-on-runtime suite
    move onto ticket 1's nodes. The scaffold loses its encoder.
 3. **Runtime viewers:** the viewer read path and the per-family views in Tato Studio, settling
    decision 5.

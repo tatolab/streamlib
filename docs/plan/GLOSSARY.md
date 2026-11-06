@@ -94,8 +94,8 @@ publishes one broadcast it names; its **track nodes** declare the tracks in it. 
 carries what differs: dialect, credential, root, catalog cadence. _Avoid_: "relay adapter"
 (retired 2026-11-06), "publisher", "sink".
 
-**Connection** _(user)_: what a gateway node holds open to one relay — its URL, its credential
-and the live session; where the URL and credential are kept is OPEN. _Avoid_:
+**Connection** _(user)_: what a gateway node holds open to one relay — the live session, made
+from the URL and credential in the node's own config. _Avoid_:
 "credentials" for the whole.
 
 **Track node** _(user)_: a node that declares one outgoing track on a gateway, with its catalog

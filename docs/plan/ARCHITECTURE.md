@@ -142,7 +142,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
   moq-relays — SHIPPED #2871; runtime-description; stream-identity-and-persistence — SHIPPED
   #2965; create-project — SHIPPED #2982, #2995, #3012; queued-stream-actions — SHIPPED #2997,
-  #2998, #3004, #3009]
+  #2998, #3004, #3009; amended by gateway-nodes: the `relays` and `relay` verbs go]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
@@ -837,10 +837,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   gate fails any `tatolab/__init__.py` in the tree or in a built lend, and `dladdr` finds
   `_vulkan_driver/` beside `_engine` unchanged. [package-split-and-lend — SHIPPED #2689,
   #2693, #2697]
-- **OPEN** — How an external control client plugs in. What it hands the runtime is settled: a
-  relay's address and credential per adapter, and nothing else (§Networking, the adapters);
-  how it plugs in stays open. Known (2026-10-04): no stream map, router or peer
-  identity exists to push. [one-runtime-per-machine; moq-relays]
+- **OPEN** — How an external control client plugs in, and what it hands the runtime: a
+  gateway's relay settings are its node config (§Networking), so it hands the runtime no relay
+  credential. Known (2026-10-04): no stream map, router or peer identity exists to push.
+  [one-runtime-per-machine; moq-relays; gateway-nodes]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tato Studio; the app and `curl | sh` ship all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -3184,7 +3184,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs; OPEN: where a connection lives)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, secret config keys, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3495,23 +3495,24 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   designed. Direction: a track fed by a decoded audio port carries an `audio` entry with the `pcm`
   codec and raw interleaved little-endian f32 objects in place of its `AudioBlock` records.
   Owner, 2026-10-20. [relay-track-reading]
-- **DECIDED** — What differs between relays is the gateway's, and the connection is stored by
-  the runtime. `tatolab-moq` carries one gateway implementation per relay kind — a plain
-  `moq-relay`, Cloudflare and moq.pro; Red5 waits on its cost — each holding what differs: the
+- **DECIDED** — What differs between relays is the gateway's. `tatolab-moq` carries one gateway
+  implementation per relay kind — a plain `moq-relay`, Cloudflare and moq.pro; Red5 waits on its cost — each holding what differs: the
   MoQ dialect (`moq-net` negotiates moq-lite and the IETF drafts; Cloudflare's relays are on the
   drafts, `moq-relay` on moq-lite), how a machine authenticates and refreshes its credential,
   the root the relay assigns or leaves the gateway to name, and how often the broadcast's catalog
   is written again whole for a relay that hands a late subscriber only newer objects —
-  Cloudflare's, every second. No secret is ever in a graph, a log or `graph`'s render. Signing in
+  Cloudflare's, every second. A credential's value is never printed (the entry below). Signing in
   to a provider and provisioning a relay live in the app or a separate service, never the
   runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes]
   Rejected: relay adapters compiled into `tatolabd` — networking is a module, and the runtime
   carries no relay code (owner, 2026-11-06).
-- **OPEN** — Where a gateway's URL and credential live. Direction (session, not decided): a
-  gateway kind declares its connection's settings as fields; the runtime stores connections by
-  name, from the app or the CLI, each secret in the OS secret store; a gateway node names one,
-  and its helper is handed the resolved settings at `setup()` through the node's context.
-  Settled by decision 2 of the change. [gateway-nodes]
+- **DECIDED** — A gateway's URL and credential are config on the gateway node, as every node's
+  settings are: the relay kind, `relay_url` and the kind's credential keys. The runtime stores no
+  relay instance and no relay secret, and has no relay verbs. A gateway kind's config schema marks
+  its credential keys secret, and `graph`, the logs and the node catalog print such a key as `set`
+  or `unset`, never its value. Owner, 2026-11-06. [gateway-nodes]
+  Rejected: the runtime storing named connections in `relays.json` and the OS secret store for
+  gateway nodes to name — a second home for a node's settings (owner, 2026-11-06).
 - **DECIDED** — Reading a track is a receive node. `MoqTrackReceive`, in `tatolab-moq`, takes a
   gateway by reference, a broadcast and a track, subscribes, and writes each object's payload
   bytes to its one output as received, stamped from the track's own timestamp re-based onto this
@@ -3871,7 +3872,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; amended by gateway-nodes: `expose_port` goes, the relay verbs and `streamlib://relay-adapter-catalog` follow where a connection lives, OPEN in §Networking, and a tool serves a viewer's read of a port]
+  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; amended by gateway-nodes: `expose_port`, the four relay verbs and `streamlib://relay-adapter-catalog` go, a gateway's settings being its config, and a tool serves a viewer's read of a port]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
@@ -3914,7 +3915,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
   #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description;
-  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` goes, and the relay verbs follow where a connection lives, OPEN in §Networking]
+  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` and the relay verbs go]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
