@@ -369,8 +369,8 @@ fn run_the_step_barrier(
             }
             let the_stream_runs = !waits_for_every_node_to_start
                 || stream_now
-                    .wait_until_every_processor_is_running(STEP_COORDINATOR_START_RECHECK)
-                    .is_ok();
+                    .observable_graph_readiness()
+                    .wait_until_every_processor_has_finished_setup(STEP_COORDINATOR_START_RECHECK);
             if the_stream_runs {
                 baselines.follow_the_links_in(&stream_now.step_ledger_reading());
                 if let Some(opened) = stream_clock.open_the_waiting_step() {

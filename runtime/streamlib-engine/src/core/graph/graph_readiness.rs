@@ -68,6 +68,17 @@ impl ObservableGraphReadiness {
         Ok(())
     }
 
+    /// Block until every processor has finished `setup` and is past a
+    /// restart, whether it then runs, is paused or failed, giving up after
+    /// `timeout`; whether every one had.
+    pub fn wait_until_every_processor_has_finished_setup(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        self.processor_states.iter().all(|(_, observable_state)| {
+            let settled = observable_state.wait_until_setup_resolved(deadline);
+            !settled.is_before_setup_completed() && settled != ProcessorState::Restarting
+        })
+    }
+
     /// Read off the states already held, so the diagnostic never takes the
     /// graph lock — the timeout it explains is most likely a thread wedged
     /// holding exactly that lock.
@@ -116,6 +127,32 @@ mod tests {
         );
         assert!(reported.contains("Psource=Running"), "{reported}");
         assert!(reported.contains("Psink=Error"), "{reported}");
+    }
+
+    #[test]
+    fn a_paused_processor_has_finished_setup_though_it_is_not_running() {
+        let paused = Arc::new(ObservableProcessorState::new(ProcessorState::Paused));
+        let readiness = ObservableGraphReadiness::new(vec![
+            (
+                ProcessorUniqueId::from("Psource"),
+                Arc::new(ObservableProcessorState::new(ProcessorState::Running)),
+            ),
+            (ProcessorUniqueId::from("Pidle"), paused),
+        ]);
+
+        assert!(readiness.wait_until_every_processor_has_finished_setup(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn a_processor_still_in_setup_has_not_finished_it() {
+        let readiness = ObservableGraphReadiness::new(vec![(
+            ProcessorUniqueId::from("Pslow"),
+            Arc::new(ObservableProcessorState::new(ProcessorState::Pending)),
+        )]);
+
+        assert!(
+            !readiness.wait_until_every_processor_has_finished_setup(Duration::from_millis(50))
+        );
     }
 
     /// A processor that failed without a reason still reads as before: the
