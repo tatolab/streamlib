@@ -22,6 +22,14 @@ from . import catalog as catalog
 from . import clock as clock
 from . import log as log
 from . import msgpack as msgpack
+from ._built_in_nodes import ArrayToChannels as ArrayToChannels
+from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
+from ._built_in_nodes import ChannelsToArray as ChannelsToArray
+from ._built_in_nodes import ChannelsToArrayConfig as ChannelsToArrayConfig
+from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
+from ._built_in_nodes import ChannelsToRecordsConfig as ChannelsToRecordsConfig
+from ._built_in_nodes import RecordsToChannels as RecordsToChannels
+from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
 from ._built_in_nodes import RelayTrackSource as RelayTrackSource
 from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
@@ -126,11 +134,17 @@ __all__ = [
     "ArrayFrame",
     "ArrayFrameCpuAttribute",
     "ArrayFrameGpuAttribute",
+    "ArrayToChannels",
+    "ArrayToChannelsConfig",
     "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
     "Channels",
     "ChannelsBlock",
+    "ChannelsToArray",
+    "ChannelsToArrayConfig",
+    "ChannelsToRecords",
+    "ChannelsToRecordsConfig",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -180,6 +194,8 @@ __all__ = [
     "RayTracingKernel",
     "RealTimeStreamClock",
     "Records",
+    "RecordsToChannels",
+    "RecordsToChannelsConfig",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
