@@ -19,27 +19,26 @@ from importlib import resources
 from typing import Annotated, Any
 
 from tatolab.stream import (
+    ColorInfo,
     ComputeKernel,
     GpuContextFullAccess,
     GpuSurfaceHandle,
+    Image,
+    ImageFrameToWrite,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     monotonic_now_ns,
-    msgpack,
     node,
 )
-from tatolab.stream.catalog import BinaryEntry
 
 __all__ = ["TestPatternSource", "TestPatternSourceConfig"]
 
 _THIS_PACKAGE = "tatolab.testpattern"
 
-VIDEO_OUTPUT_PORT_NAME = "video"
-
-TEST_PATTERN_FRAMES_PER_SECOND = 30
+TEST_PATTERN_FRAME_COLOUR = ColorInfo(primaries="bt709", transfer="srgb", range="full")
 
 LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS = 16_384
 """The largest frame side the source renders: 16K, far past any frame a stream asks for."""
@@ -232,7 +231,7 @@ def _upload_overlay_into_a_texture(
     ),
 )
 class TestPatternSource:
-    """The sample stream's animation at about 30 frames a second, as RGBA `VideoFrame`s."""
+    """The sample stream's animation at about 30 frames a second, as RGBA Image frames."""
 
     __test__ = False
 
@@ -248,11 +247,9 @@ class TestPatternSource:
         self._next_frame_index = 0
         self._consecutive_dropped_frames = 0
 
-    @node.output(
-        description="Test-pattern video frames",
-        catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"),
+    video = Output(
+        Image, formats=(_TEST_PATTERN_FRAME_TEXTURE_FORMAT,), description="Test-pattern video frames"
     )
-    def video(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
@@ -309,17 +306,8 @@ class TestPatternSource:
         self._next_frame_index += 1
         timestamp_ns = monotonic_now_ns()
         ctx.outputs.write(
-            VIDEO_OUTPUT_PORT_NAME,
-            msgpack.pack(
-                {
-                    "surface_id": frame_texture.surface_id,
-                    "width": frame_width,
-                    "height": frame_height,
-                    "timestamp_ns": timestamp_ns,
-                    "fps": TEST_PATTERN_FRAMES_PER_SECOND,
-                    "color_info": {"primaries": "bt709", "transfer": "srgb", "range": "full"},
-                }
-            ),
+            self.video,
+            ImageFrameToWrite.of_texture(frame_texture, TEST_PATTERN_FRAME_COLOUR),
             timestamp_ns=timestamp_ns,
         )
 

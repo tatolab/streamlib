@@ -6,13 +6,13 @@
 from tatolab.stream import StreamBuilder, stream
 from tatolab.testpattern import TestPatternSource
 
-from test_pattern_module_probes import VideoFrameProbe
+from test_pattern_module_probes import ImageFrameProbe
 
 
 @stream
-def a_test_pattern_into_a_video_frame_probe(stream_builder: StreamBuilder) -> None:
+def a_test_pattern_into_an_image_frame_probe(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
-    probe = stream_builder.add(VideoFrameProbe)
+    probe = stream_builder.add(ImageFrameProbe)
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 

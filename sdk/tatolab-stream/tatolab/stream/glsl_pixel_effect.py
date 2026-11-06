@@ -7,7 +7,7 @@ The user writes `vec4 effect(vec4 source, ivec2 at)` and a list of named
 dials; this class supplies the rest of an ordinary compute kernel around it —
 the source sampler, the output image, the workgroup tile, the push-constant
 block — and per frame lands the frame with the engine copy, dispatches, and
-hands back the output frame's record. Wheel grammar over `create_compute_kernel`,
+hands back the output Image frame to write. Wheel grammar over `create_compute_kernel`,
 `NodeOutputTextureRing`, `copy_surface_to_surface` and `dispatch`; the
 engine sees nothing but a kernel and a copy.
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import struct
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from ._gpu_protocols import ComputeKernel, GpuContextFullAccess
@@ -37,7 +37,7 @@ from ._sampled_source_landing import (
 )
 from .clock import monotonic_now_ns
 from .node_output_texture_ring import NodeOutputTextureRing
-from .video_frame import VideoFrame
+from .image_frame import ImageFrame, ImageFrameToWrite
 
 __all__ = ["GlslPixelEffect", "GlslPixelEffectDialType"]
 
@@ -282,18 +282,17 @@ class GlslPixelEffect:
     def apply_to_frame(
         self,
         gpu_limited_access: GpuContextWithSurfaceCopy,
-        frame: VideoFrame,
+        frame: ImageFrame,
         dials: "Mapping[str, float | Sequence[float]] | None" = None,
-    ) -> "dict[str, Any]":
-        """Run the effect over `frame` and return the output frame's record, in `process()`.
+    ) -> ImageFrameToWrite:
+        """Run the effect over `frame` and return the Image frame to write, in `process()`.
 
         `frame` is one single-plane RGBA frame. Every declared dial is
         supplied on every apply; none persists. The output is an `rgba8_unorm`
-        frame at the source's extent, carrying its timestamp and colour
-        description; `tatolab.stream.msgpack.pack` turns the record into the
-        payload a `VideoFrame` reader reads. Raises naming the dial for an
-        undeclared, missing or ill-typed one, and naming the frame when the
-        engine copy refuses to land it.
+        frame at the source's extent carrying its colour, for
+        `ctx.outputs.write(self.video_out, frame_to_write, timestamp_ns=frame.timestamp_ns)`.
+        Raises naming the dial for an undeclared, missing or ill-typed one, and
+        naming the frame when the engine copy refuses to land it.
         """
         push_constants = self._pack_push_constants(dict(dials or {}))
 
@@ -321,20 +320,13 @@ class GlslPixelEffect:
             push_constants=push_constants,
         )
 
-        output_frame_record: "dict[str, Any]" = {
-            "surface_id": output_texture.surface_id,
-            "width": frame.width,
-            "height": frame.height,
-            # The capture's timestamp, not the effect's: downstream orders by it.
-            "timestamp_ns": frame.timestamp_ns,
-        }
-        if frame.color_info is not None:
-            output_frame_record["color_info"] = {
-                axis: value
-                for axis, value in asdict(frame.color_info).items()
-                if value is not None
-            }
-        return output_frame_record
+        return ImageFrameToWrite(
+            surface_id=output_texture.surface_id,
+            width=frame.width,
+            height=frame.height,
+            format=_EFFECT_TEXTURE_FORMAT,
+            colour=frame.colour,
+        )
 
     def _pack_push_constants(self, supplied_dials: "dict[str, Any]") -> bytes:
         for name in supplied_dials:
