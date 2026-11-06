@@ -25,7 +25,7 @@ asks why every Python processor is a child process.
    > runtime's lend directory and then the project on `PYTHONPATH`. One child, one interpreter,
    > one GIL per processor stands.
    > Amended 2026-11-06 by `lightweight-node-kinds.md`: this holds for a Python **class**
-   > node (`@node`). A `@node.function` node gets no process of its own: it runs inside the
+   > node (`@node.process`). A `@node.function` node gets no process of its own: it runs inside the
    > Python node that reads it, in a per-stream pool only if real graphs need one, and in
    > its own process after it crashes or stalls its host.
 2. ~~In-process hosting of a Python processor is banned outright — not a default, not a

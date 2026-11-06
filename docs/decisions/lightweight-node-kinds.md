@@ -15,7 +15,8 @@ and when someone asks why `Lerp` is not a process.
 A node has one of three kinds, declared by a contract about what its code does: a
 **shader**, a Slang function from Images to an Image; a **function** node, written in Python
 (`@node.function`) or Rust (`#[function_node]` in `tatolab-module-sdk`), that computes its outputs from
-its inputs with time and state handed in; or a **class** (`@node`) that may do anything. Every
+its inputs with time and state handed in; or a **process** node (`@node.process`), a class that may do anything. Bare `@node` is retired, so
+every node names its kind. Every
 kind has the same ports, families, links and `type`; the runtime derives where each runs. The
 compiler groups connected shader and function nodes into evaluation islands, where a link is a
 function call. Function nodes run inside the read of the node that reads them; shaders run on one

@@ -21,7 +21,7 @@ native processor gets its own OS thread. There is nothing smaller.
   | --- | --- | --- | --- |
   | shader | a Slang function, `@node.shader` | Images and values in, an Image out, no side effects | on the GPU; a chain fuses into one kernel |
   | function | a function in Python (`@node.function`) or Rust (`#[function_node]`, `tatolab-module-sdk`) | outputs from inputs only; state and time are parameters | inside the node that reads it |
-  | class | a class with a lifecycle, `@node` | anything: devices, network, files, threads, GPU | its own process, as today |
+  | process | a class with a lifecycle, `@node.process` | anything: devices, network, files, threads, GPU | its own process, as today |
 
 - **Two contracts underneath.** Shader and function nodes have no side effects: they use only
   their inputs, config, `now` and, if they declare one, their own `State`. A function node with
@@ -86,7 +86,7 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Node kind
 
-- Every graph node and catalog entry carries `kind`: `shader`, `function` or `class`, and a function
+- Every graph node and catalog entry carries `kind`: `shader`, `function` or `process`, and a function
   node its `language`, `python` or `rust`.
   `graph` and `/api/registry` render it, beside each port's `family`. Kind and family are
   separate axes: a family says what flows on a wire, a kind says how a node's code runs.
@@ -316,9 +316,9 @@ the device.
   function nodes run without a process; a Python function node that does not compile runs inside its Python reader, in a pool only in phase 4, and
   in its own process after a crash or a stall. "No processor may ever block another" holds
   between class nodes.
-- **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.function` and
-  `@node.shader`, and a module's `#[function_node]` is a node type too; a function's type is its
-  import path, as a class's is.
+- **The class-identity entry** (`ARCHITECTURE.md:1732`). Bare `@node` is retired: every node
+  names its kind, `@node.shader`, `@node.function` or `@node.process`, and a module's
+  `#[function_node]` is a node type too; a function's type is its import path, as a class's is.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
 - **The built-ins entry** (`ARCHITECTURE.md:539-549`). `tatolab-ops` is a first-party module of
@@ -362,8 +362,12 @@ Each carries a recommendation that is built if nobody overrules it.
 - **[NEEDS DECISION 5] A crash in an inline function node.** Breadcrumb and promotion on crash, or
   always isolate? *Recommendation:* the breadcrumb; it bounds the damage to one restart of the
   reader without a pool.
-- **[NEEDS DECISION 6] The class kind's spelling.** *Recommendation:* keep `@node`; the
-  class-versus-function shape already says which is which.
+- **[NEEDS DECISION 6] The explicit decorators.** Bare `@node` is retired (owner, 2026-11-06):
+  every node names its kind, so a reader or an agent never infers it. `@node.class` cannot be
+  spelled, `class` being a Python keyword. *Recommendation:* `@node.shader`, `@node.function`
+  (stateful when it takes `State`) and `@node.process` (a class that may do anything, in its
+  own process). The alternative is `@node.stateless` for functions and `@node.stateful` for a
+  function with state or a class.
 
 Assumed unless overruled:
 - `tatolab-ops` is installed in every stream's environment with the runtime, so every helper can
@@ -404,7 +408,8 @@ Assumed unless overruled:
 ## Tickets (expected)
 
 1. Compiled function nodes at the read seam:
-   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the function-node contract;
+   1. `kind` in the descriptor, catalog and `graph`; bare `@node` retired for `@node.process`
+      across the engine tree; the one run loop; the function-node contract;
       `@node.function` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
       `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
    2. The island pass on live edits, with cycle refusal.
