@@ -1269,22 +1269,8 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         mx.eval(array)
 
 
-class _TypedFrameProbeBase(_FrameProbeBase):
-    """Reads its one frame `into=VideoFrame`, the read that takes the claim the
-    frame object's own doors — the bare capsule, `writable()` — ride."""
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.frames_seen >= 1:
-            return
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
-        if frame is None:
-            return
-        self.frames_seen += 1
-        _report(lambda: self._probe(ctx, frame))
-
-
 @node
-class MlxReadsTheFrameProbe(_TypedFrameProbeBase):
+class MlxReadsTheFrameProbe(_FrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
 
@@ -1319,7 +1305,7 @@ def _frame_pixels_now(ctx, surface_id: str):
 
 
 @node
-class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
+class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
 
@@ -1347,7 +1333,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
 
 
 @node
-class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
+class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
     in a buffer of MLX's own and the frame never sees it — whatever the scope
@@ -1376,7 +1362,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
 
 
 @node
-class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
+class MlxWholeArrayAssignmentMissesTheFrameProbe(_FrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
     evaluated inside the scope."""
