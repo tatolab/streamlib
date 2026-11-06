@@ -3774,9 +3774,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `~/.local/share/tatolab/<version>-<sha>/`, `<version>-<sha>` read from the unit, points
   `current` at it, and links `tatolab` and `tatolabd` into `~/.local/bin` through `current`.
   It registers no service and starts no runtime: a runtime already running keeps the build it
-  started from until it is restarted, and the installer says so. It keeps the previous build,
-  removes older ones, and prints each step on a line of its own. `--uninstall` removes the
-  files, never the state directory. `curl | sh` on a Mac refuses, pointing at Tato Studio.
+  started from until it is restarted, and the installer says so. It keeps the previous build
+  and any build a running process runs from, removes older ones, and prints each step on a line
+  of its own. `--uninstall` refuses while a runtime runs from an installed build, and otherwise
+  removes the files, never the state directory. `curl | sh` on a Mac refuses, pointing at Tato Studio.
   The tarball carries the Vulkan loader and the software device in
   `tatolab/runtime/_vulkan_driver/` and a pinned uv in `bin/`, and `install.sh` refuses a unit
   without the driver's manifest or the uv. The README shows a systemd user unit for a person

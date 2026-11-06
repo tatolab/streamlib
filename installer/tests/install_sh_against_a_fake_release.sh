@@ -7,8 +7,8 @@
 # service manager, because install.sh registers no service.
 #
 # A unit's `tatolabd` is a stand-in that records which build is running and
-# under which pid, then sleeps; its `tatolab --version` answers for that build
-# while it runs, as the real one asks the runtime.
+# under which pid, then becomes a `sleep` copied into the build, so the process
+# runs an executable from its build folder as a real runtime does.
 
 set -euo pipefail
 
@@ -51,11 +51,8 @@ if [ "${1:-}" = --version ]; then
 	echo "tatolabd @UNIT_VERSION@"
 	exit 0
 fi
-running_file="$HOME/stand-in-tatolabd-running"
-trap 'rm -f "$running_file"; exit 0' TERM
-printf '%s %s %s\n' @UNIT_VERSION@ @UNIT_COMMIT@ "$$" >"$running_file"
-sleep infinity &
-wait
+printf '%s %s %s\n' @UNIT_VERSION@ @UNIT_COMMIT@ "$$" >"$HOME/stand-in-tatolabd-running"
+exec "$(dirname "$(readlink -f "$0")")/stand-in-runtime-sleep" infinity
 EOF_TATOLABD
 	sed -e "s/@UNIT_VERSION@/$unit_version/g" >"$unit_directory/bin/tatolab" <<'EOF_TATOLAB'
 #!/bin/sh
@@ -68,6 +65,7 @@ else
 	echo "runtime: not running"
 fi
 EOF_TATOLAB
+	cp "$(readlink -f "$(command -v sleep)")" "$unit_directory/bin/stand-in-runtime-sleep"
 	printf '#!/bin/sh\nexec sleep 3600\n' >"$unit_directory/bin/moq-relay"
 	chmod +x "$unit_directory/bin/tatolabd" "$unit_directory/bin/tatolab" "$unit_directory/bin/moq-relay"
 	if [ "$unit_shape" != without-uv ]; then
@@ -128,7 +126,8 @@ current_build() {
 stand_in_runtime_pid=""
 
 start_the_stand_in_runtime() {
-	as_the_test_user "$test_user_home/.local/bin/tatolabd" &
+	(exec env -i HOME="$test_user_home" PATH="/usr/bin:/bin" "$test_user_home/.local/bin/tatolabd" \
+		</dev/null >/dev/null 2>&1) &
 	stand_in_runtime_pid=$!
 	for _ in $(seq 1 50); do
 		[ -e "$test_user_home/stand-in-tatolabd-running" ] && return 0
@@ -141,6 +140,7 @@ stop_the_stand_in_runtime() {
 	[ -n "$stand_in_runtime_pid" ] || return 0
 	kill "$stand_in_runtime_pid" 2>/dev/null || true
 	wait "$stand_in_runtime_pid" 2>/dev/null || true
+	rm -f "$test_user_home/stand-in-tatolabd-running"
 	stand_in_runtime_pid=""
 }
 
@@ -190,10 +190,9 @@ upgrade_output="$(run_the_installer)"
 [ "$(as_the_test_user tatolab)" = "tatolab 1.0.1" ] || fail "tatolab on PATH is not the upgrade's"
 kill -0 "$stand_in_runtime_pid" 2>/dev/null || fail "the upgrade stopped the running runtime"
 case "$upgrade_output" in
-*"A runtime is running (runtime 1.0.0 ("*"); it keeps that build until it is restarted"*) ;;
+*"A runtime is running Tatolab 1.0.0-$commit_a; it keeps that build until it is restarted"*) ;;
 *) fail "the installer did not say the running runtime keeps its build: $upgrade_output" ;;
 esac
-stop_the_stand_in_runtime
 pass "an upgrade leaves a running runtime alone, says it keeps its build, and keeps the build before"
 
 # --- a tarball that does not match its sha256 is refused -------------------
@@ -237,7 +236,7 @@ pass "a tarball that carries no uv is refused and changes nothing"
 refuses_a_release_shaped without-the-streamlib-commit streamlib-commit
 pass "a tarball that names no streamlib commit is refused and changes nothing"
 
-# --- a third build removes the one two installs back -------------------------
+# --- a third build keeps one a runtime still runs from ------------------------
 
 commit_d="$(commit_named d)"
 make_release 1.0.3 "$commit_d"
@@ -245,15 +244,51 @@ publish_as_latest 1.0.3
 third_install_output="$(run_the_installer)"
 [ "$(current_build)" = "1.0.3-$commit_d" ] || fail "current does not point at 1.0.3-$commit_d"
 [ -d "$(installed_builds_directory)/1.0.1-$commit_b" ] || fail "the build before was not kept"
-[ ! -e "$(installed_builds_directory)/1.0.0-$commit_a" ] || fail "the build two installs back was not removed"
-for expected_step in "Downloading Tatolab 1.0.3" "Installing Tatolab 1.0.3-$commit_d" \
-	"Removing Tatolab 1.0.0-$commit_a"; do
-	case "$third_install_output" in
+[ -d "$(installed_builds_directory)/1.0.0-$commit_a" ] || fail "the build a runtime runs from was removed"
+case "$third_install_output" in
+*"Keeping Tatolab 1.0.0-$commit_a, which a running runtime runs from"*) ;;
+*) fail "the installer did not say why it kept 1.0.0-$commit_a: $third_install_output" ;;
+esac
+pass "a build a running runtime runs from is kept past the build before"
+
+# --- --uninstall refuses under a running runtime -------------------------------
+
+if uninstall_refusal="$(run_the_installer --uninstall 2>&1)"; then
+	fail "--uninstall removed the build a running runtime runs from"
+fi
+case "$uninstall_refusal" in
+*"a runtime is running Tatolab 1.0.0-$commit_a"*"stop it, then uninstall"*) ;;
+*) fail "the --uninstall refusal does not name the running build: $uninstall_refusal" ;;
+esac
+[ -d "$(installed_builds_directory)/1.0.0-$commit_a" ] || fail "a refused --uninstall removed files"
+stop_the_stand_in_runtime
+pass "--uninstall refuses while a runtime runs from an installed build, naming it"
+
+# --- a fourth build removes the one two installs back --------------------------
+
+mkdir -p "$(dirname "$test_user_home/.config/systemd/user/tatolabd.service")"
+printf '[Service]\nExecStart=%%h/.local/share/tatolab/current/bin/tatolabd\n' \
+	>"$test_user_home/.config/systemd/user/tatolabd.service"
+commit_e="$(commit_named e)"
+make_release 1.0.4 "$commit_e"
+publish_as_latest 1.0.4
+fourth_install_output="$(run_the_installer)"
+[ "$(current_build)" = "1.0.4-$commit_e" ] || fail "current does not point at 1.0.4-$commit_e"
+[ -d "$(installed_builds_directory)/1.0.3-$commit_d" ] || fail "the build before was not kept"
+for removed_build in "1.0.0-$commit_a" "1.0.1-$commit_b"; do
+	[ ! -e "$(installed_builds_directory)/$removed_build" ] || fail "$removed_build was not removed"
+done
+for expected_step in "Downloading Tatolab 1.0.4" "Installing Tatolab 1.0.4-$commit_e" \
+	"Removing Tatolab 1.0.0-$commit_a" "Removing Tatolab 1.0.1-$commit_b" \
+	"An earlier install registered $test_user_home/.config/systemd/user/tatolabd.service"; do
+	case "$fourth_install_output" in
 	*"$expected_step"*) ;;
-	*) fail "the installer did not say \"$expected_step\": $third_install_output" ;;
+	*) fail "the installer did not say \"$expected_step\": $fourth_install_output" ;;
 	esac
 done
-pass "a third install keeps the build before and removes the one two installs back, saying each step"
+[ -e "$test_user_home/.config/systemd/user/tatolabd.service" ] || fail "install.sh removed a unit it no longer owns"
+rm -f "$test_user_home/.config/systemd/user/tatolabd.service"
+pass "a fourth install keeps the build before, removes the rest, and names an earlier install's unit"
 
 # --- macOS is pointed at Tato Studio -------------------------------------------
 

@@ -197,4 +197,4 @@ Bring these to the align they touch. None is a decision.
 
 - **Secrets** live in the Infisical project `Tatolab` (`dev` and `prod`; `prod` syncs to GitHub).
   Run with `infisical run --env prod -- <cmd>` and never echo a value.
-- **Tatolab.app** is the private repo `tatolab/tatolab-app`, a client of the runtime's local API.
+- **Tato Studio** is the private repo `tatolab/tatolab-app`, a client of the runtime's local API.

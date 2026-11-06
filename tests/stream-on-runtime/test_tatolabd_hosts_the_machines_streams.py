@@ -124,7 +124,7 @@ def exposure_at(level: str) -> "list[dict[str, str]]":
 
 #: How every verb refuses when nothing answers at the socket, before it names the socket.
 NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answers at "
-NO_RUNTIME_REFUSAL_REMEDY = "Start one by running `tatolabd` in a terminal."
+NO_RUNTIME_REFUSAL_REMEDY = "Start one by opening Tato Studio, or by running `tatolabd` in a terminal."
 
 STREAM_RECORD_FILE_MODE = 0o600
 STREAM_RECORD_SCHEMA_VERSION = 4

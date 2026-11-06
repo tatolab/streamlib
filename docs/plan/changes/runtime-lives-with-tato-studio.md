@@ -64,9 +64,9 @@ two in §Distribution.
 - **ADDED (§Product, "Who starts the runtime", DECIDED):** Tato Studio starts `tatolabd` as its
   child from the unit it carries, reuses a runtime that already answers, keeps it through closed
   windows, stops one it started on Quit with `SIGTERM`, and starts it again when it exits unasked.
-- **ADDED (test, `runtime/tatolabd/tests/`):** a `SIGTERM` to a `tatolabd` hosting a stream with a
-  Python node stops the stream, leaves no helper process behind, removes the socket and exits zero.
-  This is the proof the app's Quit rests on.
+- **ADDED (test, `tests/stream-on-runtime/test_helper_shutdown_ladder.py`):** a `SIGTERM` to a
+  `tatolabd` hosting two Python nodes runs both helpers' `teardown()`, leaves no helper process
+  behind, removes the socket and exits zero. This is the proof the app's Quit rests on.
 - **ADDED (README, §Install):** "Keep the runtime running as a service", with a systemd user unit to
   copy, pointing at `~/.local/share/tatolab/current/bin/tatolabd`.
 
@@ -76,9 +76,11 @@ two in §Distribution.
   while Tato Studio runs, or through `curl | sh` on Linux; no installer registers a service.
 - **MODIFIED (§Distribution, the installer):** `install.sh` is `curl | sh` on Linux only. It checks
   the tarball, installs the folder per build, points `current` at it, links `tatolab` and `tatolabd`
-  into `~/.local/bin`, keeps the previous build and prunes older ones. It starts nothing and waits on
-  nothing; when a runtime is running it says the new build takes effect at its next start.
-  `--uninstall` removes the files, never the state directory.
+  into `~/.local/bin`, keeps the previous build and prunes older ones, never one a running process
+  runs an executable from. It starts nothing and waits on nothing; when a runtime is running another
+  build it says the new one takes effect at its next start. `--uninstall` refuses while a runtime
+  runs from an installed build and otherwise removes the files, never the state directory. A
+  systemd user unit an earlier install registered is named and left to its owner.
 - **MODIFIED (§Distribution, the app):** Tato Studio, a tray app, never runs `install.sh`, has no
   "Run Tatolab" switch, and links `tatolab` into `~/.local/bin` at the CLI its bundle carries.
 - **MODIFIED (§Media I/O, permission on Apple):** macOS credits Tato Studio, the runtime's parent,
@@ -87,9 +89,9 @@ two in §Distribution.
 - **MODIFIED (`runtime/tatolab-cli/src/machine_runtime_local_api_socket.rs`):** the refusal reads
   "no runtime is running on this machine: nothing answers at <socket>. Start one by opening Tato
   Studio, or by running `tatolabd` in a terminal."
-- **MODIFIED (`installer/tests/`):** the installer's test needs no systemd. It runs `install.sh`
-  against a fake release in a plain container, asserting the build folders, `current`, the links,
-  the pruning and `--uninstall`.
+- **MODIFIED (`installer/tests/`):** the installer's test needs no systemd and no root. It runs
+  `install.sh` against a fake release for a fresh home, asserting the build folders, `current`, the
+  links, the pruning around a running runtime and `--uninstall`.
 
 ## REMOVED
 

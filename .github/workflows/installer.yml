@@ -2,9 +2,9 @@ name: Installer test
 
 # install.sh against releases its test makes, for a user with a fresh home:
 # an install that starts nothing, an upgrade under a running runtime keeping
-# the build before, a download refused on its sha256 or a missing member, a
-# third build pruning the oldest, macOS pointed at Tato Studio, and an
-# uninstall that leaves the state directory.
+# its build, a download refused on its sha256 or a missing member, pruning,
+# an uninstall refused under a running runtime, macOS pointed at Tato Studio,
+# and an uninstall that leaves the state directory.
 on:
   pull_request:
     branches: [main]

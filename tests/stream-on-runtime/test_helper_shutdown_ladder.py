@@ -205,7 +205,8 @@ def test_sigterm_from_the_app_that_started_tatolabd_stops_every_helper_gracefull
     tmp_path: Path,
 ):
     """Tato Studio's Quit: one `SIGTERM`, every helper's `teardown()`, a clean
-    exit, and no helper left behind."""
+    exit, no helper left behind, and no socket for the next launch to mistake
+    for a running runtime."""
     teardown_record_directory = tmp_path / "teardown-records"
     teardown_record_directory.mkdir()
     tatolabd = start_tatolabd_running_stream(
@@ -230,6 +231,9 @@ def test_sigterm_from_the_app_that_started_tatolabd_stops_every_helper_gracefull
     )
     assert ended_in < ASLEEP_HELPER_EXIT_BUDGET_SECONDS, (
         f"tatolabd took {ended_in:.1f}s to end after SIGTERM:\n{tatolabd.recent_stderr()}"
+    )
+    assert not tatolabd.local_api_socket_path.exists(), (
+        f"the SIGTERM'd tatolabd left {tatolabd.local_api_socket_path} behind"
     )
 
 

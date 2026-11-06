@@ -32,6 +32,7 @@ STREAMLIB_COMMIT_FILE_NAME="streamlib-commit"
 
 TATOLAB_INSTALL_DIRECTORY="$HOME/.local/share/tatolab"
 TATOLAB_STATE_DIRECTORY="${XDG_STATE_HOME:-$HOME/.local/state}/tatolab"
+EARLIER_REGISTERED_SYSTEMD_USER_UNIT="$HOME/.config/systemd/user/tatolabd.service"
 
 say() {
 	printf '%s\n' "$*"
@@ -118,10 +119,26 @@ executable_links_into_a_build() {
 	printf '%s\n' "tatolab bin/tatolab" "tatolabd bin/tatolabd"
 }
 
-# The runtime line `tatolab --version` prints for the runtime answering on this
-# user's local API, or nothing when none answers.
-running_runtime_line() {
-	"$TATOLAB_INSTALL_DIRECTORY/current/bin/tatolab" --version 2>/dev/null | grep '^runtime [0-9]' || true
+# Every installed build a process of this user runs an executable from, one
+# per line: a runtime, or a child it started, that has not been restarted.
+builds_a_process_runs_from() {
+	[ -d "$TATOLAB_INSTALL_DIRECTORY" ] || return 0
+	resolved_install_directory="$(cd "$TATOLAB_INSTALL_DIRECTORY" && pwd -P)"
+	for process_executable in /proc/[0-9]*/exe; do
+		executable_path="$(readlink "$process_executable" 2>/dev/null)" || continue
+		case "$executable_path" in
+		"$resolved_install_directory"/*)
+			path_below_the_install_directory="${executable_path#"$resolved_install_directory"/}"
+			printf '%s\n' "${path_below_the_install_directory%%/*}"
+			;;
+		esac
+	done | sort -u
+}
+
+say_what_an_earlier_registered_service_is_now() {
+	[ -e "$EARLIER_REGISTERED_SYSTEMD_USER_UNIT" ] || return 0
+	say "An earlier install registered $EARLIER_REGISTERED_SYSTEMD_USER_UNIT; it is yours to keep" \
+		"or remove (\`systemctl --user disable --now tatolabd\`, then delete the file)."
 }
 
 # --- the build ---------------------------------------------------------------
@@ -186,7 +203,7 @@ stage_the_unit_into_its_build_folder() {
 	[ -z "$missing_member" ] || refuse "$unit_description carries no $missing_member"
 	build="$(build_of_the_staged_unit "$partial_build_directory")" || exit 1
 	build_directory="$TATOLAB_INSTALL_DIRECTORY/$build"
-	if [ -d "$build_directory" ] && [ "$(readlink "$TATOLAB_INSTALL_DIRECTORY/current" 2>/dev/null || true)" = "$build" ]; then
+	if [ -d "$build_directory" ]; then
 		say "Tatolab $build is already installed in $build_directory"
 		rm -rf "$partial_build_directory"
 	else
@@ -204,13 +221,19 @@ point_current_at() {
 	done
 }
 
+# Removes every build but `$1` and `$2`, keeping one a process still runs from.
 remove_every_build_but() {
+	running_builds="$(builds_a_process_runs_from)"
 	for installed_build_directory in "$TATOLAB_INSTALL_DIRECTORY"/*; do
 		[ -d "$installed_build_directory" ] || continue
 		[ -L "$installed_build_directory" ] && continue
 		installed_build="$(basename "$installed_build_directory")"
 		[ "$installed_build" = "$1" ] && continue
 		[ "$installed_build" = "$2" ] && continue
+		if printf '%s\n' "$running_builds" | grep -qxF "$installed_build"; then
+			say "Keeping Tatolab $installed_build, which a running runtime runs from"
+			continue
+		fi
 		say "Removing Tatolab $installed_build"
 		rm -rf "$installed_build_directory"
 	done
@@ -225,13 +248,11 @@ say_where_the_executables_are() {
 
 # Says which build a runtime already running keeps until it is restarted.
 say_what_a_running_runtime_keeps() {
-	runtime_line="$(running_runtime_line)"
-	[ -n "$runtime_line" ] || return 0
-	case "$runtime_line" in
-	"runtime $1 ("*) return 0 ;;
-	esac
-	say "A runtime is running ($runtime_line); it keeps that build until it is restarted, and" \
-		"starts as $1 the next time."
+	builds_a_process_runs_from | while IFS= read -r running_build; do
+		[ "$running_build" = "$1" ] && continue
+		say "A runtime is running Tatolab $running_build; it keeps that build until it is" \
+			"restarted, and runs $1 the next time it starts."
+	done
 }
 
 install_tatolab() {
@@ -250,7 +271,8 @@ install_tatolab() {
 	point_current_at "$build"
 	remove_every_build_but "$build" "$(readlink "$TATOLAB_INSTALL_DIRECTORY/previous" 2>/dev/null || true)"
 	say_where_the_executables_are
-	say_what_a_running_runtime_keeps "$build_version"
+	say_what_a_running_runtime_keeps "$build"
+	say_what_an_earlier_registered_service_is_now
 	say "Tatolab $build_version is installed. Start the runtime in a terminal of its own with:"
 	say "  tatolabd"
 	say "then a stream with:"
@@ -259,6 +281,10 @@ install_tatolab() {
 
 uninstall_tatolab() {
 	refuse_a_machine_with_no_runtime_build
+	running_builds="$(builds_a_process_runs_from)"
+	[ -z "$running_builds" ] ||
+		refuse "a runtime is running Tatolab $(printf '%s' "$running_builds" | tr '\n' ' ')from" \
+			"$TATOLAB_INSTALL_DIRECTORY; stop it, then uninstall"
 	executable_links_into_a_build | while read -r link_name _; do
 		executable_link="$TATOLAB_EXECUTABLE_LINK_DIRECTORY/$link_name"
 		case "$(readlink "$executable_link" 2>/dev/null || true)" in
@@ -268,6 +294,7 @@ uninstall_tatolab() {
 	rm -rf "$TATOLAB_INSTALL_DIRECTORY"
 	say "Tatolab is uninstalled. Its state directory, with your streams' records and logs, is left in place:"
 	say "  $TATOLAB_STATE_DIRECTORY"
+	say_what_an_earlier_registered_service_is_now
 }
 
 case "${1:-}" in
