@@ -165,3 +165,8 @@ recorded here so the tickets need not re-derive them.
 - A fragment target for a material graph, and Metal or WGSL output, are later changes that
   pass a target to this compiler.
 - Slang's autodiff is available to any later node that needs gradients.
+- **Next after this change: materials and instances** (owner, 2026-11-06). A material is a
+  shader-node graph compiled for a fragment target; an instance is that compiled material with
+  its own pin values, and its static switches are config. When this change and
+  `slang-shader-compiler` ship, the owner is asked whether to start it, for art-show work. Not
+  proposed yet: a fragment target, a material as a saved asset, and a named instance.

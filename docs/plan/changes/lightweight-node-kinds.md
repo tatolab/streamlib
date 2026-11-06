@@ -473,3 +473,8 @@ Assumed unless overruled:
 - The shader examples in `examples/` and the scaffold's `HalftoneLensEffect` move to
   `@node.shader` as consumer backlog. `GlslPixelEffect` is removed by `slang-shader-compiler`.
 - A thread pool for native class nodes is a separate change.
+- **Next after this change: materials and instances** (owner, 2026-11-06). A material is a
+  shader-node graph compiled for a fragment target; an instance is that compiled material with
+  its own pin values, and its static switches are config. When this change and
+  `slang-shader-compiler` ship, the owner is asked whether to start it, for art-show work. Not
+  proposed yet: a fragment target, a material as a saved asset, and a named instance.
