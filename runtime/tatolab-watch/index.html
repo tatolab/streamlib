@@ -30,6 +30,21 @@
 			a[aria-current] {
 				font-weight: bold;
 			}
+			/* `?video_only`: the playing video alone, fitted to the page with its aspect kept and black around it, for a window that frames the page. */
+			:root[data-watch-page-shows="video_only"],
+			:root[data-watch-page-shows="video_only"] body {
+				height: 100%;
+				overflow: hidden;
+				background: #000;
+			}
+			:root[data-watch-page-shows="video_only"] header,
+			:root[data-watch-page-shows="video_only"] ul {
+				display: none;
+			}
+			:root[data-watch-page-shows="video_only"] #watch-canvas {
+				height: 100%;
+				max-height: none;
+			}
 		</style>
 		<!-- libav.js stays its own unmodified files, LGPL beside the bundle; the bundle imports it by this name. -->
 		<script type="importmap">

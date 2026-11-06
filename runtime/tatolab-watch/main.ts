@@ -4,7 +4,8 @@
 // The preview page: plays the broadcast `/watch/<machine>/<stream id>` names off
 // the machine's local relay, pinned to the video track `<node>/<port>` when the
 // path names one; at `/watch` alone it lists the machine's loaded streams, each
-// by its display name and id, to open one.
+// by its display name and id, to open one. With `?video_only` it shows the
+// playing video alone, fitted to the page.
 
 import * as Watch from "@moq/watch";
 
@@ -163,6 +164,12 @@ async function listTheMachinesStreamsToPickFrom(): Promise<void> {
 			return item;
 		}),
 	);
+}
+
+const VIDEO_ONLY_QUERY_PARAMETER = "video_only";
+
+if (new URLSearchParams(location.search).has(VIDEO_ONLY_QUERY_PARAMETER)) {
+	document.documentElement.dataset.watchPageShows = "video_only";
 }
 
 const watchedAddress = watchedAddressFromThePath(location.pathname);

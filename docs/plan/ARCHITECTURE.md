@@ -3554,7 +3554,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   player — built in the release pipeline the way the crates are and staged into the runtime
   unit, served by the runtime's loopback HTTP, reading the local relay alone at
   `http://<host>:<port>` so the player pins the relay's certificate by its fingerprint, and
-  playing the track its URL names. Every browser plays it: Safari and iOS over the relay's
+  playing the track its URL names. With `?video_only` it shows the playing video alone, fitted
+  to the page with its aspect kept, for a window that frames it, as Tato Studio's Viewer does
+  (owner, 2026-11-05). Every browser plays it: Safari and iOS over the relay's
   WebSocket path, the rest over QUIC. A hosted relay has its own player at its own URL. Known
   (2026-10-17): the player's dependency tree carries an LGPL-2.1 Opus decoder polyfill, named
   in the third-party notices. Owner, 2026-10-04, 2026-10-16 and 2026-10-17. [moq-relays —
