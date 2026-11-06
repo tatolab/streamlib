@@ -8,7 +8,6 @@ and `process()` see in a real child, so nothing here needs a runtime or a
 device. `tatolab.runtime` is borrowed from the runtime unit's lend.
 """
 
-import array
 import dataclasses
 import math
 import os
@@ -121,15 +120,14 @@ def test_an_encoder_setting_the_class_does_not_take_is_refused():
 class PlanarWindowToSend:
     """One window of `[channel][sample]` f32 samples, its first sample's index and stamp."""
 
-    planar_samples: memoryview
+    planar_samples: "numpy.ndarray[Any, Any]"
     start_sample: int
     timestamp_ns: int
 
 
-def planar_f32_samples(channels: "list[list[float]]") -> memoryview:
-    """A C-contiguous `[channel][sample]` float32 buffer of `channels`."""
-    flat = array.array("f", [scalar for channel in channels for scalar in channel])
-    return memoryview(flat).cast("B").cast("f", (len(channels), len(channels[0])))
+def planar_f32_samples(channels: "list[list[float]]") -> "numpy.ndarray[Any, Any]":
+    """A C-contiguous `[channel][sample]` float32 array of `channels`."""
+    return numpy.ascontiguousarray(channels, dtype=numpy.float32)
 
 
 def a_stereo_tone_window(window_index: int) -> PlanarWindowToSend:
