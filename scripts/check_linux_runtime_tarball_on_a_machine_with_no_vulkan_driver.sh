@@ -100,9 +100,12 @@ until "$tatolab_executable" streams >/dev/null 2>&1; do
 done
 
 # The venv is made first, from this checkout's `tatolab-stream`, so the load
-# `tatolab new` queues finds an interpreter that runs and syncs nothing.
+# `tatolab new` queues finds an interpreter that runs and syncs nothing. uv
+# brings the CPython 3.12 `requires-python` floors it at: Ubuntu 22.04's own
+# python3 is 3.10.
 mkdir -p /tmp/stream-on-the-software-device
-python3 -m venv /tmp/stream-on-the-software-device/.venv
+python3 -m pip install --quiet uv
+python3 -m uv venv --quiet --seed --python 3.12 /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet \
 	--no-index --find-links /first-party-module-distributions tatolab-h264 tatolab-testpattern
