@@ -232,6 +232,19 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
   the cost. See [NEEDS DECISION 5].
 
+### Native compilation of `@node.pure` (phase 3)
+
+- A Python pure node whose body is typed numeric code (floats, ints, numpy arrays, loops) is
+  compiled to machine code by Numba at load and handed to the read seam as a C function pointer
+  on the pure-node contract, so it runs like a Rust pure node: inside any reader, a module's
+  native half included, with no GIL. A body outside that subset runs as Python. Nothing in the
+  authoring changes, and `graph` shows which ran.
+- The compiled code is cached by a hash of the source, the signature and the Numba version, so
+  a reload or a live edit of another node pays nothing.
+- Measured (2026-11-06, one scalar ease function and a 10M-element loop, C `-O2` as the native
+  baseline): 2.8 ns a call against 2.4 ns native and 155 ns plain Python; the loop within 10%
+  of native; 140 ms to compile a scalar function, about 0.5 s an array loop.
+
 ### The pool and promotion (phase 4)
 
 - Built only if real graphs carry pure Python that no Python class reads. One pool interpreter
@@ -346,6 +359,8 @@ Assumed unless overruled:
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
 - Blueprint's execution wire ("do A, then B") is not part of this change; gates cover streams.
+- Numba ships in the runtime's Python environment; the size (about 40 MB with llvmlite) is
+  accepted, as Slang's was.
 - Wasm is out of scope.
 
 ## Proof
@@ -387,6 +402,7 @@ Assumed unless overruled:
    1. `@node.pure` with `Time` and `State`, inline in a Python reader.
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
+   4. Native compilation of numeric pure functions, with the compile cache.
 4. The pool and promotion, only if graphs need it.
 5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.

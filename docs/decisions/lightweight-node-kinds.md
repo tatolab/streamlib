@@ -81,6 +81,9 @@ language, not a behaviour.
   modes.
 - **CPython subinterpreters** — one crash domain, no kill, and no numpy or pyo3 extensions, so
   not StreamLib's own wheel.
+- **Rust snippets compiled at run time** — every machine needs the Rust toolchain and each
+  compile takes seconds; compiling numeric Python with Numba gives native speed with no new
+  language.
 - **Wasm for user code** — cheap and killable, but Python in Wasm is several times slower with no
   numpy; pure nodes in Rust or Python and Slang shaders cover the editor's node list.
 
