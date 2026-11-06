@@ -13,26 +13,13 @@ wait on the service manager or the runtime.
 
 ## Decision
 
-- The runtime is a component the installer installs, on both platforms. Each build goes into a
-  folder of its own, `<version>-<sha>`, and `current` names the one running. The per-user
-  service — a systemd user unit on Linux, a launch agent in `~/Library/LaunchAgents` on macOS —
-  names only `current`. Homebrew services keep the same shape: a versioned folder, a stable
-  link, a service that names the link.
-- One installer, streamlib's `install.sh`, does every install. `curl | sh` downloads a release
-  on Linux; `--from-unit` installs a unit it is handed, which is how the app installs the one it
-  carries on either platform.
-- The app installs its runtime on every launch whose carried build differs from `current`, in
-  either direction, and asks nothing: installing an app is the choice to run its runtime,
-  because the app and the runtime ship features together. A build is its version and its
-  streamlib commit, so a dev build of an unchanged version still counts.
-- On macOS the runtime is a helper bundle with its own bundle id and usage strings, so macOS
-  credits it for camera, microphone and local network, and its grants follow its signing
-  identity and bundle id across build folders.
+- ~~The runtime is a component the installer installs, on both platforms. Each build goes into a folder of its own, `<version>-<sha>`, and `current` names the one running. The per-user service — a systemd user unit on Linux, a launch agent in `~/Library/LaunchAgents` on macOS — names only `current`. Homebrew services keep the same shape: a versioned folder, a stable link, a service that names the link.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: Tato Studio runs the runtime unit it carries as its child, and no installer registers a service; `curl | sh` keeps the folder per build and `current` on Linux.
+- ~~One installer, streamlib's `install.sh`, does every install. `curl | sh` downloads a release on Linux; `--from-unit` installs a unit it is handed, which is how the app installs the one it carries on either platform.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: `install.sh` is `curl | sh` on Linux only; the app never runs it and `--from-unit` goes.
+- ~~The app installs its runtime on every launch whose carried build differs from `current`, in either direction, and asks nothing: installing an app is the choice to run its runtime, because the app and the runtime ship features together. A build is its version and its streamlib commit, so a dev build of an unchanged version still counts.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: the app installs nothing at launch.
+- ~~On macOS the runtime is a helper bundle with its own bundle id and usage strings, so macOS credits it for camera, microphone and local network, and its grants follow its signing identity and bundle id across build folders.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: the runtime is the app's child, so macOS credits Tato Studio.
 - An app opened while another copy runs hands it its build; a different build makes the running
   copy quit and open the new one.
-- No wait has a deadline. Stopping waits for `launchctl bootout` or `systemctl` to return;
-  starting waits until the runtime answers on its local API or the service manager reports the
-  job exited. An exit puts the previous build back.
+- ~~No wait has a deadline. Stopping waits for `launchctl bootout` or `systemctl` to return; starting waits until the runtime answers on its local API or the service manager reports the job exited. An exit puts the previous build back.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: with no service to start, the installer waits on nothing.
 
 ## Rejected alternatives
 
@@ -57,12 +44,10 @@ wait on the service manager or the runtime.
 
 ## Consequences
 
-- `install.sh` gains `--from-unit`, a folder per build, a macOS arm, the wait for an answer and
-  the rollback; `curl | sh` stays for Linux machines without the app.
+- ~~`install.sh` gains `--from-unit`, a folder per build, a macOS arm, the wait for an answer and the rollback; `curl | sh` stays for Linux machines without the app.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: `--from-unit`, the macOS arm, the wait and the rollback are removed.
 - `Tatolab.app` wraps the runtime unit in a signed helper and drops its `SMAppService` agent;
   the `.deb` and the AppImage carry the Linux runtime unit.
-- macOS shows its background-item notice once, when the launch agent is first written: the
-  plist does not change between builds.
+- ~~macOS shows its background-item notice once, when the launch agent is first written: the plist does not change between builds.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: no launch agent is written.
 - A runtime restart forgets queued stream actions, as it always has; an install in the middle
   of a project's first sync loses that action, and the project's recorded streams come back at
   start.

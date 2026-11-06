@@ -28,11 +28,8 @@ packaged on Apple.
   — Superseded 2026-10-16 by `moq-relays.md`: a stream reads another's exposed port through
   the relay source node, the cross-stream link being deleted.
   Surfaces are shared across all of the runtime's processor interpreters.
-- On Apple, `tatolabd` is an SMAppService agent inside the signed Tatolab app.
-- Who starts it (2026-10-02): no verb ever does. With no runtime running, a verb fails because it
-  cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the
-  login service on Apple (Docker Desktop's shape), a terminal runs `tatolabd` there until the app
-  ships, and on Linux the installer registers a systemd user service, Docker Engine's shape.
+- ~~On Apple, `tatolabd` is an SMAppService agent inside the signed Tatolab app.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: Tato Studio starts `tatolabd` as its child.
+- ~~Who starts it (2026-10-02): no verb ever does. With no runtime running, a verb fails because it cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the login service on Apple (Docker Desktop's shape), a terminal runs `tatolabd` there until the app ships, and on Linux the installer registers a systemd user service, Docker Engine's shape.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: no verb starts it still; Tato Studio starts it as its child while the app runs, and no installer registers a service on either floor.
 - Kept streams always come back unless stopped or failed; `stop` remembers, `start` resumes, `rm` forgets~~; an attached
   stream ends with its terminal command~~ (2026-10-02) — Superseded 2026-10-27 by
   `stream-identity-and-persistence.md`: there is no attached stream.
@@ -44,9 +41,7 @@ packaged on Apple.
   > Superseded 2026-10-04 by `moq-on-the-tailnet.md`: a machine's name is its tailnet name, which
   > Tailscale keeps unique, so nothing is claimed or suffixed here.
 
-- A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting
-  decision 2): opening it starts the runtime if it is not running and offers the login item, as
-  Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
+- ~~A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting decision 2): opening it starts the runtime if it is not running and offers the login item, as Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: opening Tato Studio starts the runtime as its child and offers no login item.
 - Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
   exposed name is lowercased into RFC 3986's unreserved characters — one casting to empty, `.` or
   `..` is refused — a defaulted node duplicate takes `-2` ~~while a duplicate stream name is
@@ -58,9 +53,7 @@ packaged on Apple.
 - A stream that keeps crashing the runtime is `failed` (2026-10-02, runtime-hosting decision 5):
   implicated in the runtime's last two crashes in a row, or unable to load; shown with its
   reason, skipped at start, retried by `start`. Restarting is not failing.
-- No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
-  does; quitting the app quits the app. It stops only by its service manager or a signal in the
-  terminal running it; a client ends its own work with `stop <stream>`.
+- ~~No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled` does; quitting the app quits the app. It stops only by its service manager or a signal in the terminal running it; a client ends its own work with `stop <stream>`.~~ — Superseded 2026-11-05 by `runtime-lives-with-tato-studio.md`: there is still no shutdown verb, but Quit in Tato Studio stops the runtime it started.
 
 ## Rejected alternatives
 

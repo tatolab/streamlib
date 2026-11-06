@@ -82,7 +82,7 @@ mod against_an_isolated_machine {
         let project_directory = scratch_directory.path().to_str().unwrap();
         let expected_refusal_line = format!(
             "error: no runtime is running on this machine: nothing answers at {}. Start one by \
-             running `tatolabd` in a terminal.",
+             opening Tato Studio, or by running `tatolabd` in a terminal.",
             isolated_machine_directories
                 .local_api_socket_path()
                 .display()

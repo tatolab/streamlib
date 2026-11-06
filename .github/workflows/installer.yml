@@ -1,11 +1,10 @@
 name: Installer test
 
-# install.sh against releases and runtime units its test makes, on a machine
-# booting systemd, so the service it registers runs under a real user manager:
-# install, a kill -9 restarted, an upgrade keeping the build before, a download
-# refused on its sha256 or a missing member, two units of one version at
-# different commits, a unit whose runtime exits at start put back, macOS
-# pointed at the app, and an uninstall that leaves the state directory.
+# install.sh against releases its test makes, for a user with a fresh home:
+# an install that starts nothing, an upgrade under a running runtime keeping
+# its build, a download refused on its sha256 or a missing member, pruning,
+# an uninstall refused under a running runtime, macOS pointed at Tato Studio,
+# and an uninstall that leaves the state directory.
 on:
   pull_request:
     branches: [main]
@@ -23,12 +22,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  install-sh-under-a-user-systemd:
+  install-sh-against-a-fake-release:
     name: Test installer
     runs-on: ubuntu-latest
-    # The image build is an apt install inside docker, outside the bounded-apt
-    # action's reach; this bound is what stops a slow mirror holding the job.
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -40,5 +37,5 @@ jobs:
       - name: shellcheck
         run: shellcheck -s sh installer/install.sh && shellcheck installer/tests/*.sh
 
-      - name: install.sh against a fake release under a user systemd
-        run: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh
+      - name: install.sh against a fake release
+        run: bash installer/tests/install_sh_against_a_fake_release.sh
