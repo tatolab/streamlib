@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
-use streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_consumer_rhi::{ConsumerVulkanBuffer, VulkanLayout};
 use streamlib_surface_client::{
