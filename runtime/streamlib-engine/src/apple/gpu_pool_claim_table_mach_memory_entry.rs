@@ -26,8 +26,9 @@ use crate::core::{Error, Result};
 /// the pages of the mapping it names rather than copying them.
 const MAP_MEM_VM_SHARE: i32 = 0x0040_0000;
 
-/// A claim table's rows, in a Mach memory entry exactly one table long, so no
-/// holder maps fewer bytes than another writes.
+/// A claim table's rows, in a Mach memory entry at least one table long —
+/// whole pages, 16 KiB on Apple silicon — so no holder maps fewer bytes than
+/// another writes.
 pub struct GpuPoolClaimTableMachMemoryEntry {
     memory_entry: OwnedMachSendRight,
     rows: NonNull<GpuPoolClaimTableRow>,
@@ -81,7 +82,7 @@ impl GpuPoolClaimTableMachMemoryEntry {
         }
         // SAFETY: mach_make_memory_entry_64 handed this task one send right.
         let memory_entry = unsafe { OwnedMachSendRight::from_raw_name(memory_entry) };
-        if entry_size as usize != GPU_POOL_CLAIM_TABLE_BYTES {
+        if (entry_size as usize) < GPU_POOL_CLAIM_TABLE_BYTES {
             // SAFETY: frees exactly the allocation above.
             unsafe {
                 mach_vm_deallocate(
@@ -91,8 +92,8 @@ impl GpuPoolClaimTableMachMemoryEntry {
                 )
             };
             return Err(Error::Runtime(format!(
-                "a GPU pool claim table's memory entry is {entry_size} bytes; a claim table is \
-                 {GPU_POOL_CLAIM_TABLE_BYTES}"
+                "a GPU pool claim table's memory entry is {entry_size} bytes, short of the \
+                 {GPU_POOL_CLAIM_TABLE_BYTES} a claim table spans"
             )));
         }
         Self::over(memory_entry, mapped_address)

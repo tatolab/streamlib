@@ -7,6 +7,7 @@ use std::io::Write as _;
 use streamlib::sdk::context::{
     GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool, GpuPoolSlotFrameDescriptorBody,
 };
+use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
 fn a_vulkan_device_is_available() -> bool {
     match streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates()
