@@ -19,12 +19,12 @@ tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.6.0" 
 serde.workspace = true
 rmp-serde.workspace = true
 tracing.workspace = true
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.28" }
-streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.28" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.29" }
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.29" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.28" }
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.28" }
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.29" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.29" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation.workspace = true

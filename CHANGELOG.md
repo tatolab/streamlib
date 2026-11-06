@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.29](https://github.com/tatolab/streamlib/compare/v0.68.28...v0.68.29) (2026-11-06)
+
+
+### Bug Fixes
+
+* **release:** the old-Vulkan-loader gate makes its stream venv on CPython 3.12 ([#3186](https://github.com/tatolab/streamlib/issues/3186)) ([cd9614e](https://github.com/tatolab/streamlib/commit/cd9614e1f7bca8233656fd9c69f5d9ad6f6c33cf))
+
 ## [0.68.28](https://github.com/tatolab/streamlib/compare/v0.68.27...v0.68.28) (2026-11-06)
 
 
