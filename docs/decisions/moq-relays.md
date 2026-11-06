@@ -1,5 +1,10 @@
 # MoQ relays: a stream's exposed ports are tracks at relays, forwarded without logic
 
+> Partially superseded 2026-11-06 by `gateway-nodes.md`: the publisher, exposure, the local relay,
+> the relay adapters in `tatolabd` and the preview page are gone; gateway nodes in `tatolab-moq`
+> send and receive tracks. The catalog-entry layout, the group flag, the stamp re-basing and the
+> moq-dev line stand.
+
 Rationale for the `[moq-relays]` entries in `docs/plan/ARCHITECTURE.md` and the 2026-10-16
 vocabulary in `docs/plan/GLOSSARY.md`, from the owner's align of the sharing step on
 2026-10-16 and the owner's realignment of 2026-10-17, which struck the clauses below that a

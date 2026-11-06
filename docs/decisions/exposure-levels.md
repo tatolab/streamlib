@@ -1,5 +1,8 @@
 # Exposure is a live, three-level permission at a stream's edge
 
+> Superseded 2026-11-06 by `gateway-nodes.md`: exposure, the edge check and `expose` are gone;
+> nothing leaves a stream except through gateway nodes its author added.
+
 > Partially superseded 2026-11-03 by `stream-interface-and-routing-policy.md`: `expose` takes
 > no level, and a runtime-owned routing policy decides what reaches each relay. The edge check,
 > a live change with no restart, and a restriction recorded before it changes live stand.

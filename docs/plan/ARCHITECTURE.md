@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -34,7 +34,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
   runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
   #2796; moq-relays — SHIPPED #2853, #2864, #2866; amended by runtime-lives-with-tato-studio:
-  the runtime running while Tato Studio runs]
+  the runtime running while Tato Studio runs; amended by gateway-nodes: the sample stream is seen live in Tato Studio's viewer, with no encoder and no relay]
 - **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
   `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
   the `tatolab.runtime` portion processor interpreters borrow, one unit never shipped
@@ -50,7 +50,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
   #2682; stream-identity-and-persistence — SHIPPED #2962; create-project — SHIPPED #2995;
   queued-stream-actions — SHIPPED #3004, #3009; amended by stream-interface-and-routing-policy:
-  `add` also takes a `@stream` function as a subgraph]
+  `add` also takes a `@stream` function as a subgraph; amended by gateway-nodes: the builder's API is `add`/`connect`; `expose` goes]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -111,7 +111,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
   SHIPPED #2866; amended by stream-interface-and-routing-policy: the scaffold's `expose` takes no
-  level]
+  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
 - **DECIDED** — The lead demo is an agent building a live visual system while the person
@@ -142,7 +142,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
   moq-relays — SHIPPED #2871; runtime-description; stream-identity-and-persistence — SHIPPED
   #2965; create-project — SHIPPED #2982, #2995, #3012; queued-stream-actions — SHIPPED #2997,
-  #2998, #3004, #3009]
+  #2998, #3004, #3009; amended by gateway-nodes: the `relays` and `relay` verbs go]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
@@ -194,13 +194,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port to relays through one publisher, and runs the local relay's two instances as its
   children. Every Python node keeps its own process, and agents keep changing live graphs.
   Owner, 2026-09-30. [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655;
-  moq-relays — SHIPPED #2842, #2853]
+  moq-relays — SHIPPED #2842, #2853; amended by gateway-nodes: a stream sends data off itself only through gateway nodes it adds, and the runtime holds no publisher and runs no relay]
 - **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
   sharing them with people and agents. Tailscale users are the first customers, and Tatolab
   builds nothing Tailscale already does — nor reads or configures it: a tailnet reaches a
   machine's local relay as any network does. Robotics and physical-machine systems are out of
   scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04 and
-  2026-10-16. [moq-on-the-tailnet; moq-relays — SHIPPED #2842]
+  2026-10-16. [moq-on-the-tailnet; moq-relays — SHIPPED #2842; amended by gateway-nodes: a tailnet reaches whatever relay a person runs, and the runtime runs none]
 - **DECIDED** — The runtime is required, and one runs per machine. It ships as one
   version-matched unit — the runtime, the CLI and the native portion processor interpreters
   borrow — inside Tato Studio, which runs it while the app runs, or through `curl | sh` on a
@@ -275,8 +275,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by
-  stream-interface-and-routing-policy: `expose_port` gives way to the routing policy's tools]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -300,7 +299,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   by id and display name; `list_streams` lists each stream's id, display name, location, state
   (and why, when failed)
   and node count. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED #2960, #2962;
-  create-project — SHIPPED #3012; queued-stream-actions — SHIPPED #2997, #3004, #3009]
+  create-project — SHIPPED #3012; queued-stream-actions — SHIPPED #2997, #3004, #3009; amended by gateway-nodes: the stream id is no broadcast's name; a gateway names its own]
   Rejected: a stream named by its function, a second load of the name refused with `--name` the
   way out — every scaffolded `main` collides once every load persists (owner, 2026-10-27).
   Rejected: the display name in the address — a rename would cut off every reader of the
@@ -456,7 +455,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - **The CLI.** `tatolab run` prints the action id and how to follow it (`tatolab logs -f`).
     `tatolab dev` follows the project's log and queues a load on every save.
 
-  Owner, 2026-10-30. [queued-stream-actions — SHIPPED #2998, #2999, #3004, #3006, #3009]
+  Owner, 2026-10-30. [queued-stream-actions — SHIPPED #2998, #2999, #3004, #3006, #3009; amended by gateway-nodes: `expose_port` goes, leaving `rename_stream` the one attribute]
   Rejected: making the venv inside the call that answers the load, bounded, with the client's
   timeouts raised to fit — an asynchronous side effect never sits inside a call that promises
   its final answer (owner, 2026-10-30).
@@ -474,9 +473,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stays flat and addresses stay `<machine>/<stream id>/<node>/<port>`; no group label and no nested
   subgraph is built until an editor or an agent needs to see a fragment as one thing. Across
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
-  [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
+  [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, strict-port-families)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, strict-port-families, gateway-nodes)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -547,7 +546,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and node names. The one built-in left is `RelayTrackSource`, which is transport — the only
   way a graph reads a relay, its MoQ crates pinned to `tatolabd`'s publisher — not a media
   node. Installing the runtime alone gives other applications no camera. Owner, 2026-11-02.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; amended by gateway-nodes: `RelayTrackSource` leaves the runtime as `tatolab.moq:MoqTrackReceive`, and the runtime ships no transport]
 - **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
@@ -814,7 +813,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   config={"broadcast": "desk/rig.hang", "track": "camera/video"})` — and CI fails when a
   regeneration differs. `RelayTrackSource` is the one class it writes. One
   declaration, the Rust one; no native marker class exists. [package-split-and-lend — SHIPPED
-  #2684]
+  #2684; amended by gateway-nodes: `RelayTrackSource` leaves it]
 - **DECIDED** — What the runtime backs is declared once, in `tatolab.stream`: the contexts,
   `LinkInputDataReader`, `LinkOutputDataWriter`, `NodeLinkDataAccess`, the `GpuContext`
   capabilities, `GpuSurfaceHandle`, the kernels, `MonotonicTimer`, the texture exports,
@@ -838,10 +837,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   gate fails any `tatolab/__init__.py` in the tree or in a built lend, and `dladdr` finds
   `_vulkan_driver/` beside `_engine` unchanged. [package-split-and-lend — SHIPPED #2689,
   #2693, #2697]
-- **OPEN** — How an external control client plugs in. What it hands the runtime is settled: a
-  relay's address and credential per adapter, and nothing else (§Networking, the adapters);
-  how it plugs in stays open. Known (2026-10-04): no stream map, router or peer
-  identity exists to push. [one-runtime-per-machine; moq-relays]
+- **OPEN** — How an external control client plugs in, and what it hands the runtime: a
+  gateway's relay settings are its node config (§Networking), so it hands the runtime no relay
+  credential. Known (2026-10-04): no stream map, router or peer identity exists to push.
+  [one-runtime-per-machine; moq-relays; gateway-nodes]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tato Studio; the app and `curl | sh` ship all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -897,7 +896,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pip-published pack becomes that directory, the registry's owner and standards, a manager UI,
   and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — SHIPPED
+## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes)
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -939,7 +938,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   round-trip showcase (a sender's encoded track read back through `RelayTrackSource →
   H264Decoder`) — the owner chose no showcase for either (owner, 2026-10-20).
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
-  networking-extension-wheels — SHIPPED #2153; virtual-camera-sink — SHIPPED #2198]
+  networking-extension-wheels — SHIPPED #2153; virtual-camera-sink — SHIPPED #2198; amended by gateway-nodes: an example's picture is seen in a viewer, and an example that shares one adds gateway nodes]
 - **DECIDED** — An example shows a person writing and running a stream: the scaffold's
   idiom, built-ins, nodes, links and exposure. It never shows engine work. That means no
   engine embedded in a host process, no driving the executor or its async runtime, and no
@@ -993,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families; unbuilt: the five port families, subgraphs; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes; unbuilt: the five port families, subgraphs, Input and Output nodes, variables, reference edges; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1500,7 +1499,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   step reads from it follows the reading port's delivery setting. `RelayTrackSource` and the
   camera, microphone, audio-output and WHIP-publish nodes in `packages/` declare it; a display
   does not, being a view that presents what arrives. Owner, 2026-11-04. [stream-clocks —
-  SHIPPED #3171]
+  SHIPPED #3171; amended by gateway-nodes: `MoqTrackReceive` in `tatolab-moq` declares it in place of `RelayTrackSource`]
   Rejected: refusing a device node in a scaled or stepped stream — it breaks streams that mix
   devices with a warped clock (owner, 2026-11-04).
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
@@ -1749,7 +1748,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime's built-ins, and any other is imported in the stream's own interpreter. A type
   changes only when its class's public name does — renaming or moving the runtime's crates
   and modules never changes one — and the first golden graph a runtime is held to already
-  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684]
+  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684; amended by gateway-nodes: the example type is a former built-in's: `RelayTrackSource` moves to `tatolab.moq:MoqTrackReceive`]
 - **DECIDED** — `@node` registers nothing: it writes the class's declaration stamps and
   returns the class, so a declaration is readable with no engine anywhere. A Python node class
   reaches the node catalog when a graph that names it loads — or a live `add_node` names it —
@@ -1789,7 +1788,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   unregistered `type`, an end in this stream naming a node or port the graph does not hold,
   and an exposure naming a node or an output the graph does not hold; a source in another
   stream is that stream's to hold and is not looked up here.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708; amended by gateway-nodes: `exposed` leaves the spec keys; a config value naming another node is a reference edge, which the load checks by the node's name and type and `graph` renders beside the links]
 - **DECIDED** — The graph is emitted, never authored. A stream's function produces it, the
   runtime exports the live one in the same shape, and nobody writes one by hand as the source
   of a stream — a stream's source is its Python, which keeps the retired manifest retired. On
@@ -1818,32 +1817,28 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   variable — and a stream reads its own settings from its project as any program does.
   Provisioning an environment is the packs OPEN in §Packages. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2689, #2693; runtime-hosting — SHIPPED #2711]
-- **DECIDED** — Spawn and describe live in the engine, beside `subprocess_bridge.rs`, and
-  run no Python in the runtime process. A loaded stream's environment is recorded as
-  `StreamEnvironment { project_directory, interpreter }`. A processor interpreter's command is
-  `<interpreter> <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py`, run by path and
-  never `-m` or `-c`; `PYTHONPATH` is the lend directory, then the project directory; every
-  other `PYTHON*` variable is removed; the working directory is the project; the `STREAMLIB_*` variables
-  are unchanged. The bootstrap first drops its own directory from `sys.path`, then imports
-  `tatolab.runtime` — an interpreter that cannot load it (not CPython, below 3.12,
-  free-threaded, a foreign architecture) writes a refusal to raw stderr naming its path,
-  implementation, version, free-threading, architecture and the import error, and exits —
-  then checks the build id, then runs its node. `tatolabd` finds the lend relative to its own
-  executable, at `../lib/tatolab/lend`, or at `Contents/Resources/lend` inside the bundle holding it. Describe is the same command with `--describe <import
-  paths>`, run at load for every Python `type` a graph names and at a live `add_node` for one
-  not yet described; the bootstrap prints each declaration as JSON, and a type that will not
-  import or carries no stamp is refused by name, quoting the interpreter's stderr. It costs one
-  interpreter start per load and per live add of an undescribed type. [package-split-and-lend
-  — SHIPPED #2689; runtime-hosting — SHIPPED #2711, #2721]
-- **DECIDED** — A stream's interface is what it exposes: `expose` declares its inputs and its
-  outputs, with no level and nothing about networks, and an optional stream-level name that
-  defaults to the port's own. `stream_builder.add` takes a `@stream` function as it takes a node
-  class: its extra parameters are promoted config, so binding them is partial application; its
-  exposed ports are the only ones reachable from outside; and it flattens at compile, its nodes
-  named under the reference's name (`overlay/comp`). An added subgraph's exposed ports are its
-  interface to the stream that adds it and are wired inside that stream like any node's; only
-  the outermost stream's exposures reach the routing policy. The same function still runs alone
-  as a stream. Owner, 2026-11-03. [stream-interface-and-routing-policy]
+- **DECIDED** — A graph's interface is its Input and Output nodes, at every level. A stream's
+  graph and a subgraph alike declare each port they offer with a `GraphInput` or `GraphOutput`
+  node, named and of one family, the way DaVinci Resolve's Fusion page and Effect House do; there
+  is no `expose` verb. Tato Studio shows a graph's Outputs as what it displays, at every level.
+  `stream_builder.add` takes a `@stream` function as it takes a node class: its extra parameters
+  are promoted config, so binding them is partial application; its Input and Output nodes are its
+  ports, the only ones reachable from the graph that adds it; and it flattens at compile, its
+  nodes named under the reference's name (`overlay/comp`). The same function still runs alone as
+  a stream. An Output never leaves the machine on its own: sending one is a gateway node's job
+  (§Networking). Owner, 2026-11-03 and 2026-11-06. [stream-interface-and-routing-policy;
+  gateway-nodes]
+  Rejected: `expose` as the way a graph declares its ports — an implicit edge on a node's port in
+  place of a node the designer draws (owner, 2026-11-06).
+- **DECIDED** — Variables, as Unreal Blueprints have them: a `SetVariable` node names a value and
+  `GetVariable` nodes anywhere in the graph read it, so one value reaches many nodes with no
+  drawn wire. A variable holds a port's output, which the compiler resolves to a link from the
+  setter's source, or a node reference — a gateway node a track names, a track node a send node
+  names — which it resolves to a reference edge (§Networking). A connection is held as a
+  reference to its gateway node, which keeps the live session; it is never a record on a link.
+  Owner, 2026-11-06. [lightweight-node-kinds; gateway-nodes]
+  Rejected: a connection carried as a Records value — a live session is not data, and each reader
+  would open its own (owner, 2026-11-06).
 - **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether
   every installed `@stream` is addable or only marked ones. [stream-interface-and-routing-policy]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
@@ -1878,7 +1873,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the runtime's children. Streams needing conflicting Python
   packages each start from their own venv (the package split and the lend, §Packages). Owner,
   2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2715; moq-relays — SHIPPED #2842, #2853, #2855]
+  runtime-hosting — SHIPPED #2704, #2715; moq-relays — SHIPPED #2842, #2853, #2855; amended by gateway-nodes: a stream reads another's track only through gateway nodes, and `tatolabd` keeps no publisher, relay adapter or relay child]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -2330,7 +2325,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2473,7 +2468,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `VulkanOffscreenCompositor`, offscreen only. A person sees a stream in a browser through the
   preview page (§Networking); the rigs and the codec proof read a port through the local relay
   as a user does, as tools outside the runtime; a stream's one output off its graph is a track
-  at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845]
+  at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845; amended by gateway-nodes: a person sees any port in Tato Studio's viewer, and the rigs read a port that the stream under test sends through gateway nodes to a relay the rig starts]
 - **DECIDED** — `TestPatternSource` is the sample stream's source: a branded looping animation
   — colour bars, the potato bouncing corner to corner, "Tatolab stream setup successfully" and
   "sample stream" bottom-right — rendered by one compute dispatch per frame
@@ -2867,7 +2862,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   output is filter delay rather than input; the remainder parked when a port's last link
   disconnects is the designed stop above; and a message `accept` refuses already fails the read
   by name.
-  [audio-port-window-contract — SHIPPED #2033; loss-visibility — SHIPPED #2269]
+  [audio-port-window-contract — SHIPPED #2033; loss-visibility — SHIPPED #2269; amended by gateway-nodes: the reserved subscriber slot the publisher held goes with it]
 - **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
   windowed cap should instead wire at that channel's depth, with its ring overwrites counted.
   Overwrite counting is shipped (§Processor model); until this is decided the connect is
@@ -3022,7 +3017,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `/verify-live`, and (ii) CI-named GPU-free tests: bitstream parsing, VUI/color translation,
   config resolution, container bytes. Running the rig stays rig-only, and no test reaches into
   a consumer for its fixtures. [codec-blocks — SHIPPED #2084, #2085, #2086; moq-relays —
-  SHIPPED #2860, #2866]
+  SHIPPED #2860, #2866; amended by gateway-nodes: the sender sends the encoder's port through `MoqTrackSend` to a `moq-relay` the rig starts, and the receiver reads it through `MoqTrackReceive`]
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3162,7 +3157,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   no audio device in the path, so a failure here with the loopback green is the codec's. The
   decoder's port is read as a track at the local relay with `tatolab-read-track`, a tool
   outside the runtime (§Networking), by `verify_audio_channel.sh`.
-  [opus-mp4-recording-rung — SHIPPED #2126, #2128; moq-relays — SHIPPED #2860]
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; moq-relays — SHIPPED #2860; amended by gateway-nodes: the decoder's port reaches `tatolab-read-track` through `MoqTrackSend` to a relay the check starts]
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers: a held
   codec package is mined for its logic and deletes in the change that ships its block, and a
   codec proof example deletes into the engine-owned proof rig — its job becomes the rig's
@@ -3189,8 +3184,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — SHIPPED (unbuilt: the routing policy, a publicly valid certificate on the every-interface listener)
-
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3291,7 +3285,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   scores it with `xtask psnr bar-colors` against its own baseline within ±0.05; the
   receiver's decode is proven by its decoded-frame count in `graph` — the network sits inside
   a path the codec rig already scored, so a mismatch is the wheel's.
-  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902]
+  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902; amended by gateway-nodes: the receiver's `encoded_video` reaches `tatolab-read-track` through `MoqTrackSend` to a `moq-relay` the rig starts]
 - **DECIDED** — The address, as built. A port's address is `<machine>/<stream id>/<node>/<port>`,
   every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
   of cases the engine and the pure-Python builder both cast from): the `/watch` path names
@@ -3304,7 +3298,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715;
-  stream-identity-and-persistence — SHIPPED #2960]
+  stream-identity-and-persistence — SHIPPED #2960; amended by gateway-nodes: `graph`, the logs and a viewer name a port by its address, and no broadcast or `/watch` path is derived from it]
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
   is `{node, port}`, a port of this stream's graph; the graph holds one link collection, which
   every traversal walks. A snapshot whose link end names a stream or a machine is refused by
@@ -3312,13 +3306,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   another stream's port on this machine or another. In Python `connect(source, destination)`
   takes a reference minted by this stream's builder as its source, and a value of any other
   kind is refused naming the spelling that would work. The engine reads no payload to carry a
-  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715]
-- **DECIDED** — Reading across streams is always pulled, and the source is never asked. The
-  stream that wants another stream's port subscribes to it at a relay — through the relay
-  source node, the preview page, or any MoQ client — and nothing is sent for a track nobody
-  subscribes to. No runtime pushes its output into another's input, and no runtime wires two
-  others. Owner, 2026-10-04: a source never wires itself into a reader, the way a server never
-  wires its URL into a client's browser. [exposure-levels; moq-relays — SHIPPED #2853, #2855]
+  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: the refusal names `MoqTrackReceive`, through which a stream reads another stream's track at a relay]
+- **DECIDED** — Reading across streams is always pulled, and the source is never asked. A
+  stream that wants another stream's data reads a track at a relay through a track receive
+  node, and that track exists only because the other stream's author added a track send node
+  for it; nothing is sent for a track nobody subscribes to. No runtime pushes its output into
+  another's input, and no runtime wires two others. Owner, 2026-10-04: a source never wires
+  itself into a reader, the way a server never wires its URL into a client's browser; owner,
+  2026-11-06: nothing is shared that the graph does not show. [exposure-levels; gateway-nodes]
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
   link carries a stamp from another machine, so a many-track sink compares first stamps across tracks with no another-machine refusal. A
@@ -3328,7 +3323,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stack's own player's model — with the timestamped write; a track carrying no timestamp is
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
-  moq-relays — SHIPPED #2855]
+  moq-relays — SHIPPED #2855; amended by gateway-nodes: the node that re-bases a relay track's stamps is `MoqTrackReceive`]
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
   machines become comparable; until then the per-clock rule above stands, and the relay
@@ -3338,8 +3333,34 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   playing sink holds what it plays at a steady delay sized from the jitter it measures, the
   way WebRTC's NetEQ does, separate from a relay reader's `max_age`. Owner, 2026-10-20.
   [relay-track-reading]
-- **DECIDED** — The runtime decides what leaves the machine; who reads at a relay is that
-  relay's own access rules. [one-runtime-per-machine; moq-relays — SHIPPED #2842, #2853]
+- **DECIDED** — Nothing leaves a stream on its own. A stream's data reaches a network only
+  through nodes its author added, opted into one by one in the graph and in Tato Studio's
+  designer the way TouchDesigner's and Unreal Blueprints' are; the runtime holds no publisher,
+  no exposure, no routing policy and no relay of its own, and a stream's graph shows everything
+  it sends. Who reads at a relay is that relay's own access rules. Owner, 2026-11-06.
+  [gateway-nodes]
+  Rejected: a publisher in the runtime that forwards a stream's ports to relays on its own —
+  data the graph does not show (owner, 2026-11-06).
+  Rejected: `expose`, exposure levels or a per-relay routing toggle deciding what leaves the
+  machine — policy outside the graph; users want every behaviour as an explicit node they opt
+  into (owner, 2026-11-06).
+- **DECIDED** — Networking is a module of gateway nodes, in the Unreal Engine shape. A
+  **gateway node** holds one connection to a relay and publishes one broadcast it names; a
+  **track node** declares one outgoing track on a gateway with its catalog entry, and the stream
+  holds it as a graph variable; a **track send node** writes content to a track it names by
+  reference, anywhere in the graph, with no wire back to the gateway; a **track receive node**
+  reads a remote track through a gateway. A node names another — a track its gateway, a send
+  node its track — by the node reference `add` returned, passed as a config value
+  (`MoqTrackSend(track=camera_track)`): the graph records it as a reference edge, the load
+  refuses one naming a node that is missing or of the wrong type, and `graph` renders it beside
+  the links. A reference edge carries no data and is never a link. The MoQ nodes are the
+  `tatolab-moq` module, built the way a third party builds one; the WebRTC wheel's nodes are
+  another such module. Owner, 2026-11-06. [gateway-nodes]
+  Rejected: a long data wire from every sender to its gateway, or a connection carried on a
+  special port — the graph variable is what keeps one connection reusable across the graph
+  (owner, 2026-11-06).
+  Rejected: a track named by a free string the load resolves — a typo is caught only at load
+  (owner, 2026-11-06).
 - **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
   identity, encryption on the wire, NAT and names are a relay's, or the network the user
   already has — a tailnet, a LAN, the internet. The runtime reads, configures and requires
@@ -3347,7 +3368,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   machine's local relay over a tailnet is a docs page, because the relay listens on the
   machine and a tailnet reaches the machine. Nothing is built for discovery, certificate
   minting, name claiming or peer authentication, on any network. Owner, 2026-10-16.
-  [one-runtime-per-machine; moq-relays — SHIPPED #2842]
+  [one-runtime-per-machine; moq-relays — SHIPPED #2842; amended by gateway-nodes: no relay runs on the machine unless a person starts one, so a tailnet reaches whatever relay a connection names]
   Rejected: reading Tailscale's status for the machine's name and the tailnet's machines, and
   having `tatolabd` configure `tailscale serve` — a rights prompt and a manual step on every
   install, for reach the local relay already gives (owner, 2026-10-16).
@@ -3376,50 +3397,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. The engine names the machine by its hostname cast and reads
   nothing of Tailscale; a relay adapter's root prefixes the broadcast at that relay.
-  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873]
-- **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
-  runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
-  any node of the stream may link to it, and it is at no relay. **Private**: at the machine's
-  local relay's loopback listener only, so a stream, a script, the preview page or any MoQ
-  client on the machine reads it and nothing off the machine can. **Public**: at every relay
-  the machine has joined, the local relay's every-interface listener included.
-  `stream_builder.expose(output)` makes an output private and
-  `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum member, never a
-  string. The stream's function sets where its exposures start; `expose` at
-  the CLI, the app or the local API changes them while the stream runs, the change applies at
-  once — a reader the new level no longer allows is cut off, a relay subscriber included — and
-  neither the runtime nor the stream restarts. The engine checks the live exposures wherever a
-  read crosses a stream's edge, and a port is read from outside its stream only through
-  exposure: no debugging door bypasses it, and a stream's own logs are how its
-  insides are seen. Nothing leaves the machine until a port is public. The CLI and the app
-  list every running stream with its private and public ports; an internal port may be
-  listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
-  one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853; amended by
-  stream-interface-and-routing-policy: levels leave code for the routing policy below; amended by
-  strict-port-families: the machine's owner previews any port on the machine, exposed or not]
-- **DECIDED** — What goes out where is decided on the publisher's side, by the runtime, never
-  in the stream's code, and applied live with the edge check above. For now that is one toggle:
-  every exposed output is published to every relay the machine has joined, and the owner turns
-  it off per relay in the app, the CLI or MCP. Relays are destinations: the runtime keeps a
-  transport-neutral manifest of exposed ports — name, stream, family and its names — and the
-  MoQ catalog and `.hang` are one projection of it, beside which WebRTC, NDI, SRT or a file
-  sink is each one adapter. In the app the toggle lives in the Relays settings section, a page
-  per relay. The local relay's loopback listener is outside the toggle: the preview page and
-  every reader on the machine always see every exposed port. Owner, 2026-11-03. [stream-interface-and-routing-policy]
-  Rejected: exposure levels and a `local_only` veto in code — where a port goes is the
-  machine's owner's call, not the author's (owner, 2026-11-03).
-- **OPEN** — The routing policy's final form, settled after the toggle has been tested: per-output
-  toggles and segments ("only `kind:video` to Cloudflare"); ingress, the same shape for exposed
-  inputs, binding an input to another stream's output or a remote track, off by default, with the
-  runtime inserting the receive node for a remote track, and whether it needs its own consent
-  step; a compose-style file that seeds it; and whether the publisher and the relays stay
-  separate concerns. Direction (review, not decided): routing logic on the publisher's side,
-  in the spirit of Docker's `EXPOSE` and `-p`. [stream-interface-and-routing-policy]
-- **DECIDED** — Every exposed port is a track at a relay, named by its address, and that is the
-  one way a port is read from outside its stream — by another stream through the relay source
-  node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,
-  all alike. A user with no account sees and uses their own streams through the local relay
-  (owner, 2026-09-30). [one-runtime-per-machine; moq-relays — SHIPPED #2853, #2855, #2864]
+  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873; amended by gateway-nodes: the root is the connection's, and a gateway node prefixes its broadcast with it]
 - **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
   the listing of the machine's streams and exposed ports, the preview page, and at
   `/machine-runtime-lock-holder` the serving runtime's pid, which names the macOS machine
@@ -3432,7 +3410,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   relay program's `/fetch` — is the relay's, under the same grant as the tracks. The read-only
   MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16,
   2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
-  machine-lock-without-administrator — SHIPPED #2929]
+  machine-lock-without-administrator — SHIPPED #2929; amended by gateway-nodes: the preview page and the `/watch` paths leave it; it carries the listing of the machine's streams and the lock holder's pid]
   Rejected: live forms over HTTP served by the runtime — MPEG-TS, HLS, raw H.264, fMP4 — and a
   `whep` form (owner, 2026-10-04).
   Rejected: a snapshot form — one PNG of a port's latest frame, the runtime reading the port's
@@ -3440,15 +3418,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   any MoQ client (owner, 2026-10-17).
 - **DECIDED** — The runtime has no door for verification, and verification gets none. Every
   end-to-end proof — the codec rigs, the audio loopback check, the evidence an agent captures —
-  is a deterministic tool outside the runtime that reads a port the way a user does, as a MoQ
-  client of a relay or through the preview page, and nothing of it lives in the engine. A port
-  is inspected by exposing it — private keeps it on the machine — or by chaining nodes off it
-  at the access level its author chooses, and an internal port is seen through its stream's
-  logs alone. The engine's internals are proven by unit tests; the engine is never proven by
-  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875; amended by
-  strict-port-families: an internal port is also seen through an on-machine preview]
+  is a deterministic tool outside the runtime that reads a port the way a user does: the stream
+  under test sends it through gateway nodes to a relay the rig starts, and the tool reads it as
+  a MoQ client, or a person looks at it in a viewer. Nothing of it lives in the engine. The
+  engine's internals are proven by unit tests; the engine is never proven by building an app on
+  it. Owner, 2026-10-17 and 2026-11-06. [moq-relays — SHIPPED #2860, #2875; gateway-nodes]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
-  for the rigs, an MCP image tool — side paths past exposure and the relays, which agents
+  for the rigs, an MCP image tool — side paths past the product's own nodes, which agents
   reach for over the product's own doors (owner, 2026-10-17).
 - **DECIDED** — End-to-end encryption through a relay is not a launch requirement; it is a
   later change, and the design keeps it possible. A hosted relay's operator can see the
@@ -3463,57 +3439,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   per-stream keys through the control client later, and the team's devices signing the key
   set the way Tailnet Lock does. Its cost, accepted for later: stock MoQ tooling and curl then
   work only through a TLS tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine; moq-relays]
-- **DECIDED** — Off a stream, data travels over MoQ on QUIC and over nothing else, to relays.
-  Inside a stream, nodes share data through shared memory, as today. The runtime serves no MoQ
-  endpoint of its own: it is a MoQ client of every relay it has joined, and the local relay —
-  `moq-relay`, shipped in the runtime unit on both floors, started and supervised by `tatolabd`
-  as child processes with their own configuration, one per listener — a loopback listener and
-  an every-interface listener (the adapters entry below), each serving its tracks, its
-  certificate fingerprint and its WebSocket path on one port, UDP and TCP — is the relay every
-  machine has. It is a separate program the runtime joins like any other; the runtime is never
-  a relay. Only the runtime publishes to either listener, and anyone may subscribe to what a
-  listener serves; how the local adapter configures that — the relay's own admission knobs, an
-  auth responder the adapter answers over a unix socket, a credential it mints for the runtime
-  — is the adapter's, driven by its `relays.json` instance. `tatolabd` provisions the
-  listeners' certificates as files the relay reloads, rotating them before they expire: on
-  loopback a short-lived certificate the player pins by its fingerprint; where the machine has
-  a reachable hostname, a publicly valid certificate issued programmatically, so a browser off
-  the machine trusts it with nothing pinned — the issuer is a research question, not decided
-  here. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2842, #2853]
-  Rejected: embedding `moq-relay` as a library inside `tatolabd` to save the loopback hop — the
-  runtime would then be a relay (owner, 2026-10-16).
-  Rejected: the engine serving a MoQ endpoint itself on its tailnet address, read directly by
-  other machines — a second serving path beside the relays, and a Tailscale requirement
-  (owner, 2026-10-16, over the 2026-10-04 ruling).
-- **DECIDED** — One publisher per runtime, and it holds no logic. It lives in `tatolabd`
-  beside the relay adapters and reads the engine's exposed ports through one engine seam. It
-  watches exposure across every loaded stream: a port turning private or public is announced
-  at the relays its level reaches, one turning back is withdrawn, which cuts its subscribers
-  at once. Per exposed port it holds one reader on the port's channel — the subscriber slot
-  every channel reserves — and forwards each message's payload bytes as
-  written to every joined relay that has a subscriber, stamping each object from the
-  message's envelope and nothing else. Under backpressure, and on a message whose
-  `lost_since_last_read` is nonzero, it drops the rest of the current group and resumes at
-  the next `starts_group` — the message reporting the loss, when that message itself starts a
-  group — never a message inside a group. It decodes no payload, imports no class, and knows
-  no port's encoding. Which exposed ports it offers is a
-  predicate that says "all": anything can be published and any port can go public, and a port
-  whose bytes mean nothing off the machine — a `VideoFrame` record naming a surface — is
-  forwarded all the same, so what was published is what a subscriber sees. Owner, 2026-10-16
-  and 2026-10-17. [moq-relays — SHIPPED #2853]
-  Rejected: the publisher refusing, warning on or filtering a port by what it carries — logic
-  in the forwarding path (owner, 2026-10-17).
-- **DECIDED** — A stream is one broadcast; each exposed port is one track in it. At a relay a
-  stream is the broadcast `<root>/<machine>/<stream id>.hang` — `<root>` the prefix the relay's
-  credential assigned, the suffix the players' convention for a catalog they read — and each
-  exposed port is the track `<node>/<port>` inside it, so four cameras and a microphone in one
-  stream are five tracks any client subscribes to by name; the stack's player shows one video
-  rendition at a time, and the preview page names the track in its URL. The relay's
-  own listing is the directory: everything under `<root>/<machine>/` is that machine's streams,
-  and the broadcast's catalog is what is in one. A stream that wants two unrelated bundles is
-  two streams. Owner, 2026-10-16. [moq-relays — SHIPPED #2853]
-  Rejected: one broadcast per exposed port — it loses multi-track switching and audio beside
-  video, the things a broadcast is for (owner, 2026-10-16).
+- **DECIDED** — Off a stream, data travels only through nodes the author added — the MoQ
+  gateway nodes over QUIC to relays, the WebRTC wheel's nodes to WHIP and WHEP endpoints. Inside
+  a stream, nodes share data through shared memory, as today. The runtime is never a relay and
+  starts none: a person who wants one on the machine runs `moq-relay` and stores a connection to
+  it, and a rig starts its own as a fixture. Owner, 2026-10-16 and 2026-11-06. [moq-relays;
+  gateway-nodes]
+  Rejected: `tatolabd` supervising a bundled local relay — an always-running relay is the
+  automatic sharing this removes (owner, 2026-11-06).
+  Rejected: embedding `moq-relay` as a library inside `tatolabd` — the runtime would then be a
+  relay (owner, 2026-10-16).
+  Rejected: the engine serving a MoQ endpoint itself, read directly by other machines — a
+  second serving path beside the relays (owner, 2026-10-16).
+- **DECIDED** — A gateway publishes one broadcast; each of its track nodes is one track in it.
+  At a relay the broadcast is `<root>/<broadcast>.hang` — `<root>` the prefix the connection's
+  credential assigns, `<broadcast>` the gateway's config, cast, the suffix the players'
+  convention for a catalog they read — and each track node is the track its config names, so four
+  cameras and a microphone sent through one gateway are five tracks any client subscribes to by
+  name. The relay's own listing is the directory. Two gateways on one connection are two
+  broadcasts. Owner, 2026-10-16 and 2026-11-06. [moq-relays; gateway-nodes]
+  Rejected: one broadcast per track — it loses multi-track switching and audio beside video,
+  the things a broadcast is for (owner, 2026-10-16).
 - **DECIDED** — A message's group boundary is the writer's, in the envelope. `write(port,
   payload, starts_group=True)`: the default says this message stands alone, so every data
   port is one group per message and its author never sees the flag; `starts_group=False`
@@ -3522,7 +3468,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   own keyframe knowledge; `OpusEncoder` opens a group per packet. The publisher maps it to the
   relay's group boundary and reads nothing else; Python and Rust readers see it alike, beside
   the stamp, and the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
-  [moq-relays — SHIPPED #2821, #2850, #2853]
+  [moq-relays — SHIPPED #2821, #2850, #2853; amended by gateway-nodes: the track send node maps `starts_group` to the group boundary and drops the rest of a group under backpressure or on a message reporting a loss, as the publisher did]
 - **DECIDED** — The catalog is assembled from port descriptions, never from payloads. An output
   port's declaration may carry, beside its name and description, its catalog entry in the
   layout the stack's players read: the section it belongs in — `video`, `audio`, `text`,
@@ -3538,7 +3484,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   each port's entry. Any reader may read a port's entry — a local node off its inbound link,
   a remote client off the catalog — and it is documentation a reader follows: `connect`
   compares nothing, the engine checks nothing against it, and no port is required to carry
-  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2840, #2853]
+  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2840, #2853; amended by gateway-nodes: the gateway merges its track nodes' entries into its broadcast's catalog, a track node's `catalog` replacing its upstream port's entry]
   Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
   under — media logic in the adapter path (owner, 2026-10-16).
   Rejected: an entry in the runtime's own words — a `kind`, a free-text `encoding`, a `cast`
@@ -3546,55 +3492,42 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   itself in the layout the players read, so one malformed entry breaks its own track and
   never the broadcast (owner, 2026-10-17).
 - **OPEN** — A decoded audio port playable by any MoQ player: intended, do not build until
-  designed. Direction: an exposed decoded audio port publishes an `audio` entry with the `pcm`
+  designed. Direction: a track fed by a decoded audio port carries an `audio` entry with the `pcm`
   codec and raw interleaved little-endian f32 objects in place of its `AudioBlock` records.
   Owner, 2026-10-20. [relay-track-reading]
-- **DECIDED** — Relay adapters carry what differs between relays, behind one interface. A
-  relay-adapter SDK crate holds the trait — joining, publishing, the events and calls the app
-  and the CLI drive, how a credential is held and refreshed — and one crate per adapter
-  implements it: the local relay, Cloudflare and moq.pro; Red5 waits on its cost. What differs
-  is the MoQ dialect the relay speaks (`moq-net` negotiates moq-lite and the IETF drafts;
-  Cloudflare's relays are on the drafts, `moq-relay` on moq-lite), how a machine
-  authenticates and refreshes its credential, the root the relay assigns the machine or
-  leaves the adapter to name, and how often each broadcast's catalog is written again whole
-  for a relay that hands a subscriber joining late only the objects written after it
-  subscribed — Cloudflare's, every second — which the publisher does when its adapter says
-  so (owner, 2026-10-20). Every adapter is compiled into `tatolabd`, so a headless machine
-  has them all, and any number of instances of each is added and configured through
-  `tatolabd`, by the app or at the CLI; `relays.json` holds the instances, each with its own
-  settings and whatever credential its provider's SDK needs, held in the OS secret store and
-  never written to a log — a token that rides a URL is redacted with the URL. Signing in to a
-  provider and provisioning a relay live in the app or a separate private service, never the
-  runtime. The local relay's read boundary is where it listens, never a token: it has two
-  listeners — one bound to loopback alone, serving every exposed port, private and public,
-  which is what the preview page and a relay source node on the machine dial; and one bound to
-  every interface, serving public tracks only, which is what another machine dials. A private
-  port is therefore readable only by a process on the machine, enforced by the kernel's
-  loopback binding; the two listeners are two `moq-relay` children, since the program binds one
-  address, and the local adapter's two instances. Owner, 2026-10-14, 2026-10-16 and
-  2026-10-17. [moq-relays — SHIPPED #2842, #2871, #2873]
-  Rejected: private tracks on an all-interfaces listener behind a token minted over loopback —
-  a bearer token carried off the machine reads them from anywhere (owner, 2026-10-17, from the
-  review of the align PR on 2026-10-16).
-  Rejected: one trait inside `tatolabd` with no crate per adapter — adding a relay would mean
-  editing the daemon (owner, 2026-10-17).
-- **DECIDED** — Reading a track is a source node. The relay source node, a built-in, takes a
-  relay, a broadcast and a track, subscribes, and writes each object's payload bytes to
-  its one output as received, stamped from the track's own timestamp re-based onto this
-  machine's clock (the stamps entry above); the track's catalog entry is readable off the
-  node. What follows it — a decoder, a numpy node, nothing — is
-  the builder's. It is how a stream on this machine reads another stream's private port, how
-  a stream on another machine reads a public one, and the only way a graph reads a relay.
-  Nothing in the runtime is built for runtime-to-runtime: the node is one MoQ client among
-  any. Owner, 2026-10-16. Its config is MoQ's own vocabulary and nothing else: `relay_url`,
-  `broadcast`, `track` and `max_age` (the entry below), both names required and each read exactly as written — a stream's
-  exposed port `desk/camera-rig/encoder/encoded_video` is the broadcast `desk/camera-rig.hang`,
-  the track `encoder/encoded_video`, as the preview page and any MoQ client show it. The
-  runtime casts every name it gives, and a name another publisher's relay accepts is read as
-  that publisher wrote it, `.hang` (moq-dev's catalog-format suffix, a convention our
-  publisher follows) or not. Tatolab's `<machine>/<stream id>/<node>/<port>` address is not one
-  of the node's names. Owner, 2026-10-18. [moq-relays — SHIPPED #2855, #2858;
-  relay-track-reading — SHIPPED #2898]
+- **DECIDED** — What differs between relays is the gateway's. `tatolab-moq` carries one gateway
+  implementation per relay kind — a plain `moq-relay`, Cloudflare and moq.pro; Red5 waits on its cost — each holding what differs: the
+  MoQ dialect (`moq-net` negotiates moq-lite and the IETF drafts; Cloudflare's relays are on the
+  drafts, `moq-relay` on moq-lite), how a machine authenticates and refreshes its credential,
+  the root the relay assigns or leaves the gateway to name, and how often the broadcast's catalog
+  is written again whole for a relay that hands a late subscriber only newer objects —
+  Cloudflare's, every second. Signing in
+  to a provider and provisioning a relay live in the app or a separate service, never the
+  runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes]
+  Rejected: relay adapters compiled into `tatolabd` — networking is a module, and the runtime
+  carries no relay code (owner, 2026-11-06).
+- **DECIDED** — A gateway's URL and credential are config on the gateway node, as every node's
+  settings are: the relay kind, `relay_url` and the kind's credential keys. The runtime stores no
+  relay instance and no relay secret, and has no relay verbs. No config key is a special secret
+  type: a credential kept in a secret store reaches the gateway on the wire, from a node that
+  reads the store and writes the gateway's settings as a Records message to its `settings` input,
+  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes]
+  Rejected: a secret config type that `graph` and the logs redact — a special type for one case,
+  where a node on the wire already does it (owner, 2026-11-06).
+  Rejected: the runtime storing named connections in `relays.json` and the OS secret store for
+  gateway nodes to name — a second home for a node's settings (owner, 2026-11-06).
+- **DECIDED** — Reading a track is a receive node. `MoqTrackReceive`, in `tatolab-moq`, takes a
+  gateway by reference, a broadcast and a track, subscribes, and writes each object's payload
+  bytes to its one output as received, stamped from the track's own timestamp re-based onto this
+  machine's clock (the stamps entry above); the track's catalog entry is readable off the node.
+  What follows it — a decoder, a numpy node, nothing — is the builder's. It is how a stream reads
+  another stream's track on this machine or another, and the only way a graph reads a relay;
+  nothing in the runtime is built for runtime-to-runtime. Its config is MoQ's own vocabulary:
+  `gateway`, `broadcast`, `track` and `max_age` (the entry below), with the family settings
+  §Processor model gives a source, each name read exactly as written — `.hang` or not. The
+  runtime casts every name it gives and never a name it reads. Owner, 2026-10-16, 2026-10-18 and
+  2026-11-06. [moq-relays — SHIPPED #2855, #2858; relay-track-reading — SHIPPED #2898;
+  gateway-nodes]
   Rejected: naming the track by a Tatolab address, `track_address`, beside `broadcast` and
   `track` — two ways to name one thing, one of them a term invented where MoQ has one (owner,
   2026-10-18).
@@ -3617,7 +3550,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a group may arrive and still be used, and never a playout delay. The relay source node
   writes every group it gives up as a loss its readers count in `lost_since_last_read`, the
   way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading —
-  SHIPPED #2898, #2900]
+  SHIPPED #2898, #2900; amended by gateway-nodes: the reader lives in `tatolab-moq`, shared by `MoqTrackReceive` and `tatolab-read-track`]
   Rejected: moq-net's sequence cursor (`.ordered()`) — it steps over a group whose stream lands
   after its successor's, at any budget (session, 2026-10-20).
   Rejected: giving up a missing group when the budget elapses on a clock — waits and sleeps
@@ -3633,37 +3566,25 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   its adapter names the machine's namespace; moq.pro's credential is a project signing key
   that mints read and write for every broadcast. The line's own compatibility claim is
   otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
-  #2853]
-- **DECIDED** — The preview page is a lightweight built-in viewer, not a product: a small web
-  project in the repo — `package.json`, `index.html` and one script on the stack's own browser
-  player — built in the release pipeline the way the crates are and staged into the runtime
-  unit, served by the runtime's loopback HTTP, reading the local relay alone at
-  `http://<host>:<port>` so the player pins the relay's certificate by its fingerprint, and
-  playing the track its URL names. With `?video_only` it shows the playing video alone, fitted
-  to the page with its aspect kept, for a window that frames it, as Tato Studio's Viewer does
-  (owner, 2026-11-05). Every browser plays it: Safari and iOS over the relay's
-  WebSocket path, the rest over QUIC. A hosted relay has its own player at its own URL. Known
-  (2026-10-17): the player's dependency tree carries an LGPL-2.1 Opus decoder polyfill, named
-  in the third-party notices. Owner, 2026-10-04, 2026-10-16 and 2026-10-17. [moq-relays —
-  SHIPPED #2864]
-  Rejected: a `?relay=` parameter pointing the preview page at another relay — every hosted
-  relay already has its own player (owner, 2026-10-16).
-  Rejected: the player's published package copied in with no build — it is a library of many
-  packages a browser cannot load unbundled (owner, 2026-10-17).
-- **DECIDED** — The machine's owner can preview any port of any node on the machine, exposed or
-  not, the way TouchDesigner shows every wire: a view per family — a thumbnail for Image, shape
-  and statistics or a point view for Array, a waveform for Channels, keyframes and bitrate with
-  an on-demand decode for Packets, a table or a tree for Records. A preview is on the machine
-  only: it never reaches a relay's every-interface listener or a hosted relay, and it changes
-  no stream's interface. Owner, 2026-11-03. [strict-port-families]
-- **OPEN** — How a preview reads a port that is not exposed, and who on the machine may open one.
-  Direction (review, not decided): the runtime publishes the previewed port to the local relay's
-  loopback listener alone while a preview is open, so the relay stays the one way a port is read.
-  Settled in the change that builds the families. [strict-port-families]
+  #2853; amended by gateway-nodes: `tatolab-moq` stands on the line, not the engine or `tatolabd`, and the runtime unit ships no `moq-relay`]
+- **DECIDED** — Previews come straight from the runtime. Tato Studio's viewers show any port
+  of any node on the machine, the way TouchDesigner shows every wire: a view per family — a
+  thumbnail for Image, shape and statistics or a point view for Array, a waveform for Channels,
+  keyframes and bitrate with an on-demand decode for Packets, a table or a tree for Records — with
+  no relay, encoder or exposure in between. A preview is on the machine only and changes no
+  stream's graph. Owner, 2026-11-03 and 2026-11-06. [strict-port-families; gateway-nodes]
+  Rejected: previews through the local relay — the preview page, `/watch` and an encode, two
+  loopback hops and a decode for a picture on the same machine, and nothing for a family a MoQ
+  player cannot draw (owner, 2026-11-06).
+- **OPEN** — How a viewer reads a port, and who on the machine may open one. Direction
+  (session, not decided): Tato Studio opens a read of the port over the local API, and the
+  runtime hands it the port's channel as it hands a helper one, an Image surface imported as a
+  helper imports it, so a preview is zero-copy and never reaches a relay. Settled in the change
+  that builds viewers. [strict-port-families; gateway-nodes]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
-  stock MoQ tooling; Red5's adapter; and a zero-copy
-  local fast path behind the relay source node for two streams on one machine. Known
+  stock MoQ tooling; a Red5 gateway; and a zero-copy
+  local fast path between two streams on one machine. Known
   (2026-10-16): through the local relay a raw frame between two streams on one machine pays an
   encode, two loopback hops and a decode, about ten milliseconds and a lossy codec; data
   pays about a millisecond. [moq-relays]
@@ -3702,7 +3623,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
   runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3795,7 +3716,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697;
-  moq-relays — SHIPPED #2845, #2866]
+  moq-relays — SHIPPED #2845, #2866; amended by gateway-nodes: the scaffolded stream carries no `H264Encoder`, so the proof checks the effect's frames alone]
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
   (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
@@ -3896,10 +3817,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-10-02, 2026-10-11, 2026-10-24, 2026-10-28, 2026-10-31 and 2026-11-05.
   [runtime-hosting — SHIPPED #2721; machine-lock-without-administrator — SHIPPED #2929;
   amended by runtime-lives-with-tato-studio: the app hosting the runtime as its child, no
-  install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio]
+  install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, helper-process-restart, gateway-nodes)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3954,7 +3875,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009; stream-clocks — SHIPPED #3166]
+  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; amended by gateway-nodes: `expose_port`, the four relay verbs and `streamlib://relay-adapter-catalog` go, a gateway's settings being its config, and a tool serves a viewer's read of a port]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
@@ -3978,7 +3899,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one
   subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
   [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
-  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853]
+  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; amended by gateway-nodes: `exposed` leaves `graph`, reference edges join it, and no channel reserves a publisher's slot]
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
@@ -3997,7 +3918,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
   #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description;
-  stream-identity-and-persistence — SHIPPED #2962]
+  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` and the relay verbs go]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
@@ -4019,12 +3940,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — There is no observer effect: reading a port requires neither terminating it in
   a window nor adding a node to the graph — an exposed port is read through a relay in the
   topology that ships. [control-plane-surface-pixel-exchange; moq-relays — SHIPPED #2853,
-  #2860]
+  #2860; amended by gateway-nodes: any port is read through a viewer, with no relay and no node added]
 - **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
   call it — the owning user, by file permission — and nothing off the machine can call it at
   all, so control carries no token and no account. What a runtime offers other machines is
   exposure, decided in §Networking. Owner, 2026-10-01.
-  [control-plane-bind-posture; local-api — SHIPPED #2663]
+  [control-plane-bind-posture; local-api — SHIPPED #2663; amended by gateway-nodes: what a runtime offers other machines is what its streams' gateway nodes send]
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
   open — `local-api.sock`, chmod 0600 inside the 0700 directory, a live holder refused by a
@@ -4037,7 +3958,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
-  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; moq-relays — SHIPPED #2860, #2864]
+  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; moq-relays — SHIPPED #2860, #2864; amended by gateway-nodes: the listing and the lock holder's pid, with no `/watch`]
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
   opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,
@@ -4064,4 +3985,4 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can. One
   runtime per machine owned by one user (§Product) means one socket per machine. Owner,
   2026-10-01; confirmed 2026-10-02. [local-api; runtime-hosting — SHIPPED #2711;
-  stream-identity-and-persistence — SHIPPED #2962, #2965]
+  stream-identity-and-persistence — SHIPPED #2962, #2965; amended by gateway-nodes: `expose` leaves the verbs and the tools]
