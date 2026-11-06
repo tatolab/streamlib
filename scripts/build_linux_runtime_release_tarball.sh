@@ -9,8 +9,8 @@
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/moq-relay, bin/uv, lib/tatolab/lend/,
-# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus streamlib-commit, the commit it was built from, which names the build
-# install.sh installs it as.
+# lib/tatolab/watch/, lib/tatolab/browser-host/ — plus streamlib-commit, the
+# commit it was built from, which names the build install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
 # every binary the tarball carries runs on glibc 2.28 and later, and the

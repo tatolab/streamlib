@@ -148,10 +148,12 @@ python3 -m http.server "$release_server_port" --bind 127.0.0.1 --directory "$rel
 	>/dev/null 2>&1 &
 release_server_pid=$!
 trap 'stop_the_stand_in_runtime; kill "$release_server_pid" 2>/dev/null || true; rm -rf "$release_server_root" "$test_user_home"' EXIT
+release_server_answers=no
 for _ in $(seq 1 50); do
-	curl --silent --fail "$release_server_base_url/" >/dev/null && break
+	curl --silent --fail "$release_server_base_url/" >/dev/null && release_server_answers=yes && break
 	sleep 0.1
 done
+[ "$release_server_answers" = yes ] || fail "the test's release server never answered on $release_server_base_url"
 
 # --- a first install -------------------------------------------------------
 
@@ -205,7 +207,7 @@ if run_the_installer 2>/dev/null; then
 	fail "a tarball not matching its sha256 was installed"
 fi
 [ "$(current_build)" = "1.0.1-$commit_b" ] || fail "a refused download moved current"
-[ -z "$(find "$(installed_builds_directory)" -maxdepth 1 -name '1.0.2-*' -o -maxdepth 1 -name '.partial-*')" ] ||
+[ -z "$(find "$(installed_builds_directory)" -maxdepth 1 \( -name '1.0.2-*' -o -name '.partial-*' \))" ] ||
 	fail "a refused download was left unpacked"
 pass "a tarball that does not match its published sha256 is refused and changes nothing"
 
@@ -226,7 +228,7 @@ refuses_a_release_shaped() {
 	*) fail "the refusal does not name the missing $missing_member: $refusal" ;;
 	esac
 	[ "$(current_build)" = "1.0.1-$commit_b" ] || fail "a tarball without $missing_member moved current"
-	[ -z "$(find "$(installed_builds_directory)" -maxdepth 1 -name "$release_version-*" -o -maxdepth 1 -name '.partial-*')" ] ||
+	[ -z "$(find "$(installed_builds_directory)" -maxdepth 1 \( -name "$release_version-*" -o -name '.partial-*' \))" ] ||
 		fail "a tarball without $missing_member was left unpacked"
 }
 refuses_a_release_shaped without-the-bundled-vulkan-icd-manifest "$bundled_vulkan_icd_manifest_in_a_unit"

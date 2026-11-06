@@ -63,7 +63,7 @@ fn this_platforms_credential_store() -> Result<Arc<keyring_core::CredentialStore
         .map_err(|refusal| format!("the data-protection keychain did not answer: {refusal}"))
 }
 
-/// Readable by the runtime, a launch agent, while the screen is locked, and
+/// Readable by the runtime while the screen is locked, and
 /// never carried to another Mac by a backup or iCloud.
 #[cfg(target_os = "macos")]
 fn this_platforms_entry_modifiers() -> Option<HashMap<&'static str, &'static str>> {

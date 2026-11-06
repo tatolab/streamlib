@@ -120,13 +120,16 @@ executable_links_into_a_build() {
 }
 
 # Every installed build a process of this user runs an executable from, one
-# per line: a runtime, or a child it started, that has not been restarted.
+# per line: a runtime, or a child it started, that has not been restarted. The
+# CLI is left out, because a long-lived `tatolab mcp` or `tatolab dev` is a
+# client, not a runtime.
 builds_a_process_runs_from() {
 	[ -d "$TATOLAB_INSTALL_DIRECTORY" ] || return 0
 	resolved_install_directory="$(cd "$TATOLAB_INSTALL_DIRECTORY" && pwd -P)"
 	for process_executable in /proc/[0-9]*/exe; do
 		executable_path="$(readlink "$process_executable" 2>/dev/null)" || continue
 		case "$executable_path" in
+		"$resolved_install_directory"/*/bin/tatolab) ;;
 		"$resolved_install_directory"/*)
 			path_below_the_install_directory="${executable_path#"$resolved_install_directory"/}"
 			printf '%s\n' "${path_below_the_install_directory%%/*}"
@@ -196,7 +199,7 @@ download_the_release_into() {
 stage_the_unit_into_its_build_folder() {
 	mkdir -p "$TATOLAB_INSTALL_DIRECTORY"
 	partial_build_directory="$TATOLAB_INSTALL_DIRECTORY/.partial-$$"
-	rm -rf "$partial_build_directory"
+	rm -rf "$TATOLAB_INSTALL_DIRECTORY"/.partial-*
 	mkdir "$partial_build_directory"
 	download_the_release_into "$partial_build_directory"
 	missing_member="$(first_missing_member_of "$partial_build_directory")"
@@ -261,6 +264,7 @@ install_tatolab() {
 	require_command tar
 	download_directory="$(mktemp -d)"
 	trap 'rm -rf "$download_directory" "$TATOLAB_INSTALL_DIRECTORY/.partial-$$"' EXIT
+	trap 'exit 130' INT TERM
 
 	stage_the_unit_into_its_build_folder
 	build_version="${build%-*}"
