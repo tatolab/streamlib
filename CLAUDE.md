@@ -154,6 +154,9 @@ built-in publishes on means you skipped it.
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +
   `runtime/streamlib-consumer-rhi/`). Nothing else touches `vulkanalia`. CI enforces.
 - Logging is `tracing` only — no `println!`/`eprintln!` (CI enforces).
+- macOS 26.0 is the minimum for everything macOS — every `macos-deployment-target`,
+  `MACOSX_DEPLOYMENT_TARGET`, `LSMinimumSystemVersion`, and doc that names a floor. Never 15.0
+  or anything lower, in this repo or in Tato Studio.
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
 - New Rust files carry the BUSL header, except in the vendored trees §Licensing lists, where
   a change is a recorded patch against upstream and never a drive-by edit. Never touch the

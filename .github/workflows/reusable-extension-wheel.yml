@@ -146,7 +146,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: astral-sh/setup-uv@v7
 
-      # abi3-py312 at the engine wheel's macOS 15.0 floor. maturin writes
+      # abi3-py312 at the engine wheel's macOS 26.0 floor. maturin writes
       # `macos-deployment-target` into the wheel's tag but does not hand it to
       # the link, so without this the binary inside claims whatever rustc
       # defaults to. Read from the one place it is pinned.

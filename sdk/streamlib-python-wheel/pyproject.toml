@@ -88,7 +88,7 @@ include = [{ path = "tatolab/runtime/_vulkan_driver/*.so", format = "wheel" }]
 # `AVCaptureDeviceTypeExternal` (14). Pinned so it cannot drift with rustc;
 # `scripts/stage_macos_bundled_vulkan_driver.sh` builds the bundled loader here.
 [tool.maturin.target.aarch64-apple-darwin]
-macos-deployment-target = "15.0"
+macos-deployment-target = "26.0"
 
 [tool.pyright]
 # The wheel's Python half, checked at the version floor rather than whatever

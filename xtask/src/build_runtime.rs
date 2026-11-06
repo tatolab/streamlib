@@ -1041,11 +1041,11 @@ mod tests {
     #[test]
     fn the_macos_deployment_target_is_read_from_the_maturin_target_table() {
         let maturin_pyproject = "[tool.maturin]\npython-source = \"python\"\n\n\
-             [tool.maturin.target.aarch64-apple-darwin]\nmacos-deployment-target = \"15.0\"\n";
+             [tool.maturin.target.aarch64-apple-darwin]\nmacos-deployment-target = \"26.0\"\n";
 
         assert_eq!(
             macos_deployment_target_from_maturin_pyproject(maturin_pyproject).unwrap(),
-            "15.0"
+            "26.0"
         );
         assert!(macos_deployment_target_from_maturin_pyproject("[tool.maturin]\n").is_err());
     }
@@ -1060,7 +1060,10 @@ mod tests {
         )
         .unwrap();
 
-        macos_deployment_target_from_maturin_pyproject(&maturin_pyproject).unwrap();
+        assert_eq!(
+            macos_deployment_target_from_maturin_pyproject(&maturin_pyproject).unwrap(),
+            "26.0"
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

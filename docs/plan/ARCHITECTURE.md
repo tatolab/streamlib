@@ -3773,12 +3773,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   floor as the Linux one, at the same version. Apple Silicon only: no
   Intel wheel, no universal2, and Rosetta is not a supported path — not as a fallback, not
   as a courtesy (owner, 2026-09-19). It is built on a pinned `macos-26` runner, the owner's own
-  macOS, because the image decides the SDK. The deployment target is macOS 15.0, pinned once in
+  macOS, because the image decides the SDK. The deployment target is macOS 26.0, the floor
+  for every macOS artefact the project ships (owner, 2026-11-06), pinned once in
   `[tool.maturin.target.aarch64-apple-darwin]` and exported as `MACOSX_DEPLOYMENT_TARGET`,
   because maturin tags the wheel with it but does not hand it to the link; the bundled
-  loader is built to it. 15.0 sits below the build SDK on purpose: it
-  clears MoltenVK's floor (12) and AVFoundation's `AVCaptureDeviceTypeExternal` (14), and
-  every Apple Silicon Mac can run it; a Mac on 14 or older gets no matching distribution.
+  loader is built to it, and every extension wheel and app bundle carries the same floor.
+  A Mac on 15 or older gets no matching distribution.
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the

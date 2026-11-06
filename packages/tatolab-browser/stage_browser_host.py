@@ -38,7 +38,7 @@ REQUIRED_LOCALE_PACK_NAME = "en-US.pak"
 CEF_FRAMEWORK_DIRECTORY_NAME = "Chromium Embedded Framework.framework"
 HOST_APP_BUNDLE_DIRECTORY_NAME = f"{HOST_EXECUTABLE_NAME}.app"
 HOST_BUNDLE_IDENTIFIER = "com.tatolab.browser-host"
-MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
+MACOS_MINIMUM_SYSTEM_VERSION = "26.0"
 # The helper apps CEF looks for beside its framework, each named
 # "<host executable> <suffix>", with the bundle identifier suffix each takes.
 CEF_HELPER_APP_NAME_SUFFIXES = (
