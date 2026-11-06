@@ -90,6 +90,8 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 pub use crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
 #[cfg(target_os = "linux")]
 pub use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use gpu_pool_claim_table::GpuPoolClaimTableSharedRows;
 pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
 pub use gpu_pool_claim_table::{
     GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,

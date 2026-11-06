@@ -140,14 +140,14 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
 /// The claim a read took on the pooled GPU frame it carried, which holds the
 /// frame's slot against a rehand for as long as the read's payload is held.
 #[cfg_attr(
-    not(target_os = "linux"),
+    not(any(target_os = "linux", target_os = "macos")),
     allow(
         dead_code,
-        reason = "only Linux reads pooled frames through a claim table"
+        reason = "only Linux and macOS read pooled frames through a claim table"
     )
 )]
 pub(crate) struct PooledGpuFrameClaimHeldByARead(
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[expect(
         dead_code,
         reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
@@ -176,7 +176,7 @@ impl PythonGpuContextLimitedAccess {
         python: Python<'_>,
         pooled_frame: streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody,
     ) -> PyResult<Option<PooledGpuFrameClaimHeldByARead>> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return python
                 .detach(|| {
@@ -191,7 +191,7 @@ impl PythonGpuContextLimitedAccess {
     /// Whether this node read or acquired any pooled GPU frame a write could
     /// name.
     pub(crate) fn knows_any_pooled_gpu_frame(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.knows_any_pooled_gpu_frame();
         }
@@ -204,7 +204,7 @@ impl PythonGpuContextLimitedAccess {
         &self,
         published_frame_id: &str,
     ) -> Option<streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.descriptor_of_the_pooled_gpu_frame_named(published_frame_id);
         }

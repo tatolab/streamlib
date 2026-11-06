@@ -20,11 +20,15 @@ use streamlib_ipc_types::{
 use super::SurfaceStore;
 use crate::core::{Error, Result};
 
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a sealed memfd on Linux.
 #[cfg(target_os = "linux")]
-pub(crate) type GpuPoolClaimTableSharedRows =
+pub type GpuPoolClaimTableSharedRows =
     crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a Mach memory entry on macOS.
 #[cfg(target_os = "macos")]
-pub(crate) type GpuPoolClaimTableSharedRows =
+pub type GpuPoolClaimTableSharedRows =
     crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
 
 /// The process a claimant column is assigned to: its pid and which process

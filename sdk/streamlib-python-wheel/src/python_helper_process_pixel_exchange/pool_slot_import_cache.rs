@@ -3,9 +3,9 @@
 
 //! One import per pool slot. The first frame over a slot imports its memory;
 //! every later frame over that slot reuses the import, and the surface-share
-//! service sends it no fds. A cached import is never a claim: each frame
-//! still takes and releases its own checkout lease, and the engine rehands a
-//! slot by its leases alone.
+//! service sends it no handles. A cached import is never a claim: each frame
+//! still holds itself against producer reuse, by a checkout lease or a claim
+//! in its pool's claim table.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -15,21 +15,10 @@ use streamlib_surface_client::{
     SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, split_pool_slot_and_frame_generation,
 };
 
-use super::HelperPixelBufferPoolSlotImport;
-use super::storage_buffer::HelperStorageBufferPoolSlotImport;
-use super::texture::HelperTexturePoolSlotImport;
-
-/// One pool slot's memory as this helper imported it, shared by every frame
-/// checked out over the slot.
-#[derive(Clone)]
-pub(crate) enum HelperPoolSlotImport {
-    PixelBuffer(Arc<HelperPixelBufferPoolSlotImport>),
-    Texture(Arc<HelperTexturePoolSlotImport>),
-    StorageBuffer(Arc<HelperStorageBufferPoolSlotImport>),
-}
+use super::HelperPoolSlotImport;
 
 /// Where a fresh import of a pool slot lands once it is made. Reserved while
-/// the check-out that delivered the slot's fds holds the connection, so a
+/// the reply that delivered the slot's handles holds the connection, so a
 /// retirement notice on any later reply evicts it even before it is filled.
 pub(crate) type HelperPoolSlotImportReservation = Arc<OnceLock<HelperPoolSlotImport>>;
 

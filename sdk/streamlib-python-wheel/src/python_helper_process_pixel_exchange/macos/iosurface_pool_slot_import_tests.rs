@@ -4,6 +4,9 @@
 use super::*;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 use std::io::Write as _;
+use streamlib::sdk::context::{
+    GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool, GpuPoolSlotFrameDescriptorBody,
+};
 
 fn a_vulkan_device_is_available() -> bool {
     match streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates()
@@ -61,7 +64,9 @@ fn a_held_frame_pins_its_slot_and_a_cached_slot_does_not() {
     drop(held_frame);
     assert_eq!(share.outstanding_claims_on("pool-slot-held"), 0);
     assert_eq!(
-        exchange_client.iosurface_imports_by_pool_slot.lock().len(),
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
         1,
         "the slot's import stays cached for its next frame"
     );
@@ -72,7 +77,7 @@ fn a_held_frame_pins_its_slot_and_a_cached_slot_does_not() {
 }
 
 /// The slot's next frame reuses its import: no second lookup, no second
-/// Vulkan import — the port it arrived with is released unlooked-up.
+/// Vulkan import, and no port sent with its checkout.
 #[test]
 fn a_later_frame_over_a_cached_slot_reuses_the_slots_import() {
     if !a_vulkan_device_is_available() {
@@ -97,8 +102,185 @@ fn a_later_frame_over_a_cached_slot_reuses_the_slots_import() {
     drop(first_import);
     assert!(
         !iosurface.is_in_use(),
-        "the unlooked-up port must have been released with the checkout"
+        "no port may linger once the frames over the slot are dropped"
     );
+}
+
+/// A slot the engine unregisters leaves the cache on the connection's next
+/// reply, whichever request that reply answers.
+#[test]
+fn a_retired_slot_leaves_the_cache_on_the_next_reply() {
+    if !a_vulkan_device_is_available() {
+        return;
+    }
+    let share = SurfaceShareUnderTest::start("slot-retired");
+    share.publish_pool_slot_frame("pool-slot-retired", 1);
+    share.publish_pool_slot_frame("pool-slot-kept", 1);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
+    drop(check_out_pixel_surface(
+        &exchange_client,
+        "pool-slot-retired#1",
+    ));
+    assert_eq!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
+        1
+    );
+
+    share.unregister_pool_slot("pool-slot-retired");
+    drop(check_out_pixel_surface(
+        &exchange_client,
+        "pool-slot-kept#1",
+    ));
+
+    assert!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .import_held_for("pool-slot-retired")
+            .is_none(),
+        "the retired slot must leave the cache on the connection's next reply"
+    );
+    assert!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .import_held_for("pool-slot-kept")
+            .is_some()
+    );
+}
+
+/// Replacing the connection empties the cache, whether or not the death watch
+/// ever fires: the notices of the slots it held would have come on the
+/// connection that is gone.
+#[test]
+fn replacing_the_connection_empties_the_cache() {
+    if !a_vulkan_device_is_available() {
+        return;
+    }
+    let share = SurfaceShareUnderTest::start("connection-replaced");
+    share.publish_pool_slot_frame("pool-slot-before", 1);
+    share.publish_pool_slot_frame("pool-slot-after", 1);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
+    drop(check_out_pixel_surface(
+        &exchange_client,
+        "pool-slot-before#1",
+    ));
+
+    let replaced_connection = exchange_client
+        .surface_share_mach_connection
+        .lock()
+        .take()
+        .expect("the first checkout opened a connection");
+    drop(check_out_pixel_surface(
+        &exchange_client,
+        "pool-slot-after#1",
+    ));
+
+    assert!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .import_held_for("pool-slot-before")
+            .is_none(),
+        "a slot imported over the replaced connection must leave the cache"
+    );
+    assert_eq!(
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
+        1
+    );
+    drop(replaced_connection);
+}
+
+fn the_frame_of(
+    row_lease: &GpuPoolClaimTableRowLease,
+    generation: u64,
+) -> GpuPoolSlotFrameDescriptorBody {
+    GpuPoolSlotFrameDescriptorBody {
+        pool: row_lease.table().pool_uuid(),
+        slot: row_lease.row_index(),
+        generation,
+        timeline_value: 0,
+        image_layout: 0,
+    }
+}
+
+/// After the pool's claim table and the slot's IOSurface cross once, pooled
+/// frames are claimed in the shared table and read over the slot's one
+/// import: no checkout lease, no further import, and both halves of the
+/// claim — the table's and the IOSurface use count — held while a frame is.
+#[test]
+fn pooled_frames_cross_with_no_port_per_frame_once_the_slot_set_has() {
+    if !a_vulkan_device_is_available() {
+        return;
+    }
+    const POOL_SLOT_KEY: &str = "pool-slot-claimed";
+    let share = SurfaceShareUnderTest::start("claim-table-read");
+    share.publish_pool_slot_frame(POOL_SLOT_KEY, 1);
+    let iosurface = share.iosurface_registered_as(POOL_SLOT_KEY);
+    let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("claim-table-read");
+    let row_lease = claim_tables_of_the_pool
+        .lease_a_row_for_a_slot(
+            share.check_out_leases().gpu_pool_claim_tables(),
+            POOL_SLOT_KEY,
+        )
+        .expect("the pool leases its slot a row");
+    let exchange_client = share.exchange_client_labelled("claim-table-read-under-test");
+    row_lease.row().publish_generation(1);
+
+    let first_read_claim = exchange_client
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(&row_lease, 1))
+        .expect("the first frame fetches the pool's claim table")
+        .expect("the first read claims its frame");
+    let HelperCheckedOutSurface::PixelBuffer(first_frame) = exchange_client
+        .check_out_and_import(&format!("{POOL_SLOT_KEY}#1"))
+        .expect("the first frame imports its slot once")
+    else {
+        panic!("a pixel_buffer registration reads as a pixel buffer");
+    };
+    let slot_import = Arc::clone(&first_frame.iosurface_pool_slot_import);
+    assert!(row_lease.row().is_claimed());
+    assert!(iosurface.is_in_use(), "a held frame raises the use count");
+    assert_eq!(
+        share.outstanding_claims_on(POOL_SLOT_KEY),
+        0,
+        "a claimed frame takes no checkout lease"
+    );
+    drop((first_frame, first_read_claim));
+    assert!(!row_lease.row().is_claimed());
+
+    for generation in 2..=4 {
+        row_lease.row().publish_generation(generation);
+        share.publish_frame_generation_over_a_registered_pool_slot(POOL_SLOT_KEY, generation);
+        let read_claim = exchange_client
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(the_frame_of(
+                &row_lease, generation,
+            ))
+            .expect("a known slot's frame needs no hand-over")
+            .expect("a read claims the frame it carries");
+        let HelperCheckedOutSurface::PixelBuffer(frame) = exchange_client
+            .check_out_and_import(&format!("{POOL_SLOT_KEY}#{generation}"))
+            .expect("a claimed frame reads over its slot's import")
+        else {
+            panic!("a pixel_buffer registration reads as a pixel buffer");
+        };
+        assert!(
+            Arc::ptr_eq(&slot_import, &frame.iosurface_pool_slot_import),
+            "every later frame reuses the slot's one import, asking the service nothing"
+        );
+        assert_eq!(share.outstanding_claims_on(POOL_SLOT_KEY), 0);
+        drop((frame, read_claim));
+        assert!(!row_lease.row().is_claimed());
+    }
+
+    row_lease.row().publish_generation(5);
+    assert!(
+        exchange_client
+            .claim_in_its_pool_claim_table(&format!("{POOL_SLOT_KEY}#4"))
+            .is_err(),
+        "a frame the slot moved past is refused as recycled"
+    );
+    drop(slot_import);
 }
 
 /// The engine going away empties the per-slot cache: an IOSurface this
@@ -114,26 +296,28 @@ fn the_service_going_away_releases_every_cached_slot() {
     let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
     let still_held_view = check_out_pixel_surface(&exchange_client, "pool-slot-orphaned#1");
     assert_eq!(
-        exchange_client.iosurface_imports_by_pool_slot.lock().len(),
+        exchange_client
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
         1
     );
 
     drop(share);
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !exchange_client
-        .iosurface_imports_by_pool_slot
-        .lock()
-        .is_empty()
+    while exchange_client
+        .pool_slot_imports_by_pool_slot
+        .held_pool_slot_count()
+        != 0
         && std::time::Instant::now() < deadline
     {
         std::thread::yield_now();
     }
-    assert!(
+    assert_eq!(
         exchange_client
-            .iosurface_imports_by_pool_slot
-            .lock()
-            .is_empty(),
+            .pool_slot_imports_by_pool_slot
+            .held_pool_slot_count(),
+        0,
         "the per-slot cache must empty once the service is gone"
     );
     assert!(

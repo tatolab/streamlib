@@ -413,6 +413,27 @@ impl SurfaceShareUnderTest {
             .expect("the lease table stays readable");
     }
 
+    /// Unregister the pool slot `slot_id` the way the engine does when it
+    /// frees the slot.
+    pub(crate) fn unregister_pool_slot(&self, slot_id: &str) {
+        let (response, _no_reply_ports) = self
+            .publisher_connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "unregister",
+                    "surface_id": slot_id,
+                    "runtime_id": "lease-debt-test-runtime",
+                }),
+                Vec::new(),
+            )
+            .expect("unregister");
+        assert_eq!(
+            response.get("success").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the unregistration must succeed: {response:?}"
+        );
+    }
+
     /// Admit `pid` — a helper process this test spawned — to the service.
     pub(crate) fn admit_helper_process(
         &self,

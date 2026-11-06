@@ -10,25 +10,24 @@ use streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_consumer_rhi::{ConsumerVulkanBuffer, VulkanLayout};
 use streamlib_surface_client::{
-    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, GpuPoolClaimTableHandOver,
-    SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP, SURFACE_SHARE_GPU_POOL_FIELD,
-    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
-    SurfaceShareCheckOutFds, gpu_pool_uuid_of_its_wire_name, gpu_pool_uuid_wire_name,
-    published_frame_id_of_pool_slot, refusal_the_surface_share_service_answered,
-    resource_type_of_a_check_out,
+    CheckedOutPixelBuffer, CheckedOutPixelBufferMemory, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SurfaceShareCheckOutFds,
+    refusal_the_surface_share_service_answered, resource_type_of_a_check_out,
 };
 
+use super::pool_slot_import_cache::{
+    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
+};
 use super::{
-    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
-    HelperSurfaceCheckOutLeaseDebt, HelperSurfaceHeldAgainstProducerReuse,
-    SURFACE_SHARE_RESPONSE_TIMEOUT, refuse_check_out_the_service_declined, response_field,
+    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
+    HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
+    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_RESPONSE_TIMEOUT,
+    refuse_check_out_the_service_declined, response_field,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
 mod export_staging;
 mod foreign_dma_buf;
-mod gpu_pool_claim_tables_of_this_helper;
-mod pool_slot_import_cache;
 mod storage_buffer;
 mod texture;
 
@@ -38,14 +37,6 @@ pub(crate) use export_staging::{
 pub(crate) use foreign_dma_buf::{
     DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
     HelperForeignSurfaceUnregisterDebt, foreign_dma_buf_plane_layout,
-};
-use gpu_pool_claim_tables_of_this_helper::HelperGpuPoolFrameClaimAttempt;
-pub(crate) use gpu_pool_claim_tables_of_this_helper::{
-    HelperGpuPoolClaimTables, HelperGpuPoolSlotFrameClaim,
-};
-pub(crate) use pool_slot_import_cache::HelperPoolSlotImportsByPoolSlot;
-use pool_slot_import_cache::{
-    HelperPoolSlotImport, pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
 };
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
@@ -257,6 +248,15 @@ pub(crate) enum HelperPixelBufferMemoryFlavour {
         exportable_memory_fd: OwnedFd,
         export_contract: OpaqueFdExportContract,
     },
+}
+
+/// One pool slot's memory as this helper imported it, shared by every frame
+/// checked out over the slot.
+#[derive(Clone)]
+pub(crate) enum HelperPoolSlotImport {
+    PixelBuffer(Arc<HelperPixelBufferPoolSlotImport>),
+    Texture(Arc<texture::HelperTexturePoolSlotImport>),
+    StorageBuffer(Arc<storage_buffer::HelperStorageBufferPoolSlotImport>),
 }
 
 /// One pixel-buffer pool slot as this helper imported it: the mapped memory
@@ -581,191 +581,6 @@ impl HelperProcessGpuExchangeClient {
         )
     }
 
-    /// Claim the frame `surface_id` names in its pool's claim table, with no
-    /// surface-share request; `None` for a frame no table this helper holds
-    /// covers, which a checkout holds instead.
-    pub(crate) fn claim_in_its_pool_claim_table(
-        &self,
-        surface_id: &str,
-    ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
-        match self.gpu_pool_claim_tables.claim_the_frame_named(surface_id) {
-            HelperGpuPoolFrameClaimAttempt::Claimed(claimed) => Ok(Some(claimed)),
-            HelperGpuPoolFrameClaimAttempt::NotInAClaimTable => Ok(None),
-            HelperGpuPoolFrameClaimAttempt::Recycled(recycled) => {
-                Err(PyRuntimeError::new_err(format!(
-                    "frame {surface_id:?} was recycled: its slot publishes generation {}{}, \
-                     and a published frame is never answered with newer pixels",
-                    recycled.published_generation,
-                    if recycled.slot_was_retiring {
-                        " and is being handed out again"
-                    } else {
-                        ""
-                    }
-                )))
-            }
-        }
-    }
-
-    /// Take in the pooled frame a read carried and claim it, so the slot is
-    /// never rehanded while the read's payload is held: the first frame of a
-    /// pool, or of a slot this helper does not know yet, fetches the pool's
-    /// claim table and its slot keys once. A pool whose table the service
-    /// refuses, such as one past its last claimant column, is read through
-    /// checkouts, and answers no claim.
-    pub(crate) fn note_and_claim_the_pooled_gpu_frame_a_read_carries(
-        &self,
-        pooled_frame: GpuPoolSlotFrameDescriptorBody,
-    ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
-        if self
-            .gpu_pool_claim_tables
-            .the_hand_over_was_refused(&pooled_frame.pool)
-        {
-            return Ok(None);
-        }
-        if !self.gpu_pool_claim_tables.knows_the_slot_of(&pooled_frame) {
-            match self.fetch_the_claim_table_of_gpu_pool(pooled_frame.pool) {
-                Ok(()) => {}
-                Err(GpuPoolClaimTableHandOverFailure::RequestFailed(request_failure)) => {
-                    tracing::warn!(
-                        "GPU pool {}: the claim table request failed ({request_failure}); \
-                         this frame is read through a checkout and the next frame asks again",
-                        gpu_pool_uuid_wire_name(&pooled_frame.pool)
-                    );
-                    return Ok(None);
-                }
-                Err(GpuPoolClaimTableHandOverFailure::Refused(refusal)) => {
-                    tracing::warn!(
-                        "GPU pool {}: {refusal}; this helper reads the pool's frames through \
-                         checkouts",
-                        gpu_pool_uuid_wire_name(&pooled_frame.pool)
-                    );
-                    self.gpu_pool_claim_tables
-                        .note_a_refused_hand_over(pooled_frame.pool);
-                    return Ok(None);
-                }
-            }
-        }
-        let Some(pool_slot_key) = self.gpu_pool_claim_tables.note_a_pooled_frame(pooled_frame)
-        else {
-            return Err(PyRuntimeError::new_err(format!(
-                "a frame of GPU pool {} names claim table row {}, which the pool's claim table \
-                 hand-over leases to no slot",
-                gpu_pool_uuid_wire_name(&pooled_frame.pool),
-                pooled_frame.slot
-            )));
-        };
-        self.claim_in_its_pool_claim_table(&published_frame_id_of_pool_slot(
-            &pool_slot_key,
-            pooled_frame.generation,
-        ))
-    }
-
-    /// Remember the descriptor an acquire from this helper's own output pool
-    /// answered, which its writes of the frame carry.
-    pub(crate) fn note_the_pooled_frame_an_acquire_answered(
-        &self,
-        published_frame_id: &str,
-        acquire_response: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        let Ok(pooled_frame) = acquire_response.get_item("gpu_pool_slot_frame") else {
-            return Ok(());
-        };
-        if pooled_frame.is_none() {
-            return Ok(());
-        }
-        let pool_wire_name: String = pooled_frame.get_item("pool")?.extract()?;
-        let pool = gpu_pool_uuid_of_its_wire_name(&pool_wire_name).ok_or_else(|| {
-            PyRuntimeError::new_err(format!(
-                "the parent's acquire named GPU pool {pool_wire_name:?}, which is not 32 hex \
-                 digits"
-            ))
-        })?;
-        let generation_digits: String = pooled_frame.get_item("generation")?.extract()?;
-        let generation = generation_digits.parse::<u64>().map_err(|_| {
-            PyRuntimeError::new_err(format!(
-                "the parent's acquire named frame generation {generation_digits:?}, which is not \
-                 a decimal u64"
-            ))
-        })?;
-        self.gpu_pool_claim_tables.note_an_acquired_pooled_frame(
-            published_frame_id,
-            GpuPoolSlotFrameDescriptorBody {
-                pool,
-                slot: pooled_frame.get_item("slot")?.extract()?,
-                generation,
-                timeline_value: 0,
-                image_layout: 0,
-            },
-        );
-        Ok(())
-    }
-
-    /// Record the layout a kernel run left each texture it bound in.
-    pub(crate) fn note_the_texture_layouts_a_run_left(&self, run_response: &Bound<'_, PyAny>) {
-        let Ok(layouts) = run_response.get_item("texture_layouts_after_the_run") else {
-            return;
-        };
-        let Ok(layouts) = layouts.try_iter() else {
-            return;
-        };
-        for layout in layouts.flatten() {
-            let surface_id = layout
-                .get_item("surface_id")
-                .and_then(|value| value.extract::<String>());
-            let image_layout = layout
-                .get_item("image_layout")
-                .and_then(|value| value.extract::<i32>());
-            if let (Ok(surface_id), Ok(image_layout)) = (surface_id, image_layout) {
-                self.gpu_pool_claim_tables
-                    .note_the_layout_a_run_left(&surface_id, image_layout);
-            }
-        }
-    }
-
-    /// Whether this helper read or acquired any pooled frame a write could name.
-    pub(crate) fn knows_any_pooled_gpu_frame(&self) -> bool {
-        self.gpu_pool_claim_tables.knows_any_pooled_frame()
-    }
-
-    /// The descriptor a write of the pooled frame `published_frame_id` names
-    /// carries, as this helper last read or acquired it.
-    pub(crate) fn descriptor_of_the_pooled_gpu_frame_named(
-        &self,
-        published_frame_id: &str,
-    ) -> Option<GpuPoolSlotFrameDescriptorBody> {
-        self.gpu_pool_claim_tables
-            .descriptor_of_the_frame_named(published_frame_id)
-    }
-
-    fn fetch_the_claim_table_of_gpu_pool(
-        &self,
-        pool: [u8; 16],
-    ) -> Result<(), GpuPoolClaimTableHandOverFailure> {
-        let pool_wire_name = gpu_pool_uuid_wire_name(&pool);
-        let (reply, received_fds) = self
-            .surface_share_request(&serde_json::json!({
-                "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-                SURFACE_SHARE_GPU_POOL_FIELD: pool_wire_name,
-            }))
-            .map_err(GpuPoolClaimTableHandOverFailure::RequestFailed)?;
-        if let Some(refusal) = refusal_the_surface_share_service_answered(&reply) {
-            return Err(GpuPoolClaimTableHandOverFailure::Refused(format!(
-                "the surface-share service refused the claim table of GPU pool \
-                 {pool_wire_name}: {refusal}"
-            )));
-        }
-        let claim_table_memfd = received_fds.into_iter().next().ok_or_else(|| {
-            GpuPoolClaimTableHandOverFailure::Refused(format!(
-                "the claim table hand-over of GPU pool {pool_wire_name} carried no memfd"
-            ))
-        })?;
-        let hand_over = GpuPoolClaimTableHandOver::from_reply(&reply)
-            .map_err(GpuPoolClaimTableHandOverFailure::Refused)?;
-        self.gpu_pool_claim_tables
-            .adopt_a_hand_over(pool, claim_table_memfd, hand_over)
-            .map_err(GpuPoolClaimTableHandOverFailure::Refused)
-    }
-
     /// One frame held by its pool claim table claim, read through the slot's
     /// import — made once per slot with `import_pool_slot`, which takes no
     /// lease.
@@ -1029,13 +844,6 @@ impl HelperProcessGpuExchangeClient {
             }
         }
     }
-}
-
-/// Why a pool's claim table hand-over did not land: a request that never got
-/// an answer is asked again on the next frame, an answered refusal is final.
-enum GpuPoolClaimTableHandOverFailure {
-    RequestFailed(PyErr),
-    Refused(String),
 }
 
 /// Where a frame's producer states the layout it left a texture in.

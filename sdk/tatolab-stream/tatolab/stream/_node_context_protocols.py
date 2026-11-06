@@ -595,8 +595,7 @@ class LinkOutputDataWriter(Protocol):
         `NodeOutputTextureRing` slot — carries the frame's descriptor, so every
         reader claims the frame with no request. `pooled_gpu_frame` names the
         frame explicitly for any other payload; an id naming no such frame
-        raises `ValueError`. Claim tables cross processes only on Linux, so on
-        macOS every `pooled_gpu_frame` raises `ValueError`.
+        raises `ValueError`.
         """
         ...
 

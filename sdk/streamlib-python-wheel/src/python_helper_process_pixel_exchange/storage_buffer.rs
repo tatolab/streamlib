@@ -34,7 +34,6 @@ impl HelperProcessGpuExchangeClient {
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
-        #[cfg(target_os = "linux")]
         self.note_the_pooled_frame_an_acquire_answered(&surface_id, &response)?;
         // Bound before the checkout, so a failed checkout or a malformed
         // answer still pays the release instead of stranding the allocation.

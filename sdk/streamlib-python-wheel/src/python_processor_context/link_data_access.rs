@@ -210,9 +210,7 @@ impl PythonLinkOutputDataWriter {
     /// to every downstream link on `port_name`. A msgpack record whose
     /// `surface_id` names a pooled GPU frame this node acquired or read, or any
     /// payload passing that frame's id as `pooled_gpu_frame`, carries the
-    /// frame's descriptor for its readers to claim it by; claim tables
-    /// cross processes only on Linux, so elsewhere `pooled_gpu_frame` raises
-    /// `ValueError`.
+    /// frame's descriptor for its readers to claim it by.
     #[pyo3(signature = (
         port_name,
         payload,
