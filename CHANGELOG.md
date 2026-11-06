@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.32](https://github.com/tatolab/streamlib/compare/v0.68.31...v0.68.32) (2026-11-06)
+
+
+### Features
+
+* **stream:** the video producers write Image frames; the scaffold declares family ports ([#3220](https://github.com/tatolab/streamlib/issues/3220)) ([3e0a76b](https://github.com/tatolab/streamlib/commit/3e0a76b1677bc00e6b06538fb974e2f83ac048ab))
+
 ## [0.68.31](https://github.com/tatolab/streamlib/compare/v0.68.30...v0.68.31) (2026-11-06)
 
 
