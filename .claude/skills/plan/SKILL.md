@@ -12,16 +12,18 @@ whatever next step the situation actually calls for.
 
 A rough pass that has worked well:
 
-1. Read `docs/plan/ARCHITECTURE.md` and count sections by status (SHIPPED / IN-FLIGHT /
+1. Read `docs/plan/ROADMAP.md`: the owner's order for the active changes. The next step
+   you suggest comes from the earliest roadmap step that has not landed.
+2. Read `docs/plan/ARCHITECTURE.md` and count sections by status (SHIPPED / IN-FLIGHT /
    DECIDED / OPEN). Name the OPEN ones — they are where the owner's input is most
    likely needed.
-2. List `docs/plan/changes/*.md` (active deltas) and any `[NEEDS DECISION]` markers
+3. List `docs/plan/changes/*.md` (active deltas) and any `[NEEDS DECISION]` markers
    still inside them.
-3. Look at what is mid-flight — open PRs (`gh pr list`), plus remote branches
+4. Look at what is mid-flight — open PRs (`gh pr list`), plus remote branches
    (`git branch -r`) and local worktrees (`git worktree list`) that have no PR yet — and
    the tracker
    (`gh issue list --state open --limit 100 --json number,title,milestone`).
-4. Report briefly: plan state, active changes, in-flight work, tracker shape, and the
+5. Report briefly: plan state, active changes, in-flight work, tracker shape, and the
    step you'd recommend.
 
 Common next steps, as a starting point rather than a decision table:
