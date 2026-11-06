@@ -22,7 +22,7 @@ predates the markers.
 
 **Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
 `@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
-several; it may expose ports. The function builds it through the `StreamBuilder` it is handed.
+several; its Input and Output nodes are its interface. The function builds it through the `StreamBuilder` it is handed.
 Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "dataflow",
 "workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
 stream persists).
@@ -36,8 +36,8 @@ _Avoid_: "stream project" (a project holds many streams), "app".
 start, a create, a stop, a remove, or the runtime's re-load at start — answered at once with its
 **action id** and carried out in the background, one at a time per project. It ends done or
 failed or cancelled; `describe_stream_action` reads it and `cancel_stream_action` ends it
-early. A project's actions form one serial queue. `rename_stream` and `expose_port` set an
-attribute of the record and are not actions. _Avoid_: "job", "task", "load" for a stop or a
+early. A project's actions form one serial queue. `rename_stream` sets an
+attribute of the record and is not an action. _Avoid_: "job", "task", "load" for a stop or a
 remove.
 
 **Project log** _(user)_: a project's one log under `<project>/.streamlib/logs/`, keyed by the
@@ -47,7 +47,7 @@ and compile belong to none of them).
 
 **Location** _(crosses)_: what a stream is — its project directory and its stream function.
 Loading the same location again replaces the stream; a moved directory is a new stream.
-_Avoid_: "source" (the relay source node's word), "origin" (MoQ's), "path" alone.
+_Avoid_: "source" (a source node's word), "origin" (MoQ's), "path" alone.
 
 **Stream id** _(crosses)_: the handle computed from a stream's location — the folder, the
 function and a short hash — and the stream part of every address; never chosen, never
@@ -66,13 +66,12 @@ also brings a capability.
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
-**Built-in**: a first-party native processor shipped inside the runtime, never on pip — today
-only `RelayTrackSource`, which is transport — added and configured from Python through the class
-`tatolab.stream` carries generated for it, its type that class's import path
-(`tatolab.stream:RelayTrackSource`), never where its native code lives; its per-frame path never
-enters an interpreter. The runtime ships no media nodes: camera, audio, codecs, the test pattern
-and the virtual camera are modules. _Avoid_: "built-in" for a media node or an optional
-capability (that is an **extension wheel** or a module).
+**Built-in**: a first-party native node shipped inside the runtime, never on pip, added from
+Python through the class `tatolab.stream` carries generated for it, its type that class's import
+path, never where its native code lives; its per-frame path never enters an interpreter. The
+runtime ships no media node and no transport: camera, audio, codecs, the test pattern, the
+virtual camera and the MoQ nodes are modules. _Avoid_: "built-in" for a media node, a transport
+or an optional capability (that is an **extension wheel** or a module).
 
 **Extension wheel**: a separate PyPI package — Rust inside for speed, a Python node as the
 binding — that depends on `tatolab-stream` and never on the runtime; a first-party one is
@@ -86,36 +85,48 @@ runs in native code the same wheel carries and which it calls directly;
 `stream_builder.add(TheClass)` adds it and it runs in its own processor interpreter like any
 Python node.
 
-**Edge I/O processor**: a source or sink processor that ingests or egresses an
-external-world stream — WebRTC, raw UDP, and the **relay source node**. Sending an exposed
-port to relays is the runtime's **publisher**; reading one back into a graph is a node.
-_Avoid_: "transport processor", "network transport".
+**Edge I/O processor**: a source or sink node that ingests or egresses an external-world
+stream — WebRTC, raw UDP, and the **gateway nodes**. Nothing leaves a stream except through one
+an author added. _Avoid_: "transport processor", "network transport".
 
-**Publisher** _(engine)_: the runtime's one component, in `tatolabd` beside the adapters, that
-forwards every exposed port's messages to the relays its level reaches, holding no logic —
-bytes as written, anything exposed, groups from the envelope, whole groups dropped under
-backpressure or a reported loss, the catalog from the ports' entries. _Avoid_: "publish" as the user's verb
-(that is **expose**), "broadcaster".
+**Gateway node** _(user)_: a node in `tatolab-moq` that holds one **connection** to a relay and
+publishes one broadcast it names; its **track nodes** declare the tracks in it. One gateway implementation per relay kind — `moq-relay`, Cloudflare, moq.pro —
+carries what differs: dialect, credential, root, catalog cadence. _Avoid_: "relay adapter"
+(retired 2026-11-06), "publisher", "sink".
 
-**Relay adapter** _(engine)_: one crate implementing the relay-adapter SDK's trait, carrying
-what differs between relays — dialect, credential, root, its own settings — compiled into
-`tatolabd`, any number of instances each, recorded in `relays.json`. Local, Cloudflare,
-moq.pro; Red5 on hold. _Avoid_: "connector", "sink".
+**Connection** _(user)_: what a gateway node holds open to one relay — its URL, its credential
+and the live session; where the URL and credential are kept is OPEN. _Avoid_:
+"credentials" for the whole.
 
-**Relay source node** _(user)_: the built-in that subscribes to one track at a relay and
-writes its payloads out as received; the one way a graph reads a relay, on this machine or
-another. _Avoid_: "remote link", "remote_output" (retired 2026-10-16), "subscriber node".
+**Track node** _(user)_: a node that declares one outgoing track on a gateway, with its catalog
+entry, held as a graph variable and named by the send nodes that write to it. _Avoid_: "track
+address", "channel".
 
-**Broadcast** / **Track**: MoQ's words, used as they are — a stream is one broadcast at a
-relay, each exposed port one track in it. The relay source node names what it reads by them alone,
-`broadcast` and `track`, each read exactly as its publisher wrote it: the runtime casts the names it
-gives, never a name it reads (owner, 2026-10-18). _Avoid_: "channel" (iceoryx2's word), "topic",
-"track address" / `track_address` (retired 2026-10-18 — an invented term for what MoQ already
-names).
+**Track send node** / **Track receive node** _(user)_: `MoqTrackSend` writes its input's
+messages to the track node it names by reference — payload bytes as written, groups from
+`starts_group`; `MoqTrackReceive` reads one remote track through a gateway and writes its
+payloads out as received, the one way a graph reads a relay. _Avoid_: "relay source node"
+(retired 2026-11-06), "remote link", "subscriber node".
+
+**Reference edge** _(crosses)_: a config value that names another node by the reference `add`
+returned — a track naming its gateway, a send node its track — recorded in the graph, checked
+at load and rendered by `graph`; it carries no data and is never a link. _Avoid_: "link" for
+it, "handle".
+
+**Variable** _(user)_: a value a `SetVariable` node names and `GetVariable` nodes read anywhere in
+the graph with no drawn wire, as in Unreal Blueprints — a port's output, resolved to a link, or a
+node reference, resolved to a reference edge. _Avoid_: "global", "bus".
+
+**Broadcast** / **Track**: MoQ's words, used as they are — a gateway publishes one broadcast at a
+relay, each of its track nodes one track in it. A receive node names what it reads by them
+alone, `broadcast` and `track`, each read exactly as its publisher wrote it: the runtime casts
+the names it gives, never a name it reads (owner, 2026-10-18). _Avoid_: "channel" (iceoryx2's
+word), "topic", "track address" / `track_address` (retired 2026-10-18 — an invented term for what
+MoQ already names).
 
 **Tailnet** _(user)_: the Tailscale network a machine may belong to. A docs word only: the
-runtime reads, configures and requires nothing of Tailscale, and a tailnet reaches a machine's
-local relay as any network does. _Avoid_: "mesh" (retired), "VPN", "network" unqualified.
+runtime reads, configures and requires nothing of Tailscale, and a tailnet reaches a relay as any
+network does. _Avoid_: "mesh" (retired), "VPN", "network" unqualified.
 
 **Runtime** _(crosses)_: the one program per machine that runs streams — the engine, the
 accelerator when one is present, the transports, the local API; installed once, never
@@ -127,45 +138,25 @@ surface (the engine is the library inside it).
 hostname, cast; a containerised runtime is its own machine. _Avoid_: "host", "device", "runtime name" (retired).
 
 **Address** _(crosses)_: the path `<machine>/<stream id>/<node>/<port>`, the same string on
-every surface — the `/watch` path names it, and at a relay it is the track `<node>/<port>` of
-the broadcast `<machine>/<stream id>.hang`. _Avoid_: "channel name", "mesh address", "service
-name", "remote link" (retired).
+every surface that names a port — `graph`, the logs, a viewer. No broadcast or track is derived
+from it. _Avoid_: "channel name", "mesh address", "service name", "remote link" (retired).
 
-**Exposure** _(crosses)_: who outside a stream may read one of its output ports — **internal**
-(the default: the stream's own nodes only), **private** (any stream or code on the machine) or
-**public** (private, plus every **relay** the machine has joined, the local relay's
-every-interface listener included). A live permission
-the runtime checks at the stream's edge, never part of the stream's logic. `expose` is the verb —
-in the stream's function, where the exposures start; at the CLI, the app or the local API, while
-it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint". _Amended by
-stream-interface-and-routing-policy: `expose` declares a stream's **interface** with no level, and
-the **routing policy** decides what reaches each relay._
-
-**Interface** _(user)_: the inputs and outputs a stream exposes — the only ports reachable from
-outside it, whether it runs alone or as a **subgraph**. _Avoid_: "API", "public ports".
+**Interface** _(user)_: a graph's `GraphInput` and `GraphOutput` nodes — the ports it offers,
+at every level, whether it runs alone or as a **subgraph**; Tato Studio shows a graph's Outputs.
+_Avoid_: "API", "public ports", "expose" (retired 2026-11-06).
 
 **Subgraph** _(user)_: a `@stream` function added to another stream with `stream_builder.add`,
 its extra parameters promoted config, flattened at compile under the reference's name. _Avoid_:
 "component", "COMP", "macro".
 
-**Routing policy** _(crosses)_: what the runtime decides, on the publisher's side, about which
-exposed outputs reach which relay — for now one toggle per relay, edited in the app, the CLI or
-MCP. Never in a stream's code. _Avoid_: "exposure level", "publish settings".
+**Viewer** _(user)_: a Tato Studio view of any port of any node on the machine, by its family —
+a thumbnail for Image, statistics or points for Array, a waveform for Channels, keyframes for
+Packets, a table for Records — read straight from the runtime, never through a relay. _Avoid_:
+"preview page" (retired 2026-11-06), "dashboard", "console".
 
-**Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
-
-**Form** _(user)_: the shape the runtime's loopback HTTP serves an exposed port in — the
-URL's leading chunk, `watch`, before the address. Live data is a track at a relay, never a
-form, and no snapshot form is built. _Avoid_: "format" (a pixel format), "transport".
-
-**Preview page** _(user)_: the lightweight built-in viewer the runtime serves on loopback at
-`/watch/<address>`, the stack's own player over the local relay; not a product. _Avoid_:
-"viewer page" (retired 2026-10-16), "dashboard", "console".
-
-**Relay** _(crosses)_: a separate program a machine joins so its exposed ports can be read —
-the **local relay** `tatolabd` runs as a child for every machine, and the hosted ones a
-machine joins for an internet address. Never the runtime. _Avoid_: "gateway", "tower",
-"router", "endpoint".
+**Relay** _(crosses)_: a separate program a gateway node connects to so a stream's tracks can be
+read — `moq-relay` run by a person or a rig, or a hosted one. Never the runtime, and never run by
+it. _Avoid_: "tower", "router", "endpoint".
 
 **Codec block**: an encoder or decoder node — the video codecs as the `tatolab-h264` and
 `tatolab-h265` modules (`H264Encoder`, `H265Decoder`, ...), the Opus pair as `tatolab-opus` —
@@ -210,7 +201,7 @@ cast type need not be a frame).
 **Catalog entry** _(crosses)_: what an output port's declaration says about what it writes,
 in the layout the stack's players read — the section (`video`, `audio`, `text`, `json`,
 `binary`) and that section's own fields — written by the node that owns the port, merged by
-the publisher into a broadcast's catalog as text and rendered by `graph`; documentation a
+a gateway node into its broadcast's catalog as text and rendered by `graph`; documentation a
 reader follows, never a contract `connect` compares. _Avoid_: "catalog fragment" (retired
 2026-10-17 — it named a `kind`/`encoding`/`cast` triple in the runtime's own words),
 "schema", "port type", "shape declaration".
@@ -246,7 +237,7 @@ lowercase RFC 3986 unreserved characters (`Front Camera` → `front-camera`) wha
 wrote; a node's defaults to its class's short name (`camerasource`); never an identity. _Avoid_: "display
 name" (retired), "id", "label".
 
-**Graph** _(crosses)_: a stream's nodes, links and exposures as one JSON shape — what a
+**Graph** _(crosses)_: a stream's nodes, links and reference edges as one JSON shape — what a
 stream's function compiles to, and what the runtime renders live; emitted, never authored. _Avoid_: "graph description", "stream
 description", "snapshot", "manifest", "pipeline file".
 
@@ -322,7 +313,7 @@ frame — the surface-id lifetime guarantees end at export. _Avoid_: "export"
 unqualified where the allocation-vs-frame distinction matters.
 
 **Present target** and **Node-owned window**: retired 2026-10-16 with every window — the
-runtime opens none, and a stream is seen through the **preview page**.
+runtime opens none, and a port is seen in a **viewer**.
 
 **Kernel**: a GPU program the engine compiles and runs on its device — compute,
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
@@ -433,6 +424,13 @@ Retired by the 2026-10-17 realignment of the sharing step (see `docs/decisions/m
 seen through the preview page or any MoQ client; **Mp4Sink** — a stream's last mile is a MoQ
 client's; **tap** and **exchange** as verification doors — verification is a tool outside the
 runtime reading a relay.
+
+Retired by the 2026-11-06 gateway-nodes pivot (see `docs/decisions/gateway-nodes.md`):
+**Publisher**, **Exposure**, **Exposed port**, **Routing policy** and `expose` — nothing leaves a
+stream on its own, and a graph's interface is its Input and Output nodes; **Relay adapter** —
+say **gateway node**; **Relay source node** — say
+**track receive node**; **Local relay** — the runtime runs no relay; **Preview page**, `/watch`
+and **Form** — say **viewer**.
 
 Retired by the 2026-10-02 package split (see `docs/decisions/package-split-and-lend.md`):
 **The wheel** — say **stream package** for `tatolab-stream` and **runtime portion** for

@@ -1,5 +1,9 @@
 # A stream's interface in code, its routing as runtime policy
 
+> Superseded 2026-11-06 by `gateway-nodes.md`: `expose` and the routing policy are gone; a
+> graph's interface is its `GraphInput` and `GraphOutput` nodes at every level, and nothing leaves
+> a stream except through gateway nodes. Subgraphs as `add`-ed `@stream` functions stand.
+
 Rationale for the `[stream-interface-and-routing-policy]` entries in
 `docs/plan/ARCHITECTURE.md` §Networking, §Processor model & scheduling and §Product, decided
 2026-11-03. Supersedes the levels in `exposure-levels.md`. The edge check, a change applied
