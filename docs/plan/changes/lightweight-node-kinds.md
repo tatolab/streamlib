@@ -96,6 +96,10 @@ The order is: the families, then variables, then the gateway and track nodes.
     frame until told to refresh).
 - `Select` picks a value; `Gate` passes or blocks messages, so a reactive node behind a closed
   gate does not run. That is the graph's if/else.
+- **Module ops.** A module may ship native ops of its own through the same op contract the
+  engine's use: a module declares its ops, and a helper or the evaluator loads those its graph
+  uses. The engine's set is the ops that come with the runtime, built the way a module's are.
+  The contract is published once phase 1 has proved the op shape.
 
 ### Evaluation islands
 
@@ -313,7 +317,7 @@ Each carries a recommendation that is built if nobody overrules it.
   class-versus-function shape already says which is which.
 
 Assumed unless overruled:
-- Ops live in the engine crate, so every host carries them.
+- The engine's own ops live in the engine crate, so every host carries them.
 - The shader template is the `ImageInput` shape above.
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
@@ -356,7 +360,9 @@ Assumed unless overruled:
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
 4. The pool and promotion, only if graphs need it.
-5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
+5. Module ops: the op contract published for modules, after phase 1. Proven by a fixture
+   module whose native op joins an island beside the engine's.
+6. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.
 
 ## Notes (not in scope)
