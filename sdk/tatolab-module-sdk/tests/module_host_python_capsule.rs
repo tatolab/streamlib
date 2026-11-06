@@ -17,6 +17,7 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableAudioStreamHandle, ModuleHostTableBytes,
     ModuleHostTableCapturedAudioBlockCallback, ModuleHostTableErrorMessage,
     ModuleHostTableIOSurfaceImport, ModuleHostTableOpenedAudioPlaybackStream,
+    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
     ModuleHostTableVirtualCameraStreamHandle,
 };
@@ -275,6 +276,41 @@ unsafe extern "C" fn close_no_virtual_camera(
 ) {
 }
 
+unsafe extern "C" fn refuse_payload_descriptor(
+    _: *mut c_void,
+    _: *const ModuleHostTableReadMessage,
+    _: *mut ModuleHostTablePayloadDescriptor,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_lend_pooled_gpu_frame(
+    _: *mut c_void,
+    _: *const ModuleHostTableReadMessage,
+    _: *mut ModuleHostTableSurfaceHandle,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_described_write(
+    _: *mut c_void,
+    _: ModuleHostTablePortHandle,
+    _: ModuleHostTableBytes,
+    _: i64,
+    _: u32,
+    _: *const ModuleHostTablePayloadDescriptor,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+unsafe extern "C" fn refuse_gpu_pool_slot_frame(
+    _: *mut c_void,
+    _: ModuleHostTableSurfaceHandle,
+    _: *mut ModuleHostTablePayloadDescriptor,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+
 fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
     let table = Box::leak(Box::new(ModuleHostTable {
         abi_major: 1,
@@ -323,6 +359,10 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         virtual_camera_stream_close: close_no_virtual_camera,
         surface_read_into_host_memory: refuse_host_memory_read,
         stream_time_ns_of_a_machine_instant: zero_stream_time,
+        input_message_payload_descriptor: refuse_payload_descriptor,
+        input_message_lend_pooled_gpu_frame: refuse_lend_pooled_gpu_frame,
+        output_port_write_described: refuse_described_write,
+        surface_gpu_pool_slot_frame: refuse_gpu_pool_slot_frame,
     }));
     NonNull::from(table).cast()
 }

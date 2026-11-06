@@ -30,7 +30,7 @@ from block_wiring_streams import (
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
-from tatolab.stream import VideoFrame, compile_stream_to_graph
+from tatolab.stream import compile_stream_to_graph
 from video_codec_blocks_probes import DECODED_STAMPS_REPORTED, ENCODED_FRAMES_REPORTED
 from video_codec_blocks_streams import (
     an_h264_decoder_alone,
@@ -172,13 +172,12 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", codec
 ):
     """The whole surface, end to end: module node class → helper process →
-    hardware encode and decode in its helper → decoded bags read by a Python
+    hardware encode and decode in its helper → decoded Image frames read by a Python
     processor in its own processor interpreter.
 
     The pattern publishes 320×180, both codecs code it at 320×192, and the
-    probe must see 320×180 back — the conformance crop. The decoded frame
-    carries `color_info` with `fps` absent, so an ordinary `VideoFrame` read
-    consumes it unchanged. That the stamp is the encoded frame's own rather
+    probe must see 320×180 back — the conformance crop — as an Image frame
+    carrying the stream's colour. That the stamp is the encoded frame's own rather
     than re-stamped at publication is the sibling test's, which has the
     encoded side's frame-header stamps to compare against."""
     tatolabd = start_the_codec_round_trip(start_tatolabd_running_stream, codec)
@@ -199,22 +198,16 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     )
     first_decoded_message, second_decoded_message = decoded_frames
 
-    frame = VideoFrame(**first_decoded_message)
-    assert (frame.width, frame.height) == (320, 180), (
+    assert (first_decoded_message["width"], first_decoded_message["height"]) == (320, 180), (
         "the decoder must publish the conformance-windowed extent, never the "
         "coded picture"
     )
-    assert frame.surface_id, "surface_id names the decoder's pooled frame"
-    assert frame.color_info is not None, (
-        "the decoded frame carries the stream's color"
+    assert first_decoded_message["surface_id"], "surface_id names the decoder's pooled frame"
+    assert first_decoded_message["format"] == "rgba8_unorm"
+    assert any(axis is not None for axis in first_decoded_message["colour"].values()), (
+        "the decoded frame carries the stream's colour"
     )
-    assert frame.fps is None, (
-        "a decoded elementary stream knows no rate, so the message must not "
-        "invent one"
-    )
-
-    later_frame = VideoFrame(**second_decoded_message)
-    assert later_frame.timestamp_ns > frame.timestamp_ns, (
+    assert second_decoded_message["timestamp_ns"] > first_decoded_message["timestamp_ns"], (
         "timestamps are the ordering primitive and must advance"
     )
 

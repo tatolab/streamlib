@@ -11,8 +11,9 @@ that stalls half way still says how far it got.
 the way a moq-dev player does — each message a media frame, a keyframe
 opening a group, the port's catalog entry naming the codec.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
-`DecodedVideoFrameProbe` reads the far side of the decoder, where the
-published output is an ordinary video-frame message.
+`DecodedVideoFrameProbe` reads the far side of the decoder as Image frames.
+`TestPatternFrameRepublishedAsAnImageFrame` stands between the pattern, which
+still publishes `VideoFrame` records, and the encoder, which reads Image frames.
 
 The two stamp reports are uncapped, unlike the cast report. Each probe is its
 own helper process attaching at its own pace, so a short window on either side
@@ -20,11 +21,11 @@ could close before the other opened, and a cross-check needs the two to
 overlap.
 """
 
+import dataclasses
 import json
 
 from hang_media_frame_reading import split_hang_legacy_container_media_frame
-from tatolab.stream import log, node
-from tatolab.stream.msgpack import unpack
+from tatolab.stream import ColorInfo, Image, Input, Output, VideoFrame, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -45,6 +46,48 @@ ENCODED_FRAMES_REPORTED = 40
 DECODED_STAMPS_REPORTED = 30
 
 ENCODED_PORT = "encoded_video_from_upstream"
+
+
+TEST_PATTERN_FRAME_FORMAT = "rgba8_unorm"
+
+
+@dataclasses.dataclass(frozen=True)
+class _TestPatternFrameAsAnImage:
+    """The fields an Image write reads off a pooled frame this node read."""
+
+    surface_id: str
+    width: int
+    height: int
+    format: str
+    colour: "ColorInfo | None"
+
+
+@node
+class TestPatternFrameRepublishedAsAnImageFrame:
+    """Reads the pattern's `VideoFrame` records and writes each frame on as an Image frame."""
+
+    __test__ = False
+
+    video = Output(Image)
+
+    @node.input(delivery_profile="ordered")
+    def video_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None:
+            return
+        ctx.outputs.write(
+            self.video,
+            _TestPatternFrameAsAnImage(
+                surface_id=frame.surface_id,
+                width=frame.width,
+                height=frame.height,
+                format=TEST_PATTERN_FRAME_FORMAT,
+                colour=frame.color_info,
+            ),
+            timestamp_ns=frame.timestamp_ns,
+        )
 
 
 @node
@@ -111,9 +154,9 @@ class EncodedFrameTimestampProbe:
 
 @node
 class DecodedVideoFrameProbe:
-    """Reports the decoder's first two messages whole, then every frame's stamp.
+    """Reports the decoder's first two Image frames whole, then every frame's stamp.
 
-    The first two carry the whole message because that is what the extent, colour
+    The first two carry the whole frame because that is what the extent, colour
     and surface assertions read; the stamps keep coming so the encoded side's
     report has something to overlap with.
     """
@@ -122,14 +165,20 @@ class DecodedVideoFrameProbe:
         self.messages_seen = []
         self.stamps_reported = 0
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None:
             return
-        message = unpack(payload)
+        message = {
+            "surface_id": frame.surface_id,
+            "width": frame.width,
+            "height": frame.height,
+            "format": frame.format,
+            "colour": dataclasses.asdict(frame.colour),
+            "timestamp_ns": frame.timestamp_ns,
+        }
         if len(self.messages_seen) < 2:
             self.messages_seen.append(message)
             if len(self.messages_seen) == 2:

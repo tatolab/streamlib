@@ -32,8 +32,8 @@ use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{
     EncodedVideoAccessUnit, EncodedVideoOutputPort, EncodedVideoPublication,
 };
+use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
-use crate::video_frame_message::VideoFrameMessage;
 
 /// The variable a processor interpreter is handed the surface-share socket in.
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
@@ -133,7 +133,7 @@ impl OwnedDeviceVideoEncoder {
     /// arriving after a failed mint is discarded.
     pub fn encode_and_publish(
         &mut self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
@@ -142,7 +142,7 @@ impl OwnedDeviceVideoEncoder {
         }
         let checked_out = match check_out_surface_on_surface_share(
             &self.surface_share_connection,
-            &frame.surface_id,
+            frame.surface_id(),
         ) {
             Ok(checked_out) => checked_out,
             Err(refusal) => {
@@ -163,7 +163,7 @@ impl OwnedDeviceVideoEncoder {
             CheckedOutSurface::Texture(texture) => self.encode_checked_out_texture(frame, texture),
         };
         if let Err(release_refusal) =
-            release_check_out_on_surface_share(&self.surface_share_connection, &frame.surface_id)
+            release_check_out_on_surface_share(&self.surface_share_connection, frame.surface_id())
         {
             tracing::warn!("{node_type_name}: {release_refusal}");
         }
@@ -212,7 +212,7 @@ impl OwnedDeviceVideoEncoder {
 
     fn encode_checked_out_pixel_buffer(
         &mut self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         checked_out: CheckedOutPixelBuffer,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
@@ -220,13 +220,14 @@ impl OwnedDeviceVideoEncoder {
             PixelFormat::parse_wire_name(&checked_out.format_wire_name).map_err(|refusal| {
                 format!(
                     "{node_type_name}: surface {:?}: {refusal}",
-                    frame.surface_id
+                    frame.surface_id()
                 )
             })?;
         if pixel_format != PixelFormat::Rgba32 {
             return Err(format!(
                 "{node_type_name}: surface {:?} is a {} pixel buffer; the encoder reads rgba32",
-                frame.surface_id, checked_out.format_wire_name
+                frame.surface_id(),
+                checked_out.format_wire_name
             ));
         }
         let (width, height, bytes_per_row) = (
@@ -234,7 +235,7 @@ impl OwnedDeviceVideoEncoder {
             checked_out.height,
             checked_out.bytes_per_row,
         );
-        self.import_unless_already_imported(&frame.surface_id, checked_out)?;
+        self.import_unless_already_imported(frame.surface_id(), checked_out)?;
         self.mint_unless_a_session_matches(frame, width, height)?;
         let session = self
             .minted_session
@@ -245,11 +246,11 @@ impl OwnedDeviceVideoEncoder {
         }
         let pixel_buffer = self
             .imported_pixel_buffers
-            .get(pool_slot_key_of_surface_id(&frame.surface_id))
+            .get(pool_slot_key_of_surface_id(frame.surface_id()))
             .ok_or_else(|| {
                 format!(
                     "{node_type_name}: surface {:?} was not imported",
-                    frame.surface_id
+                    frame.surface_id()
                 )
             })?;
         let packets = session
@@ -279,11 +280,11 @@ impl OwnedDeviceVideoEncoder {
     /// in, so the next reader's acquire names it.
     fn encode_checked_out_texture(
         &mut self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         checked_out: CheckedOutTexture,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
-        let surface_id = frame.surface_id.as_str();
+        let surface_id = frame.surface_id();
         let (width, height) = (checked_out.width, checked_out.height);
         let published_layout = VulkanLayout(checked_out.current_image_layout);
         self.import_texture_unless_already_imported(surface_id, checked_out)?;
@@ -500,7 +501,7 @@ impl OwnedDeviceVideoEncoder {
 
     fn mint_unless_a_session_matches(
         &mut self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -518,12 +519,9 @@ impl OwnedDeviceVideoEncoder {
             );
         }
         if self.minted_session.is_none() {
-            let shape = self.settings.session_shape_for_frame(
-                self.node.node_type_name,
-                width,
-                height,
-                frame.fps,
-            );
+            let shape =
+                self.settings
+                    .session_shape_for_frame(self.node.node_type_name, width, height);
             match self.mint_session(frame, shape) {
                 Ok(minted) => {
                     self.publication.session_minted();
@@ -540,17 +538,12 @@ impl OwnedDeviceVideoEncoder {
 
     fn mint_session(
         &self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         shape: VideoEncodeSessionShape,
     ) -> Result<VideoEncodeSessionMintedFromAFrame, String> {
         let node_type_name = self.node.node_type_name;
-        let color_vui = frame
-            .color_info
-            .as_ref()
-            .map(|color_info| color_info.to_h273_color_vui())
-            .transpose()
-            .map_err(|refusal| format!("{node_type_name}: {refusal}"))?
-            .filter(|color_vui| color_vui.is_video_signal_type_block_needed());
+        let color_vui =
+            Some(frame.color_vui).filter(|color_vui| color_vui.is_video_signal_type_block_needed());
         let config = SimpleEncoderConfig {
             width: shape.width,
             height: shape.height,

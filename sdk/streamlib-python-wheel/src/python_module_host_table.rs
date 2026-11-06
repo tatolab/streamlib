@@ -27,7 +27,8 @@ use streamlib::sdk::context::CaptureDeviceAccessPrompting;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
-    InputMailboxesInner, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
+    DataChannelPayloadDescriptor, InputMailboxesInner, MessageGroupBoundary,
+    MessageReadFromInputPort, OutputWriterInner,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
@@ -39,9 +40,9 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
     ModuleHostTableHostMemoryPixels, ModuleHostTableHostMemoryPixelsToFill,
     ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableSharedNativeServiceLease,
-    ModuleHostTableSharedNativeServiceLeaseHandle, ModuleHostTableStatus,
-    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
+    ModuleHostTableSharedNativeServiceLease, ModuleHostTableSharedNativeServiceLeaseHandle,
+    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 use self::module_host_surface_verbs::SurfacesLentToNativeCode;
@@ -219,6 +220,10 @@ fn module_host_of_one_node(
                 virtual_camera_stream_close,
                 surface_read_into_host_memory,
                 stream_time_ns_of_a_machine_instant,
+                input_message_payload_descriptor,
+                input_message_lend_pooled_gpu_frame,
+                output_port_write_described,
+                surface_gpu_pool_slot_frame,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -402,6 +407,57 @@ unsafe extern "C" fn output_port_write(
     starts_group: u32,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
+    unsafe {
+        write_on_a_lent_output_port(
+            node_host,
+            port,
+            payload,
+            timestamp_ns,
+            starts_group,
+            DataChannelPayloadDescriptor::bytes(),
+            error_message,
+        )
+    }
+}
+
+unsafe extern "C" fn output_port_write_described(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    payload: ModuleHostTableBytes,
+    timestamp_ns: i64,
+    starts_group: u32,
+    payload_descriptor: *const ModuleHostTablePayloadDescriptor,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a descriptor live for the call.
+    let Some(payload_descriptor) = (unsafe { payload_descriptor.as_ref() }) else {
+        return unsafe { refuse(error_message, "no payload descriptor was handed") };
+    };
+    unsafe {
+        write_on_a_lent_output_port(
+            node_host,
+            port,
+            payload,
+            timestamp_ns,
+            starts_group,
+            DataChannelPayloadDescriptor {
+                kind: payload_descriptor.kind,
+                body: payload_descriptor.body,
+            },
+            error_message,
+        )
+    }
+}
+
+unsafe fn write_on_a_lent_output_port(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    payload: ModuleHostTableBytes,
+    timestamp_ns: i64,
+    starts_group: u32,
+    payload_descriptor: DataChannelPayloadDescriptor,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
     let node_host = unsafe { node_host_of(node_host) };
     let port_name =
         match lent_port_name_of_a_handle("output", &node_host.lent_output_port_names, port) {
@@ -423,11 +479,12 @@ unsafe extern "C" fn output_port_write(
     };
     // SAFETY: the SDK hands a payload live for the call.
     let payload_bytes = unsafe { payload.as_slice() };
-    match node_host.output_writer.write_bytes_with_timestamp(
+    match node_host.output_writer.write_bytes_described_by(
         port_name,
         payload_bytes,
         timestamp_ns,
         group_boundary,
+        payload_descriptor,
     ) {
         Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
         Err(Error::PayloadExceedsChannelCeiling {
@@ -549,6 +606,89 @@ unsafe extern "C" fn input_port_read(
         }
         Ok(None) => MODULE_HOST_TABLE_STATUS_EMPTY,
         Err(read_failure) => unsafe { refuse(error_message, &read_failure.to_string()) },
+    }
+}
+
+/// The message a read handed out, as the host boxed it.
+unsafe fn message_a_read_handed_out<'message>(
+    read_message: *const ModuleHostTableReadMessage,
+) -> Option<&'message MessageReadFromInputPort> {
+    // SAFETY: a read boxed the message and the SDK holds it until release.
+    let read_message = unsafe { read_message.as_ref() }?;
+    unsafe {
+        read_message
+            .host_owned_message
+            .cast::<MessageReadFromInputPort>()
+            .as_ref()
+    }
+}
+
+unsafe extern "C" fn input_message_payload_descriptor(
+    _node_host: *mut c_void,
+    read_message: *const ModuleHostTableReadMessage,
+    payload_descriptor: *mut ModuleHostTablePayloadDescriptor,
+) -> ModuleHostTableStatus {
+    let (Some(message), Some(payload_descriptor)) =
+        (unsafe { message_a_read_handed_out(read_message) }, unsafe {
+            payload_descriptor.as_mut()
+        })
+    else {
+        return MODULE_HOST_TABLE_STATUS_REFUSED;
+    };
+    *payload_descriptor = ModuleHostTablePayloadDescriptor {
+        kind: message.payload_descriptor.kind,
+        body: message.payload_descriptor.body,
+    };
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
+unsafe extern "C" fn input_message_lend_pooled_gpu_frame(
+    node_host: *mut c_void,
+    read_message: *const ModuleHostTableReadMessage,
+    lent_surface: *mut ModuleHostTableSurfaceHandle,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(message) = (unsafe { message_a_read_handed_out(read_message) }) else {
+        return unsafe { refuse(error_message, "no read message was handed") };
+    };
+    let Some(lent_surface) = (unsafe { lent_surface.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the lent surface") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .lend_the_pooled_gpu_frame_a_message_carries(&message.payload_descriptor)
+    {
+        Ok(handle) => {
+            *lent_surface = handle;
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
+    }
+}
+
+unsafe extern "C" fn surface_gpu_pool_slot_frame(
+    node_host: *mut c_void,
+    surface: ModuleHostTableSurfaceHandle,
+    gpu_pool_slot_frame: *mut ModuleHostTablePayloadDescriptor,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    let Some(gpu_pool_slot_frame) = (unsafe { gpu_pool_slot_frame.as_mut() }) else {
+        return unsafe { refuse(error_message, "no slot was handed for the descriptor") };
+    };
+    match node_host
+        .surfaces_lent_to_native_code
+        .gpu_pool_slot_frame_of_a_pool_texture(surface)
+    {
+        Ok(descriptor) => {
+            *gpu_pool_slot_frame = ModuleHostTablePayloadDescriptor {
+                kind: descriptor.kind,
+                body: descriptor.body,
+            };
+            MODULE_HOST_TABLE_STATUS_OK
+        }
+        Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
 }
 

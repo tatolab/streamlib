@@ -20,7 +20,14 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableNodeOutputTextureRequest, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
+use streamlib::sdk::iceoryx2::{
+    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody,
+    ImageFrameDescriptorBody,
+};
+
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_helper_process_pixel_exchange::HelperGpuPoolSlotFrameClaim;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 /// Where a surface lent to native code came from, which decides what giving
@@ -42,6 +49,13 @@ struct SurfaceLentToNativeCode {
     origin: SurfaceLentToNativeCodeOrigin,
     /// The parent resolved it for a conversion and holds it until told.
     resolved_by_the_parent_for_a_conversion: bool,
+    /// The GPU pool slot an output-pool texture was acquired in, as the
+    /// parent's acquire answered it.
+    gpu_pool_slot_frame: Option<GpuPoolSlotFrameDescriptorBody>,
+    /// The claim that keeps a message's pooled frame from its producer's
+    /// reuse while native code holds it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    claim_held_while_lent: Option<Arc<HelperGpuPoolSlotFrameClaim>>,
 }
 
 /// One node's surfaces lent to native code, by the handle the table hands out,
@@ -85,16 +99,97 @@ impl SurfacesLentToNativeCode {
         surface_id: String,
         origin: SurfaceLentToNativeCodeOrigin,
     ) -> ModuleHostTableSurfaceHandle {
+        self.lend_holding(surface_id, origin, |lent| lent)
+    }
+
+    fn lend_holding(
+        &self,
+        surface_id: String,
+        origin: SurfaceLentToNativeCodeOrigin,
+        what_the_lend_holds: impl FnOnce(SurfaceLentToNativeCode) -> SurfaceLentToNativeCode,
+    ) -> ModuleHostTableSurfaceHandle {
         let value = self.next_handle_value.fetch_add(1, Ordering::Relaxed);
         self.surfaces_by_handle_value.lock().insert(
             value,
-            SurfaceLentToNativeCode {
+            what_the_lend_holds(SurfaceLentToNativeCode {
                 surface_id,
                 origin,
                 resolved_by_the_parent_for_a_conversion: false,
-            },
+                gpu_pool_slot_frame: None,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                claim_held_while_lent: None,
+            }),
         );
         ModuleHostTableSurfaceHandle { value }
+    }
+
+    /// Lend the pooled GPU frame `payload_descriptor` names, an Image frame's
+    /// slot or a GPU pool slot frame, claimed until native code releases it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn lend_the_pooled_gpu_frame_a_message_carries(
+        &self,
+        payload_descriptor: &DataChannelPayloadDescriptor,
+    ) -> Result<ModuleHostTableSurfaceHandle, String> {
+        let pooled_frame = gpu_pool_slot_frame_a_message_names(payload_descriptor)?;
+        let surface_share_client = self.surface_share_client.as_deref().ok_or_else(|| {
+            "this helper was started without its surface-share service, so it claims no \
+             pooled frame"
+                .to_string()
+        })?;
+        let claim = surface_share_client
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(pooled_frame)?;
+        let surface_id = surface_share_client
+            .published_frame_id_of_the_pooled_gpu_frame(&pooled_frame)
+            .ok_or_else(|| {
+                "the message names a GPU pool slot no claim table this helper holds covers"
+                    .to_string()
+            })?;
+        Ok(self.lend_holding(
+            surface_id,
+            SurfaceLentToNativeCodeOrigin::NamedByAMessage,
+            |lent| SurfaceLentToNativeCode {
+                claim_held_while_lent: claim,
+                ..lent
+            },
+        ))
+    }
+
+    /// Refuses by name: pooled GPU frames are claimed on Linux and macOS.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub(super) fn lend_the_pooled_gpu_frame_a_message_carries(
+        &self,
+        payload_descriptor: &DataChannelPayloadDescriptor,
+    ) -> Result<ModuleHostTableSurfaceHandle, String> {
+        gpu_pool_slot_frame_a_message_names(payload_descriptor)?;
+        Err("input_message_lend_pooled_gpu_frame claims on Linux and macOS only".to_string())
+    }
+
+    /// The GPU pool slot an output-pool texture was acquired in.
+    pub(super) fn gpu_pool_slot_frame_of_a_pool_texture(
+        &self,
+        surface: ModuleHostTableSurfaceHandle,
+    ) -> Result<DataChannelPayloadDescriptor, String> {
+        match self.surfaces_by_handle_value.lock().get(&surface.value) {
+            Some(lent) if lent.origin == SurfaceLentToNativeCodeOrigin::NodeOutputPoolTexture => lent
+                .gpu_pool_slot_frame
+                .map(DataChannelPayloadDescriptor::gpu_pool_slot_frame)
+                .ok_or_else(|| {
+                    format!(
+                        "output-pool texture {} sits in a pool with no claim table, so it has no \
+                         GPU pool slot to name",
+                        lent.surface_id
+                    )
+                }),
+            Some(lent) => Err(format!(
+                "surface {} is not a texture acquired from a node output pool, so it names no \
+                 slot this node can write",
+                lent.surface_id
+            )),
+            None => Err(format!(
+                "surface handle {} names no surface this table lent",
+                surface.value
+            )),
+        }
     }
 
     /// The surface id an output-pool texture's handle names; an imported
@@ -317,9 +412,14 @@ impl SurfacesLentToNativeCode {
                 format!("the parent's acquire_texture answer named no handle_id: {answer}")
             })?
             .to_string();
-        Ok(self.lend(
+        let gpu_pool_slot_frame = gpu_pool_slot_frame_an_acquire_answered(&answer)?;
+        Ok(self.lend_holding(
             surface_id,
             SurfaceLentToNativeCodeOrigin::NodeOutputPoolTexture,
+            |lent| SurfaceLentToNativeCode {
+                gpu_pool_slot_frame,
+                ..lent
+            },
         ))
     }
 
@@ -688,6 +788,8 @@ impl SurfacesLentToNativeCode {
         if lent.origin == SurfaceLentToNativeCodeOrigin::AdoptedForeignSurface {
             self.unregister_an_adoption(&lent.surface_id);
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        drop(lent.claim_held_while_lent);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -771,6 +873,71 @@ fn color_axis_name(axis: &str, name: ModuleHostTableUtf8) -> Result<&str, String
     }
     // SAFETY: the SDK hands views live for the call.
     unsafe { name.as_str() }.map_err(|not_utf8| format!("a {axis} name is UTF-8: {not_utf8}"))
+}
+
+/// The GPU pool slot frame a message's Image frame or GPU pool slot frame
+/// descriptor names, refusing a message of any other kind by its kind.
+fn gpu_pool_slot_frame_a_message_names(
+    payload_descriptor: &DataChannelPayloadDescriptor,
+) -> Result<GpuPoolSlotFrameDescriptorBody, String> {
+    match DataChannelPayloadDescriptorKind::from_wire(payload_descriptor.kind) {
+        Some(DataChannelPayloadDescriptorKind::ImageFrame) => {
+            Ok(ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body).slot)
+        }
+        Some(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame) => Ok(
+            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+        ),
+        _ => Err(format!(
+            "the message is described as kind {}, and only an Image frame or a GPU pool slot \
+             frame names a pooled frame",
+            payload_descriptor.kind
+        )),
+    }
+}
+
+/// The slot the parent's acquire answer names, as `{pool, slot, generation}`;
+/// `None` for a pool with no claim table.
+fn gpu_pool_slot_frame_an_acquire_answered(
+    answer: &serde_json::Value,
+) -> Result<Option<GpuPoolSlotFrameDescriptorBody>, String> {
+    let Some(pooled_frame) = answer
+        .get("gpu_pool_slot_frame")
+        .filter(|pooled_frame| !pooled_frame.is_null())
+    else {
+        return Ok(None);
+    };
+    let field_text = |field: &str| {
+        pooled_frame
+            .get(field)
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("the parent's acquire named no {field} text: {pooled_frame}"))
+    };
+    let pool_wire_name = field_text("pool")?;
+    let pool = streamlib_surface_client::gpu_pool_uuid_of_its_wire_name(pool_wire_name)
+        .ok_or_else(|| {
+            format!(
+                "the parent's acquire named GPU pool {pool_wire_name:?}, which is not 32 hex digits"
+            )
+        })?;
+    let generation_digits = field_text("generation")?;
+    let generation = generation_digits.parse::<u64>().map_err(|_| {
+        format!(
+            "the parent's acquire named frame generation {generation_digits:?}, which is not a \
+             decimal u64"
+        )
+    })?;
+    let slot = pooled_frame
+        .get("slot")
+        .and_then(|slot| slot.as_u64())
+        .and_then(|slot| u32::try_from(slot).ok())
+        .ok_or_else(|| format!("the parent's acquire named no slot index: {pooled_frame}"))?;
+    Ok(Some(GpuPoolSlotFrameDescriptorBody {
+        pool,
+        slot,
+        generation,
+        timeline_value: 0,
+        image_layout: 0,
+    }))
 }
 
 #[cfg(test)]

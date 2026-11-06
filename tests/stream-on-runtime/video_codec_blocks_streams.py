@@ -12,11 +12,13 @@ from video_codec_blocks_probes import (
     DecodedVideoFrameProbe,
     EncodedFrameProbe,
     EncodedFrameTimestampProbe,
+    TestPatternFrameRepublishedAsAnImageFrame,
 )
 
 
-# One second at the pattern's 30 fps. The encoder resolves its rate from the
-# frame, and the pattern's bag carries 30, so this is 30 frames per group.
+# The pattern's 30 fps, which the encoder is configured with since an Image
+# frame carries no rate; one second is 30 frames per group.
+TEST_PATTERN_FRAMES_PER_SECOND = 30
 KEYFRAME_INTERVAL_SECONDS = 1
 
 
@@ -47,7 +49,8 @@ def _add_a_codec_round_trip_with_probes(
 ) -> None:
     """A test pattern encoded and decoded back, with no Python in the frame path.
 
-    `TestPatternSource → <codec>Encoder → <codec>Decoder → DecodedVideoFrameProbe`.
+    `TestPatternSource → TestPatternFrameRepublishedAsAnImageFrame →
+    <codec>Encoder → <codec>Decoder → DecodedVideoFrameProbe`.
     The pattern's extent is 320×180, an extent both codecs pad (to 320×192:
     the 16-sample macroblock and the 64-sample CTU agree on it), so the decoded
     probe seeing 320×180 is the conformance crop proven from Python.
@@ -64,13 +67,20 @@ def _add_a_codec_round_trip_with_probes(
     )
     encoder = stream_builder.add(
         encoder_class,
-        config={"keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS},
+        config={
+            "fps": TEST_PATTERN_FRAMES_PER_SECOND,
+            "keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS,
+        },
     )
+    pattern_as_image_frames = stream_builder.add(TestPatternFrameRepublishedAsAnImageFrame)
     decoder = stream_builder.add(decoder_class)
     encoded_frame_probe = stream_builder.add(EncodedFrameProbe)
     encoded_frame_timestamp_probe = stream_builder.add(EncodedFrameTimestampProbe)
     decoded_frame_probe = stream_builder.add(DecodedVideoFrameProbe)
-    stream_builder.connect(pattern.output("video"), encoder.input("video"))
+    stream_builder.connect(
+        pattern.output("video"), pattern_as_image_frames.input("video_from_upstream")
+    )
+    stream_builder.connect(pattern_as_image_frames.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
     stream_builder.connect(
         encoder.output("encoded_video"),

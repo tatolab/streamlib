@@ -4,8 +4,7 @@
 //! A video encoder node's config keys, and the session shape they resolve to
 //! against the first frame.
 
-/// The rate a session is minted at when neither the frame nor the config
-/// states one.
+/// The rate a session is minted at when the config states none.
 pub const DEFAULT_ENCODE_FPS: u32 = 60;
 /// Seconds between IDR sync points when the config states none.
 pub const DEFAULT_KEYFRAME_INTERVAL_SECONDS: u32 = 2;
@@ -17,7 +16,7 @@ pub struct VideoEncoderSettings {
     pub width: Option<u32>,
     /// Expected frame height, a guardrail like `width`.
     pub height: Option<u32>,
-    /// The rate used when frames carry none.
+    /// The rate sessions are minted at.
     pub fps: Option<u32>,
     /// Target bitrate; absent is constant-QP at the balanced preset.
     pub bitrate_bps: Option<u32>,
@@ -38,13 +37,12 @@ pub struct VideoEncodeSessionShape {
 impl VideoEncoderSettings {
     /// Resolve the session a `frame_width` x `frame_height` frame mints: the
     /// frame's extent wins over the guardrails, with a warning, and the rate
-    /// falls back frame → config → default.
+    /// is the config's, or the default.
     pub fn session_shape_for_frame(
         &self,
         node_type_name: &str,
         frame_width: u32,
         frame_height: u32,
-        frame_fps: Option<u32>,
     ) -> VideoEncodeSessionShape {
         if let Some(config_width) = self.width
             && config_width != frame_width
@@ -69,7 +67,7 @@ impl VideoEncoderSettings {
         VideoEncodeSessionShape {
             width: frame_width,
             height: frame_height,
-            frames_per_second: frame_fps.unwrap_or_else(|| self.fps.unwrap_or(DEFAULT_ENCODE_FPS)),
+            frames_per_second: self.fps.unwrap_or(DEFAULT_ENCODE_FPS),
             keyframe_interval_seconds: self
                 .keyframe_interval_seconds
                 .unwrap_or(DEFAULT_KEYFRAME_INTERVAL_SECONDS),
@@ -88,31 +86,25 @@ mod tests {
             height: Some(1080),
             ..Default::default()
         };
-        let shape = settings.session_shape_for_frame("H264Encoder", 1280, 720, None);
+        let shape = settings.session_shape_for_frame("H264Encoder", 1280, 720);
         assert_eq!((shape.width, shape.height), (1280, 720));
     }
 
     #[test]
-    fn the_rate_falls_back_frame_then_config_then_default() {
+    fn the_rate_is_the_configs_or_the_default() {
         let configured = VideoEncoderSettings {
             fps: Some(24),
             ..Default::default()
         };
         assert_eq!(
             configured
-                .session_shape_for_frame("H264Encoder", 2, 2, Some(30))
-                .frames_per_second,
-            30
-        );
-        assert_eq!(
-            configured
-                .session_shape_for_frame("H264Encoder", 2, 2, None)
+                .session_shape_for_frame("H264Encoder", 2, 2)
                 .frames_per_second,
             24
         );
         assert_eq!(
             VideoEncoderSettings::default()
-                .session_shape_for_frame("H264Encoder", 2, 2, None)
+                .session_shape_for_frame("H264Encoder", 2, 2)
                 .frames_per_second,
             DEFAULT_ENCODE_FPS
         );
@@ -120,8 +112,7 @@ mod tests {
 
     #[test]
     fn the_keyframe_interval_defaults_to_two_seconds() {
-        let shape =
-            VideoEncoderSettings::default().session_shape_for_frame("H264Encoder", 2, 2, None);
+        let shape = VideoEncoderSettings::default().session_shape_for_frame("H264Encoder", 2, 2);
         assert_eq!(
             shape.keyframe_interval_seconds,
             DEFAULT_KEYFRAME_INTERVAL_SECONDS

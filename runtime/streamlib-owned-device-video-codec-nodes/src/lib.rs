@@ -12,30 +12,34 @@ use std::time::Duration;
 
 use streamlib_video_bitstream::VideoCodecElementaryStream;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
-use tatolab_module_sdk::{ModuleHost, ModuleHostInputPort, ModuleHostOutputPort};
+use tatolab_module_sdk::{
+    ModuleHost, ModuleHostInputPort, ModuleHostOutputPort, ModuleHostTablePayloadDescriptor,
+    codec_of_a_packets_unit, packets_unit_payload_descriptor,
+};
 
 pub mod encoded_video_group_entry_gate;
 pub mod encoded_video_publication;
 pub mod hang_legacy_container_media_frame;
+pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_decoder;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_encoder;
 pub mod video_decoder_settings;
 pub mod video_encoder_settings;
-pub mod video_frame_message;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 
 use crate::encoded_video_publication::EncodedVideoOutputPort;
+use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_decoder_settings::VideoDecoderSettings;
 use crate::video_encoder_settings::VideoEncoderSettings;
-use crate::video_frame_message::VideoFrameMessage;
 
-/// The port decoded video frames travel on: an encoder's input, a decoder's
-/// output.
+/// The Image port decoded pictures travel on: an encoder's input, a
+/// decoder's output.
 pub const VIDEO_PORT: &str = "video";
-/// The port media frames travel on: an encoder's output, a decoder's input.
+/// The Packets port media frames travel on: an encoder's output, a decoder's
+/// input.
 pub const ENCODED_VIDEO_PORT: &str = "encoded_video";
 
 /// How long one wait for a message lasts before the stop flag is read again.
@@ -70,6 +74,14 @@ impl VideoCodecNodeIdentity {
         node_type_name: "H265Decoder",
         elementary_stream: VideoCodecElementaryStream::H265,
     };
+
+    /// The codec a Packets unit of this node's elementary stream names.
+    pub fn packets_unit_codec_name(self) -> &'static str {
+        match self.elementary_stream {
+            VideoCodecElementaryStream::H264 => "h264",
+            VideoCodecElementaryStream::H265 => "h265",
+        }
+    }
 
     /// The Vulkan Video codec this node's elementary stream is coded with.
     #[cfg(target_os = "linux")]
@@ -194,12 +206,16 @@ impl VideoCodecNodeThread {
     }
 }
 
-/// `encoded_video` as the publication writes it.
-struct EncodedVideoLentByTheModuleHost<'port>(&'port ModuleHostOutputPort);
+/// `encoded_video` as the publication writes it: each media frame one
+/// Packets unit of the node's codec.
+struct EncodedVideoLentByTheModuleHost<'port> {
+    encoded_video_output: &'port ModuleHostOutputPort,
+    packets_unit: ModuleHostTablePayloadDescriptor,
+}
 
 impl EncodedVideoOutputPort for EncodedVideoLentByTheModuleHost<'_> {
     fn set_catalog_entry(&self, section: &str, entry_json: &str) -> Result<(), String> {
-        self.0
+        self.encoded_video_output
             .set_catalog_entry(section, entry_json)
             .map_err(|refusal| refusal.to_string())
     }
@@ -210,8 +226,13 @@ impl EncodedVideoOutputPort for EncodedVideoLentByTheModuleHost<'_> {
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String> {
-        self.0
-            .write(media_frame, Some(timestamp_ns), starts_group)
+        self.encoded_video_output
+            .write_described(
+                media_frame,
+                Some(timestamp_ns),
+                starts_group,
+                &self.packets_unit,
+            )
             .map_err(|refusal| refusal.to_string())
     }
 }
@@ -249,7 +270,7 @@ enum VideoEncoderOnThisPlatform {}
 impl VideoEncoderOnThisPlatform {
     fn encode_and_publish(
         &mut self,
-        _frame: &VideoFrameMessage,
+        _frame: &ImageFrameReadByTheEncoder,
         _encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
         match *self {}
@@ -286,7 +307,17 @@ fn encode_until_stopped(
             None
         }
     };
-    let encoded_video = EncodedVideoLentByTheModuleHost(encoded_video_output);
+    let packets_unit = match packets_unit_payload_descriptor(node.packets_unit_codec_name()) {
+        Ok(packets_unit) => packets_unit,
+        Err(refusal) => {
+            tracing::error!("{node_type_name}: {refusal}");
+            return;
+        }
+    };
+    let encoded_video = EncodedVideoLentByTheModuleHost {
+        encoded_video_output,
+        packets_unit,
+    };
     let mut frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
@@ -305,7 +336,7 @@ fn encode_until_stopped(
             let Some(encoder) = encoder.as_mut() else {
                 continue;
             };
-            let encoded = VideoFrameMessage::from_msgpack(message.payload())
+            let encoded = ImageFrameReadByTheEncoder::of_the_video_message(&message)
                 .and_then(|frame| encoder.encode_and_publish(&frame, &encoded_video));
             if let Err(refusal) = encoded {
                 frames_refused += 1;
@@ -402,7 +433,9 @@ fn decode_until_stopped(
             let Some(decoder) = decoder.as_mut() else {
                 continue;
             };
-            if let Err(refusal) = decoder.decode_and_publish(&media_frame, video_output) {
+            let decoded = refuse_unless_a_packets_unit_of_this_codec(node, &media_frame)
+                .and_then(|()| decoder.decode_and_publish(&media_frame, video_output));
+            if let Err(refusal) = decoded {
                 media_frames_refused += 1;
                 if media_frames_refused.is_power_of_two() {
                     tracing::error!(
@@ -416,4 +449,26 @@ fn decode_until_stopped(
     if let Some(decoder) = decoder.as_ref() {
         decoder.report_at_teardown();
     }
+}
+
+/// Refuse by name a media frame that is not a Packets unit of `node`'s codec.
+fn refuse_unless_a_packets_unit_of_this_codec(
+    node: VideoCodecNodeIdentity,
+    media_frame: &tatolab_module_sdk::ModuleHostReadMessage,
+) -> Result<(), String> {
+    let node_type_name = node.node_type_name;
+    let payload_descriptor = media_frame
+        .payload_descriptor()
+        .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
+    let codec = codec_of_a_packets_unit(&payload_descriptor).map_err(|refusal| {
+        format!("{node_type_name}: an `encoded_video` message is not a Packets unit: {refusal}")
+    })?;
+    if codec != node.packets_unit_codec_name() {
+        return Err(format!(
+            "{node_type_name}: an `encoded_video` Packets unit is coded {codec:?}, and this \
+             decoder reads {:?}",
+            node.packets_unit_codec_name()
+        ));
+    }
+    Ok(())
 }

@@ -18,8 +18,10 @@
 //! minor 4 adds, the host-memory write minor 5 adds, the lend by surface
 //! id minor 6 adds and the shared native service leases and node failure
 //! minor 7 adds and the host-memory read minor 9 adds. The virtual camera
-//! verbs minor 8 adds and the stream-time conversion minor 10 adds act in the
-//! helper itself.
+//! verbs minor 8 adds, the stream-time conversion minor 10 adds and the
+//! described reads and writes minor 11 adds act in the helper itself; its lend
+//! of a message's pooled frame and its slot of a pool texture reach the
+//! surface-share service the helper already holds.
 
 use std::ffi::{CStr, c_void};
 
@@ -28,7 +30,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 10;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 11;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -76,6 +78,23 @@ pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_PUBLISHED: u32 = 0;
 pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_NO_CONSUMER_IS_WATCHING: u32 = 1;
 /// A frame dropped because every buffer is still with the consumer.
 pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER: u32 = 2;
+
+/// Bytes in a payload descriptor's body. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES: usize = 60;
+/// A payload that is plain bytes. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES: u32 = 0;
+/// A payload whose frame lives in a GPU pool slot. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_GPU_POOL_SLOT_FRAME: u32 = 1;
+/// An Image frame. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME: u32 = 2;
+/// A Channels block. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK: u32 = 3;
+/// A Packets unit. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT: u32 = 4;
+/// A Records message. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE: u32 = 5;
+/// An Array frame. Minor 11.
+pub const MODULE_HOST_TABLE_PAYLOAD_KIND_ARRAY_FRAME: u32 = 6;
 
 /// How many bytes of a refusal's message the caller's buffer holds; a longer
 /// message is cut at a UTF-8 boundary.
@@ -270,6 +289,17 @@ pub struct ModuleHostTableReadMessage {
     pub reserved: u32,
     pub lost_since_last_read: u64,
     pub host_owned_message: *mut c_void,
+}
+
+/// What a message's payload is, as its channel sample's header carries it:
+/// one of the `MODULE_HOST_TABLE_PAYLOAD_KIND_*` kinds and that kind's
+/// little-endian body, laid out as the engine's `DataChannelPayloadDescriptor`
+/// is. Minor 11.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostTablePayloadDescriptor {
+    pub kind: u32,
+    pub body: [u8; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES],
 }
 
 /// An audio stream's rate, channel count and scalar encoding. In a request,
@@ -710,6 +740,52 @@ pub struct ModuleHostTable {
     /// stream's clock steps.
     pub stream_time_ns_of_a_machine_instant:
         unsafe extern "C" fn(node_host: *mut c_void, machine_instant_ns: i64) -> i64,
+    /// Minor 11: the descriptor of the payload a read message carries.
+    pub input_message_payload_descriptor: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        read_message: *const ModuleHostTableReadMessage,
+        payload_descriptor: *mut ModuleHostTablePayloadDescriptor,
+    ) -> ModuleHostTableStatus,
+    /// Minor 11: lend native code the GPU pool slot frame a read message's
+    /// Image frame or GPU pool slot frame descriptor names, claimed against
+    /// its producer's reuse until the lent surface is released; a message of
+    /// any other kind is refused naming it.
+    pub input_message_lend_pooled_gpu_frame: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        read_message: *const ModuleHostTableReadMessage,
+        lent_surface: *mut ModuleHostTableSurfaceHandle,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 11: publish `payload` described by `payload_descriptor`, as
+    /// [`ModuleHostTable::output_port_write`] publishes plain bytes.
+    pub output_port_write_described: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        port: ModuleHostTablePortHandle,
+        payload: ModuleHostTableBytes,
+        timestamp_ns: i64,
+        starts_group: u32,
+        payload_descriptor: *const ModuleHostTablePayloadDescriptor,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+    /// Minor 11: the GPU pool slot frame descriptor of a texture acquired
+    /// from the node's output pool, which an Image frame written of it
+    /// carries in its body's first 40 bytes.
+    pub surface_gpu_pool_slot_frame: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        surface: ModuleHostTableSurfaceHandle,
+        gpu_pool_slot_frame: *mut ModuleHostTablePayloadDescriptor,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
+}
+
+impl ModuleHostTablePayloadDescriptor {
+    /// The descriptor of a payload that is plain bytes.
+    pub const fn bytes() -> Self {
+        Self {
+            kind: MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES,
+            body: [0; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+        }
+    }
 }
 
 impl ModuleHostTableUtf8 {
@@ -1166,7 +1242,31 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, stream_time_ns_of_a_machine_instant),
             16 + 42 * POINTER
         );
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 43 * POINTER);
+    }
+
+    /// Minor 11 appends its described reads and writes after the minor 10
+    /// conversion.
+    #[test]
+    fn the_v1_11_table_appends_its_described_reads_and_writes_after_every_v1_10_field() {
+        let pointer_slots_appended_at_minor_11 = [
+            offset_of!(ModuleHostTable, input_message_payload_descriptor),
+            offset_of!(ModuleHostTable, input_message_lend_pooled_gpu_frame),
+            offset_of!(ModuleHostTable, output_port_write_described),
+            offset_of!(ModuleHostTable, surface_gpu_pool_slot_frame),
+        ];
+        for (slot, offset) in pointer_slots_appended_at_minor_11.into_iter().enumerate() {
+            assert_eq!(offset, 16 + (43 + slot) * POINTER, "minor 11 slot {slot}");
+        }
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 47 * POINTER);
+    }
+
+    /// A payload descriptor lays out as the engine's 64-byte channel-sample
+    /// descriptor does.
+    #[test]
+    fn a_payload_descriptor_is_its_kind_then_its_60_byte_body() {
+        assert_eq!(offset_of!(ModuleHostTablePayloadDescriptor, kind), 0);
+        assert_eq!(offset_of!(ModuleHostTablePayloadDescriptor, body), 4);
+        assert_eq!(size_of::<ModuleHostTablePayloadDescriptor>(), 64);
     }
 
     #[test]

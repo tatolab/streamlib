@@ -28,8 +28,10 @@ use crate::encoded_video_group_entry_gate::{
     EncodedVideoGroupEntryDisposition, EncodedVideoGroupEntryGate,
 };
 use crate::hang_legacy_container_media_frame::annex_b_access_unit_of_a_hang_legacy_container_media_frame;
+use crate::image_frame_on_the_video_port::{
+    H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
+};
 use crate::video_decoder_settings::VideoDecoderSettings;
-use crate::video_frame_message::{DecodedVideoFrameRecord, VideoFrameColorInfoWireNames};
 
 /// The node output pool decoded pictures are converted into.
 const DECODED_PICTURE_POOL_KEY: &str = "decoded_pictures";
@@ -190,8 +192,8 @@ impl VideoToolboxVideoDecoder {
         let decoded_picture_color_vui =
             h273_color_vui_of_core_video_pixel_buffer(&picture.pixel_buffer);
         let published_color_info =
-            VideoFrameColorInfoWireNames::of_h273_color_vui(&decoded_picture_color_vui);
-        let conversion_color_info = VideoFrameColorInfoWireNames::of_h273_color_vui(
+            H273ColorVuiWireNames::of_h273_color_vui(&decoded_picture_color_vui);
+        let conversion_color_info = H273ColorVuiWireNames::of_h273_color_vui(
             &decoded_picture_color_vui
                 .with_decoded_picture_matrix_and_range_defaults(picture.width, picture.height),
         );
@@ -231,16 +233,16 @@ impl VideoToolboxVideoDecoder {
                 },
             )
             .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
-        let record = DecodedVideoFrameRecord {
-            surface_id: decoded_picture_texture.surface_id(),
-            width: picture.width,
-            height: picture.height,
-            timestamp_ns,
-            color_info: published_color_info,
-        }
-        .to_msgpack();
+        let image_frame = image_frame_payload_descriptor_of_a_decoded_picture(
+            &decoded_picture_texture,
+            DECODED_PICTURE_TEXTURE_FORMAT,
+            picture.width,
+            picture.height,
+            &decoded_picture_color_vui,
+        )
+        .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
         video_output
-            .write(&record, Some(timestamp_ns), true)
+            .write_described(&[], Some(timestamp_ns), true, &image_frame)
             .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
 
         self.frames_decoded += 1;

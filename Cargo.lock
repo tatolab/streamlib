@@ -5894,8 +5894,6 @@ dependencies = [
  "objc2-io-surface",
  "objc2-video-toolbox",
  "png",
- "rmp-serde",
- "serde",
  "streamlib",
  "streamlib-consumer-rhi",
  "streamlib-surface-client",
@@ -6193,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-module-sdk"
-version = "1.10.0"
+version = "1.11.0"
 dependencies = [
  "pyo3",
  "tracing",
