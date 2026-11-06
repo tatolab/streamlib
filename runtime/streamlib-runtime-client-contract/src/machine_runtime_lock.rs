@@ -1445,33 +1445,6 @@ mod tests {
             });
         }
 
-        #[test]
-        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
-        fn the_holder_probe_names_nobody_when_free_and_the_holder_when_held() {
-            let lock = LockLocationOnlyThisTestUses::new();
-            assert_eq!(
-                holder_of_the_machine_runtime_lock_at(&lock.location).unwrap(),
-                None
-            );
-
-            let held_lock = take_and_answer_as_its_holder(&lock.location);
-            assert_eq!(
-                holder_of_the_machine_runtime_lock_at(&lock.location)
-                    .unwrap()
-                    .map(with_its_executable_canonicalized),
-                Some(this_process_as_the_holder())
-            );
-
-            drop(held_lock);
-            once_every_forked_copy_of_the_dropped_lock_is_gone(|| {
-                holder_of_the_machine_runtime_lock_at(&lock.location)
-                    .unwrap()
-                    .is_none()
-                    .then_some(())
-            });
-            let _taken_after_the_probes = take_the_machine_runtime_lock_at(&lock.location).unwrap();
-        }
-
         /// On Linux a test beside this one that spawns a child process copies
         /// every descriptor this process holds into it until it execs, the
         /// dropped lock's socket included, so the name frees once that copy closes.

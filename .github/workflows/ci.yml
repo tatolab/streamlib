@@ -2,9 +2,8 @@ name: CI
 
 # What a pull request must prove before it merges: the code is formatted and
 # lint-clean, it builds, its test suites pass, and a stream still runs end to
-# end on the runtime. It builds nothing that ships; distribution-dry-run.yml
-# builds and checks the distributables on every push to `main`, and release.yml
-# publishes them.
+# end on the runtime. It builds nothing that ships; release.yml builds, checks
+# and publishes the distributables.
 #
 #   Lint                       formatting, clippy, the source gates, licences,
 #                              Python types

@@ -3696,8 +3696,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
-  built zip and again after install. The same workflow runs as a dry run on every push to
-  `main`, on a runner with no Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
+  built zip and again after install. The release proof runs on a runner with no Vulkan
+  SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
   against the lend, and into a directory whose venv holds only `tatolab-stream` runs `tatolab
   new`, whose load runs for twenty seconds, which must open the carried loader, raise nothing from the
