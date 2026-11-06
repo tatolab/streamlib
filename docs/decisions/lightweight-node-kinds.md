@@ -21,8 +21,9 @@ compiler groups connected shader and pure nodes into evaluation islands, where a
 function call. Pure nodes run inside the read of the node that reads them; shaders run on one
 native evaluator per stream, and stateful pure nodes feeding several readers in one helper per
 stream. A class runs in its own process, and every helper runs the engine's one Rust run loop.
-The runtime's own small nodes (`Lerp`, `Lfo`) are Rust pure nodes in the bundled module
-`tatolab-ops`, built on the same SDK as anyone's.
+Numeric pure Python is compiled to native code by Numba, so the runtime's own small nodes
+(`Lerp`, `Lfo`) are ordinary `@node.pure` functions in the bundled module `tatolab-ops`, written
+the way a user writes one.
 
 ## Why
 
@@ -36,7 +37,7 @@ TouchDesigner cooks a chain in one process; Houdini cooks in-process, out-of-pro
 pool. One mode was where StreamLib started, not where it stops.
 
 **The cheapest host already exists.** Nearly every node that reads data runs in a helper, and
-every helper reads through one Rust seam with the GIL detached. Evaluating Rust pure nodes
+every helper reads through one Rust seam with the GIL detached. Calling a compiled pure node
 inside that read needs no new process, thread or scheduler, which is why they ship first.
 
 **Islands, not lighter processors.** Green threads or a rayon pool make many processors cheaper
@@ -62,14 +63,17 @@ built-ins ended up needing a migration of their own. The runtime's small nodes a
 the start, so the ones in the box and a third party's are built, loaded and namespaced the same
 way.
 
-**Language is not a kind.** A Rust `Lerp` and a Python one meet the same contract; only where
-they can run differs, and the runtime derives that. A separate "op" kind would have named a
-language, not a behaviour.
+**Language is not a kind.** A Rust `Lerp` and a Python one meet the same contract, and the read
+seam calls the same C entry for both; Numba-compiled Python measured within 10–15% of native.
+A separate "op" kind would have named a language, not a behaviour, and the built-ins written in
+Python are the user path's own proof.
 
 ## Rejected alternatives
 
 - **Ops as a fixed set in the engine crate** — a path only the engine can use, which modules
   would later need to be migrated onto (owner, 2026-11-06).
+- **The built-in ops in Rust** — fast, but written in a way users mostly will not, so the box's
+  nodes would not exercise the path users take.
 - **Ops as a fourth kind beside pure** — the same contract under a second name, which leaves an
   author unsure which to reach for (owner, 2026-11-06).
 - **A separate control-rate graph with its own value ports** — it reintroduces the two-graph

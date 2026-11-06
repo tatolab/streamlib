@@ -24,14 +24,17 @@ native processor gets its own OS thread. There is nothing smaller.
   | class | a class with a lifecycle, `@node` | anything: devices, network, files, threads, GPU | its own process, as today |
 
 - **Which to reach for:** pixels in and an Image out is a shader. Computing from inputs (maths,
-  logic, a join, a curve, a custom lerp of numbers) is a pure function: Python by default, Rust
-  when it is hot or a native node reads it. Touching the world, or holding a resource across
-  calls, is a class.
-- **Language is not a kind.** A Rust pure node and a Python one keep the same contract. The
-  language only changes where it can run: Rust runs inside any reader, Python inside a Python
-  reader, or the pool in phase 4.
-- **The runtime's own small nodes** (`Lerp`, `Lfo`, `Clamp`, …) are Rust pure nodes in the
-  bundled first-party module `tatolab-ops`, built on the same SDK as anyone's.
+  logic, a join, a curve, a custom lerp of numbers) is a pure function, written in Python; a
+  numeric body is compiled to native code for you, and Rust is there for code outside that
+  subset that still needs native speed. Touching the world, or holding a resource across calls,
+  is a class.
+- **Language is not a kind.** Every pure node meets one contract, and underneath the read seam
+  calls one thing: a C function pointer with a fixed signature. Numba-compiled Python and Rust
+  are two ways to produce it. Only where a node can run differs: a compiled node runs inside any
+  reader; Python that does not compile runs inside a Python reader, or the pool in phase 4.
+- **The runtime's own small nodes** (`Lerp`, `Lfo`, `Clamp`, …) are ordinary `@node.pure`
+  Python in the bundled first-party module `tatolab-ops`, written the way a user writes one and
+  compiled to native code.
 - **The rule an agent needs:** a class is a process; a function, shader or pure, runs wherever
   the runtime puts it, and never gets a process of its own unless it crashes its reader.
 - **The kind travels in the graph and the catalog**, so an agent reads it and an editor draws it.
@@ -91,28 +94,42 @@ The order is: the families, then variables, then the gateway and track nodes.
   instance's `process()` in-process. The bootstrap keeps the lifecycle commands, imports and
   describe; it no longer schedules. Every rule below is written once, in Rust.
 
-### Pure nodes in Rust, and `tatolab-ops`
+### The pure-node contract
 
-- **The pure-node contract** in `tatolab-module-sdk` is the Rust form of `@node.pure`. A
-  `#[pure_node]` function declares its ports, families, config and state in its signature, as
-  the Python form does; the module's native half exports its descriptor and an evaluate entry
-  the read seam calls with the input values, config, `now` and its state, returning its outputs.
-  The module lists it in its `tatolab.nodes` entry points like any node, so its type is its
-  import path. Two modules may both ship a `Lerp`, told apart by import path.
-- The entry extends the module host table: the one place the engine calls module code, versioned
-  with the table, and loaded only in a helper. No node code, first-party or not, runs in
-  `tatolabd`.
-- **`tatolab-ops`** is a first-party module of Rust pure nodes, bundled with the runtime and built
-  exactly the way a third party builds one; nothing in the engine knows their names
-  (`tatolab.ops:Lerp`). It carries:
+- **One entry the read seam calls:** per pure node, a descriptor (ports, families, config,
+  state) and a C evaluate function taking the input values, config, `now` and its state and
+  returning its outputs. It extends the module host table: the one place the engine calls
+  module code, versioned with the table, and loaded only in a helper. No node code, first-party
+  or not, runs in `tatolabd`.
+- **Two producers.** A `@node.pure` Python function whose body is typed numeric code (floats,
+  ints, numpy arrays, loops) is compiled by Numba to that entry. A `#[pure_node]` Rust function
+  in `tatolab-module-sdk` exports it directly, for code outside Numba's subset that still needs
+  native speed. A Python body that does not compile runs as Python (§`@node.pure` in Python).
+- **Compilation** happens at load and is cached by a hash of the source, the signature and the
+  Numba version, so a reload or a live edit of another node pays nothing; a module ships its
+  pure nodes pre-compiled in its wheel. `graph` shows whether each pure node ran compiled.
+- **Compiled state** is a typed record Numba can lower (`State[T]` with `T` a record of numbers
+  and arrays); a state outside that keeps the node in Python.
+- **Measured** (2026-11-06, one scalar ease function and a 10M-element loop, C `-O2` as the
+  native baseline): 2.8 ns a call against 2.4 ns native and 155 ns plain Python; the loop
+  within 10% of native; 140 ms to compile a scalar function, about 0.5 s an array loop.
+- A pure node's type is its import path in its module's `tatolab.nodes` entry points, like any
+  node, so two modules may both ship a `Lerp`, told apart by import path.
+
+### `tatolab-ops`
+
+- A first-party module of `@node.pure` functions, bundled with the runtime, pre-compiled in its
+  wheel, and built exactly the way a third party builds one; nothing in the engine knows their
+  names (`tatolab.ops:Lerp`). It carries:
   - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`, `Absolute`,
     `Modulo`.
   - Shaping: `Lerp`, `Clamp`, `Remap`, `Smoothstep`, `Step`.
   - Logic: `Compare`, `Switch`, `Select`, `Gate`.
   - Values and noise: `Constant`, `Random`, `PerlinNoise`.
   - Time: `Lfo`, `Timer`, `Lag`, `Trigger`, `Counter`, `SampleAndHold`.
-  - Images: `ImageFile` (loads once, keeps publishing one frame) and `HoldFrame` (keeps one
-    frame until told to refresh).
+  - Images: `HoldFrame` (keeps one frame until told to refresh), which passes an Image along
+    without reading its pixels and so needs no compiling. Loading an image from a file touches
+    the filesystem, so `ImageFile` is a class node in the same module.
 - `Select` picks a value; `Gate` passes or blocks messages, so a reactive node behind a closed
   gate does not run. That is the graph's if/else.
 
@@ -124,14 +141,15 @@ The order is: the families, then variables, then the gateway and track nodes.
 - **Where an island runs:**
   - **Pure nodes read by a helper** run inside that helper's read: an island output is a
     synthetic port in `InputMailboxesInner`, and a read evaluates it. No process, no thread, no
-    processor instance. A Rust pure node runs inside any reader's read, a module's native half
-    included.
+    processor instance. A compiled pure node runs inside any reader's read, a module's native
+    half included.
   - **Shaders** run on one native evaluator per stream in `tatolabd`, which owns the device,
     and publish on a channel. A shader's code is Slang the engine compiles, never module code.
   - **A stateful pure node that feeds several readers** runs in one pure-node helper per
     stream, spawned only when the stream has such a node, and publishes on a channel. One
     state never has two copies.
-  - **A Python pure island read by a module's native half** runs on the pool (phase 4) or the
+  - **An uncompiled Python pure island read by a module's native half** runs on the pool
+    (phase 4) or the
     port is refused by name, since that read holds no GIL.
 - **The island pass** runs between plan and PREPARE: union-find over lightweight nodes, a host
   per island, cycle refusal. It re-runs on every live `connect` and `disconnect`, touching only
@@ -226,24 +244,13 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   globals. It cannot see aliased, dynamic or transitive access; a function that cheats computes
   wrong values but cannot crash anything outside its interpreter. A Rust pure node is held to
   the same contract by review, not a lint.
+- A body that compiles runs as native code (§The pure-node contract); the rest of this section
+  is how a body that does not compile runs.
 - **A crash breadcrumb.** Before each pure call, in either language, the helper writes the node's
   name to its board.
   When a helper dies with the breadcrumb set, its restart moves that node out to its own
   process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
   the cost. See [NEEDS DECISION 5].
-
-### Native compilation of `@node.pure` (phase 3)
-
-- A Python pure node whose body is typed numeric code (floats, ints, numpy arrays, loops) is
-  compiled to machine code by Numba at load and handed to the read seam as a C function pointer
-  on the pure-node contract, so it runs like a Rust pure node: inside any reader, a module's
-  native half included, with no GIL. A body outside that subset runs as Python. Nothing in the
-  authoring changes, and `graph` shows which ran.
-- The compiled code is cached by a hash of the source, the signature and the Numba version, so
-  a reload or a live edit of another node pays nothing.
-- Measured (2026-11-06, one scalar ease function and a 10M-element loop, C `-O2` as the native
-  baseline): 2.8 ns a call against 2.4 ns native and 155 ns plain Python; the loop within 10%
-  of native; 140 ms to compile a scalar function, about 0.5 s an array loop.
 
 ### The pool and promotion (phase 4)
 
@@ -299,8 +306,8 @@ the device.
 ## MODIFIED
 
 - **The placement entry** (`ARCHITECTURE.md:1529-1546`). It reads: a Python **class** node runs
-  in its own child process, exec'd from the stream's venv, never fork; shaders and Rust pure
-  nodes run without a process; Python pure nodes run inside their Python reader, in a pool only in phase 4, and
+  in its own child process, exec'd from the stream's venv, never fork; shaders and compiled
+  pure nodes run without a process; pure Python that does not compile runs inside its Python reader, in a pool only in phase 4, and
   in its own process after a crash or a stall. "No processor may ever block another" holds
   between class nodes.
 - **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.pure` and
@@ -309,7 +316,7 @@ the device.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
 - **The built-ins entry** (`ARCHITECTURE.md:539-549`). `tatolab-ops` is a first-party module of
-  Rust pure nodes, bundled with the runtime and built on the SDK any module uses, so the runtime
+  pure nodes, bundled with the runtime and built on the SDK any module uses, so the runtime
   still ships no node of its own.
 - **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the pure-node entry, the one
   place the engine calls module code, and only in a helper.
@@ -360,7 +367,8 @@ Assumed unless overruled:
   adds a renderer node; nothing here precludes it.
 - Blueprint's execution wire ("do A, then B") is not part of this change; gates cover streams.
 - Numba ships in the runtime's Python environment; the size (about 40 MB with llvmlite) is
-  accepted, as Slang's was.
+  accepted, as Slang's was. Numba supports a new CPython some months after its release; in that
+  gap pure nodes run as Python, slower, and a native reader of one is refused by name.
 - Wasm is out of scope.
 
 ## Proof
@@ -368,8 +376,11 @@ Assumed unless overruled:
 - `Lfo → Remap → <Python class>` runs with exactly one child process, the class's, beside the
   class case in `tests/stream-on-runtime/test_helper_placement.py`.
 - `connect` and `disconnect` re-island live, and a cycle without a delay node is refused by name.
-- A fixture module's Rust pure node joins an island beside `tatolab-ops`' and is read by a
-  module's native half.
+- `Lfo → Remap` from `tatolab-ops` runs compiled, from the wheel's pre-compiled code, and is
+  read by a module's native half with no GIL.
+- A user's numeric `@node.pure` compiles on load, is cached, and matches its Python output; a
+  non-numeric one runs as Python, and `graph` shows which.
+- A fixture module's Rust pure node joins an island beside `tatolab-ops`'.
 - A stateful pure node keeps its state across a helper restart and a stream reload.
 - A stateful pure node feeding two readers gives both the same value.
 - Two streams' shader dispatches no longer serialise on one host fence.
@@ -386,23 +397,23 @@ Assumed unless overruled:
 
 ## Tickets (expected)
 
-1. Rust pure nodes at the read seam:
-   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the pure-node contract in
-      `tatolab-module-sdk`; `tatolab-ops` with `Lfo`, `Remap`, `Clamp`; a fixture module's pure
-      node joining an island beside them.
+1. Compiled pure nodes at the read seam:
+   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the pure-node contract;
+      `@node.pure` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
+      `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
    2. The island pass on live edits, with cycle refusal.
    3. Literal pins and the full `tatolab-ops` set.
    4. Stateful pure nodes on the state board.
    5. Fan-out of a stateful pure node in the per-stream pure-node helper.
+   6. Rust `#[pure_node]` in `tatolab-module-sdk`, proven by a fixture module.
 2. Shaders:
    1. Asynchronous GPU submission.
    2. One `@node.shader` on the native evaluator.
    3. Fusion under the split rule.
-3. Pure nodes in Python:
-   1. `@node.pure` with `Time` and `State`, inline in a Python reader.
+3. Pure Python that does not compile:
+   1. Inline in a Python reader.
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
-   4. Native compilation of numeric pure functions, with the compile cache.
 4. The pool and promotion, only if graphs need it.
 5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.
@@ -410,7 +421,7 @@ Assumed unless overruled:
 ## Notes (not in scope)
 
 - Measure a helper's real cost (wheel import, idle memory, iceoryx2 and Vulkan setup) and the
-  per-message hop before phase 3; phase 1 removes the hop for Rust pure nodes.
+  per-message hop before phase 3; phase 1 removes the hop for compiled pure nodes.
 - The shader examples in `examples/` and the scaffold's `HalftoneLensEffect` move to
   `@node.shader` as consumer backlog. Retiring `GlslPixelEffect` is a separate owner call.
 - A thread pool for native class nodes is a separate change.
