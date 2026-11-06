@@ -238,9 +238,22 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
     ...
 ```
 
-- Parameters are input ports and the return annotation is the output; a dataclass return gives
-  several named outputs. `float` is a one-channel Channels port, `dict` is Records, and a read
-  type is its family. A ParamSpec decorator keeps the call signature, so a test calls it.
+- **The signature is the node**, read once at import into the catalog, so the editor draws it
+  without running it. A plain parameter is an input pin, and its default the pin's value when
+  nothing is wired; with no default the input must be wired, and `T | None = None` is optional.
+  The return annotation is the output, named `result`; a dataclass return gives one output per
+  field. `float`, `int` and `bool` are one-channel Channels, `dict` is Records, and a read type is
+  its family.
+- **`config`** is one dataclass named by the parameter called `config`, exactly as a
+  `@node.process` `__init__` names it: its JSON Schema is published in the catalog, `add(f,
+  config={...})` sets it and an update changes it live. Its fields are settings, never pins.
+- `Time` and `State[...]` are found by type in any position, and are never pins; they follow a
+  bare `*`, since Python refuses a parameter without a default after one with a default.
+- **Refused at import, by name, with the fix:** a class (that is `@node.process`), a parameter
+  without a type, `*args` or `**kwargs`, a `State` without a matching `Stateful` return or the
+  reverse, a lambda, a closure or a nested function, `async def` and generators, and `-> None`.
+  A prototype reader is 151 lines with every refusal.
+- A ParamSpec decorator keeps the call signature, so a test calls it.
 - `Time` is integer nanoseconds. `State[T]` comes in and `Stateful[Out, T]` names what goes out,
   so the state is visible in the type. The state lives on the board.
 - `add` takes a function through its own overload, and the zero-argument hole is closed.
