@@ -29,6 +29,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_config_class_json_schema,
     json_schema_for_a_node_declaring_no_config,
@@ -651,6 +652,8 @@ def _collect_declared_ports(
                 declared_input["borrow_quota"] = marker["borrow_quota"]
             if "audio_window" in marker:
                 declared_input["audio_window"] = marker["audio_window"]
+            if "family" in marker:
+                declared_input["family"] = marker["family"]
             input_ports.append(declared_input)
         else:
             declared_output: "dict[str, Any]" = {
@@ -659,19 +662,25 @@ def _collect_declared_ports(
             }
             if "catalog_entry" in marker:
                 declared_output["catalog_entry"] = marker["catalog_entry"]
+            if "family" in marker:
+                declared_output["family"] = marker["family"]
             output_ports.append(declared_output)
     return input_ports, output_ports
 
 
 def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
-    """Every port marker declared on the class or inherited, in declaration order.
+    """Every port marker declared on the class or inherited, in declaration order:
+    a decorated method's, and an `Input` or `Output` class attribute's.
 
     Walks the MRO in reverse so a subclass's redeclaration of an inherited
-    method wins, and a base class's ports are inherited rather than lost.
+    attribute wins, and a base class's ports are inherited rather than lost.
     """
     markers_by_attribute: "dict[str, list[dict[str, Any]]]" = {}
     for ancestor in reversed(node_class.__mro__):
         for attribute_name, attribute in vars(ancestor).items():
+            if isinstance(attribute, (Input, Output)):
+                markers_by_attribute[attribute_name] = [attribute._as_port_marker()]
+                continue
             attribute_markers = [
                 marker
                 for marker_attribute in (

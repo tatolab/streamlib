@@ -454,3 +454,69 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
         "a port that declared no contract carries none"
     );
 }
+
+#[streamlib::sdk::processor(
+    execution = manual,
+    input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
+    output(
+        "telemetry",
+        family = Channels,
+        names = from_config("channel_names"),
+        rate = 48000,
+        dtype = "f64"
+    ),
+    output("packets", family = Packets, codec = "h264"),
+)]
+pub struct PortFamilyTestProcessor;
+
+impl streamlib_engine::ManualProcessor for PortFamilyTestProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
+    use streamlib_engine::core::descriptors::{
+        ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType, OutputPortDeclaredNames,
+        PortFamily,
+    };
+
+    let descriptor = PortFamilyTestProcessor::Processor::descriptor().expect("a descriptor");
+    let signals = descriptor.inputs[0]
+        .family
+        .as_ref()
+        .expect("a Channels input");
+    assert_eq!(signals.family, PortFamily::Channels);
+    assert_eq!(signals.requires, vec!["rpm".to_string()]);
+    let telemetry = descriptor.outputs[0]
+        .family
+        .as_ref()
+        .expect("a Channels output");
+    assert_eq!(
+        telemetry.names,
+        Some(OutputPortDeclaredNames::FromConfig {
+            config_key: "channel_names".into()
+        })
+    );
+    assert_eq!(
+        telemetry.rate,
+        Some(ChannelsOutputPortSampleRate::Stated(48_000))
+    );
+    assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F64));
+    assert_eq!(
+        descriptor.outputs[1]
+            .family
+            .as_ref()
+            .and_then(|family| family.codec.as_deref()),
+        Some("h264")
+    );
+}

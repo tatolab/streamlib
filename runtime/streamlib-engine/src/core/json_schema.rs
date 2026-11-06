@@ -121,6 +121,10 @@ pub struct PortInfoOutput {
     /// from the rendering on a port that carries none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    /// The port family this port declares and its family's keys. Absent from
+    /// the rendering on a decorator port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
 }
 
 /// The kind of port - determines how data flows.
@@ -373,6 +377,10 @@ pub struct PortDescriptorOutput {
     /// from the rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    /// The port family this port declares and its family's keys. Absent from
+    /// the rendering on a decorator port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
 }
 
 /// Code examples for a processor in different languages.
@@ -480,6 +488,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
+            family: port.family.clone(),
         }
     }
 }
@@ -634,6 +643,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
+            family: port.family.clone(),
         }
     }
 }
@@ -827,6 +837,7 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -862,6 +873,7 @@ mod port_rendering_tests {
                 borrow_quota: None,
                 audio_window: None,
                 catalog_entry,
+                family: None,
             }],
         )
     }
@@ -952,6 +964,7 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
         assert_carries_no_type_key(&json);
@@ -992,6 +1005,7 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: Some(declared_window_contract()),
             catalog_entry: None,
+            family: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1031,6 +1045,7 @@ mod port_rendering_tests {
                 },
             )),
             catalog_entry: None,
+            family: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1058,6 +1073,7 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             catalog_entry: None,
+            family: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1087,6 +1103,7 @@ mod port_rendering_tests {
                 borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
                 catalog_entry: None,
+                family: None,
             }],
             Vec::new(),
         );

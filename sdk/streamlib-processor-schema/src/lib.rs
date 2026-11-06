@@ -13,6 +13,7 @@ pub mod config_schema_document;
 pub mod descriptors;
 pub mod error;
 pub mod exposed_name_cast;
+pub mod port_family;
 pub mod processor_class_import_path;
 pub mod processor_class_short_name;
 pub mod processor_schema;
@@ -36,6 +37,12 @@ pub use error::{SchemaError, SchemaResult};
 pub use exposed_name_cast::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
     is_in_exposed_name_cast_form,
+};
+pub use port_family::{
+    ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+    OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
+    PortFamilyLinkEndpoint, output_port_names_resolved_against_config,
+    refusal_of_a_link_between_port_families, refusal_of_required_names,
 };
 pub use processor_class_import_path::{BUILT_IN_NODE_CLASS_MODULE, ProcessorClassImportPath};
 pub use processor_class_short_name::ProcessorClassShortName;

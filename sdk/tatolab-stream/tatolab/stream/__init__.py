@@ -58,6 +58,16 @@ from ._node_context_protocols import (
 from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
+from ._port_family_declaration import Array as Array
+from ._port_family_declaration import Channels as Channels
+from ._port_family_declaration import Image as Image
+from ._port_family_declaration import Input as Input
+from ._port_family_declaration import Output as Output
+from ._port_family_declaration import Packets as Packets
+from ._port_family_declaration import PortFamily as PortFamily
+from ._port_family_declaration import PortNamesFromConfig as PortNamesFromConfig
+from ._port_family_declaration import Records as Records
+from ._port_family_declaration import from_config as from_config
 from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
@@ -106,14 +116,16 @@ from .video_frame import VideoFrame as VideoFrame
 
 __all__ = [
     "AccelerationStructureHandle",
+    "Array",
     "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
-    "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
+    "Channels",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
     "ContentLight",
+    "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "Exposure",
     "GlslPixelEffect",
     "GlslPixelEffectDialType",
@@ -124,6 +136,8 @@ __all__ = [
     "GpuSurfaceHandle",
     "GraphicsKernel",
     "IOSurfaceMachPortExport",
+    "Image",
+    "Input",
     "KernelDispatchBatch",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
@@ -144,11 +158,16 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "OpaqueFdAllocationExport",
+    "Output",
+    "Packets",
     "PixelAccessToOneClaimedSurface",
+    "PortFamily",
+    "PortNamesFromConfig",
     "PortPayloadBorrow",
     "PortPayloadLoan",
     "RayTracingKernel",
     "RealTimeStreamClock",
+    "Records",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
@@ -162,6 +181,7 @@ __all__ = [
     "catalog",
     "clock",
     "compile_stream_to_graph",
+    "from_config",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",

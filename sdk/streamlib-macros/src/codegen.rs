@@ -589,6 +589,7 @@ fn generate_descriptor_from_schema(
                 None => quote! { ::std::option::Option::None },
             };
             let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
+            let family_tokens = port_family_declaration_tokens(p.family.as_ref());
             let borrow_quota_tokens = match p.borrow_quota {
                 Some(quota) => quote! { ::std::option::Option::Some(#quota) },
                 None => quote! { ::std::option::Option::None },
@@ -602,6 +603,7 @@ fn generate_descriptor_from_schema(
                     borrow_quota: #borrow_quota_tokens,
                     audio_window: #audio_window_tokens,
                     catalog_entry: ::std::option::Option::None,
+                    family: #family_tokens,
                 })
             }
         })
@@ -616,6 +618,7 @@ fn generate_descriptor_from_schema(
             let port_name = &p.name;
             let port_desc = p.description.as_deref().unwrap_or("");
             let catalog_entry_tokens = catalog_entry_tokens(p.catalog_entry.as_ref());
+            let family_tokens = port_family_declaration_tokens(p.family.as_ref());
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -625,6 +628,7 @@ fn generate_descriptor_from_schema(
                     borrow_quota: ::std::option::Option::None,
                     audio_window: #no_audio_window_tokens,
                     catalog_entry: #catalog_entry_tokens,
+                    family: #family_tokens,
                 })
             }
         })
@@ -814,6 +818,87 @@ fn catalog_entry_tokens(
         ::std::option::Option::Some(__streamlib_sdk::descriptors::CatalogEntry {
             section: __streamlib_sdk::descriptors::CatalogSection::#section_tokens,
             entry: #entry_tokens,
+        })
+    }
+}
+
+/// Emit an expression that rebuilds `family` as a `PortFamilyDeclaration`.
+fn port_family_declaration_tokens(
+    family: Option<&streamlib_processor_schema::PortFamilyDeclaration>,
+) -> TokenStream {
+    use streamlib_processor_schema::{
+        ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+        OutputPortDeclaredNames,
+    };
+
+    let Some(family) = family else {
+        return quote! { ::std::option::Option::None };
+    };
+    let descriptors = quote! { __streamlib_sdk::descriptors };
+    let family_ident = proc_macro2::Ident::new(
+        family.family.declaration_name(),
+        proc_macro2::Span::call_site(),
+    );
+    let strings = |values: &[String]| {
+        quote! { ::std::vec![#(::std::string::String::from(#values)),*] }
+    };
+    let optional = |tokens: Option<TokenStream>| match tokens {
+        Some(tokens) => quote! { ::std::option::Option::Some(#tokens) },
+        None => quote! { ::std::option::Option::None },
+    };
+    let names = optional(family.names.as_ref().map(|names| match names {
+        OutputPortDeclaredNames::Stated(names) => {
+            let names = strings(names);
+            quote! { #descriptors::OutputPortDeclaredNames::Stated(#names) }
+        }
+        OutputPortDeclaredNames::FromConfig { config_key } => quote! {
+            #descriptors::OutputPortDeclaredNames::FromConfig {
+                config_key: ::std::string::String::from(#config_key),
+            }
+        },
+    }));
+    let requires = strings(&family.requires);
+    let codec = optional(
+        family
+            .codec
+            .as_ref()
+            .map(|codec| quote! { ::std::string::String::from(#codec) }),
+    );
+    let requires_codec = strings(&family.requires_codec);
+    let rate = optional(family.rate.as_ref().map(|rate| match rate {
+        ChannelsOutputPortSampleRate::Stated(rate) => {
+            quote! { #descriptors::ChannelsOutputPortSampleRate::Stated(#rate) }
+        }
+        ChannelsOutputPortSampleRate::FromConfig { config_key } => quote! {
+            #descriptors::ChannelsOutputPortSampleRate::FromConfig {
+                config_key: ::std::string::String::from(#config_key),
+            }
+        },
+    }));
+    let dtype = optional(family.dtype.map(|dtype| match dtype {
+        ChannelsOutputPortSampleType::F32 => {
+            quote! { #descriptors::ChannelsOutputPortSampleType::F32 }
+        }
+        ChannelsOutputPortSampleType::F64 => {
+            quote! { #descriptors::ChannelsOutputPortSampleType::F64 }
+        }
+    }));
+    let formats = strings(&family.formats);
+    let residency = optional(family.residency.map(|residency| match residency {
+        ArrayOutputPortResidency::Gpu => quote! { #descriptors::ArrayOutputPortResidency::Gpu },
+        ArrayOutputPortResidency::Cpu => quote! { #descriptors::ArrayOutputPortResidency::Cpu },
+    }));
+    quote! {
+        ::std::option::Option::Some(#descriptors::PortFamilyDeclaration {
+            family: #descriptors::PortFamily::#family_ident,
+            names: #names,
+            requires: #requires,
+            codec: #codec,
+            requires_codec: #requires_codec,
+            rate: #rate,
+            dtype: #dtype,
+            formats: #formats,
+            residency: #residency,
         })
     }
 }
@@ -1125,6 +1210,7 @@ mod processor_struct_emit_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         };
         ProcessorSchema {
             inputs: vec![port("video_in")],
@@ -1668,6 +1754,7 @@ mod processor_struct_emit_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
+            family: None,
         };
         let rendered =
             generate_port_marker_module(PortDirection::Output, &[declared_output_port]).to_string();
