@@ -765,10 +765,11 @@ fn a_described_native_write_reaches_a_native_reader_with_its_descriptor_and_lend
 /// The module SDK writes the module-facing half of the descriptor wire layout
 /// the engine's own types write; the two agree byte for byte.
 #[test]
-fn the_module_sdks_image_frame_and_packets_unit_lay_out_as_the_engines() {
+fn the_module_sdks_descriptors_lay_out_as_the_engines() {
     use streamlib::sdk::iceoryx2::{
-        DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody,
-        ImageFrameH273Colour, PacketsUnitDescriptorBody,
+        ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptorKind,
+        GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
+        PacketsUnitDescriptorBody,
     };
     use tatolab_module_sdk::module_host_table_abi::{
         MODULE_HOST_TABLE_PAYLOAD_KIND_ARRAY_FRAME, MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES,
@@ -778,7 +779,9 @@ fn the_module_sdks_image_frame_and_packets_unit_lay_out_as_the_engines() {
         MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE,
     };
     use tatolab_module_sdk::{
-        ModuleHostImageFrame, ModuleHostImageFrameH273Colour, packets_unit_payload_descriptor,
+        ModuleHostChannelsBlock, ModuleHostChannelsBlockSampleType, ModuleHostImageFrame,
+        ModuleHostImageFrameH273Colour, packets_unit_payload_descriptor,
+        records_message_payload_descriptor,
     };
 
     for (module_kind, engine_kind) in [
@@ -865,5 +868,44 @@ fn the_module_sdks_image_frame_and_packets_unit_lay_out_as_the_engines() {
     assert_eq!(
         (module_packets_unit.kind, module_packets_unit.body),
         (engine_packets_unit.kind, engine_packets_unit.body)
+    );
+
+    for (module_sample_type, engine_sample_type) in [
+        (
+            ModuleHostChannelsBlockSampleType::F32,
+            ChannelsBlockSampleType::F32,
+        ),
+        (
+            ModuleHostChannelsBlockSampleType::F64,
+            ChannelsBlockSampleType::F64,
+        ),
+    ] {
+        let engine_channels_block =
+            DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
+                start_sample: 0x0102_0304_0506_0708,
+                sample_rate: 44_100,
+                channel_count: 6,
+                samples_per_channel: 1024,
+                sample_type: engine_sample_type as u32,
+            });
+        let module_channels_block = ModuleHostChannelsBlock {
+            start_sample: 0x0102_0304_0506_0708,
+            sample_rate: 44_100,
+            channel_count: 6,
+            samples_per_channel: 1024,
+            sample_type: module_sample_type,
+        }
+        .payload_descriptor();
+        assert_eq!(
+            (module_channels_block.kind, module_channels_block.body),
+            (engine_channels_block.kind, engine_channels_block.body)
+        );
+    }
+
+    let engine_records_message = DataChannelPayloadDescriptor::records_message();
+    let module_records_message = records_message_payload_descriptor();
+    assert_eq!(
+        (module_records_message.kind, module_records_message.body),
+        (engine_records_message.kind, engine_records_message.body)
     );
 }
