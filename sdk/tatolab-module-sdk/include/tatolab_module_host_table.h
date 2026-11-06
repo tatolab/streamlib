@@ -23,8 +23,10 @@
  * minor 4 adds, the host-memory write minor 5 adds, the lend by surface
  * id minor 6 adds and the shared native service leases and node failure
  * minor 7 adds and the host-memory read minor 9 adds. The virtual camera
- * verbs minor 8 adds and the stream-time conversion minor 10 adds act in the
- * helper itself.
+ * verbs minor 8 adds, the stream-time conversion minor 10 adds and the
+ * described reads and writes minor 11 adds act in the helper itself; its lend
+ * of a message's pooled frame and its slot of a pool texture reach the
+ * surface-share service the helper already holds.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -45,7 +47,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(10)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(11)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -143,6 +145,46 @@ typedef int32_t ModuleHostTableStatus;
  * A frame dropped because every buffer is still with the consumer.
  */
 #define MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER UINT32_C(2)
+
+/**
+ * Bytes in a payload descriptor's body. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES ((size_t)60)
+
+/**
+ * A payload that is plain bytes. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES UINT32_C(0)
+
+/**
+ * A payload whose frame lives in a GPU pool slot. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_GPU_POOL_SLOT_FRAME UINT32_C(1)
+
+/**
+ * An Image frame. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME UINT32_C(2)
+
+/**
+ * A Channels block. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK UINT32_C(3)
+
+/**
+ * A Packets unit. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT UINT32_C(4)
+
+/**
+ * A Records message. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE UINT32_C(5)
+
+/**
+ * An Array frame. Minor 11.
+ */
+#define MODULE_HOST_TABLE_PAYLOAD_KIND_ARRAY_FRAME UINT32_C(6)
 
 /**
  * How many bytes of a refusal's message the caller's buffer holds; a longer
@@ -382,6 +424,17 @@ typedef struct ModuleHostTableReadMessage {
     uint64_t lost_since_last_read;
     void *host_owned_message;
 } ModuleHostTableReadMessage;
+
+/**
+ * What a message's payload is, as its channel sample's header carries it:
+ * one of the `MODULE_HOST_TABLE_PAYLOAD_KIND_*` kinds and that kind's
+ * little-endian body, laid out as the engine's `DataChannelPayloadDescriptor`
+ * is. Minor 11.
+ */
+typedef struct ModuleHostTablePayloadDescriptor {
+    uint32_t kind;
+    uint8_t body[MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES];
+} ModuleHostTablePayloadDescriptor;
 
 /**
  * An audio stream's rate, channel count and scalar encoding. In a request,
@@ -780,6 +833,28 @@ typedef struct ModuleHostTable {
      * stream's clock steps.
      */
     int64_t (*stream_time_ns_of_a_machine_instant)(void *node_host, int64_t machine_instant_ns);
+    /**
+     * Minor 11: the descriptor of the payload a read message carries.
+     */
+    ModuleHostTableStatus (*input_message_payload_descriptor)(void *node_host, const ModuleHostTableReadMessage *read_message, ModuleHostTablePayloadDescriptor *payload_descriptor);
+    /**
+     * Minor 11: lend native code the GPU pool slot frame a read message's
+     * Image frame or GPU pool slot frame descriptor names, claimed against
+     * its producer's reuse until the lent surface is released; a message of
+     * any other kind is refused naming it.
+     */
+    ModuleHostTableStatus (*input_message_lend_pooled_gpu_frame)(void *node_host, const ModuleHostTableReadMessage *read_message, ModuleHostTableSurfaceHandle *lent_surface, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 11: publish `payload` described by `payload_descriptor`, as
+     * `ModuleHostTable.output_port_write` publishes plain bytes.
+     */
+    ModuleHostTableStatus (*output_port_write_described)(void *node_host, ModuleHostTablePortHandle port, ModuleHostTableBytes payload, int64_t timestamp_ns, uint32_t starts_group, const ModuleHostTablePayloadDescriptor *payload_descriptor, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 11: the GPU pool slot frame descriptor of a texture acquired
+     * from the node's output pool, which an Image frame written of it
+     * carries in its body's first 40 bytes.
+     */
+    ModuleHostTableStatus (*surface_gpu_pool_slot_frame)(void *node_host, ModuleHostTableSurfaceHandle surface, ModuleHostTablePayloadDescriptor *gpu_pool_slot_frame, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

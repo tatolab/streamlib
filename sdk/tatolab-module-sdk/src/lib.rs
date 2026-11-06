@@ -17,6 +17,7 @@
 pub mod module_host;
 pub mod module_host_audio_capture;
 pub mod module_host_audio_playback;
+pub mod module_host_payload_descriptor;
 #[cfg(feature = "pyo3")]
 mod module_host_python_capsule;
 pub mod module_host_shared_native_service;
@@ -42,12 +43,16 @@ pub use module_host_audio_playback::{
     ModuleHostAudioPlaybackStream, ModuleHostAudioPlaybackStreamLiveness,
     ModuleHostAudioPlaybackStreamRequest,
 };
+pub use module_host_payload_descriptor::{
+    MODULE_HOST_H273_UNSPECIFIED, ModuleHostImageFrame, ModuleHostImageFrameH273Colour,
+    ModuleHostPayloadDescriptorRefusal, codec_of_a_packets_unit, packets_unit_payload_descriptor,
+};
 pub use module_host_shared_native_service::{
     ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,
 };
 pub use module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
-    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable,
+    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable, ModuleHostTablePayloadDescriptor,
 };
 pub use module_host_virtual_camera::{
     ModuleHostVirtualCameraFramePresentation, ModuleHostVirtualCameraStream,

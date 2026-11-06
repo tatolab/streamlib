@@ -14,7 +14,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextFullAccess, log, node
+from tatolab.stream import Image, Input, Output, Packets, RuntimeContextFullAccess, log, node
 
 from . import _native
 
@@ -38,7 +38,7 @@ class H265EncoderConfig:
         "wins with a warning.",
     ] = None
     height: Annotated["int | None", "Expected frame height — a guardrail like `width`."] = None
-    fps: Annotated["int | None", "Frame rate used when the incoming frames carry none. Absent: 60."] = None
+    fps: Annotated["int | None", "The frame rate the encoder's rate control assumes. Absent: 60."] = None
     bitrate_bps: Annotated[
         "int | None",
         "Target bitrate in bits per second. Absent: constant-QP encoding at the "
@@ -61,9 +61,10 @@ class H265EncoderConfig:
 class H265Encoder:
     """Video frames in, H.265 media frames out, encoded with Vulkan Video or VideoToolbox.
 
-    `video` takes 8-bit RGBA or BGRA frames, buffer-backed (camera, test
-    pattern) or texture-backed (a GPU effect, a decoder); any other format is
-    refused by name and dropped.
+    `video` takes 8-bit RGBA or BGRA Image frames, buffer-backed (camera) or
+    texture-backed (a test pattern, a GPU effect, a decoder), the colour their
+    descriptor states written into the stream's VUI; any other format, and a
+    message that is not an Image frame, is refused by name and dropped.
     `encoded_video` publishes one media frame per access unit — a QUIC varint
     timestamp in microseconds, then the Annex-B access unit, parameter sets
     inline before each keyframe — and a keyframe opens a group. After the first
@@ -85,13 +86,10 @@ class H265Encoder:
         self._config = config
         self._encoding_thread: "_native.H265EncoderThread | None" = None
 
-    @node.input(delivery_profile="ordered")
-    def video(self) -> None:
-        """Video frames to encode."""
-
-    @node.output()
-    def encoded_video(self) -> None:
-        """H.265 media frames, one access unit each."""
+    video = Input(Image, delivery="ordered", description="Video frames to encode")
+    encoded_video = Output(
+        Packets, codec="h265", description="H.265 media frames, one access unit each"
+    )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to an encoding thread of this wheel's Rust.
@@ -152,15 +150,16 @@ class H265Decoder:
 
     `encoded_video` takes media frames in the layout `H265Encoder` publishes — a
     QUIC varint timestamp, then one Annex-B access unit, a keyframe opening a
-    group — from any producer; a message that is not one is refused by name.
+    group — from any producer; a message that is not a Packets unit of this codec is
+    refused by name.
     The decoder enters the stream at a group start and, after a read reports a
     loss, discards to the next one, so it never publishes a picture built from
     references it did not see. A keyframe whose parameter sets differ from the
     ones before it reconfigures the decoder.
 
-    `video` publishes a `VideoFrame` on an RGBA texture from this node's output
+    `video` publishes an Image frame on an RGBA texture from this node's output
     pool at the conformance-windowed extent, carrying the media frame's
-    timestamp and the `color_info` the picture was converted with: the SPS
+    timestamp and the colour the picture was converted with: the SPS
     VUI's, its matrix and range filled when the stream leaves them out (BT.709
     for HD, BT.601 for SD, limited range). The host converts each picture from
     the NV12 buffer the decoder exports on Linux, or the NV12 IOSurface
@@ -177,13 +176,13 @@ class H265Decoder:
         self._config = config
         self._decoding_thread: "_native.H265DecoderThread | None" = None
 
-    @node.input(delivery_profile="ordered")
-    def encoded_video(self) -> None:
-        """H.265 media frames to decode."""
-
-    @node.output()
-    def video(self) -> None:
-        """Decoded video frames."""
+    encoded_video = Input(
+        Packets,
+        delivery="ordered",
+        requires_codec=("h265",),
+        description="H.265 media frames to decode",
+    )
+    video = Output(Image, description="Decoded video frames")
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to a decoding thread of this wheel's Rust.

@@ -17,8 +17,8 @@ use crate::module_host_table_abi::{
     ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
     ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
     ModuleHostTableMutableBytes, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePortHandle, ModuleHostTableReadMessage, ModuleHostTableStatus,
-    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
+    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
 
 /// Why the module host table, or one of its verbs, refused.
@@ -790,6 +790,29 @@ impl ModuleHostSurface {
     }
 }
 
+impl ModuleHostSurface {
+    /// The GPU pool slot frame descriptor of this texture, acquired from the
+    /// node's output pool: what an Image frame written of it names its slot
+    /// with.
+    pub fn gpu_pool_slot_frame(&self) -> Result<ModuleHostTablePayloadDescriptor, ModuleHostError> {
+        let table = &self.module_host.module_host_table;
+        let mut gpu_pool_slot_frame = ModuleHostTablePayloadDescriptor::bytes();
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: the node host is retained by `self.module_host`; the
+        // descriptor and the message buffer are live for the call.
+        let status = unsafe {
+            (table.surface_gpu_pool_slot_frame)(
+                table.node_host,
+                self.handle,
+                &mut gpu_pool_slot_frame,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("surface_gpu_pool_slot_frame", status, &error_message)?;
+        Ok(gpu_pool_slot_frame)
+    }
+}
+
 impl Drop for ModuleHostSurface {
     fn drop(&mut self) {
         let table = &self.module_host.module_host_table;
@@ -835,6 +858,32 @@ impl ModuleHostOutputPort {
             )
         };
         refuse_unless_ok("output_port_write", status, &error_message)
+    }
+
+    /// Publish `payload` described by `payload_descriptor` to every
+    /// downstream link, stamped as [`Self::write`] stamps.
+    pub fn write_described(
+        &self,
+        payload: &[u8],
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+        payload_descriptor: &ModuleHostTablePayloadDescriptor,
+    ) -> Result<(), ModuleHostError> {
+        let table = &self.module_host.module_host_table;
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `write`; the descriptor is live for the call.
+        let status = unsafe {
+            (table.output_port_write_described)(
+                table.node_host,
+                self.handle,
+                ModuleHostTableBytes::of(payload),
+                timestamp_ns.unwrap_or(MODULE_HOST_TABLE_TIMESTAMP_NOW),
+                u32::from(starts_group),
+                payload_descriptor,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok("output_port_write_described", status, &error_message)
     }
 
     /// State the port's catalog entry: `section` is `video` or `audio`, and
@@ -936,6 +985,53 @@ impl ModuleHostReadMessage {
     /// The messages this one's inbound link lost since the read before it.
     pub fn lost_since_last_read(&self) -> u64 {
         self.read_message.lost_since_last_read
+    }
+
+    /// What the payload is: its kind and that kind's body.
+    pub fn payload_descriptor(&self) -> Result<ModuleHostTablePayloadDescriptor, ModuleHostError> {
+        let table = &self.module_host.module_host_table;
+        let mut payload_descriptor = ModuleHostTablePayloadDescriptor::bytes();
+        // SAFETY: the host owns the message until this value drops.
+        let status = unsafe {
+            (table.input_message_payload_descriptor)(
+                table.node_host,
+                &self.read_message,
+                &mut payload_descriptor,
+            )
+        };
+        refuse_unless_ok(
+            "input_message_payload_descriptor",
+            status,
+            &ModuleHostTableErrorMessage::empty(),
+        )?;
+        Ok(payload_descriptor)
+    }
+
+    /// Lend native code the pooled GPU frame this message's Image frame or
+    /// GPU pool slot frame names, held against its producer's reuse until the
+    /// lent surface drops.
+    pub fn lend_pooled_gpu_frame(&self) -> Result<ModuleHostSurface, ModuleHostError> {
+        let table = &self.module_host.module_host_table;
+        let mut lent_surface = ModuleHostTableSurfaceHandle { value: 0 };
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `payload_descriptor`; the slots are live for the call.
+        let status = unsafe {
+            (table.input_message_lend_pooled_gpu_frame)(
+                table.node_host,
+                &self.read_message,
+                &mut lent_surface,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok(
+            "input_message_lend_pooled_gpu_frame",
+            status,
+            &error_message,
+        )?;
+        Ok(ModuleHostSurface {
+            module_host: self.module_host.clone(),
+            handle: lent_surface,
+        })
     }
 }
 

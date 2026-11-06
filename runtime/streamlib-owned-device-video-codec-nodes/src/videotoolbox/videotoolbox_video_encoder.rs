@@ -23,8 +23,8 @@ use super::videotoolbox_compression_session::{
 };
 use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
+use crate::image_frame_on_the_video_port::{H273ColorVuiWireNames, ImageFrameReadByTheEncoder};
 use crate::video_encoder_settings::VideoEncoderSettings;
-use crate::video_frame_message::{VideoFrameColorInfoWireNames, VideoFrameMessage};
 
 /// Pool IOSurfaces kept adopted; the session's pool is far smaller.
 const MOST_ADOPTED_IOSURFACES_KEPT: usize = 32;
@@ -50,7 +50,7 @@ struct CompressionSessionMintedFromAFrame {
     compression_session: VideoToolboxCompressionSession,
     minted_width: u32,
     minted_height: u32,
-    encoded_color_info: VideoFrameColorInfoWireNames,
+    encoded_color_info: H273ColorVuiWireNames,
     adopted_pool_surfaces_by_iosurface_id: HashMap<IOSurfaceID, PoolIOSurfaceAdoptedAsSurface>,
 }
 
@@ -105,7 +105,7 @@ impl VideoToolboxVideoEncoder {
     /// arriving after a failed mint is discarded.
     pub fn encode_and_publish(
         &mut self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
         encoded_video: &dyn EncodedVideoOutputPort,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
@@ -186,7 +186,10 @@ impl VideoToolboxVideoEncoder {
         Ok(())
     }
 
-    fn mint_unless_a_session_matches(&mut self, frame: &VideoFrameMessage) -> Result<(), String> {
+    fn mint_unless_a_session_matches(
+        &mut self,
+        frame: &ImageFrameReadByTheEncoder,
+    ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
         if let Some(stale_session) = self.minted_session.take_if(|minted| {
             (minted.minted_width, minted.minted_height) != (frame.width, frame.height)
@@ -216,23 +219,14 @@ impl VideoToolboxVideoEncoder {
 
     fn mint_session(
         &self,
-        frame: &VideoFrameMessage,
+        frame: &ImageFrameReadByTheEncoder,
     ) -> Result<CompressionSessionMintedFromAFrame, String> {
         let node_type_name = self.node.node_type_name;
-        let source_frame_color_vui = frame
-            .color_info
-            .as_ref()
-            .map(|color_info| color_info.to_h273_color_vui())
-            .transpose()
-            .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
         let encoded_color_vui: H273ColorVui =
-            color_vui_every_engine_encoder_writes(source_frame_color_vui);
-        let shape = self.settings.session_shape_for_frame(
-            node_type_name,
-            frame.width,
-            frame.height,
-            frame.fps,
-        );
+            color_vui_every_engine_encoder_writes(Some(frame.color_vui));
+        let shape =
+            self.settings
+                .session_shape_for_frame(node_type_name, frame.width, frame.height);
         let mint_started = Instant::now();
         let compression_session =
             VideoToolboxCompressionSession::open(&VideoToolboxCompressionSessionRequest {
@@ -263,7 +257,7 @@ impl VideoToolboxVideoEncoder {
             compression_session,
             minted_width: shape.width,
             minted_height: shape.height,
-            encoded_color_info: VideoFrameColorInfoWireNames::of_h273_color_vui(&encoded_color_vui),
+            encoded_color_info: H273ColorVuiWireNames::of_h273_color_vui(&encoded_color_vui),
             adopted_pool_surfaces_by_iosurface_id: HashMap::new(),
         })
     }
@@ -275,7 +269,7 @@ impl VideoToolboxVideoEncoder {
 fn convert_the_frame_into_the_pool_surface(
     module_host: &ModuleHost,
     session: &mut CompressionSessionMintedFromAFrame,
-    frame: &VideoFrameMessage,
+    frame: &ImageFrameReadByTheEncoder,
     pool_iosurface: CFRetained<IOSurfaceRef>,
 ) -> Result<(), String> {
     let iosurface_id = pool_iosurface.id();
@@ -310,13 +304,10 @@ fn convert_the_frame_into_the_pool_surface(
         .get(&iosurface_id)
         .ok_or_else(|| format!("IOSurface {iosurface_id} is missing from the adopted set"))?
         .adopted_surface;
-    let lent_frame = module_host
-        .lend_surface_a_message_names(&frame.surface_id)
-        .map_err(|refusal| refusal.to_string())?;
     let encoded_color_info = session.encoded_color_info;
     module_host
         .convert_surface_into(
-            &lent_frame,
+            frame.lent_pooled_frame(),
             adopted_pool_surface,
             &ModuleHostColorInfo {
                 primaries: encoded_color_info.primaries,

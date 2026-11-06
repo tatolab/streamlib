@@ -15,9 +15,7 @@ name = "streamlib_owned_device_video_codec_nodes"
 path = "src/lib.rs"
 
 [dependencies]
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.6.0" }
-serde.workspace = true
-rmp-serde.workspace = true
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0" }
 tracing.workspace = true
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.30" }
 streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.30" }

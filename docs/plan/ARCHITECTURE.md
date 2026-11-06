@@ -2980,7 +2980,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   colour rides the bitstream's VUI; a sync point is the envelope's `starts_group`; the
   timestamp rides the user header like every message's. A message the decoder cannot read is
   refused by name, never reshaped — the audio wire codec's doctrine — and a decoded frame is
-  an ordinary `VideoFrame`. Loss on an ordered encoded link is the engine's per-link count the
+  an ordinary Image frame; the encoded message is a Packets unit naming its codec. Loss on an ordered encoded link is the engine's per-link count the
   reader exposes as `lost_since_last_read`: a decoder enters a stream only at a
   `starts_group` and, on a message reporting a loss, discards to the next `starts_group` —
   resuming at that message when it itself starts a group. A write the channel ceiling refuses
@@ -3069,9 +3069,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `max_width`/`max_height` against the picture extent — and
   the `max_width`/`max_height` pair that warns and auto-detects from the first SPS when
   half-specified. What a Python app may wire follows from the engine half and is stated
-  so the docstrings can say it: the encoder's `video` input takes any published
-  `VideoFrame`, buffer-backed or texture-backed, while the decoder's `video` output is
-  an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface — so a decoded frame
+  so the docstrings can say it: the encoder's `video` input takes any Image frame,
+  buffer-backed or texture-backed, while the decoder's `video` output is an ordinary
+  Image frame on a pooled RGBA surface — so a decoded frame
   reaches a Python kernel through a DLPack landing copy and never by bare surface id,
   which is the camera's existing gap carried, not a new one.
   [python-codec-block-api — SHIPPED #2105; macos-capability-parity — SHIPPED #2413;

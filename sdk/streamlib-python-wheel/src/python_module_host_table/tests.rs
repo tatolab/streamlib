@@ -360,7 +360,7 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 10})
+        serde_json::json!({"major": 1, "minor": 11})
     );
     assert_eq!(capabilities["node_id"], "source-node");
     assert_eq!(
@@ -701,5 +701,169 @@ fn a_virtual_camera_handle_no_open_returned_is_refused() {
     assert!(
         refusal.contains("names no camera this table has open"),
         "{refusal}"
+    );
+}
+
+#[test]
+fn a_described_native_write_reaches_a_native_reader_with_its_descriptor_and_lends_no_frame() {
+    Python::initialize();
+    let (writer_host, reader_host, _contexts) = Python::attach(|python| {
+        let (source, destination) = one_wired_link(python, "described");
+        let (source_context, _) = full_access_context_recording_escalates(python, source, "source");
+        let (destination_context, _) =
+            full_access_context_recording_escalates(python, destination, "destination");
+        let writer_capsule =
+            open_module_host_table(&source_context, &[SOURCE_OUTPUT_PORT], &[]).unwrap();
+        let reader_capsule =
+            open_module_host_table(&destination_context, &[], &[DESTINATION_INPUT_PORT]).unwrap();
+        (
+            module_host_of(&writer_capsule),
+            module_host_of(&reader_capsule),
+            (source_context.unbind(), destination_context.unbind()),
+        )
+    });
+    let packets_unit = DataChannelPayloadDescriptor::packets_unit(
+        &streamlib::sdk::iceoryx2::PacketsUnitDescriptorBody {
+            codec: "h264".to_string(),
+        },
+    )
+    .unwrap();
+    writer_host
+        .open_output_port(SOURCE_OUTPUT_PORT)
+        .unwrap()
+        .write_described(
+            b"access unit",
+            Some(90),
+            true,
+            &ModuleHostTablePayloadDescriptor {
+                kind: packets_unit.kind,
+                body: packets_unit.body,
+            },
+        )
+        .unwrap();
+
+    let message = reader_host
+        .open_input_port(DESTINATION_INPUT_PORT)
+        .unwrap()
+        .read()
+        .unwrap()
+        .expect("the described write arrived");
+    assert_eq!(message.payload(), b"access unit");
+    assert_eq!(message.timestamp_ns(), 90);
+    let read_descriptor = message.payload_descriptor().unwrap();
+    assert_eq!(
+        (read_descriptor.kind, read_descriptor.body),
+        (packets_unit.kind, packets_unit.body)
+    );
+    let refusal = message.lend_pooled_gpu_frame().unwrap_err().to_string();
+    assert!(
+        refusal.contains("kind 4") && refusal.contains("Image frame"),
+        "{refusal}"
+    );
+}
+
+/// The module SDK writes the module-facing half of the descriptor wire layout
+/// the engine's own types write; the two agree byte for byte.
+#[test]
+fn the_module_sdks_image_frame_and_packets_unit_lay_out_as_the_engines() {
+    use streamlib::sdk::iceoryx2::{
+        DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody,
+        ImageFrameH273Colour, PacketsUnitDescriptorBody,
+    };
+    use tatolab_module_sdk::module_host_table_abi::{
+        MODULE_HOST_TABLE_PAYLOAD_KIND_ARRAY_FRAME, MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES,
+        MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK,
+        MODULE_HOST_TABLE_PAYLOAD_KIND_GPU_POOL_SLOT_FRAME,
+        MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME, MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT,
+        MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE,
+    };
+    use tatolab_module_sdk::{
+        ModuleHostImageFrame, ModuleHostImageFrameH273Colour, packets_unit_payload_descriptor,
+    };
+
+    for (module_kind, engine_kind) in [
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_BYTES,
+            DataChannelPayloadDescriptorKind::Bytes,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_GPU_POOL_SLOT_FRAME,
+            DataChannelPayloadDescriptorKind::GpuPoolSlotFrame,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME,
+            DataChannelPayloadDescriptorKind::ImageFrame,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK,
+            DataChannelPayloadDescriptorKind::ChannelsBlock,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT,
+            DataChannelPayloadDescriptorKind::PacketsUnit,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE,
+            DataChannelPayloadDescriptorKind::RecordsMessage,
+        ),
+        (
+            MODULE_HOST_TABLE_PAYLOAD_KIND_ARRAY_FRAME,
+            DataChannelPayloadDescriptorKind::ArrayFrame,
+        ),
+    ] {
+        assert_eq!(module_kind, engine_kind as u32, "{engine_kind:?}");
+    }
+
+    let slot = GpuPoolSlotFrameDescriptorBody {
+        pool: [9; 16],
+        slot: 3,
+        generation: 11,
+        timeline_value: 13,
+        image_layout: 5,
+    };
+    let colour = ImageFrameH273Colour {
+        primaries: 1,
+        transfer: 13,
+        matrix: 6,
+        range: 0,
+    };
+    let engine_image_frame = DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
+        slot,
+        width: 640,
+        height: 360,
+        format: 7,
+        colour,
+    });
+    let engine_slot = DataChannelPayloadDescriptor::gpu_pool_slot_frame(slot);
+    let module_image_frame = ModuleHostImageFrame {
+        width: 640,
+        height: 360,
+        texture_format: 7,
+        colour: ModuleHostImageFrameH273Colour {
+            primaries: 1,
+            transfer: 13,
+            matrix: 6,
+            range: 0,
+        },
+    }
+    .payload_descriptor_in_the_slot(&ModuleHostTablePayloadDescriptor {
+        kind: engine_slot.kind,
+        body: engine_slot.body,
+    })
+    .unwrap();
+    assert_eq!(
+        (module_image_frame.kind, module_image_frame.body),
+        (engine_image_frame.kind, engine_image_frame.body)
+    );
+
+    let engine_packets_unit =
+        DataChannelPayloadDescriptor::packets_unit(&PacketsUnitDescriptorBody {
+            codec: "h264".to_string(),
+        })
+        .unwrap();
+    let module_packets_unit = packets_unit_payload_descriptor("h264").unwrap();
+    assert_eq!(
+        (module_packets_unit.kind, module_packets_unit.body),
+        (engine_packets_unit.kind, engine_packets_unit.body)
     );
 }

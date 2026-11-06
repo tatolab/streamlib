@@ -29,21 +29,29 @@ impl HelperProcessGpuExchangeClient {
         &self,
         surface_id: &str,
     ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
+        self.claim_in_its_pool_claim_table_refusing_by_message(surface_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// [`Self::claim_in_its_pool_claim_table`], refusing with a message rather
+    /// than a Python exception, for a caller holding no interpreter.
+    pub(crate) fn claim_in_its_pool_claim_table_refusing_by_message(
+        &self,
+        surface_id: &str,
+    ) -> Result<Option<Arc<HelperGpuPoolSlotFrameClaim>>, String> {
         match self.gpu_pool_claim_tables.claim_the_frame_named(surface_id) {
             HelperGpuPoolFrameClaimAttempt::Claimed(claimed) => Ok(Some(claimed)),
             HelperGpuPoolFrameClaimAttempt::NotInAClaimTable => Ok(None),
-            HelperGpuPoolFrameClaimAttempt::Recycled(recycled) => {
-                Err(PyRuntimeError::new_err(format!(
-                    "frame {surface_id:?} was recycled: its slot publishes generation {}{}, \
-                     and a published frame is never answered with newer pixels",
-                    recycled.published_generation,
-                    if recycled.slot_was_retiring {
-                        " and is being handed out again"
-                    } else {
-                        ""
-                    }
-                )))
-            }
+            HelperGpuPoolFrameClaimAttempt::Recycled(recycled) => Err(format!(
+                "frame {surface_id:?} was recycled: its slot publishes generation {}{}, and a \
+                 published frame is never answered with newer pixels",
+                recycled.published_generation,
+                if recycled.slot_was_retiring {
+                    " and is being handed out again"
+                } else {
+                    ""
+                }
+            )),
         }
     }
 
@@ -57,6 +65,17 @@ impl HelperProcessGpuExchangeClient {
         &self,
         pooled_frame: GpuPoolSlotFrameDescriptorBody,
     ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
+        self.note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(pooled_frame)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// [`Self::note_and_claim_the_pooled_gpu_frame_a_read_carries`], refusing
+    /// with a message rather than a Python exception, for a caller holding no
+    /// interpreter.
+    pub(crate) fn note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(
+        &self,
+        pooled_frame: GpuPoolSlotFrameDescriptorBody,
+    ) -> Result<Option<Arc<HelperGpuPoolSlotFrameClaim>>, String> {
         if self
             .gpu_pool_claim_tables
             .the_hand_over_was_refused(&pooled_frame.pool)
@@ -88,14 +107,14 @@ impl HelperProcessGpuExchangeClient {
         }
         let Some(pool_slot_key) = self.gpu_pool_claim_tables.note_a_pooled_frame(pooled_frame)
         else {
-            return Err(PyRuntimeError::new_err(format!(
+            return Err(format!(
                 "a frame of GPU pool {} names claim table row {}, which the pool's claim table \
                  hand-over leases to no slot",
                 gpu_pool_uuid_wire_name(&pooled_frame.pool),
                 pooled_frame.slot
-            )));
+            ));
         };
-        self.claim_in_its_pool_claim_table(&published_frame_id_of_pool_slot(
+        self.claim_in_its_pool_claim_table_refusing_by_message(&published_frame_id_of_pool_slot(
             &pool_slot_key,
             pooled_frame.generation,
         ))

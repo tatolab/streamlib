@@ -31,8 +31,10 @@ use crate::encoded_video_group_entry_gate::{
     EncodedVideoGroupEntryDisposition, EncodedVideoGroupEntryGate,
 };
 use crate::hang_legacy_container_media_frame::annex_b_access_unit_of_a_hang_legacy_container_media_frame;
+use crate::image_frame_on_the_video_port::{
+    H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
+};
 use crate::video_decoder_settings::VideoDecoderSettings;
-use crate::video_frame_message::{DecodedVideoFrameRecord, VideoFrameColorInfoWireNames};
 
 /// The node output pool decoded pictures are converted into.
 const DECODED_PICTURE_POOL_KEY: &str = "decoded_pictures";
@@ -231,7 +233,7 @@ impl OwnedDeviceVideoDecoder {
             format!("{node_type_name}: the decoder handed back a picture in no exported buffer")
         })?;
         let color_info =
-            VideoFrameColorInfoWireNames::of_h273_color_vui(&picture.decoded_picture_color_vui);
+            H273ColorVuiWireNames::of_h273_color_vui(&picture.decoded_picture_color_vui);
         let pixel_format_wire_name = match color_info.range {
             Some("full") => "nv12_full_range",
             _ => "nv12_video_range",
@@ -265,16 +267,16 @@ impl OwnedDeviceVideoDecoder {
                 },
             )
             .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
-        let record = DecodedVideoFrameRecord {
-            surface_id: decoded_picture_texture.surface_id(),
-            width: picture.width,
-            height: picture.height,
-            timestamp_ns,
-            color_info,
-        }
-        .to_msgpack();
+        let image_frame = image_frame_payload_descriptor_of_a_decoded_picture(
+            &decoded_picture_texture,
+            DECODED_PICTURE_TEXTURE_FORMAT,
+            picture.width,
+            picture.height,
+            &picture.decoded_picture_color_vui,
+        )
+        .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
         video_output
-            .write(&record, Some(timestamp_ns), true)
+            .write_described(&[], Some(timestamp_ns), true, &image_frame)
             .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
 
         self.frames_decoded += 1;
