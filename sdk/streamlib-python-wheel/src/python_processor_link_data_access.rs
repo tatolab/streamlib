@@ -2806,6 +2806,189 @@ mod tests {
         );
     }
 
+    /// `ImageToArray` borrows an Image frame's pool slot as its one Array
+    /// attribute: the attribute a reader claims exports the very address the
+    /// Image frame itself does, the slot's mapping, with no copy between.
+    /// Needs a Vulkan device; skips where none comes up.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_to_array_borrows_the_frames_own_slot_with_no_copy() {
+        use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+        use streamlib::sdk::context::{GpuPoolClaimTablesOfOnePool, SurfaceStore};
+        use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
+        use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+        use streamlib_media_builtins::port_family_conversion::image_to_array::array_frame_of_the_image_frame;
+
+        const POOL_SLOT_KEY: &str = "image-to-array-slot";
+        let host_device = match HostVulkanDevice::new() {
+            Ok(host_device) => host_device,
+            Err(unavailable) => {
+                tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+                return;
+            }
+        };
+        let exported = match HostVulkanBuffer::new_opaque_fd_export(&host_device, 64 * 4 * 16) {
+            Ok(exported) => exported,
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no OPAQUE_FD buffer export on this device ({unavailable})"
+                );
+                return;
+            }
+        };
+        let pool_slot = PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(exported),
+            64,
+            16,
+            4,
+            PixelFormat::Bgra32,
+        );
+        let share = SurfaceShareUnderTest::start("image-to-array");
+        let engine_surface_store = SurfaceStore::new(
+            share.socket_path.to_string_lossy().into_owned(),
+            "engine:image-to-array".to_string(),
+        );
+        engine_surface_store
+            .connect()
+            .expect("the engine's store connects");
+        engine_surface_store
+            .register_buffer(POOL_SLOT_KEY, &pool_slot)
+            .expect("the engine registers the pool slot");
+        let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("image-to-array");
+        let row_lease = claim_tables_of_the_pool
+            .lease_a_row_for_a_slot(
+                share.check_out_leases().gpu_pool_claim_tables(),
+                POOL_SLOT_KEY,
+            )
+            .expect("the pool leases its slot a row");
+        row_lease.row().publish_generation(1);
+        share.publish_frame_generation_over_a_registered_pool_slot(POOL_SLOT_KEY, 1);
+        let exchange_client = share.exchange_client_labelled_importing_on(
+            "image-to-array",
+            Ok(host_device.physical_device_uuid()),
+        );
+
+        Python::initialize();
+        Python::attach(|python| {
+            put_the_stream_distribution_source_on_sys_path(python);
+            lend_the_typed_read_gpu_offer_to_this_interpreter(python);
+            let gpu = Bound::new(
+                python,
+                PythonGpuContextLimitedAccess::new_for_helper_process(Some(exchange_client)),
+            )
+            .unwrap();
+            let image_frame = DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
+                slot: GpuPoolSlotFrameDescriptorBody {
+                    pool: row_lease.table().pool_uuid(),
+                    slot: row_lease.row_index(),
+                    generation: 1,
+                    timeline_value: 0,
+                    image_layout: 0,
+                },
+                width: 64,
+                height: 16,
+                format: TextureFormat::Bgra8Unorm as u32,
+                colour: ImageFrameH273Colour {
+                    primaries: 1,
+                    transfer: 13,
+                    matrix: 1,
+                    range: 1,
+                },
+            });
+            let (array_descriptor, array_payload) =
+                array_frame_of_the_image_frame(image_frame).expect("a bgra8 frame converts");
+            let data_address_of = |tensor: &Bound<'_, PyAny>| {
+                let capsule = tensor.call_method0("__dlpack__").unwrap();
+                // SAFETY: an unconsumed `__dlpack__` capsule carries a
+                // `ManagedTensor` under the name `dltensor`.
+                unsafe {
+                    let managed_tensor =
+                        pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
+                            as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
+                    (*managed_tensor).dl_tensor.data as usize
+                }
+            };
+
+            let (image_source, image_destination) = one_wired_link(python, "image-to-array-image");
+            image_source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &[]).as_any(),
+                    Some(7),
+                    true,
+                    |_| Ok(image_frame),
+                )
+                .unwrap();
+            let read_image = image_destination
+                .read_from_input_port_offering_gpu_access(
+                    python,
+                    "frames_from_upstream",
+                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
+                    Some(&gpu),
+                )
+                .unwrap()
+                .expect("the image link received nothing");
+            let image_data_address = data_address_of(&read_image);
+
+            let (array_source, array_destination) = one_wired_link(python, "image-to-array-array");
+            array_source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &array_payload).as_any(),
+                    Some(7),
+                    true,
+                    |_| Ok(array_descriptor),
+                )
+                .unwrap();
+            let read_array = array_destination
+                .read_from_input_port_offering_gpu_access(
+                    python,
+                    "frames_from_upstream",
+                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Array),
+                    Some(&gpu),
+                )
+                .unwrap()
+                .expect("the array link received nothing");
+            let image_attribute = read_array.get_item("image").unwrap();
+            assert_eq!(
+                image_attribute
+                    .getattr("dtype")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "uint8"
+            );
+            assert_eq!(
+                image_attribute
+                    .getattr("shape")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![16, 64, 4]
+            );
+            let array_data_address = data_address_of(&image_attribute);
+
+            assert_ne!(image_data_address, 0);
+            assert_eq!(
+                array_data_address, image_data_address,
+                "the attribute is the frame's slot mapping, not a copy of it"
+            );
+            assert!(
+                row_lease.row().is_claimed(),
+                "the read attribute holds its slot"
+            );
+            drop((read_image, image_attribute, read_array));
+            python.run(c"import gc; gc.collect()", None, None).unwrap();
+            withdraw_the_lent_typed_read_gpu_offer(python);
+        });
+        assert!(
+            !row_lease.row().is_claimed(),
+            "dropped reads let the slot go"
+        );
+    }
+
     /// A read through a port attribute refuses a message whose descriptor
     /// kind is not its family's, naming both.
     #[test]

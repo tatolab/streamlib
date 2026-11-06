@@ -28,6 +28,8 @@ from ._built_in_nodes import ChannelsToArray as ChannelsToArray
 from ._built_in_nodes import ChannelsToArrayConfig as ChannelsToArrayConfig
 from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
 from ._built_in_nodes import ChannelsToRecordsConfig as ChannelsToRecordsConfig
+from ._built_in_nodes import ImageToArray as ImageToArray
+from ._built_in_nodes import ImageToArrayConfig as ImageToArrayConfig
 from ._built_in_nodes import RecordsToChannels as RecordsToChannels
 from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
 from ._built_in_nodes import RelayTrackSource as RelayTrackSource
@@ -162,6 +164,8 @@ __all__ = [
     "IOSurfaceMachPortExport",
     "Image",
     "ImageFrame",
+    "ImageToArray",
+    "ImageToArrayConfig",
     "Input",
     "KernelDispatchBatch",
     "LinkInputDataReader",
