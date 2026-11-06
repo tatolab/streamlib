@@ -5,8 +5,9 @@
 //! and its slots, once, so each later frame of the pool is claimed in shared
 //! memory with no request.
 
-/// The op that answers a pool's claim table memfd, the caller's claimant
-/// column, and the pool slot key leased to each row.
+/// The op that answers a pool's claim table (a memfd on Linux, a Mach memory
+/// entry on macOS), the caller's claimant column, and the pool slot key
+/// leased to each row.
 pub const SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP: &str = "claim_table_of_gpu_pool";
 
 /// The op that answers one pool slot's memory, under its pool slot key, with
@@ -24,6 +25,15 @@ pub const SURFACE_SHARE_POOL_SLOTS_FIELD: &str = "pool_slots";
 
 /// The field of one `pool_slots` entry naming its claim table row.
 pub const SURFACE_SHARE_POOL_SLOT_ROW_FIELD: &str = "slot";
+
+/// The `check_out` request field a helper sets when it already holds its own
+/// import of the published frame's pool slot; the service then answers the
+/// frame's metadata and sends no handle.
+pub const SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD: &str = "holds_pool_slot_import";
+
+/// The reply field listing the pool slot keys the engine unregistered since
+/// this connection was last answered, among those it handed memory for.
+pub const SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD: &str = "retired_pool_slots";
 
 /// A pool's UUID as the wire spells it: 32 lowercase hex digits.
 pub fn gpu_pool_uuid_wire_name(pool_uuid: &[u8; 16]) -> String {
@@ -83,6 +93,11 @@ impl GpuPoolClaimTableHandOver {
             pool_slot_key_by_row,
         })
     }
+}
+
+/// The refusal the service answered a request with, if it answered one.
+pub fn refusal_the_surface_share_service_answered(response: &serde_json::Value) -> Option<&str> {
+    response.get("error").and_then(|value| value.as_str())
 }
 
 #[cfg(test)]

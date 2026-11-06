@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use streamlib::sdk::context::{
-    GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool, GpuPoolSlotRehandTest, SurfaceStore,
+    GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool, GpuPoolSlotFrameDescriptorBody,
+    GpuPoolSlotRehandTest, SurfaceStore,
 };
 use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
 use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};

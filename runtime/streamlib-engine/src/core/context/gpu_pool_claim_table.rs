@@ -20,40 +20,26 @@ use streamlib_ipc_types::{
 use super::SurfaceStore;
 use crate::core::{Error, Result};
 
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a sealed memfd on Linux.
 #[cfg(target_os = "linux")]
-pub(crate) type GpuPoolClaimTableSharedRows =
+pub type GpuPoolClaimTableSharedRows =
     crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
-#[cfg(not(target_os = "linux"))]
-pub(crate) type GpuPoolClaimTableSharedRows = GpuPoolClaimTableRowsOfThisProcessOnly;
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a Mach memory entry on macOS.
+#[cfg(target_os = "macos")]
+pub type GpuPoolClaimTableSharedRows =
+    crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
 
-/// The process a claimant column is assigned to: its pid and the time it
-/// started, so a later process that reuses the pid is a different claimant.
+/// The process a claimant column is assigned to: its pid and which process
+/// holding that pid it is, so a later process that reuses the pid is a
+/// different claimant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GpuPoolClaimantProcessId {
     pub pid: u32,
-    pub start_time_in_clock_ticks_since_boot: u64,
-}
-
-/// Rows held in this process's heap, for a platform whose claim tables do
-/// not yet cross to another process.
-pub(crate) struct GpuPoolClaimTableRowsOfThisProcessOnly {
-    rows: Box<[GpuPoolClaimTableRow]>,
-}
-
-impl GpuPoolClaimTableRowsOfThisProcessOnly {
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn create(_pool_name: &str) -> Result<Self> {
-        Ok(Self {
-            rows: (0..GPU_POOL_CLAIM_TABLE_ROWS)
-                .map(|_| GpuPoolClaimTableRow::unpublished())
-                .collect(),
-        })
-    }
-
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn rows(&self) -> &[GpuPoolClaimTableRow] {
-        &self.rows
-    }
+    /// Differs for every process that holds the pid: its start time in clock
+    /// ticks since boot on Linux, its audit pid version on macOS.
+    pub incarnation_of_the_pid: u64,
 }
 
 /// What a table knows of one of its rows besides the shared counts.
@@ -108,7 +94,6 @@ impl GpuPoolClaimTable {
     }
 
     /// The shared rows, for handing the table to another process.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn shared_rows(&self) -> &GpuPoolClaimTableSharedRows {
         &self.shared_rows
     }
@@ -441,7 +426,7 @@ mod tests {
                 .table()
                 .claimant_column_of(GpuPoolClaimantProcessId {
                     pid: claimant,
-                    start_time_in_clock_ticks_since_boot: 0,
+                    incarnation_of_the_pid: 0,
                 })
                 .unwrap();
         }
@@ -450,7 +435,7 @@ mod tests {
             .table()
             .claimant_column_of(GpuPoolClaimantProcessId {
                 pid: 9_999,
-                start_time_in_clock_ticks_since_boot: 0,
+                incarnation_of_the_pid: 0,
             })
             .unwrap_err()
             .to_string();
@@ -471,7 +456,7 @@ mod tests {
         lease.row().publish_generation(3);
         let reaped = GpuPoolClaimantProcessId {
             pid: 4242,
-            start_time_in_clock_ticks_since_boot: 0,
+            incarnation_of_the_pid: 0,
         };
         let column = lease.table().claimant_column_of(reaped).unwrap();
         lease.row().claim_frame(column, 3).unwrap();
@@ -494,7 +479,7 @@ mod tests {
                 .table()
                 .claimant_column_of(GpuPoolClaimantProcessId {
                     pid: 1,
-                    start_time_in_clock_ticks_since_boot: 0
+                    incarnation_of_the_pid: 0
                 })
                 .unwrap(),
             column
@@ -510,11 +495,11 @@ mod tests {
             .unwrap();
         let exited = GpuPoolClaimantProcessId {
             pid: 4242,
-            start_time_in_clock_ticks_since_boot: 100,
+            incarnation_of_the_pid: 100,
         };
         let reusing_its_pid = GpuPoolClaimantProcessId {
             pid: 4242,
-            start_time_in_clock_ticks_since_boot: 200,
+            incarnation_of_the_pid: 200,
         };
 
         let column_of_the_exited = lease.table().claimant_column_of(exited).unwrap();

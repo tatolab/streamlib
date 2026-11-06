@@ -24,9 +24,9 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("destination_surface_id", destination_surface_id)?;
         let settled_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.note_the_texture_layouts_a_run_left(&settled_response);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = settled_response;
         Ok(())
     }

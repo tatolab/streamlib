@@ -12,38 +12,35 @@ use streamlib_consumer_rhi::{
 };
 
 use super::super::{
-    HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
+    HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse,
     HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, SurfaceShareTransferredHandle,
     escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
     vk_image_creation_recipe_of_check_out,
 };
-use super::{HelperIOSurfaceCpuLock, IOSurfaceLockRefused, IOSurfaceMachPortExportDescription};
+use super::{
+    HelperIOSurfaceCpuLock, HelperIOSurfaceUseCountClaim, HelperPoolSlotImport,
+    IOSurfaceLockRefused, IOSurfaceMachPortExportDescription,
+};
 use crate::python_processor_context::ExportedVkImageCreationRecipe;
 use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 
-/// A texture-backed surface this helper imported: the engine's image rebuilt
-/// over its IOSurface on this process's own device, plus the timeline pair
-/// and the layout cell that keep the crossing coordinated.
-///
-/// The surface's storage is its own linear rows, so the CPU reaches the
-/// pixels through the surface itself under its lock — the same memory the
-/// engine's image and this side's image both address, with no staging.
-pub(crate) struct HelperCheckedOutTextureSurface {
-    pub(crate) surface_id: String,
-    pub(crate) consumer_texture: ConsumerVulkanTexture,
+/// A texture pool slot as this helper imported it, shared by every frame over
+/// the slot: the engine's image rebuilt over its IOSurface on this process's
+/// own device, and the timeline pair that keeps the crossing coordinated.
+pub(crate) struct HelperIOSurfaceTexturePoolSlotImport {
+    consumer_texture: ConsumerVulkanTexture,
     /// The surface the image is created over — the CPU door's memory.
     iosurface: RetainedIOSurfaceSharedAcrossThreads,
     /// The surface's pages imported as a buffer, on the first device-tensor
     /// reach: an image's own memory maps a private copy, so the no-copy
     /// `MTLBuffer` a Metal capsule points at comes from here.
     iosurface_pages_import: parking_lot::Mutex<Option<ConsumerVulkanBuffer>>,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) format: TextureFormat,
+    width: u32,
+    height: u32,
+    format: TextureFormat,
     /// The engine image's creation recipe, as the registration carried it —
     /// what a raw-handle importer rebuilds the image from.
     vk_image_creation_recipe: ExportedVkImageCreationRecipe,
-    iosurface_cpu_lock: HelperIOSurfaceCpuLock,
     /// The producer's edge of the pair. Nothing signals it today — the
     /// escalate dispatch retires its GPU work before any consumer can learn
     /// the id — so there is no wire value to wait on; the import holds the
@@ -53,10 +50,31 @@ pub(crate) struct HelperCheckedOutTextureSurface {
         reason = "no wire value exists to wait on yet; held for the pair's producer side"
     )]
     produce_done_timeline: ConsumerVulkanTimelineSemaphore,
-    /// This side's edge, signalled once at release.
+    /// This side's edge, signalled once at each frame's release.
     consume_done_timeline: ConsumerVulkanTimelineSemaphore,
-    /// The layout this side's image sits in — seeded from the checkout's
-    /// published cell, republished at release.
+}
+
+impl HelperIOSurfaceTexturePoolSlotImport {
+    /// The slot's IOSurface.
+    pub(super) fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
+        &self.iosurface
+    }
+}
+
+/// A texture-backed frame this helper holds, over its pool slot's import.
+///
+/// The surface's storage is its own linear rows, so the CPU reaches the
+/// pixels through the surface itself under its lock — the same memory the
+/// engine's image and this side's image both address, with no staging.
+pub(crate) struct HelperCheckedOutTextureSurface {
+    pub(crate) surface_id: String,
+    texture_pool_slot_import: Arc<HelperIOSurfaceTexturePoolSlotImport>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: TextureFormat,
+    iosurface_cpu_lock: HelperIOSurfaceCpuLock,
+    /// The layout this side's image sits in — seeded from the layout the
+    /// producer published, republished at release.
     current_image_layout: VulkanLayout,
     /// Present only on an acquired texture — a resolved one belongs to its
     /// acquirer.
@@ -65,7 +83,12 @@ pub(crate) struct HelperCheckedOutTextureSurface {
         dead_code,
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
-    release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    iosurface_use_count_claim: HelperIOSurfaceUseCountClaim,
+    #[expect(
+        dead_code,
+        reason = "settled by its own Drop; nothing reads it, and that is the point"
+    )]
+    held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
     exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -81,7 +104,7 @@ impl HelperCheckedOutTextureSurface {
                 self.surface_id, self.format
             ))
         })?;
-        let iosurface = &self.iosurface;
+        let iosurface = &self.texture_pool_slot_import.iosurface;
         Ok(
             crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
                 base_address: iosurface.base_address().as_ptr().cast(),
@@ -97,14 +120,14 @@ impl HelperCheckedOutTextureSurface {
     /// unless this texture already holds it.
     pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .lock_unless_held(&self.iosurface, read_only)
+            .lock_unless_held(&self.texture_pool_slot_import.iosurface, read_only)
             .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
     /// Release the IOSurface lock this texture's CPU access holds, if any.
     pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .release(&self.iosurface)
+            .release(&self.texture_pool_slot_import.iosurface)
             .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
@@ -116,12 +139,12 @@ impl HelperCheckedOutTextureSurface {
     /// it backs.
     pub(crate) fn export_iosurface(&self) -> PyResult<IOSurfaceMachPortExportDescription> {
         IOSurfaceMachPortExportDescription::minted_from(
-            &self.iosurface,
+            &self.texture_pool_slot_import.iosurface,
             &self.surface_id,
             self.width,
             self.height,
             self.format.wire_name(),
-            Some(self.vk_image_creation_recipe),
+            Some(self.texture_pool_slot_import.vk_image_creation_recipe),
         )
     }
 
@@ -131,18 +154,21 @@ impl HelperCheckedOutTextureSurface {
         &self,
     ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
     {
-        let mut iosurface_pages_import = self.iosurface_pages_import.lock();
+        let mut iosurface_pages_import =
+            self.texture_pool_slot_import.iosurface_pages_import.lock();
         if iosurface_pages_import.is_none() {
             let vulkan_device = self.exchange_client.consumer_vulkan_device()?;
-            let imported =
-                ConsumerVulkanBuffer::from_iosurface_pages(&vulkan_device, &self.iosurface)
-                    .map_err(|import_failure| {
-                        PyRuntimeError::new_err(format!(
-                            "texture {:?}'s IOSurface pages would not import as a buffer, so no \
+            let imported = ConsumerVulkanBuffer::from_iosurface_pages(
+                &vulkan_device,
+                &self.texture_pool_slot_import.iosurface,
+            )
+            .map_err(|import_failure| {
+                PyRuntimeError::new_err(format!(
+                    "texture {:?}'s IOSurface pages would not import as a buffer, so no \
                          Metal buffer can alias them: {import_failure}",
-                            self.surface_id
-                        ))
-                    })?;
+                    self.surface_id
+                ))
+            })?;
             *iosurface_pages_import = Some(imported);
         }
         iosurface_pages_import
@@ -170,21 +196,28 @@ impl Drop for HelperCheckedOutTextureSurface {
         Python::attach(|python| {
             let release_failures = python.detach(|| {
                 let mut release_failures: Vec<String> = Vec::new();
-                if let Err(refused) = self.iosurface_cpu_lock.release(&self.iosurface) {
+                let texture_pool_slot_import = &self.texture_pool_slot_import;
+                if let Err(refused) = self
+                    .iosurface_cpu_lock
+                    .release(&texture_pool_slot_import.iosurface)
+                {
                     release_failures.push(refused.to_string());
                 }
-                let signalled = self
-                    .consume_done_timeline
+                let consume_done_timeline = &texture_pool_slot_import.consume_done_timeline;
+                let signalled = consume_done_timeline
                     .current_value()
-                    .and_then(|value| self.consume_done_timeline.signal_host(value + 1));
+                    .and_then(|value| consume_done_timeline.signal_host(value + 1));
                 if let Err(signal_failure) = signalled {
                     release_failures.push(format!("consume_done signal failed: {signal_failure}"));
                 }
                 if self.current_image_layout != VulkanLayout::UNDEFINED {
-                    if let Err(barrier_failure) = self.consumer_texture.release_to_foreign_layout(
-                        self.current_image_layout,
-                        self.current_image_layout,
-                    ) {
+                    if let Err(barrier_failure) = texture_pool_slot_import
+                        .consumer_texture
+                        .release_to_foreign_layout(
+                            self.current_image_layout,
+                            self.current_image_layout,
+                        )
+                    {
                         release_failures.push(format!("QFOT release failed: {barrier_failure}"));
                     }
                     if let Err(publish_failure) =
@@ -265,6 +298,7 @@ impl HelperProcessGpuExchangeClient {
                 )
             })?
             .extract()?;
+        self.note_the_pooled_frame_an_acquire_answered(&handle_id, &response)?;
         // The debt exists from the moment the parent allocated, so a refused
         // checkout or import below still hands the pool slot back. A processor
         // output pool's frame owes none: the pool owns the slot.
@@ -290,16 +324,16 @@ impl HelperProcessGpuExchangeClient {
         Ok(checked_out_texture)
     }
 
-    /// The texture arm of a checkout: rebuild the engine's image over the
-    /// IOSurface on this process's device, join the timeline pair, and take
-    /// the published layout as this side's starting point.
-    pub(super) fn import_checked_out_texture(
-        self: &Arc<Self>,
+    /// A texture pool slot's import, from the registration a checkout or a
+    /// pool slot import answered and the ports it carried: the engine's image
+    /// rebuilt over the IOSurface on this process's device, and the timeline
+    /// pair joined.
+    pub(super) fn import_texture_pool_slot(
+        &self,
         surface_id: &str,
         response: &serde_json::Value,
         received_ports: Vec<SurfaceShareTransferredHandle>,
-        release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
-    ) -> PyResult<HelperCheckedOutTextureSurface> {
+    ) -> PyResult<HelperPoolSlotImport> {
         let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
         let height =
             required_positive_u32_check_out_metadata_field(response, surface_id, "height")?;
@@ -322,13 +356,6 @@ impl HelperProcessGpuExchangeClient {
                 ))
             })
             .map(VulkanImageUsage)?;
-        let current_image_layout = VulkanLayout(
-            response
-                .get("current_image_layout")
-                .and_then(|value| value.as_i64())
-                .and_then(|value| i32::try_from(value).ok())
-                .unwrap_or(VulkanLayout::UNDEFINED.0),
-        );
 
         let [iosurface_port, produce_done_port, consume_done_port] =
             <[_; 3]>::try_from(received_ports).map_err(|received_ports: Vec<_>| {
@@ -368,32 +395,68 @@ impl HelperProcessGpuExchangeClient {
             "consume_done",
             &consume_done_port,
         )?;
-        consumer_texture
-            .acquire_from_foreign_layout(current_image_layout)
+        Ok(HelperPoolSlotImport::Texture(Arc::new(
+            HelperIOSurfaceTexturePoolSlotImport {
+                consumer_texture,
+                iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
+                iosurface_pages_import: parking_lot::Mutex::new(None),
+                width,
+                height,
+                format,
+                vk_image_creation_recipe: vk_image_creation_recipe_of_check_out(response),
+                produce_done_timeline,
+                consume_done_timeline,
+            },
+        )))
+    }
+
+    /// One texture frame over its pool slot's import: acquire the image from
+    /// the layout the producer left it in, and take the frame's use-count
+    /// claim.
+    pub(super) fn texture_frame_over_a_pool_slot_import(
+        self: &Arc<Self>,
+        surface_id: &str,
+        producer_image_layout: VulkanLayout,
+        texture_pool_slot_import: Arc<HelperIOSurfaceTexturePoolSlotImport>,
+        held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
+    ) -> PyResult<HelperCheckedOutTextureSurface> {
+        texture_pool_slot_import
+            .consumer_texture
+            .acquire_from_foreign_layout(producer_image_layout)
             .map_err(|barrier_failure| {
                 PyRuntimeError::new_err(format!(
                     "texture {surface_id:?}'s acquire barrier failed: {barrier_failure}"
                 ))
             })?;
-
         Ok(HelperCheckedOutTextureSurface {
             surface_id: surface_id.to_string(),
-            consumer_texture,
-            iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
-            iosurface_pages_import: parking_lot::Mutex::new(None),
-            width,
-            height,
-            format,
-            vk_image_creation_recipe: vk_image_creation_recipe_of_check_out(response),
+            width: texture_pool_slot_import.width,
+            height: texture_pool_slot_import.height,
+            format: texture_pool_slot_import.format,
+            iosurface_use_count_claim: HelperIOSurfaceUseCountClaim::claiming(
+                HelperPoolSlotImport::Texture(Arc::clone(&texture_pool_slot_import)),
+            ),
+            texture_pool_slot_import,
             iosurface_cpu_lock: HelperIOSurfaceCpuLock::default(),
-            produce_done_timeline,
-            consume_done_timeline,
-            current_image_layout,
+            current_image_layout: producer_image_layout,
             release_to_parent: None,
-            release_check_out_to_surface_share,
+            held_against_producer_reuse,
             exchange_client: Arc::clone(self),
         })
     }
+}
+
+/// The layout a texture checkout says its producer left the image in.
+pub(super) fn current_image_layout_of_a_texture_check_out(
+    response: &serde_json::Value,
+) -> VulkanLayout {
+    VulkanLayout(
+        response
+            .get("current_image_layout")
+            .and_then(|value| value.as_i64())
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(VulkanLayout::UNDEFINED.0),
+    )
 }
 
 /// The macOS texture arm against a real Mach service: the registration's

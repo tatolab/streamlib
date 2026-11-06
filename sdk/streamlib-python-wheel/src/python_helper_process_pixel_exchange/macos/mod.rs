@@ -6,11 +6,21 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+use streamlib::sdk::rhi::PixelFormat;
+use streamlib_consumer_rhi::{ConsumerVulkanBuffer, VulkanLayout};
+use streamlib_surface_client::{
+    OwnedMachSendRight, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SurfaceShareMachServiceConnection,
+    refusal_the_surface_share_service_answered,
+};
 
+use super::pool_slot_import_cache::{
+    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
+};
 use super::{
-    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
-    HelperSurfaceCheckOutLeaseDebt, HelperSurfaceHeldAgainstProducerReuse,
+    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
+    HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
+    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST,
     SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer, SurfaceShareTransferredHandle,
     refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
 };
@@ -19,30 +29,51 @@ mod foreign_iosurface;
 mod storage_buffer;
 mod texture;
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
+use storage_buffer::HelperIOSurfaceStorageBufferPoolSlotImport;
 pub(crate) use texture::HelperCheckedOutTextureSurface;
+use texture::HelperIOSurfaceTexturePoolSlotImport;
 
-/// A pool slot's IOSurface pages imported as host memory on this helper's
-/// consumer device; the import retains the surface.
-pub(crate) struct HelperIOSurfacePoolSlotImport {
+/// A pixel-buffer pool slot's IOSurface pages imported as host memory on this
+/// helper's consumer device, and the layout every frame over the slot shares;
+/// the import retains the surface.
+pub(crate) struct HelperIOSurfacePixelBufferPoolSlotImport {
     pub(super) consumer_buffer: ConsumerVulkanBuffer,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    bytes_per_row: u64,
 }
 
-impl HelperIOSurfacePoolSlotImport {
-    /// Import `iosurface`'s pages on `vulkan_device`.
-    fn import(
-        vulkan_device: &Arc<ConsumerVulkanDevice>,
-        iosurface: &objc2_io_surface::IOSurfaceRef,
-    ) -> streamlib_consumer_rhi::Result<Self> {
-        Ok(Self {
-            consumer_buffer: ConsumerVulkanBuffer::from_iosurface_pages(vulkan_device, iosurface)?,
-        })
-    }
-
+impl HelperIOSurfacePixelBufferPoolSlotImport {
     /// The slot's IOSurface.
     fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
         self.consumer_buffer
             .backing_iosurface()
-            .expect("an import built by `import` is backed by the IOSurface it was built from")
+            .expect("a pixel-buffer slot's import is backed by the IOSurface it was built from")
+    }
+}
+
+/// One pool slot's IOSurface as this helper imported it, shared by every
+/// frame over the slot.
+#[derive(Clone)]
+pub(crate) enum HelperPoolSlotImport {
+    PixelBuffer(Arc<HelperIOSurfacePixelBufferPoolSlotImport>),
+    Texture(Arc<HelperIOSurfaceTexturePoolSlotImport>),
+    StorageBuffer(Arc<HelperIOSurfaceStorageBufferPoolSlotImport>),
+}
+
+impl HelperPoolSlotImport {
+    /// The slot's IOSurface.
+    fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
+        match self {
+            Self::PixelBuffer(pixel_buffer_pool_slot_import) => {
+                pixel_buffer_pool_slot_import.iosurface()
+            }
+            Self::Texture(texture_pool_slot_import) => texture_pool_slot_import.iosurface(),
+            Self::StorageBuffer(storage_buffer_pool_slot_import) => {
+                storage_buffer_pool_slot_import.iosurface()
+            }
+        }
     }
 }
 
@@ -131,11 +162,6 @@ fn iosurface_named_by_the_check_out_port(
     Ok(iosurface)
 }
 
-/// The per-slot cache, shared with the thread that empties it when the
-/// parent's service goes away.
-pub(super) type HelperIOSurfaceImportsByPoolSlot =
-    Arc<Mutex<std::collections::HashMap<String, Arc<HelperIOSurfacePoolSlotImport>>>>;
-
 /// One frame's raise of its IOSurface's use count, lowered on drop.
 ///
 /// This is the claim `IOSurfaceIsInUse` answers across processes, so the pool
@@ -143,23 +169,19 @@ pub(super) type HelperIOSurfaceImportsByPoolSlot =
 /// reclaimed on a connection drop — and the kernel lowers it if this process
 /// dies. A cached `IOSurfaceRef` alone raises nothing.
 pub(crate) struct HelperIOSurfaceUseCountClaim {
-    iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>,
+    pool_slot_import: HelperPoolSlotImport,
 }
 
 impl HelperIOSurfaceUseCountClaim {
-    fn claiming(iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>) -> Self {
-        iosurface_pool_slot_import.iosurface().increment_use_count();
-        Self {
-            iosurface_pool_slot_import,
-        }
+    fn claiming(pool_slot_import: HelperPoolSlotImport) -> Self {
+        pool_slot_import.iosurface().increment_use_count();
+        Self { pool_slot_import }
     }
 }
 
 impl Drop for HelperIOSurfaceUseCountClaim {
     fn drop(&mut self) {
-        self.iosurface_pool_slot_import
-            .iosurface()
-            .decrement_use_count();
+        self.pool_slot_import.iosurface().decrement_use_count();
     }
 }
 
@@ -308,30 +330,25 @@ impl Drop for HelperCheckedOutPixelSurface {
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// This helper's connection to the parent's surface-share Mach service,
-    /// opened on first use together with the thread that empties the
-    /// per-slot cache when the service goes away — an IOSurface this helper
-    /// still holds stays readable after the engine dies, so nothing else
-    /// would release it.
-    pub(super) fn surface_share_mach_connection(
+    /// Open a connection to the parent's surface-share Mach service, together
+    /// with the thread that drops every pool slot import when the service goes
+    /// away — an IOSurface this helper still holds stays readable after the
+    /// engine dies, so nothing else would release it.
+    fn open_surface_share_mach_connection(
         &self,
-    ) -> PyResult<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>> {
-        let mut connection = self.surface_share_mach_connection.lock();
-        if let Some(open_connection) = connection.as_ref() {
-            return Ok(Arc::clone(open_connection));
-        }
+    ) -> PyResult<Arc<SurfaceShareMachServiceConnection>> {
         let service_name = self
             .surface_share_mach_service_name
             .to_str()
             .ok_or_else(|| {
                 PyRuntimeError::new_err(format!(
                     "the surface-share Mach service name {:?} is not UTF-8, so it names no \
-                 bootstrap service",
+                     bootstrap service",
                     self.surface_share_mach_service_name
                 ))
             })?;
         let opened = Arc::new(
-            streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
+            SurfaceShareMachServiceConnection::connect(
                 service_name,
                 SURFACE_SHARE_RESPONSE_TIMEOUT,
             )
@@ -344,23 +361,22 @@ impl HelperProcessGpuExchangeClient {
             })?,
         );
         let watched_connection = Arc::clone(&opened);
-        let iosurface_imports_by_pool_slot = Arc::clone(&self.iosurface_imports_by_pool_slot);
+        let pool_slot_imports_by_pool_slot = Arc::clone(&self.pool_slot_imports_by_pool_slot);
         std::thread::Builder::new()
             .name("surface-share-service-watch".into())
             .spawn(
                 move || match watched_connection.wait_for_the_service_to_go_away(None) {
                     Ok(_) => {
-                        let released = std::mem::take(&mut *iosurface_imports_by_pool_slot.lock());
+                        pool_slot_imports_by_pool_slot.drop_every_import();
                         tracing::info!(
-                            "the surface-share service went away; released the {} pool slot(s) \
-                             this helper had imported",
-                            released.len()
+                            "the surface-share service went away; released every pool slot this \
+                             helper had imported"
                         );
                     }
                     Err(watch_failure) => tracing::warn!(
                         "could not watch the surface-share service for its going away \
-                         ({watch_failure}); this helper keeps its imported pool slots until it \
-                         stops"
+                         ({watch_failure}); this helper keeps its imported pool slots until its \
+                         connection is replaced"
                     ),
                 },
             )
@@ -370,21 +386,78 @@ impl HelperProcessGpuExchangeClient {
                      {spawn_failure}"
                 ))
             })?;
-        *connection = Some(Arc::clone(&opened));
         Ok(opened)
+    }
+
+    /// The one exchange every surface-share request makes, over this helper's
+    /// connection, opened on first use. `while_the_connection_is_held` runs on
+    /// the answer before another request can be sent, so what it records is
+    /// ordered against the retirement notice of every later reply.
+    ///
+    /// Every pool slot import is dropped whenever the connection is replaced:
+    /// the service lists a retired slot only on the connection it handed the
+    /// slot's IOSurface to. A connection whose request failed is set aside,
+    /// never used again, and kept open so the frames claimed on it stay held.
+    pub(super) fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
+        &self,
+        request: &serde_json::Value,
+        outbound_ports: Vec<OwnedMachSendRight>,
+        while_the_connection_is_held: impl FnOnce(&serde_json::Value) -> DecidedWhileTheConnectionIsHeld,
+    ) -> PyResult<(
+        serde_json::Value,
+        Vec<SurfaceShareTransferredHandle>,
+        DecidedWhileTheConnectionIsHeld,
+    )> {
+        let mut connection = self.surface_share_mach_connection.lock();
+        let open_connection = match connection.as_ref() {
+            Some(open_connection) => Arc::clone(open_connection),
+            None => {
+                let connections_set_aside = self
+                    .surface_share_mach_connections_set_aside_after_a_failure
+                    .lock()
+                    .len();
+                if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "the surface-share service has failed {connections_set_aside} requests, \
+                         so this helper asks it nothing more; the connections it set aside stay \
+                         open, keeping the frames claimed on them held, until this helper stops"
+                    )));
+                }
+                let opened = self.open_surface_share_mach_connection()?;
+                self.pool_slot_imports_by_pool_slot.drop_every_import();
+                *connection = Some(Arc::clone(&opened));
+                opened
+            }
+        };
+        match open_connection.send_request_with_ports(request, outbound_ports) {
+            Ok((reply, received_ports)) => {
+                self.pool_slot_imports_by_pool_slot
+                    .drop_the_pool_slots_a_reply_lists_as_retired(&reply);
+                let decided_while_the_connection_is_held = while_the_connection_is_held(&reply);
+                Ok((reply, received_ports, decided_while_the_connection_is_held))
+            }
+            Err(request_failure) => {
+                if let Some(failed_connection) = connection.take() {
+                    self.surface_share_mach_connections_set_aside_after_a_failure
+                        .lock()
+                        .push(failed_connection);
+                }
+                self.pool_slot_imports_by_pool_slot.drop_every_import();
+                Err(PyRuntimeError::new_err(format!(
+                    "the surface-share request failed: {request_failure}; this helper set that \
+                     connection aside and opens a new one on its next request"
+                )))
+            }
+        }
     }
 
     pub(super) fn surface_share_request(
         &self,
         request: &serde_json::Value,
     ) -> PyResult<SurfaceShareAnswer> {
-        self.surface_share_mach_connection()?
-            .send_request_with_ports(request, Vec::new())
-            .map_err(|request_failure| {
-                PyRuntimeError::new_err(format!(
-                    "the surface-share request failed: {request_failure}"
-                ))
-            })
+        let (reply, received_ports, ()) =
+            self.surface_share_exchange(request, Vec::new(), |_| ())?;
+        Ok((reply, received_ports))
     }
 
     /// Whether an edit written back into `surface_id` publishes at all.
@@ -431,24 +504,152 @@ impl HelperProcessGpuExchangeClient {
         Ok(can_take_write_back)
     }
 
-    /// The import of a checked-out frame's IOSurface: the pool slot's cached
-    /// import, or a lookup of the port and a fresh import on the slot's first
-    /// touch — plus this frame's use-count claim. The CPU reaches the pixels
-    /// through the import's mapping, which is the IOSurface's own memory.
-    pub(super) fn import_checked_out_surface(
+    /// `check_out` over the surface-share service, then the import of
+    /// whichever backing the registration names — or, for a published frame
+    /// over a pool slot this helper already imported, that import, with no
+    /// port sent. A pooled frame its pool's claim table covers is claimed in
+    /// that table instead of checked out.
+    pub(crate) fn check_out_and_import(
         self: &Arc<Self>,
+        surface_id: &str,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        if let Some(claimed) = self.claim_in_its_pool_claim_table(surface_id)? {
+            return self.import_a_frame_claimed_in_its_pool_claim_table(surface_id, claimed);
+        }
+        let published_pool_slot = pool_slot_of_a_published_frame_id(surface_id);
+        let held_pool_slot_import = published_pool_slot.and_then(|published_pool_slot| {
+            self.pool_slot_imports_by_pool_slot
+                .import_held_for(published_pool_slot)
+        });
+        let holds_pool_slot_import = held_pool_slot_import.is_some();
+        let (response, received_ports, fresh_import_reservation) = self.surface_share_exchange(
+            &serde_json::json!({
+                "op": "check_out",
+                "surface_id": surface_id,
+                SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD: holds_pool_slot_import,
+            }),
+            Vec::new(),
+            |response| match published_pool_slot {
+                Some(published_pool_slot)
+                    if !holds_pool_slot_import
+                        && refusal_the_surface_share_service_answered(response).is_none()
+                        && !pool_slots_a_reply_lists_as_retired(response)
+                            .any(|retired_pool_slot| retired_pool_slot == published_pool_slot) =>
+                {
+                    Some(
+                        self.pool_slot_imports_by_pool_slot
+                            .reserve_for_a_fresh_import(published_pool_slot),
+                    )
+                }
+                _ => None,
+            },
+        )?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
+        // From here the lease is this surface's, so every refusal below
+        // releases it on the way out.
+        let held_against_producer_reuse =
+            HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(HelperSurfaceCheckOutLeaseDebt {
+                exchange_client: Arc::clone(self),
+                surface_id: surface_id.to_string(),
+            });
+        let pool_slot_import = match held_pool_slot_import {
+            Some(held_pool_slot_import) => held_pool_slot_import,
+            None => {
+                let imported = self.import_pool_slot_the_service_handed_over(
+                    surface_id,
+                    &response,
+                    received_ports,
+                )?;
+                if let Some(fresh_import_reservation) = fresh_import_reservation {
+                    let _ = fresh_import_reservation.set(imported.clone());
+                }
+                imported
+            }
+        };
+        self.frame_over_a_pool_slot_import(
+            surface_id,
+            texture::current_image_layout_of_a_texture_check_out(&response),
+            pool_slot_import,
+            held_against_producer_reuse,
+        )
+    }
+
+    /// One frame held by its pool claim table claim, read through the slot's
+    /// import — made once per slot with `import_pool_slot`, which takes no
+    /// lease.
+    fn import_a_frame_claimed_in_its_pool_claim_table(
+        self: &Arc<Self>,
+        surface_id: &str,
+        claimed: Arc<HelperGpuPoolSlotFrameClaim>,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        let pool_slot_key = pool_slot_of_a_published_frame_id(surface_id).ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "{surface_id:?} was claimed in a pool claim table but names no pool slot"
+            ))
+        })?;
+        let pool_slot_import = match self
+            .pool_slot_imports_by_pool_slot
+            .import_held_for(pool_slot_key)
+        {
+            Some(held_pool_slot_import) => held_pool_slot_import,
+            None => {
+                let (reply, received_ports, fresh_import_reservation) = self
+                    .surface_share_exchange(
+                        &serde_json::json!({
+                            "op": SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+                            "surface_id": pool_slot_key,
+                        }),
+                        Vec::new(),
+                        |reply| {
+                            (refusal_the_surface_share_service_answered(reply).is_none()
+                                && !pool_slots_a_reply_lists_as_retired(reply)
+                                    .any(|retired_pool_slot| retired_pool_slot == pool_slot_key))
+                            .then(|| {
+                                self.pool_slot_imports_by_pool_slot
+                                    .reserve_for_a_fresh_import(pool_slot_key)
+                            })
+                        },
+                    )?;
+                if let Some(refusal) = refusal_the_surface_share_service_answered(&reply) {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "the surface-share service refused to import pool slot \
+                         {pool_slot_key:?}: {refusal}"
+                    )));
+                }
+                let imported = self.import_pool_slot_the_service_handed_over(
+                    pool_slot_key,
+                    &reply,
+                    received_ports,
+                )?;
+                if let Some(fresh_import_reservation) = fresh_import_reservation {
+                    let _ = fresh_import_reservation.set(imported.clone());
+                }
+                imported
+            }
+        };
+        let image_layout = self
+            .gpu_pool_claim_tables
+            .descriptor_of_the_frame_named(surface_id)
+            .map_or(claimed.claimed_frame().image_layout, |frame| {
+                frame.image_layout
+            });
+        self.frame_over_a_pool_slot_import(
+            surface_id,
+            VulkanLayout(image_layout),
+            pool_slot_import,
+            HelperSurfaceHeldAgainstProducerReuse::GpuPoolClaim(claimed),
+        )
+    }
+
+    /// Validate a registration the service answered and import the slot's
+    /// IOSurface as whichever backing it names: mapped pages for a pixel
+    /// buffer, an image for a texture, pages for a tensor.
+    fn import_pool_slot_the_service_handed_over(
+        &self,
         surface_id: &str,
         response: &serde_json::Value,
         received_ports: Vec<SurfaceShareTransferredHandle>,
-    ) -> PyResult<HelperCheckedOutSurface> {
-        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
-        // From here the lease is this surface's, so every refusal below
-        // releases it on the way out.
-        let release_check_out_to_surface_share = HelperSurfaceCheckOutLeaseDebt {
-            exchange_client: Arc::clone(self),
-            surface_id: surface_id.to_string(),
-        };
-
+    ) -> PyResult<HelperPoolSlotImport> {
         let resource_type = response
             .get("resource_type")
             .and_then(|value| value.as_str())
@@ -457,35 +658,39 @@ impl HelperProcessGpuExchangeClient {
             .get("handle_type")
             .and_then(|value| value.as_str())
             .unwrap_or("iosurface");
-        if handle_type != "iosurface"
-            || !matches!(resource_type, "pixel_buffer" | "texture" | "storage_buffer")
-        {
+        if handle_type != "iosurface" {
             return Err(PyRuntimeError::new_err(format!(
                 "surface {surface_id:?} is registered as a {resource_type:?} over a \
                  {handle_type:?} handle; a macOS helper imports IOSurface-backed pixel buffers, \
                  textures and tensor storage buffers only"
             )));
         }
-        if resource_type == "storage_buffer" {
-            return self
-                .import_checked_out_storage_buffer(
-                    surface_id,
-                    response,
-                    received_ports,
-                    release_check_out_to_surface_share,
-                )
-                .map(HelperCheckedOutSurface::StorageBuffer);
+        match resource_type {
+            "pixel_buffer" => {
+                self.import_pixel_buffer_pool_slot(surface_id, response, received_ports)
+            }
+            "texture" => self.import_texture_pool_slot(surface_id, response, received_ports),
+            "storage_buffer" => {
+                self.import_storage_buffer_pool_slot(surface_id, response, received_ports)
+            }
+            _ => Err(PyRuntimeError::new_err(format!(
+                "surface {surface_id:?} is registered as a {resource_type:?} over a \
+                 {handle_type:?} handle; a macOS helper imports IOSurface-backed pixel buffers, \
+                 textures and tensor storage buffers only"
+            ))),
         }
-        if resource_type == "texture" {
-            return self
-                .import_checked_out_texture(
-                    surface_id,
-                    response,
-                    received_ports,
-                    release_check_out_to_surface_share,
-                )
-                .map(HelperCheckedOutSurface::Texture);
-        }
+    }
+
+    /// A pixel-buffer pool slot's import: the one IOSurface port looked up,
+    /// checked against the registered size, and its pages imported. The CPU
+    /// reaches the pixels through the import's mapping, which is the
+    /// IOSurface's own memory.
+    fn import_pixel_buffer_pool_slot(
+        &self,
+        surface_id: &str,
+        response: &serde_json::Value,
+        received_ports: Vec<SurfaceShareTransferredHandle>,
+    ) -> PyResult<HelperPoolSlotImport> {
         let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
         let height =
             required_positive_u32_check_out_metadata_field(response, surface_id, "height")?;
@@ -494,10 +699,14 @@ impl HelperProcessGpuExchangeClient {
             .and_then(|value| value.as_str())
             .unwrap_or("unknown");
         let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
-
-        let iosurface_pool_slot_import =
-            self.iosurface_pool_slot_import_for(surface_id, received_ports)?;
-        let iosurface = iosurface_pool_slot_import.iosurface();
+        let mut received_ports = received_ports.into_iter();
+        let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
+            return Err(PyRuntimeError::new_err(format!(
+                "check_out of {surface_id:?} did not carry exactly one IOSurface port"
+            )));
+        };
+        let iosurface =
+            iosurface_named_by_the_check_out_port(&format!("{surface_id:?}"), iosurface_port)?;
         let bytes_per_row = iosurface.bytes_per_row() as u64;
         if iosurface.width() < width as usize
             || iosurface.height() < height as usize
@@ -510,67 +719,73 @@ impl HelperProcessGpuExchangeClient {
                 iosurface.height(),
             )));
         }
-
-        Ok(HelperCheckedOutSurface::PixelBuffer(
-            HelperCheckedOutPixelSurface {
-                surface_id: surface_id.to_string(),
-                iosurface_use_count_claim: HelperIOSurfaceUseCountClaim::claiming(Arc::clone(
-                    &iosurface_pool_slot_import,
-                )),
-                iosurface_pool_slot_import,
-                iosurface_cpu_lock: HelperIOSurfaceCpuLock::default(),
+        let vulkan_device = self.consumer_vulkan_device()?;
+        let consumer_buffer = ConsumerVulkanBuffer::from_iosurface_pages(
+            &vulkan_device,
+            &iosurface,
+        )
+        .map_err(|import_failure| {
+            PyRuntimeError::new_err(format!(
+                "Vulkan could not import surface {surface_id:?}'s IOSurface: {import_failure}"
+            ))
+        })?;
+        Ok(HelperPoolSlotImport::PixelBuffer(Arc::new(
+            HelperIOSurfacePixelBufferPoolSlotImport {
+                consumer_buffer,
                 width,
                 height,
                 format,
                 bytes_per_row,
-                release_to_parent: None,
-                held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(
-                    release_check_out_to_surface_share,
-                ),
             },
-        ))
+        )))
     }
 
-    /// The pool slot's import, from the cache — releasing the fresh port
-    /// unlooked-up — or from the port on the slot's first touch.
-    fn iosurface_pool_slot_import_for(
-        &self,
+    /// One frame over `pool_slot_import`, held by `held_against_producer_reuse`
+    /// and by its own raise of the IOSurface's use count.
+    fn frame_over_a_pool_slot_import(
+        self: &Arc<Self>,
         surface_id: &str,
-        received_ports: Vec<SurfaceShareTransferredHandle>,
-    ) -> PyResult<Arc<HelperIOSurfacePoolSlotImport>> {
-        let mut received_ports = received_ports.into_iter();
-        let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
-            return Err(PyRuntimeError::new_err(format!(
-                "check_out of {surface_id:?} did not carry exactly one IOSurface port"
-            )));
-        };
-        let pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
-        if let Some(cached) = self
-            .iosurface_imports_by_pool_slot
-            .lock()
-            .get(pool_slot_key)
-        {
-            return Ok(Arc::clone(cached));
+        producer_image_layout: VulkanLayout,
+        pool_slot_import: HelperPoolSlotImport,
+        held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        match pool_slot_import {
+            HelperPoolSlotImport::PixelBuffer(pixel_buffer_pool_slot_import) => Ok(
+                HelperCheckedOutSurface::PixelBuffer(HelperCheckedOutPixelSurface {
+                    surface_id: surface_id.to_string(),
+                    iosurface_use_count_claim: HelperIOSurfaceUseCountClaim::claiming(
+                        HelperPoolSlotImport::PixelBuffer(Arc::clone(
+                            &pixel_buffer_pool_slot_import,
+                        )),
+                    ),
+                    width: pixel_buffer_pool_slot_import.width,
+                    height: pixel_buffer_pool_slot_import.height,
+                    format: pixel_buffer_pool_slot_import.format,
+                    bytes_per_row: pixel_buffer_pool_slot_import.bytes_per_row,
+                    iosurface_pool_slot_import: pixel_buffer_pool_slot_import,
+                    iosurface_cpu_lock: HelperIOSurfaceCpuLock::default(),
+                    release_to_parent: None,
+                    held_against_producer_reuse,
+                }),
+            ),
+            HelperPoolSlotImport::Texture(texture_pool_slot_import) => self
+                .texture_frame_over_a_pool_slot_import(
+                    surface_id,
+                    producer_image_layout,
+                    texture_pool_slot_import,
+                    held_against_producer_reuse,
+                )
+                .map(HelperCheckedOutSurface::Texture),
+            HelperPoolSlotImport::StorageBuffer(storage_buffer_pool_slot_import) => {
+                Ok(HelperCheckedOutSurface::StorageBuffer(
+                    storage_buffer::storage_buffer_frame_over_a_pool_slot_import(
+                        surface_id,
+                        storage_buffer_pool_slot_import,
+                        held_against_producer_reuse,
+                    ),
+                ))
+            }
         }
-        let iosurface =
-            iosurface_named_by_the_check_out_port(&format!("{surface_id:?}"), iosurface_port)?;
-        let vulkan_device = self.consumer_vulkan_device()?;
-        let imported = Arc::new(
-            HelperIOSurfacePoolSlotImport::import(&vulkan_device, &iosurface).map_err(
-                |import_failure| {
-                    PyRuntimeError::new_err(format!(
-                        "Vulkan could not import surface {surface_id:?}'s IOSurface: \
-                         {import_failure}"
-                    ))
-                },
-            )?,
-        );
-        Ok(Arc::clone(
-            self.iosurface_imports_by_pool_slot
-                .lock()
-                .entry(pool_slot_key.to_string())
-                .or_insert(imported),
-        ))
     }
 }
 

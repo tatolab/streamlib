@@ -6,15 +6,16 @@
 //! shared memory, with no surface-share request per frame.
 
 use std::collections::{HashMap, HashSet};
-use std::os::fd::OwnedFd;
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 use streamlib::sdk::context::{
-    GpuPoolClaimTableMemfd, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
+    GpuPoolClaimTableSharedRows, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
     GpuPoolSlotFrameDescriptorBody,
 };
 use streamlib_surface_client::{GpuPoolClaimTableHandOver, split_pool_slot_and_frame_generation};
+
+use super::SurfaceShareTransferredHandle;
 
 /// Live claims kept before the dead entries are swept.
 const LIVE_CLAIMS_HELD_BEFORE_A_SWEEP: usize = 256;
@@ -22,7 +23,7 @@ const LIVE_CLAIMS_HELD_BEFORE_A_SWEEP: usize = 256;
 /// One pool's claim table, mapped into this helper, and the column this
 /// helper's process claims in.
 pub(crate) struct HelperGpuPoolClaimTable {
-    shared_rows: GpuPoolClaimTableMemfd,
+    shared_rows: GpuPoolClaimTableSharedRows,
     claimant_column: GpuPoolClaimantColumn,
 }
 
@@ -109,7 +110,7 @@ impl HelperGpuPoolClaimTables {
     pub(crate) fn adopt_a_hand_over(
         &self,
         pool: [u8; 16],
-        claim_table_memfd: OwnedFd,
+        claim_table_shared_rows_handle: SurfaceShareTransferredHandle,
         hand_over: GpuPoolClaimTableHandOver,
     ) -> Result<(), String> {
         let claimant_column = GpuPoolClaimantColumn::at(hand_over.claimant_column_index)
@@ -122,7 +123,7 @@ impl HelperGpuPoolClaimTables {
         if let std::collections::hash_map::Entry::Vacant(unmapped_pool) =
             self.claim_tables_by_pool.lock().entry(pool)
         {
-            let shared_rows = GpuPoolClaimTableMemfd::adopt(claim_table_memfd)
+            let shared_rows = GpuPoolClaimTableSharedRows::adopt(claim_table_shared_rows_handle)
                 .map_err(|adoption_failure| adoption_failure.to_string())?;
             unmapped_pool.insert(Arc::new(HelperGpuPoolClaimTable {
                 shared_rows,
@@ -254,7 +255,6 @@ impl HelperGpuPoolClaimTables {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::FromRawFd as _;
 
     fn a_hand_over_of_one_row(row_index: u32, pool_slot_key: &str) -> GpuPoolClaimTableHandOver {
         GpuPoolClaimTableHandOver {
@@ -273,21 +273,34 @@ mod tests {
         }
     }
 
-    fn a_table_and_its_engine_side() -> (HelperGpuPoolClaimTables, GpuPoolClaimTableMemfd, [u8; 16])
-    {
-        let engine_side = GpuPoolClaimTableMemfd::create("helper-claims").unwrap();
+    #[cfg(target_os = "linux")]
+    fn a_hand_over_handle_of(
+        engine_side: &GpuPoolClaimTableSharedRows,
+    ) -> SurfaceShareTransferredHandle {
+        engine_side.memfd().try_clone_to_owned().unwrap()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn a_hand_over_handle_of(
+        engine_side: &GpuPoolClaimTableSharedRows,
+    ) -> SurfaceShareTransferredHandle {
+        engine_side.memory_entry_send_right().unwrap()
+    }
+
+    fn a_table_and_its_engine_side() -> (
+        HelperGpuPoolClaimTables,
+        GpuPoolClaimTableSharedRows,
+        [u8; 16],
+    ) {
+        let engine_side = GpuPoolClaimTableSharedRows::create("helper-claims").unwrap();
         let pool = [7u8; 16];
         let tables = HelperGpuPoolClaimTables::default();
-        // SAFETY: F_DUPFD_CLOEXEC of a valid memfd returns a fresh fd.
-        let handed_over = unsafe {
-            OwnedFd::from_raw_fd(libc::fcntl(
-                std::os::fd::AsRawFd::as_raw_fd(&engine_side.memfd()),
-                libc::F_DUPFD_CLOEXEC,
-                0,
-            ))
-        };
         tables
-            .adopt_a_hand_over(pool, handed_over, a_hand_over_of_one_row(3, "slot-d"))
+            .adopt_a_hand_over(
+                pool,
+                a_hand_over_handle_of(&engine_side),
+                a_hand_over_of_one_row(3, "slot-d"),
+            )
             .unwrap();
         (tables, engine_side, pool)
     }

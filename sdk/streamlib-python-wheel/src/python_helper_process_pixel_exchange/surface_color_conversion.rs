@@ -49,10 +49,7 @@ impl HelperProcessGpuExchangeClient {
         }
         let settled_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
         self.note_the_texture_layouts_a_run_left(&settled_response);
-        #[cfg(not(target_os = "linux"))]
-        let _ = settled_response;
         Ok(())
     }
 

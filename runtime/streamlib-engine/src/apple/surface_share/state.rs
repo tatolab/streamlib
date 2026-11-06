@@ -127,6 +127,11 @@ impl IOSurfaceShareState {
             .cloned()
     }
 
+    /// Whether `pool_slot_key` is registered.
+    pub fn is_registered(&self, pool_slot_key: &str) -> bool {
+        self.inner.surfaces.read().contains_key(pool_slot_key)
+    }
+
     /// Publish the layout `surface_id`'s texture image was left in; `false`
     /// when no texture is registered under it.
     pub fn update_image_layout(&self, surface_id: &str, layout: i32) -> bool {

@@ -49,10 +49,16 @@ use streamlib::sdk::rhi::PixelFormat;
 mod foreign_surface_adoption;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gpu_kernels;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod gpu_pool_claim_tables_of_this_helper;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod pool_slot_import_cache;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod pooled_gpu_frame_claims;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -65,8 +71,10 @@ pub(crate) use gpu_kernels::{
     HelperProcessRayTracingKernelRegistration, compute_dispatch_wire_entry,
 };
 
-#[cfg(target_os = "linux")]
-pub(crate) use linux::HelperGpuPoolSlotFrameClaim;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use gpu_pool_claim_tables_of_this_helper::HelperGpuPoolClaimTables;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use gpu_pool_claim_tables_of_this_helper::HelperGpuPoolSlotFrameClaim;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
@@ -75,9 +83,7 @@ pub(crate) use linux::{
     OpaqueFdAllocationExportDescription, foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "linux")]
-use linux::{
-    HelperGpuPoolClaimTables, HelperPixelBufferPoolSlotImport, HelperPoolSlotImportsByPoolSlot,
-};
+use linux::{HelperPixelBufferPoolSlotImport, HelperPoolSlotImport};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
@@ -85,9 +91,11 @@ pub(crate) use macos::{
 };
 #[cfg(target_os = "macos")]
 use macos::{
-    HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
-    HelperIOSurfaceUseCountClaim,
+    HelperIOSurfaceCpuLock, HelperIOSurfacePixelBufferPoolSlotImport, HelperIOSurfaceUseCountClaim,
+    HelperPoolSlotImport,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use pool_slot_import_cache::HelperPoolSlotImportsByPoolSlot;
 
 /// The width, height and format a pixel surface carries.
 #[derive(Clone, Copy)]
@@ -330,7 +338,7 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// The pool slot's IOSurface and its import, shared with this helper's
     /// per-slot cache and every other frame checked out over the slot.
     #[cfg(target_os = "macos")]
-    pub(crate) iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>,
+    pub(crate) iosurface_pool_slot_import: Arc<HelperIOSurfacePixelBufferPoolSlotImport>,
     /// This frame's claim on the IOSurface's use count — the claim the kernel
     /// keeps truthful across processes, and drops if this process dies.
     #[cfg(target_os = "macos")]
@@ -545,7 +553,6 @@ pub(crate) enum HelperSurfaceHeldAgainstProducerReuse {
         )]
         HelperSurfaceCheckOutLeaseDebt,
     ),
-    #[cfg(target_os = "linux")]
     GpuPoolClaim(
         #[expect(
             dead_code,
@@ -575,6 +582,12 @@ type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>
 /// The service answers from in-memory state and duplicated handles, never GPU
 /// work, so this bounds only a service that has stopped answering — and with
 /// it the time every other thread waits on the connection's lock.
+/// How many connections a helper sets aside after a failed or timed-out
+/// request before it stops asking the service anything: each one stays open,
+/// and a service that has failed this often has stopped answering.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST: usize = 4;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const SURFACE_SHARE_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -599,14 +612,12 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     #[cfg(target_os = "macos")]
     surface_share_mach_connection:
         Mutex<Option<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>>>,
-    /// Each pool slot's IOSurface and its import, looked up once per slot
-    /// rather than per frame: a child's first lookup of a surface costs
-    /// 9–10 ms. Holding them does not pin a slot — only a frame's use-count
-    /// claim does. Slot ids are never reused, so an entry never names the
-    /// wrong surface; one whose pool the engine dropped stays retained until
-    /// this helper stops or the parent goes away, which empties it.
+    /// Connections whose request failed, held open and never used again: the
+    /// service releases every lease a connection holds once it closes, and
+    /// frames this helper still reads were checked out on them.
     #[cfg(target_os = "macos")]
-    iosurface_imports_by_pool_slot: HelperIOSurfaceImportsByPoolSlot,
+    surface_share_mach_connections_set_aside_after_a_failure:
+        Mutex<Vec<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>>>,
     /// The runtime id this client's foreign-surface adoptions register and
     /// release under. Deliberately **not** the node's own runtime id: the
     /// service's crash watchdog releases every surface a disconnected
@@ -629,13 +640,15 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     surface_share_connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
     /// Each pool slot's import, made on the first frame over the slot and
     /// reused by every later one. Holding one does not pin a slot — only a
-    /// frame's checkout lease does — and the service names each slot the
-    /// engine retires on this helper's connection, which drops it here.
-    #[cfg(target_os = "linux")]
-    pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot,
+    /// frame's checkout lease or claim does — and the service names each slot
+    /// the engine retires on this helper's connection, which drops it here.
+    /// Emptied whenever the connection is replaced, since the notices of the
+    /// slots it held would have come on the connection that is gone.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pool_slot_imports_by_pool_slot: Arc<HelperPoolSlotImportsByPoolSlot>,
     /// The claim tables this helper was handed, mapped once per pool, and the
     /// claims its frames hold in them.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     gpu_pool_claim_tables: HelperGpuPoolClaimTables,
     /// The `deviceUUID` the runtime named at spawn, or why this child has
     /// none — what its import device is built on, and the refusal of every
@@ -727,15 +740,15 @@ impl HelperProcessGpuExchangeClient {
             #[cfg(target_os = "macos")]
             surface_share_mach_connection: Mutex::new(None),
             #[cfg(target_os = "macos")]
-            iosurface_imports_by_pool_slot: HelperIOSurfaceImportsByPoolSlot::default(),
+            surface_share_mach_connections_set_aside_after_a_failure: Mutex::new(Vec::new()),
             foreign_surface_registration_runtime_id,
             #[cfg(target_os = "linux")]
             surface_share_connection: Mutex::new(None),
             #[cfg(target_os = "linux")]
             surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
-            #[cfg(target_os = "linux")]
-            pool_slot_imports_by_pool_slot: HelperPoolSlotImportsByPoolSlot::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            pool_slot_imports_by_pool_slot: Arc::default(),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             gpu_pool_claim_tables: HelperGpuPoolClaimTables::default(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             vulkan_device_uuid_the_runtime_named_at_spawn,
@@ -827,7 +840,6 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperSurfaceHeldAgainstProducerReuse> {
-        #[cfg(target_os = "linux")]
         if let Some(claimed) = self.claim_in_its_pool_claim_table(surface_id)? {
             return Ok(HelperSurfaceHeldAgainstProducerReuse::GpuPoolClaim(claimed));
         }
@@ -840,17 +852,6 @@ impl HelperProcessGpuExchangeClient {
                 surface_id: surface_id.to_string(),
             },
         ))
-    }
-
-    /// `check_out` over the surface-share socket, then the import of
-    /// whichever backing the registration names.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn check_out_and_import(
-        self: &Arc<Self>,
-        surface_id: &str,
-    ) -> PyResult<HelperCheckedOutSurface> {
-        let (response, received_handles) = self.check_out_surface(surface_id)?;
-        self.import_checked_out_surface(surface_id, &response, received_handles)
     }
 
     /// Wait for the parent's GPU device to go idle.

@@ -86,8 +86,12 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
+#[cfg(target_os = "macos")]
+pub use crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
 #[cfg(target_os = "linux")]
 pub use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use gpu_pool_claim_table::GpuPoolClaimTableSharedRows;
 pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
 pub use gpu_pool_claim_table::{
     GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,

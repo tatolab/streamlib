@@ -41,9 +41,8 @@ impl HelperProcessGpuExchangeClient {
             pixel_format,
             iosurface.alloc_size() as u64,
         );
-        let (check_in_response, _no_ports_back) = self
-            .surface_share_mach_connection()?
-            .send_request_with_ports(&check_in_request, vec![iosurface_send_right])
+        let (check_in_response, _no_ports_back, ()) = self
+            .surface_share_exchange(&check_in_request, vec![iosurface_send_right], |_| ())
             .map_err(|request_failure| {
                 PyRuntimeError::new_err(format!(
                     "the surface-share check_in of a foreign IOSurface failed: {request_failure}"

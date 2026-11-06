@@ -139,23 +139,6 @@ impl SurfaceShareUnderTest {
             .to_string()
     }
 
-    /// The lease table the service keeps, and the claim tables it hands over.
-    pub(crate) fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
-        &self.check_out_leases
-    }
-
-    /// Publish `frame_generation` as the current frame of a pool slot the
-    /// test registered itself.
-    pub(crate) fn publish_frame_generation_over_a_registered_pool_slot(
-        &self,
-        slot_id: &str,
-        frame_generation: u64,
-    ) {
-        self.check_out_leases
-            .publish_frame_generation(slot_id, frame_generation)
-            .expect("the lease table stays readable");
-    }
-
     /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
     /// as its current frame — the state a pool producer's acquire leaves
     /// behind, without needing a pool or a GPU.
@@ -413,6 +396,27 @@ impl SurfaceShareUnderTest {
             .expect("the lease table stays readable");
     }
 
+    /// Unregister the pool slot `slot_id` the way the engine does when it
+    /// frees the slot.
+    pub(crate) fn unregister_pool_slot(&self, slot_id: &str) {
+        let (response, _no_reply_ports) = self
+            .publisher_connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "unregister",
+                    "surface_id": slot_id,
+                    "runtime_id": "lease-debt-test-runtime",
+                }),
+                Vec::new(),
+            )
+            .expect("unregister");
+        assert_eq!(
+            response.get("success").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the unregistration must succeed: {response:?}"
+        );
+    }
+
     /// Admit `pid` — a helper process this test spawned — to the service.
     pub(crate) fn admit_helper_process(
         &self,
@@ -437,6 +441,23 @@ impl SurfaceShareUnderTest {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl SurfaceShareUnderTest {
+    /// The lease table the service keeps, and the claim tables it hands over.
+    pub(crate) fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
+        &self.check_out_leases
+    }
+
+    /// Publish `frame_generation` as the current frame of a pool slot the
+    /// test registered itself.
+    pub(crate) fn publish_frame_generation_over_a_registered_pool_slot(
+        &self,
+        slot_id: &str,
+        frame_generation: u64,
+    ) {
+        self.check_out_leases
+            .publish_frame_generation(slot_id, frame_generation)
+            .expect("the lease table stays readable");
+    }
+
     /// How many claims are outstanding on `surface_id` — what the pool asks
     /// before it rehands a slot.
     pub(crate) fn outstanding_claims_on(&self, surface_id: &str) -> u32 {

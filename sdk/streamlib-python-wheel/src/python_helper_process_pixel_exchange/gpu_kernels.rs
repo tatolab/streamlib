@@ -154,10 +154,7 @@ impl HelperProcessGpuExchangeClient {
         // host runs both ops on the same recording machinery.
         let run_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
         self.note_the_texture_layouts_a_run_left(&run_response);
-        #[cfg(not(target_os = "linux"))]
-        let _ = run_response;
         Ok(())
     }
 
@@ -179,10 +176,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("dispatches", dispatches)?;
         let run_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
         self.note_the_texture_layouts_a_run_left(&run_response);
-        #[cfg(not(target_os = "linux"))]
-        let _ = run_response;
         Ok(())
     }
 
@@ -259,10 +253,7 @@ impl HelperProcessGpuExchangeClient {
         // render area, which is the whole target this op ever draws into.
         let run_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
         self.note_the_texture_layouts_a_run_left(&run_response);
-        #[cfg(not(target_os = "linux"))]
-        let _ = run_response;
         Ok(())
     }
 
@@ -311,10 +302,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("depth", grid.2)?;
         let run_response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        #[cfg(target_os = "linux")]
         self.note_the_texture_layouts_a_run_left(&run_response);
-        #[cfg(not(target_os = "linux"))]
-        let _ = run_response;
         Ok(())
     }
 
