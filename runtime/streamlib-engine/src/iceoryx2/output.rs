@@ -687,8 +687,8 @@ impl OutputWriterInner {
         })
     }
 
-    /// Publish `loan`, stamped `timestamp_ns` and `group_boundary`, on the port
-    /// it was loaned from.
+    /// Publish `loan`, stamped `timestamp_ns` and `group_boundary` and described
+    /// by `payload_descriptor`, on the port it was loaned from.
     ///
     /// A loan whose port was unwired since, or never linked, is given back
     /// unpublished, as a write to such a port sends nothing.
@@ -697,6 +697,7 @@ impl OutputWriterInner {
         loan: OutputPortPayloadLoan,
         timestamp_ns: i64,
         group_boundary: MessageGroupBoundary,
+        payload_descriptor: DataChannelPayloadDescriptor,
     ) -> Result<()> {
         let OutputPortPayloadLoan {
             output_port,
@@ -725,7 +726,7 @@ impl OutputWriterInner {
                 timestamp_ns,
                 payload_byte_len as u32,
                 group_boundary,
-                DataChannelPayloadDescriptor::bytes(),
+                payload_descriptor,
             ),
         )
     }
@@ -1103,7 +1104,12 @@ mod tests {
         assert_eq!(loan.payload_bytes_mut().as_ptr() as usize % 64, 0);
         loan.payload_bytes_mut().copy_from_slice(b"hello");
         inner
-            .publish_output_port_payload_loan(loan, 99, MessageGroupBoundary::ContinuesGroup)
+            .publish_output_port_payload_loan(
+                loan,
+                99,
+                MessageGroupBoundary::ContinuesGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
             .unwrap();
         let sample = subscriber.receive().unwrap().expect("the published loan");
         assert_eq!(stamped_payload_of(&sample), b"hello");
@@ -1160,7 +1166,12 @@ mod tests {
 
         loan.payload_bytes_mut()[0] = 7;
         inner
-            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .publish_output_port_payload_loan(
+                loan,
+                0,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
             .unwrap();
         assert_eq!(
             stamped_payload_of(&subscriber.receive().unwrap().unwrap()),
@@ -1177,7 +1188,12 @@ mod tests {
         let mut loan = inner.loan_output_port_payload("out", 4).unwrap();
         loan.payload_bytes_mut().copy_from_slice(b"none");
         inner
-            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .publish_output_port_payload_loan(
+                loan,
+                0,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
             .unwrap();
         assert!(inner.loan_output_port_payload("undeclared", 4).is_err());
     }
@@ -1206,7 +1222,12 @@ mod tests {
             },
         );
         inner
-            .publish_output_port_payload_loan(loan, 0, MessageGroupBoundary::StartsGroup)
+            .publish_output_port_payload_loan(
+                loan,
+                0,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
             .unwrap();
         assert!(second_subscriber.receive().unwrap().is_none());
         assert_eq!(written_bag_count_of(&inner, "out"), 0);

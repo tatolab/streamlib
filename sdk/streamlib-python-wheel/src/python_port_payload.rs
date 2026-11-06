@@ -13,7 +13,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
-    InputPortMessagePayload, MessageGroupBoundary, OutputPortPayloadLoan, OutputWriterInner,
+    DataChannelPayloadDescriptor, InputPortMessagePayload, MessageGroupBoundary,
+    OutputPortPayloadLoan, OutputWriterInner,
 };
 
 use crate::python_gpu_surface_pixel_exchange::{
@@ -349,6 +350,7 @@ impl PythonPortPayloadLoan {
                     loan,
                     timestamp_ns,
                     self.group_boundary,
+                    DataChannelPayloadDescriptor::bytes(),
                 )
             })
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))

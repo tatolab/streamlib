@@ -255,6 +255,12 @@ pub(crate) fn records_message_dict_of<'py>(
             "a Records message on {port_name:?} carries no dict"
         )));
     }
+    if !remaining.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "a Records message on {port_name:?} carries {} bytes past its one msgpack map",
+            remaining.len()
+        )));
+    }
     msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
@@ -468,6 +474,20 @@ mod tests {
                 .map(|(key, entry)| (Value::from(key), entry))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn a_records_message_with_bytes_past_its_map_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let mut payload = Vec::new();
+            rmpv::encode::write_value(&mut payload, &msgpack_map_of(vec![("a", Value::from(1))]))
+                .unwrap();
+            payload.push(0xc0);
+            let refusal = records_message_dict_of(python, "events", &payload)
+                .expect_err("a byte past the map is no part of the record");
+            assert!(refusal.to_string().contains("1 bytes past"), "{refusal}");
+        });
     }
 
     /// Every msgpack value shape converts into the Python type a reader of a

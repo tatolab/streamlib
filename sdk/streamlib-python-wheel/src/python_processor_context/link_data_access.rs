@@ -4,12 +4,15 @@
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
-use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, PacketsUnitDescriptorBody};
+use streamlib::sdk::iceoryx2::{
+    ChannelsBlockSampleType, DataChannelPayloadDescriptor, PacketsUnitDescriptorBody,
+};
 
 use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_port_payload::PythonPortPayloadLoan;
 use crate::python_processor_link_data_access::{
-    PortPayloadReadShape, PythonProcessorLinkDataAccess,
+    ChannelsOutputPortDeclaredShape, PortFamilyOfTheRead, PortPayloadReadShape,
+    PythonProcessorLinkDataAccess,
 };
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -31,8 +34,9 @@ pub(crate) struct PythonLinkInputDataReader {
 
 #[pymethods]
 impl PythonLinkInputDataReader {
-    /// The next message's payload on `port_name` as a `PortPayloadBorrow` of
-    /// the sample it arrived in, or `None` when the mailbox is empty.
+    /// The next message on `port`, a port name or an `Input` attribute, or
+    /// `None` when the mailbox is empty: by name a `PortPayloadBorrow` of the
+    /// sample it arrived in, through an attribute the port family's type.
     ///
     /// With `into`, the read returns `into.from_bytes(payload)`, so a payload
     /// that does not fit raises here rather than travelling on. `from_bytes` is
@@ -73,7 +77,7 @@ impl PythonLinkInputDataReader {
             )
     }
 
-    /// The next message's payload on `port_name` with the link it arrived on,
+    /// The next message's payload on `port` with the link it arrived on,
     /// or `None`.
     ///
     /// Any number of links may enter one input port, and each is one producer.
@@ -98,7 +102,7 @@ impl PythonLinkInputDataReader {
             )
     }
 
-    /// The next message's payload on `port_name` with its link and its
+    /// The next message's payload on `port` with its link and its
     /// timestamp, or `None`.
     ///
     /// What a many-track sink needs to restate a producer's own timing: the
@@ -122,7 +126,7 @@ impl PythonLinkInputDataReader {
             )
     }
 
-    /// The next message on `port_name` as a `Message` — payload, stamp, group
+    /// The next message on `port` as a `Message` — payload, stamp, group
     /// flag, the messages its link lost since the previous read from it, and
     /// the link — or `None`.
     ///
@@ -218,18 +222,41 @@ fn input_port_and_read_shape_named_by<'target, 'py>(
     let port_name = port_attribute_name(port, "Input")?;
     let read_shape = match into {
         Some(into) => PortPayloadReadShape::CastInto(into),
-        None => PortPayloadReadShape::FamilyType,
+        None => {
+            let declaration_name: String = port
+                .getattr("family")?
+                .getattr("declaration_name")?
+                .extract()?;
+            let family =
+                PortFamilyOfTheRead::of_declaration_name(&declaration_name).ok_or_else(|| {
+                    PyTypeError::new_err(format!(
+                        "input port {port_name:?} declares family {declaration_name:?}, which \
+                         is none of Image, Array, Channels, Packets, Records"
+                    ))
+                })?;
+            PortPayloadReadShape::FamilyType(family)
+        }
     };
     Ok((port_name, read_shape))
 }
 
-/// The port name a `tatolab.stream` `Input` or `Output` attribute names.
+/// The port name a `tatolab.stream` `Input` or `Output` attribute, or one of
+/// a subclass, names.
 fn port_attribute_name(port: &Bound<'_, PyAny>, expected_class: &str) -> PyResult<String> {
-    let class_name = port.get_type().name()?.to_string();
-    if class_name != expected_class {
+    let port_type = port.get_type();
+    let mut is_the_expected_port_class = false;
+    for class in port_type.mro().iter() {
+        let class = class.cast_into::<pyo3::types::PyType>()?;
+        let module: String = class.getattr("__module__")?.extract()?;
+        if class.name()? == expected_class && module.starts_with("tatolab.stream") {
+            is_the_expected_port_class = true;
+            break;
+        }
+    }
+    if !is_the_expected_port_class {
         return Err(PyTypeError::new_err(format!(
-            "a port is named by a str or a tatolab.stream {expected_class} attribute; got a \
-             {class_name}"
+            "a port is named by a str or a tatolab.stream {expected_class} attribute; got a {}",
+            port_type.name()?
         )));
     }
     port.getattr("port_name")?.extract()
@@ -248,8 +275,9 @@ pub(crate) struct PythonLinkOutputDataWriter {
 
 #[pymethods]
 impl PythonLinkOutputDataWriter {
-    /// Publish one message carrying a copy of `payload`, any contiguous buffer,
-    /// to every downstream link on `port_name`. A msgpack record whose
+    /// Publish one message to every downstream link on `port`: by name a copy
+    /// of `payload`, any contiguous buffer; through an `Output` attribute the
+    /// port family's type. A msgpack record whose
     /// `surface_id` names a pooled GPU frame this node acquired or read, or any
     /// payload passing that frame's id as `pooled_gpu_frame`, carries the
     /// frame's descriptor for its readers to claim it by.
@@ -274,6 +302,12 @@ impl PythonLinkOutputDataWriter {
         start_sample: Option<u64>,
     ) -> PyResult<()> {
         if !port.is_instance_of::<PyString>() {
+            if pooled_gpu_frame.is_some() {
+                return Err(PyTypeError::new_err(
+                    "pooled_gpu_frame= names the frame a write by name carries; a write through \
+                     an Output attribute builds its own descriptor from the payload",
+                ));
+            }
             return self.write_through_an_output_port_attribute(
                 python,
                 port,
@@ -284,6 +318,13 @@ impl PythonLinkOutputDataWriter {
             );
         }
         let port_name: String = port.extract()?;
+        if start_sample.is_some() {
+            return Err(PyTypeError::new_err(format!(
+                "start_sample= belongs to a write through a Channels Output attribute; write \
+                 {port_name:?} by name with write_channels_block(port_name, samples, \
+                 start_sample=…, sample_rate=…)"
+            )));
+        }
         let gpu_limited_access = self.gpu_limited_access_context.get();
         self.link_data_access.get().write_described_by(
             python,
@@ -332,7 +373,9 @@ impl PythonLinkOutputDataWriter {
                 samples,
                 start_sample,
                 sample_rate,
+                ChannelsOutputPortDeclaredShape::default(),
                 timestamp_ns,
+                true,
             )
     }
 
@@ -552,13 +595,36 @@ impl PythonLinkOutputDataWriter {
                          sample_rate=…)"
                     ))
                 })?;
+                let declared_shape = ChannelsOutputPortDeclaredShape {
+                    sample_type: match port.getattr("dtype")?.extract::<Option<String>>()? {
+                        None => None,
+                        Some(dtype) if dtype == "f32" => Some(ChannelsBlockSampleType::F32),
+                        Some(dtype) if dtype == "f64" => Some(ChannelsBlockSampleType::F64),
+                        Some(dtype) => {
+                            return Err(PyValueError::new_err(format!(
+                                "Channels output port {port_name:?} declares dtype {dtype:?}, \
+                                 which is neither \"f32\" nor \"f64\""
+                            )));
+                        }
+                    },
+                    channel_count: match names_the_output_port_attribute_states(port)?.len() {
+                        0 => None,
+                        stated => Some(u32::try_from(stated).map_err(|_| {
+                            PyValueError::new_err(format!(
+                                "Channels output port {port_name:?} states {stated} names"
+                            ))
+                        })?),
+                    },
+                };
                 link_data_access.write_channels_block_to_output_port(
                     python,
                     &port_name,
                     payload,
                     start_sample,
                     sample_rate,
+                    declared_shape,
                     timestamp_ns,
+                    starts_group,
                 )
             }
             "Image" => link_data_access.write_image_frame_to_output_port(
@@ -567,6 +633,7 @@ impl PythonLinkOutputDataWriter {
                 payload,
                 self.gpu_limited_access_context.get(),
                 timestamp_ns,
+                starts_group,
             ),
             "Array" => {
                 let declared_names = names_the_output_port_attribute_states(port)?;
@@ -577,6 +644,7 @@ impl PythonLinkOutputDataWriter {
                     &declared_names,
                     self.gpu_limited_access_context.get(),
                     timestamp_ns,
+                    starts_group,
                 )
             }
             other => Err(PyTypeError::new_err(format!(
@@ -584,5 +652,45 @@ impl PythonLinkOutputDataWriter {
                  Array, Channels, Packets, Records"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_port_attribute_of_an_input_subclass_names_its_port() {
+        Python::initialize();
+        Python::attach(|python| {
+            let stream_distribution_source_root =
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
+            python
+                .import("sys")
+                .unwrap()
+                .getattr("path")
+                .unwrap()
+                .call_method1("insert", (0, stream_distribution_source_root))
+                .unwrap();
+            let globals = pyo3::types::PyDict::new(python);
+            python
+                .run(
+                    c"from tatolab.stream import Input, Records\n\
+                      class EventsInput(Input):\n    pass\n\
+                      class Holder:\n    events = EventsInput(Records, delivery='ordered')\n\
+                      port = Holder.events\n",
+                    Some(&globals),
+                    None,
+                )
+                .unwrap();
+            let port = globals.get_item("port").unwrap().unwrap();
+            assert_eq!(port_attribute_name(&port, "Input").unwrap(), "events");
+            let refusal = port_attribute_name(&port, "Output")
+                .expect_err("an Input attribute names no output port");
+            assert!(
+                refusal.to_string().contains("got a EventsInput"),
+                "{refusal}"
+            );
+        });
     }
 }

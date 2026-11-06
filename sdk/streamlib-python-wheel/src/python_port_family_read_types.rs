@@ -199,8 +199,7 @@ impl PythonArrayFrameCpuAttribute {
 
 impl PythonArrayFrameCpuAttribute {
     /// The attribute's bytes, read where the sample holds them.
-    #[cfg(test)]
-    pub(crate) fn attribute_bytes_for_tests(&self) -> &[u8] {
+    pub(crate) fn attribute_bytes(&self) -> &[u8] {
         // SAFETY: the shared payload this attribute holds keeps the sample,
         // and the constructor checked the attribute's span lies inside it.
         unsafe {

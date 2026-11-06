@@ -110,7 +110,7 @@ No new ADR.
   - `Packets`: `Output(Packets, codec="h264")`. A read returns `PacketsUnit`, borrowed
     bytes with `pts`, `starts_group` (the keyframe) and `codec`. `codec=` is optional: a
     Packets port without one is a plain byte stream, and an input stating no
-    `requires_codec=` takes any Packets output.
+    `requires_codec=` takes any Packets output. Owner, 2026-11-06.
   - `Records`: `Output(Records, names=(…))`. `write(port, {...})` takes a plain dict of at most
     64 KiB, encoded, and a read returns a `dict`. The catalog marks a Records port unchecked.
   [strict-port-families]

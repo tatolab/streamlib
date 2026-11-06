@@ -44,7 +44,7 @@ use streamlib::sdk::iceoryx2::{
     input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
-use streamlib::sdk::rhi::{TensorElementType, TextureFormat};
+use streamlib::sdk::rhi::{TensorElementType, TensorStorageBufferLayout, TextureFormat};
 
 use crate::python_bag_conversion::{
     cast_payload_into_read_target, family_type_built_offering_gpu_access,
@@ -552,10 +552,45 @@ pub(crate) enum PortPayloadReadShape<'target, 'py> {
     /// The `PortPayloadBorrow` of the sample: a read by name.
     RawBorrow,
     /// The family's own type, built from the message's descriptor kind: a
-    /// read through a port attribute.
-    FamilyType,
+    /// read through a port attribute of that family.
+    FamilyType(PortFamilyOfTheRead),
     /// What `into.from_bytes` builds from the borrow.
     CastInto(&'target Bound<'py, PyAny>),
+}
+
+/// The family of the `Input` attribute a read names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PortFamilyOfTheRead {
+    Image,
+    Array,
+    Channels,
+    Packets,
+    Records,
+}
+
+impl PortFamilyOfTheRead {
+    /// The family a declaration spells as `declaration_name`, such as `Image`.
+    pub(crate) fn of_declaration_name(declaration_name: &str) -> Option<Self> {
+        Some(match declaration_name {
+            "Image" => Self::Image,
+            "Array" => Self::Array,
+            "Channels" => Self::Channels,
+            "Packets" => Self::Packets,
+            "Records" => Self::Records,
+            _ => return None,
+        })
+    }
+
+    /// The descriptor kind every message of this family carries.
+    fn descriptor_kind(self) -> DataChannelPayloadDescriptorKind {
+        match self {
+            Self::Image => DataChannelPayloadDescriptorKind::ImageFrame,
+            Self::Array => DataChannelPayloadDescriptorKind::ArrayFrame,
+            Self::Channels => DataChannelPayloadDescriptorKind::ChannelsBlock,
+            Self::Packets => DataChannelPayloadDescriptorKind::PacketsUnit,
+            Self::Records => DataChannelPayloadDescriptorKind::RecordsMessage,
+        }
+    }
 }
 
 impl<'target, 'py> PortPayloadReadShape<'target, 'py> {
@@ -581,10 +616,19 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let into = match read_shape {
         PortPayloadReadShape::CastInto(into) => Some(into),
-        PortPayloadReadShape::RawBorrow | PortPayloadReadShape::FamilyType => None,
+        PortPayloadReadShape::RawBorrow | PortPayloadReadShape::FamilyType(_) => None,
     };
-    if matches!(read_shape, PortPayloadReadShape::FamilyType) {
-        match payload_descriptor.known_kind() {
+    if let PortPayloadReadShape::FamilyType(family) = read_shape {
+        let kind = payload_descriptor.known_kind();
+        if kind != Ok(family.descriptor_kind()) {
+            return Err(PyTypeError::new_err(format!(
+                "a read of {family:?} input port {port_name:?} got a message described as \
+                 {kind:?} rather than {:?}: its producer wrote it by name rather than through \
+                 a {family:?} Output. Read it by name to take its raw payload.",
+                family.descriptor_kind()
+            )));
+        }
+        match kind {
             Ok(DataChannelPayloadDescriptorKind::ChannelsBlock) => {
                 let block =
                     ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
@@ -636,15 +680,21 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
         }
     }
     let mut pooled_gpu_frame_claim = None;
-    if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
-        (payload_descriptor.known_kind(), offered_gpu_limited_access)
+    let pooled_frame_the_message_carries = match payload_descriptor.known_kind() {
+        Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame) => Some(
+            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+        ),
+        Ok(DataChannelPayloadDescriptorKind::ImageFrame) => {
+            Some(ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body).slot)
+        }
+        _ => None,
+    };
+    if let (Some(pooled_frame), Some(gpu_limited_access)) =
+        (pooled_frame_the_message_carries, offered_gpu_limited_access)
     {
         let claimed = gpu_limited_access
             .get()
-            .note_and_claim_the_pooled_gpu_frame_a_read_carries(
-                python,
-                GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
-            );
+            .note_and_claim_the_pooled_gpu_frame_a_read_carries(python, pooled_frame);
         match (claimed, into) {
             (Ok(claim), _) => pooled_gpu_frame_claim = claim,
             (Err(refusal), Some(_)) => return Err(refusal),
@@ -1396,6 +1446,7 @@ impl PythonProcessorLinkDataAccess {
 impl PythonProcessorLinkDataAccess {
     /// Publish `samples`, a `[channel][sample]` array, as one Channels block
     /// on `port_name` starting at `start_sample`, at `sample_rate`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_channels_block_to_output_port(
         &self,
         python: Python<'_>,
@@ -1403,7 +1454,9 @@ impl PythonProcessorLinkDataAccess {
         samples: &Bound<'_, PyAny>,
         start_sample: u64,
         sample_rate: u32,
+        declared_shape: ChannelsOutputPortDeclaredShape,
         timestamp_ns: Option<i64>,
+        starts_group: bool,
     ) -> PyResult<()> {
         if sample_rate == 0 {
             return Err(PyValueError::new_err(format!(
@@ -1412,6 +1465,22 @@ impl PythonProcessorLinkDataAccess {
         }
         let (held_samples, sample_type, channel_count, samples_per_channel) =
             PythonBufferHeldForOneWrite::of_planar_channel_samples(port_name, samples)?;
+        if let Some(declared_sample_type) = declared_shape.sample_type
+            && declared_sample_type != sample_type
+        {
+            return Err(PyTypeError::new_err(format!(
+                "a write on Channels output port {port_name:?} holds {sample_type:?} samples, \
+                 and the port declares {declared_sample_type:?}"
+            )));
+        }
+        if let Some(declared_channel_count) = declared_shape.channel_count
+            && declared_channel_count != channel_count
+        {
+            return Err(PyValueError::new_err(format!(
+                "a write on Channels output port {port_name:?} holds {channel_count} channels, \
+                 and the port declares {declared_channel_count} names"
+            )));
+        }
         let block = ChannelsBlockDescriptorBody {
             start_sample,
             sample_rate,
@@ -1420,9 +1489,14 @@ impl PythonProcessorLinkDataAccess {
             sample_type: sample_type as u32,
         };
         drop(held_samples);
-        self.write_described_by(python, port_name, samples, timestamp_ns, true, |_| {
-            Ok(DataChannelPayloadDescriptor::channels_block(block))
-        })
+        self.write_described_by(
+            python,
+            port_name,
+            samples,
+            timestamp_ns,
+            starts_group,
+            |_| Ok(DataChannelPayloadDescriptor::channels_block(block)),
+        )
     }
 
     /// Publish `image`, an `ImageFrame` this node read or a GPU surface it
@@ -1434,6 +1508,7 @@ impl PythonProcessorLinkDataAccess {
         image: &Bound<'_, PyAny>,
         gpu_limited_access: &PythonGpuContextLimitedAccess,
         timestamp_ns: Option<i64>,
+        starts_group: bool,
     ) -> PyResult<()> {
         let not_an_image = || {
             PyTypeError::new_err(format!(
@@ -1474,7 +1549,7 @@ impl PythonProcessorLinkDataAccess {
             port_name,
             PyBytes::new(python, &[]).as_any(),
             timestamp_ns,
-            true,
+            starts_group,
             |_| Ok(DataChannelPayloadDescriptor::image_frame(image_frame)),
         )
     }
@@ -1490,6 +1565,7 @@ impl PythonProcessorLinkDataAccess {
         declared_names: &[String],
         gpu_limited_access: &PythonGpuContextLimitedAccess,
         timestamp_ns: Option<i64>,
+        starts_group: bool,
     ) -> PyResult<()> {
         let attributes = attributes.cast::<PyMapping>().map_err(|_| {
             PyTypeError::new_err(format!(
@@ -1510,6 +1586,23 @@ impl PythonProcessorLinkDataAccess {
         let mut cpu_data_held = Vec::new();
         for item in attributes.items()?.iter() {
             let (name, value): (String, Bound<'_, PyAny>) = item.extract()?;
+            if let Ok(read_attribute) = value.cast::<PythonArrayFrameCpuAttribute>() {
+                let byte_len = read_attribute.get().attribute_bytes().len() as u64;
+                rows.push(ArrayFrameAttributeRow {
+                    name,
+                    dtype: read_attribute.get().dtype().to_string(),
+                    shape: read_attribute.get().shape(),
+                    residency: ArrayFrameAttributeResidency::Cpu {
+                        payload_byte_offset: 0,
+                        byte_len,
+                    },
+                });
+                cpu_data_held.push((
+                    rows.len() - 1,
+                    ArrayAttributeCpuBytesHeldForOneWrite::ReadAttribute(read_attribute.clone()),
+                ));
+                continue;
+            }
             match value.getattr_opt("surface_id")? {
                 Some(surface_id) => {
                     let surface_id: String = surface_id.extract()?;
@@ -1532,6 +1625,13 @@ impl PythonProcessorLinkDataAccess {
                              with acquire_storage_buffer_from_node_output_pool"
                         )));
                     };
+                    TensorStorageBufferLayout::from_wire(shape.clone(), &dtype).map_err(
+                        |refusal| {
+                            PyValueError::new_err(format!(
+                                "Array attribute {name:?} on {port_name:?}: {refusal}"
+                            ))
+                        },
+                    )?;
                     rows.push(ArrayFrameAttributeRow {
                         name,
                         dtype,
@@ -1555,6 +1655,11 @@ impl PythonProcessorLinkDataAccess {
                                     .join(", ")
                             ))
                         })?;
+                    TensorStorageBufferLayout::new(shape.clone(), dtype).map_err(|refusal| {
+                        PyValueError::new_err(format!(
+                            "Array attribute {name:?} on {port_name:?}: {refusal}"
+                        ))
+                    })?;
                     let byte_len = held.bytes().len() as u64;
                     rows.push(ArrayFrameAttributeRow {
                         name,
@@ -1565,37 +1670,12 @@ impl PythonProcessorLinkDataAccess {
                             byte_len,
                         },
                     });
-                    cpu_data_held.push((rows.len() - 1, held));
+                    cpu_data_held.push((
+                        rows.len() - 1,
+                        ArrayAttributeCpuBytesHeldForOneWrite::PythonBuffer(held),
+                    ));
                 }
             }
-        }
-        let cpu_data_byte_lens: Vec<u64> = cpu_data_held
-            .iter()
-            .map(|(_, held)| held.bytes().len() as u64)
-            .collect();
-        let (cpu_data_offsets, payload_byte_len) =
-            array_frame_cpu_data_offsets(rows.len(), &cpu_data_byte_lens);
-        let mut payload = vec![0u8; payload_byte_len as usize];
-        for ((row_index, held), offset) in cpu_data_held.iter().zip(&cpu_data_offsets) {
-            if let ArrayFrameAttributeResidency::Cpu {
-                payload_byte_offset,
-                ..
-            } = &mut rows[*row_index].residency
-            {
-                *payload_byte_offset = *offset;
-            }
-            let start = *offset as usize;
-            payload[start..start + held.bytes().len()].copy_from_slice(held.bytes());
-        }
-        drop(cpu_data_held);
-        for (row_index, row) in rows.iter().enumerate() {
-            let row_bytes = row.to_row_bytes().map_err(|refusal| {
-                PyValueError::new_err(format!(
-                    "a write on Array output port {port_name:?}: {refusal}"
-                ))
-            })?;
-            let start = row_index * ARRAY_FRAME_ATTRIBUTE_ROW_BYTES;
-            payload[start..start + ARRAY_FRAME_ATTRIBUTE_ROW_BYTES].copy_from_slice(&row_bytes);
         }
         let array_frame = ArrayFrameDescriptorBody {
             attribute_count: u32::try_from(rows.len()).map_err(|_| {
@@ -1606,14 +1686,79 @@ impl PythonProcessorLinkDataAccess {
                 ))
             })?,
         };
-        self.write_described_by(
-            python,
-            port_name,
-            PyBytes::new(python, &payload).as_any(),
-            timestamp_ns,
-            true,
-            |_| Ok(DataChannelPayloadDescriptor::array_frame(array_frame)),
-        )
+        let cpu_data_byte_lens: Vec<u64> = cpu_data_held
+            .iter()
+            .map(|(_, held)| held.bytes().len() as u64)
+            .collect();
+        let (cpu_data_offsets, payload_byte_len) =
+            array_frame_cpu_data_offsets(rows.len(), &cpu_data_byte_lens);
+        for ((row_index, _), offset) in cpu_data_held.iter().zip(&cpu_data_offsets) {
+            if let ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                ..
+            } = &mut rows[*row_index].residency
+            {
+                *payload_byte_offset = *offset;
+            }
+        }
+        let attribute_table = rows
+            .iter()
+            .map(|row| {
+                row.to_row_bytes().map_err(|refusal| {
+                    PyValueError::new_err(format!(
+                        "a write on Array output port {port_name:?}: {refusal}"
+                    ))
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
+            return Ok(());
+        };
+        let payload_byte_len = usize::try_from(payload_byte_len).map_err(|_| {
+            PyValueError::new_err(format!(
+                "a write on Array output port {port_name:?} spans {payload_byte_len} bytes, past \
+                 what this machine addresses"
+            ))
+        })?;
+        let mut loan = match python
+            .detach(|| output_writer.loan_output_port_payload(port_name, payload_byte_len))
+        {
+            Ok(loan) => loan,
+            Err(refusal @ Error::PayloadExceedsChannelCeiling { .. }) => {
+                tracing::warn!("output port {port_name:?}: {refusal}; the Array frame was dropped");
+                return Ok(());
+            }
+            Err(refusal) => return Err(PyRuntimeError::new_err(refusal.to_string())),
+        };
+        let payload = loan.payload_bytes_mut();
+        payload.fill(0);
+        for (row_index, row_bytes) in attribute_table.iter().enumerate() {
+            let start = row_index * ARRAY_FRAME_ATTRIBUTE_ROW_BYTES;
+            payload[start..start + ARRAY_FRAME_ATTRIBUTE_ROW_BYTES].copy_from_slice(row_bytes);
+        }
+        for ((_, held), offset) in cpu_data_held.iter().zip(&cpu_data_offsets) {
+            let start = *offset as usize;
+            payload[start..start + held.bytes().len()].copy_from_slice(held.bytes());
+        }
+        drop(cpu_data_held);
+        let timestamp_ns = timestamp_ns
+            .unwrap_or_else(crate::python_helper_stream_clock::helper_stream_clock_now_ns);
+        let group_boundary = if starts_group {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        };
+        python
+            .detach(|| {
+                output_writer.publish_output_port_payload_loan(
+                    loan,
+                    timestamp_ns,
+                    group_boundary,
+                    DataChannelPayloadDescriptor::array_frame(array_frame),
+                )
+            })
+            .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
     }
 
     /// [`Self::write_to_output_port`], the message's header carrying the
@@ -1722,6 +1867,32 @@ fn array_attribute_element_type_of_the_buffer_format(format: &str) -> Option<Ten
     }
 }
 
+/// What a Channels output port's class states about the blocks it carries,
+/// which a write through its attribute is held to; nothing for a write by name.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ChannelsOutputPortDeclaredShape {
+    /// The `dtype=` the port states.
+    pub(crate) sample_type: Option<ChannelsBlockSampleType>,
+    /// How many `names=` the port states.
+    pub(crate) channel_count: Option<u32>,
+}
+
+/// The bytes of one CPU attribute an Array write copies into its sample: a
+/// Python buffer, or an attribute a read of an Array port returned.
+enum ArrayAttributeCpuBytesHeldForOneWrite<'py> {
+    PythonBuffer(PythonBufferHeldForOneWrite),
+    ReadAttribute(Bound<'py, PythonArrayFrameCpuAttribute>),
+}
+
+impl ArrayAttributeCpuBytesHeldForOneWrite<'_> {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::PythonBuffer(held) => held.bytes(),
+            Self::ReadAttribute(read_attribute) => read_attribute.get().attribute_bytes(),
+        }
+    }
+}
+
 /// The contiguous buffer a write was handed, held for as long as its bytes are
 /// copied out.
 struct PythonBufferHeldForOneWrite {
@@ -1798,7 +1969,9 @@ impl PythonBufferHeldForOneWrite {
                 .trim_start_matches(['@', '=', '<'])
                 .to_string()
         };
-        let extents = if held.view.shape.is_null() {
+        let extents = if held.view.ndim == 0 {
+            Vec::new()
+        } else if held.view.shape.is_null() {
             vec![held.view.len as u64]
         } else {
             // SAFETY: a view asked for its shape holds `ndim` extents at `shape`.
@@ -2072,12 +2245,13 @@ mod tests {
     fn read_as_the_family_type<'py>(
         python: Python<'py>,
         destination: &PythonProcessorLinkDataAccess,
+        family: PortFamilyOfTheRead,
     ) -> Bound<'py, PyAny> {
         destination
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType,
+                PortPayloadReadShape::FamilyType(family),
                 None,
             )
             .unwrap()
@@ -2107,12 +2281,15 @@ mod tests {
                         &samples,
                         96_000,
                         48_000,
+                        ChannelsOutputPortDeclaredShape::default(),
                         None,
+                        true,
                     )
                     .unwrap();
             }
 
-            let received = read_as_the_family_type(python, &destination);
+            let received =
+                read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Channels);
             assert!(received.cast::<PythonChannelsBlock>().is_ok());
             let attribute = |name: &str| received.getattr(name).unwrap();
             assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 2);
@@ -2144,7 +2321,9 @@ mod tests {
                     &one_dimensional,
                     0,
                     48_000,
+                    ChannelsOutputPortDeclaredShape::default(),
                     None,
+                    true,
                 )
                 .expect_err("a 1-D array is not [channel][sample]");
             assert!(
@@ -2183,7 +2362,8 @@ mod tests {
                 )
                 .unwrap();
 
-            let received = read_as_the_family_type(python, &destination);
+            let received =
+                read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Records);
             assert!(received.eq(&record).unwrap(), "got {received}");
 
             let missing_at = python.eval(c"{'kind': 'tap'}", None, None).unwrap();
@@ -2277,10 +2457,12 @@ mod tests {
                     &["boxes".to_string()],
                     &no_gpu,
                     Some(42),
+                    true,
                 )
                 .unwrap();
 
-            let received = read_as_the_family_type(python, &destination);
+            let received =
+                read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Array);
             assert_eq!(received.len().unwrap(), 2);
             assert_eq!(
                 received
@@ -2306,11 +2488,33 @@ mod tests {
                 assert_eq!(attribute.get().dtype(), dtype);
                 assert_eq!(attribute.get().shape(), shape);
                 assert_eq!(
-                    attribute.get().attribute_bytes_for_tests(),
+                    attribute.get().attribute_bytes(),
                     &expected_bytes[..],
                     "{name}"
                 );
             }
+
+            source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &received,
+                    &["boxes".to_string()],
+                    &no_gpu,
+                    Some(43),
+                    true,
+                )
+                .expect("a read Array frame relays unchanged");
+            let relayed = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Array);
+            let relayed_boxes = relayed.get_item("boxes").unwrap();
+            let relayed_boxes = relayed_boxes
+                .cast::<PythonArrayFrameCpuAttribute>()
+                .unwrap();
+            assert_eq!(relayed_boxes.get().shape(), vec![2u64, 3]);
+            assert_eq!(
+                relayed_boxes.get().attribute_bytes(),
+                &(0u8..24).collect::<Vec<_>>()[..]
+            );
 
             let missing_boxes = python
                 .eval(c"{'labels': memoryview(bytes([1]))}", None, None)
@@ -2323,6 +2527,7 @@ mod tests {
                     &["boxes".to_string()],
                     &no_gpu,
                     None,
+                    true,
                 )
                 .expect_err("`boxes` is declared");
             assert!(refusal.to_string().contains("\"boxes\""), "{refusal}");
@@ -2338,6 +2543,7 @@ mod tests {
                     &[],
                     &no_gpu,
                     None,
+                    true,
                 )
                 .expect_err("float64 is no tensor element type");
             assert!(refusal.to_string().contains("float32"), "{refusal}");
@@ -2438,7 +2644,7 @@ mod tests {
                     .read_from_input_port_offering_gpu_access(
                         python,
                         "frames_from_upstream",
-                        PortPayloadReadShape::FamilyType,
+                        PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
                         Some(&gpu),
                     )
                     .unwrap()
@@ -2487,6 +2693,7 @@ mod tests {
                     &frame,
                     gpu.get(),
                     None,
+                    true,
                 )
                 .unwrap();
             let frame_written_on = read_image_frame_on(&destination_on);
@@ -2508,6 +2715,98 @@ mod tests {
             !row_lease.row().is_claimed(),
             "a dropped frame lets its slot go"
         );
+    }
+
+    /// A read through a port attribute refuses a message whose descriptor
+    /// kind is not its family's, naming both.
+    #[test]
+    fn a_family_read_refuses_a_message_described_as_another_kind() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "family-kind-mismatch");
+            source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, b"written by name").as_any(),
+                    None,
+                    true,
+                    |_| Ok(DataChannelPayloadDescriptor::bytes()),
+                )
+                .unwrap();
+            let refusal = destination
+                .read_from_input_port_offering_gpu_access(
+                    python,
+                    "frames_from_upstream",
+                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Records),
+                    None,
+                )
+                .expect_err("a Bytes message is no Records message");
+            assert!(refusal.to_string().contains("Records"), "{refusal}");
+            assert!(refusal.to_string().contains("Bytes"), "{refusal}");
+        });
+    }
+
+    /// A write is held to what its port declares: an Array attribute with a
+    /// zero extent, and a Channels block of the wrong sample type or channel
+    /// count, are refused before anything is published.
+    #[test]
+    fn a_write_refuses_an_array_attribute_with_no_elements_and_a_channels_block_off_its_declaration()
+     {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, _destination) = one_wired_link(python, "declared-shape-refusals");
+            let no_gpu = PythonGpuContextLimitedAccess::new_for_helper_process(None);
+            let empty_boxes = python
+                .eval(c"{'boxes': memoryview(bytes(0)).cast('f')}", None, None)
+                .unwrap();
+            let refusal = source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &empty_boxes,
+                    &[],
+                    &no_gpu,
+                    None,
+                    true,
+                )
+                .expect_err("a zero extent describes no memory");
+            assert!(refusal.to_string().contains("zero dimension"), "{refusal}");
+
+            let stereo_f32 = python
+                .eval(c"memoryview(bytes(16)).cast('f', [2, 2])", None, None)
+                .unwrap();
+            for (declared_shape, expected) in [
+                (
+                    ChannelsOutputPortDeclaredShape {
+                        sample_type: Some(ChannelsBlockSampleType::F64),
+                        channel_count: None,
+                    },
+                    "F64",
+                ),
+                (
+                    ChannelsOutputPortDeclaredShape {
+                        sample_type: None,
+                        channel_count: Some(1),
+                    },
+                    "1 names",
+                ),
+            ] {
+                let refusal = source
+                    .write_channels_block_to_output_port(
+                        python,
+                        "frames_to_downstream",
+                        &stereo_f32,
+                        0,
+                        48_000,
+                        declared_shape,
+                        None,
+                        true,
+                    )
+                    .expect_err("the block is off the port's declaration");
+                assert!(refusal.to_string().contains(expected), "{refusal}");
+            }
+        });
     }
 
     /// A Packets unit reads back with its bytes, its stamp, whether a decoder
@@ -2535,7 +2834,8 @@ mod tests {
                     .unwrap();
             }
             for (codec, starts_group) in [("h264", false), ("", true)] {
-                let unit = read_as_the_family_type(python, &destination);
+                let unit =
+                    read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Packets);
                 assert!(unit.cast::<PythonPacketsUnit>().is_ok());
                 assert_eq!(
                     unit.getattr("codec").unwrap().extract::<String>().unwrap(),
