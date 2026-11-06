@@ -12,14 +12,15 @@ and when someone asks why `Lerp` is not a process.
 
 ## Decision
 
-A node has one of four kinds, declared by a contract about its code: an **op** the runtime
-supplies, a **`@node.shader`** Slang function, a **`@node.pure`** Python function, or a
+A node has one of four kinds, declared by a contract about its code: an **op**, native code on
+the module SDK's op contract, a **`@node.shader`** Slang function, a **`@node.pure`** Python function, or a
 **`@node` class**. Every kind has the same ports, families, links and `type`; the runtime
 derives where each runs. The compiler groups connected op, shader and pure nodes into
 evaluation islands, where a link is a function call. Ops and pure functions run inside the read
-of the node that reads them; shaders, and stateful nodes feeding several readers, run on one
-native evaluator per stream. A class runs in its own process, and every helper runs the engine's
-one Rust run loop.
+of the node that reads them; shaders run on one native evaluator per stream, and stateful nodes
+feeding several readers in one op helper per stream. A class runs in its own process, and every
+helper runs the engine's one Rust run loop. The runtime's own ops are a bundled module,
+`tatolab-ops`, built on the same SDK as anyone's.
 
 ## Why
 
@@ -54,7 +55,14 @@ moved to its own process after one restart, found by a breadcrumb written before
 file, two reviewer hard-fails and a vocabulary gate. Those are retired; the plan is the one
 place the architecture is stated, and it changes through the plan.
 
+**One SDK, no special path.** Built-in nodes that a module could not write are how the media
+built-ins ended up needing a migration of their own. Ops are a module from the start, so the
+ones in the box and a third party's are built, loaded and namespaced the same way.
+
 ## Rejected alternatives
+
+- **Ops as a fixed set in the engine crate** — a path only the engine can use, which modules
+  would later need to be migrated onto (owner, 2026-11-06).
 
 - **A separate control-rate graph with its own value ports** — it reintroduces the two-graph
   problem (Blueprint beside Material, visual scripting beside shader graph).

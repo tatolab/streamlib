@@ -19,7 +19,7 @@ native processor gets its own OS thread. There is nothing smaller.
 
   | Kind | Author writes | Contract | Runs |
   | --- | --- | --- | --- |
-  | op | nothing; supplied (`Lerp`, `Lfo`, `Clamp`) | native, bounded | inside the read of the node that reads it |
+  | op | a native function on the module SDK's op contract; the runtime bundles `tatolab-ops` (`Lerp`, `Lfo`, `Clamp`) | native, bounded | inside the read of the node that reads it |
   | `@node.shader` | a Slang function | Images and values in, an Image out, no side effects | on the GPU; a chain fuses into one kernel |
   | `@node.pure` | a Python function | no hidden state; state and time are parameters | inside the Python node that reads it |
   | `@node` class | a class with a lifecycle | anything: GPU, devices, threads, state | its own process, as today |
@@ -84,8 +84,18 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Ops
 
-- A fixed set in the engine crate, so `tatolabd` and the lent `tatolab.runtime` both carry
-  them, each a node type in `tatolab.stream` generated with its families and kind:
+- **One SDK for every op.** An op is native code written against the op contract in
+  `tatolab-module-sdk`, and a node type in its own module's namespace. The ops that come with
+  the runtime are the first-party module `tatolab-ops` (`tatolab.ops:Lerp`), bundled and built
+  exactly the way a third party builds a module of ops; nothing in the engine knows their
+  names. Two modules may both ship a `Lerp`, told apart by import path.
+- **The op contract** extends the module host table with one op entry. Per op, a module's
+  native half exports its descriptor (ports, families, config, whether it keeps state) and an
+  evaluate function the read seam calls with the input values, config, `now` and its state,
+  returning its outputs. It is the one place the engine calls module code, it is versioned
+  with the table, and it is loaded only in a helper: no op, first-party or not, runs in
+  `tatolabd`.
+- `tatolab-ops` carries:
   - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`, `Absolute`,
     `Modulo`.
   - Shaping: `Lerp`, `Clamp`, `Remap`, `Smoothstep`, `Step`.
@@ -96,10 +106,6 @@ The order is: the families, then variables, then the gateway and track nodes.
     frame until told to refresh).
 - `Select` picks a value; `Gate` passes or blocks messages, so a reactive node behind a closed
   gate does not run. That is the graph's if/else.
-- **Module ops.** A module may ship native ops of its own through the same op contract the
-  engine's use: a module declares its ops, and a helper or the evaluator loads those its graph
-  uses. The engine's set is the ops that come with the runtime, built the way a module's are.
-  The contract is published once phase 1 has proved the op shape.
 
 ### Evaluation islands
 
@@ -110,9 +116,11 @@ The order is: the families, then variables, then the gateway and track nodes.
   - **Ops and pure nodes read by a helper** run inside that helper's read: an island output is
     a synthetic port in `InputMailboxesInner`, and a read evaluates it. No process, no thread,
     no processor instance.
-  - **Shaders, and a stateful node that feeds several readers,** run on one native evaluator
-    per stream in `tatolabd`, which owns the device, and publish on a channel. One state never
-    has two copies.
+  - **Shaders** run on one native evaluator per stream in `tatolabd`, which owns the device,
+    and publish on a channel. A shader's code is Slang the engine compiles, never module code.
+  - **A stateful op or pure node that feeds several readers** runs in one op helper per
+    stream, spawned only when the stream has such a node, and publishes on a channel. One
+    state never has two copies.
   - **A pure island read by a module's native half** runs on the evaluator's pool (phase 4) or
     the port is refused by name, since that read holds no GIL.
 - **The island pass** runs between plan and PREPARE: union-find over lightweight nodes, a host
@@ -274,9 +282,11 @@ network or the device.
   `@node.shader`; a function's type is its import path, as a class's is.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
-- **The built-ins entry** (`ARCHITECTURE.md:539-549`). The ops are the runtime's own nodes:
-  general-purpose engine primitives, not media nodes. Nothing here depends on which other
-  built-ins remain.
+- **The built-ins entry** (`ARCHITECTURE.md:539-549`). The ops are a first-party module,
+  `tatolab-ops`, bundled with the runtime and built on the same op contract any module uses, so
+  the runtime still ships no node of its own.
+- **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the op entry, the one place
+  the engine calls module code, and only in a helper.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
 - **The variables entry** (`ARCHITECTURE.md:1833-1844`): a variable carries only the five
@@ -317,7 +327,8 @@ Each carries a recommendation that is built if nobody overrules it.
   class-versus-function shape already says which is which.
 
 Assumed unless overruled:
-- The engine's own ops live in the engine crate, so every host carries them.
+- `tatolab-ops` is installed in every stream's environment with the runtime, so every helper can
+  load it.
 - The shader template is the `ImageInput` shape above.
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
@@ -346,11 +357,13 @@ Assumed unless overruled:
 ## Tickets (expected)
 
 1. Ops at the read seam:
-   1. `kind` in the descriptor, catalog and `graph`; the one run loop; `Lfo`, `Remap`, `Clamp`.
+   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the op contract in
+      `tatolab-module-sdk`; `tatolab-ops` with `Lfo`, `Remap`, `Clamp`; a fixture module's op
+      joining an island beside them.
    2. The island pass on live edits, with cycle refusal.
    3. Literal pins and the full op set.
    4. Stateful ops on the state board.
-   5. Fan-out of a stateful op on the native evaluator.
+   5. Fan-out of a stateful op in the per-stream op helper.
 2. Shaders:
    1. Asynchronous GPU submission.
    2. One `@node.shader` on the native evaluator.
@@ -360,9 +373,7 @@ Assumed unless overruled:
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
 4. The pool and promotion, only if graphs need it.
-5. Module ops: the op contract published for modules, after phase 1. Proven by a fixture
-   module whose native op joins an island beside the engine's.
-6. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
+5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.
 
 ## Notes (not in scope)
