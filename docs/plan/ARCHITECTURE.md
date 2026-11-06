@@ -1836,7 +1836,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   setter's source, or a node reference — a gateway node a track names, a track node a send node
   names — which it resolves to a reference edge (§Networking). A connection is held as a
   reference to its gateway node, which keeps the live session; it is never a record on a link.
-  Owner, 2026-11-06. [lightweight-node-kinds; gateway-nodes]
+  A variable carries only the five families; a decorator port has none, so variables are built
+  once the families have fully replaced the decorators, and the gateway and track nodes after
+  them. Owner, 2026-11-06. [lightweight-node-kinds, which defines variables and the reference
+  edge; gateway-nodes]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
 - **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether

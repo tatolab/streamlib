@@ -35,7 +35,10 @@ public contract. ADR: `docs/decisions/lightweight-node-kinds.md`.
 
 **Sequencing.** Phase 1 needs the families' typed descriptors (`strict-port-families`, merged
 in `3e7e58b`). The SDK phases land after that change's decorator and scaffold tickets, because
-both rewrite the port surface. Phase 2 builds on `slang-shader-compiler`.
+both rewrite the port surface. Phase 2 builds on `slang-shader-compiler`. Graph variables carry
+only the five families, so they wait for `strict-port-families` to land in full, through its
+contract ticket that deletes the decorator ports; `gateway-nodes`' module ticket waits on them.
+The order is: the families, then variables, then the gateway and track nodes.
 
 ## Current state (recon, 2026-11-06, `main` `6e3fee9`)
 
@@ -45,7 +48,7 @@ both rewrite the port surface. Phase 2 builds on `slang-shader-compiler`.
   `_run_continuous`, `_processor_interpreter_bootstrap.py:1470-1580`). Native nodes use the
   Rust runner (`thread_runner.rs`).
 - **Where readers run.** Every module's native half runs in its node's helper, and `tatolabd`'s
-  one built-in, `RelayTrackSource`, has no inputs (`ARCHITECTURE.md:540-550`). Nearly every
+  one built-in, `RelayTrackSource`, has no inputs (`ARCHITECTURE.md:539-549`). Nearly every
   graph of small nodes therefore ends at a helper.
 - **The read seam.** `ctx.inputs.read` is Rust in the wheel: it calls
   `InputMailboxesInner::read_raw` with the GIL detached (`python_processor_link_data_access.rs`,
@@ -212,21 +215,39 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   interval three times running is promoted to its own process; a hung call cannot be
   pre-empted, so the pool is respawned with state handed over through the board.
 
-### What explicit I/O nodes rely on
+### Graph variables and reference edges
 
-Relays, gateways, tracks and previews become nodes a person places, not automatic behaviour
-(`gateway-nodes`). Those nodes touch the network or the device, so they are class or
-runtime-supplied nodes, never ops. A send node names its gateway's track by a node reference in
-its config, which `gateway-nodes` defines and which is never a link. This change adds two
-things beside it.
+This is the one definition of graph variables and of the reference edge. `gateway-nodes` uses
+both and defines neither.
 
-- **Graph variables.** `SetVariable` takes one input under a name; `GetVariable` reads it
-  anywhere in the stream with no wire drawn. The compiler resolves each get to a link from the
-  setter's source, so a variable has no runtime of its own and keeps its family. A variable
-  whose value is a node reference resolves to that reference instead. A get with no setter, or
-  two setters of one name, is refused by name at `connect`.
-- **Viewers.** An island holds its latest values, so a viewer of a lightweight node's output
-  reads them through whatever read path `gateway-nodes` settles, at no process cost.
+- **A reference edge.** A node's config value may be another node's reference, the value `add`
+  returned (`MoqTrackSend(track=camera_track)`). The graph records it as `{"node": "<name>"}` in
+  that config. The load refuses a reference to a missing node or to a node of the wrong type, by
+  name, and `graph` renders reference edges beside the links. A reference edge carries no data
+  and is never a link: the step barrier, delivery profiles, link counters and the island pass
+  never see it.
+- **`SetVariable` and `GetVariable`**, as Unreal Blueprints have them. `SetVariable` takes one
+  value under a name; any number of `GetVariable` nodes read it anywhere in the stream with no
+  wire drawn. A variable has no runtime of its own and holds nothing at run time:
+  - **A port's output.** `SetVariable` takes one input. The compiler resolves each get to a link
+    from the setter's source, so the variable keeps that port's family and the get's readers are
+    checked against it as any link is. The family is one of the five, Image, Packets, Records,
+    Channels or Array, from typed descriptors; a decorator port has no family a variable can
+    keep, so a variable needs the decorators gone.
+  - **A node reference.** `SetVariable` takes a node reference in config, and each get resolves
+    to a reference edge from the reader to that node. A connection is held this way, as a
+    reference to its gateway node, and a track the same way; neither is ever a record on a link.
+  - A get with no setter, two setters of one name, or a get read as the wrong family or node type
+    is refused by name at `connect`.
+- **Inside an island** a resolved variable is the link it resolved to, so a get feeding an op is
+  a function call like any other.
+
+### Viewers
+
+An island holds its latest values, so a viewer of a lightweight node's output reads them through
+whatever read path `gateway-nodes` settles, at no process cost. Relays, gateways, tracks and
+previews are class or runtime-supplied nodes a person places, never ops, because they touch the
+network or the device.
 
 ### What Tato Studio reads
 
@@ -240,20 +261,26 @@ things beside it.
 
 ## MODIFIED
 
-- **The placement entry** (`ARCHITECTURE.md:1530-1547`). It reads: a Python **class** node runs
+- **The placement entry** (`ARCHITECTURE.md:1529-1546`). It reads: a Python **class** node runs
   in its own child process, exec'd from the stream's venv, never fork; ops and shaders run
   without a process; pure Python runs inside its Python reader, in a pool only in phase 4, and
   in its own process after a crash or a stall. "No processor may ever block another" holds
   between class nodes.
 - **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.pure` and
   `@node.shader`; a function's type is its import path, as a class's is.
-- **The execution-flavors OPEN** (`ARCHITECTURE.md:1776-1778`) becomes DECIDED as evaluation
+- **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
-- **The built-ins entry** (`ARCHITECTURE.md:540-550`). The ops are the runtime's own nodes:
+- **The built-ins entry** (`ARCHITECTURE.md:539-549`). The ops are the runtime's own nodes:
   general-purpose engine primitives, not media nodes. Nothing here depends on which other
   built-ins remain.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
+- **The variables entry** (`ARCHITECTURE.md:1833-1844`): a variable carries only the five
+  families, and the order is the families, then variables, then the gateway and track nodes.
+  Done in this PR, from the owner's ruling of 2026-11-06.
+- **`gateway-nodes.md`** points at §Graph variables and reference edges instead of defining the
+  reference edge itself, and its module ticket waits on this change's variables ticket. Done in
+  this PR.
 
 ## REMOVED
 
@@ -291,7 +318,6 @@ Assumed unless overruled:
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
 - Blueprint's execution wire ("do A, then B") is not part of this change; gates cover streams.
-- Graph variables compile to links rather than holding a value of their own.
 - Wasm is out of scope.
 
 ## Proof
@@ -308,6 +334,10 @@ Assumed unless overruled:
 - `@node.pure` with `State` keeps its state across a reload; the lint refuses `time.time()`,
   `random.random()` and `open()` by name.
 - A pure node that aborts its reader is promoted after one restart, and `graph` counts it.
+- One `SetVariable` of an Image output read by two `GetVariable` nodes yields two links from the
+  setter's source and no variable node at run time; a variable holding a gateway reference yields
+  reference edges in `graph`; a missing setter, a duplicate setter and a wrong-family get are each
+  refused by name.
 
 ## Tickets (expected)
 
@@ -326,6 +356,8 @@ Assumed unless overruled:
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
 4. The pool and promotion, only if graphs need it.
+5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
+   before `gateway-nodes`' module ticket. Independent of phases 1 to 4.
 
 ## Notes (not in scope)
 
