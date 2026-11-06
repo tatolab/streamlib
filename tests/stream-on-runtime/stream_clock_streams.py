@@ -10,14 +10,17 @@ from stream_clock_processors import (
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,
     ContinuousTickCounterSource,
+    LastStepReporterSink,
     RealTimePacedReporterSink,
     RealTimeCrossingTickCounterSource,
     RealTimePacedWriterSource,
+    RelayWhoseFirstHelperDiesMidStep,
     SlowStepRelay,
     StepTimeReporterSink,
     StepTimeWriterSource,
     StreamTimeStampReporterSink,
     StreamTimeWriterSource,
+    TwoWritesPerStepSource,
 )
 
 #: The scale the slow-motion stream runs at.
@@ -113,4 +116,26 @@ def real_time_writes_beside_steps(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(
         real_time_writer.output("real_time_writes_to_downstream"),
         real_time_reporter.input("real_time_writes_from_upstream"),
+    )
+
+
+@stream
+def two_writes_per_step_through_a_relay_whose_helper_dies(stream_builder: StreamBuilder) -> None:
+    """Two writes a step through a relay whose first helper dies with one unread, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(
+        SteppedStreamClock(
+            step_ns=STEPPED_STREAM_STEP_MS * 1_000_000,
+            stop_after_steps=STEPPED_STREAM_STEPS,
+        )
+    )
+    writer = stream_builder.add(TwoWritesPerStepSource)
+    relay = stream_builder.add(RelayWhoseFirstHelperDiesMidStep)
+    reporter = stream_builder.add(LastStepReporterSink)
+    stream_builder.connect(
+        writer.output("step_indices_to_downstream"),
+        relay.input("step_indices_from_upstream"),
+    )
+    stream_builder.connect(
+        relay.output("step_indices_to_downstream"),
+        reporter.input("step_indices_from_upstream"),
     )

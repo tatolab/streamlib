@@ -4,6 +4,8 @@
 """Processors that report the stream time they read and the stamps they see."""
 
 import json
+import os
+import tempfile
 
 from tatolab.stream import log, monotonic_now_ns, node
 from tatolab.stream.msgpack import pack, unpack
@@ -280,3 +282,79 @@ class RealTimePacedReporterSink:
         )
         if len(self.seen) == REAL_TIME_PACED_MESSAGES_REPORTED:
             report("REAL_TIME_PACED_WRITES", {"seen": self.seen})
+
+
+#: The step in which the relay's first helper ends itself, after taking the
+#: first of that step's two messages and before the second.
+STEP_THE_RELAY_HELPER_DIES_IN = 3
+
+
+@node(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
+class TwoWritesPerStepSource:
+    """Writes two messages in every step, each naming the step."""
+
+    @node.output()
+    def step_indices_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        for message_in_the_step in range(2):
+            ctx.outputs.write(
+                "step_indices_to_downstream",
+                pack(
+                    {
+                        "step_index": ctx.stream_clock.step_index,
+                        "message_in_the_step": message_in_the_step,
+                    }
+                ),
+            )
+
+
+def _flag_marking_that_a_helper_of_this_stream_died() -> str:
+    return os.path.join(
+        tempfile.gettempdir(), f"tatolab-relay-helper-died-under-{os.getppid()}"
+    )
+
+
+@node
+class RelayWhoseFirstHelperDiesMidStep:
+    """Relays each message on; its first helper ends itself mid-step, leaving one unread."""
+
+    @node.input(delivery_profile="ordered")
+    def step_indices_from_upstream(self) -> None: ...
+
+    @node.output()
+    def step_indices_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        message = ctx.inputs.read_message("step_indices_from_upstream")
+        if message is None:
+            return
+        relayed = unpack(message.payload)
+        flag = _flag_marking_that_a_helper_of_this_stream_died()
+        if relayed["step_index"] == STEP_THE_RELAY_HELPER_DIES_IN and not os.path.exists(flag):
+            with open(flag, "w"):
+                pass
+            os._exit(17)
+        ctx.outputs.write("step_indices_to_downstream", pack(relayed))
+
+
+@node
+class LastStepReporterSink:
+    """Reports the step indices it read once it reads both of the last step's."""
+
+    def __init__(self) -> None:
+        self.step_indices_seen: "list[int]" = []
+
+    @node.input(delivery_profile="ordered")
+    def step_indices_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        message = ctx.inputs.read_message("step_indices_from_upstream")
+        if message is None:
+            return
+        step_index = unpack(message.payload)["step_index"]
+        self.step_indices_seen.append(step_index)
+        if self.step_indices_seen.count(STEPPED_STREAM_STEPS - 1) == 2:
+            if os.path.exists(_flag_marking_that_a_helper_of_this_stream_died()):
+                os.remove(_flag_marking_that_a_helper_of_this_stream_died())
+            report("STEPS_PAST_A_HELPER_RESTART", {"step_indices_seen": self.step_indices_seen})

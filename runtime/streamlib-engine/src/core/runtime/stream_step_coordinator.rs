@@ -40,6 +40,9 @@ pub(crate) struct StepLedgerEntryOfOneNode {
     pub(crate) display_name: String,
     pub(crate) step_progress: StepProgressReadingOfOneNode,
     pub(crate) has_failed: bool,
+    /// Whether a new helper is being started in place of one that died, for
+    /// a node neither paused nor paced by real time.
+    pub(crate) is_restarting_its_helper_inside_the_barrier: bool,
 }
 
 impl StepLedgerEntryOfOneNode {
@@ -59,6 +62,9 @@ pub(crate) struct StepLedgerEntryOfOneLink {
     /// Whether the link's destination is subscribed, so every bag written
     /// from here on reaches it.
     pub(crate) is_wired: bool,
+    /// Whether a new helper of the link's destination is being started in
+    /// place of one that died, so a bag written now may never reach it.
+    pub(crate) destination_is_restarting_its_helper: bool,
 }
 
 impl StepLedgerEntryOfOneLink {
@@ -95,8 +101,13 @@ impl StepLedgerReading {
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
         let mut link_ids_into_a_windowed_port = std::collections::HashSet::new();
         let mut processor_ids_paced_by_real_time = std::collections::HashSet::new();
+        let mut processor_ids_restarting_their_helper = std::collections::HashSet::new();
         for node in graph.traversal().v(()).iter() {
             let metrics = node.get::<ProcessorMetrics>();
+            let processor_state = node.get::<StateComponent>().map(StateComponent::current);
+            if processor_state == Some(ProcessorState::Restarting) {
+                processor_ids_restarting_their_helper.insert(node.id().to_string());
+            }
             let step_progress_of_its_host = node
                 .get::<StepProgressOfOneNodeComponent>()
                 .map(|step_progress| step_progress.0.reading())
@@ -111,11 +122,10 @@ impl StepLedgerReading {
             if step_progress.stands_outside_the_step_barrier {
                 processor_ids_paced_by_real_time.insert(node.id().to_string());
             }
-            if step_progress.finishes_every_step
-                || node
-                    .get::<ProcessorPauseGateComponent>()
-                    .is_some_and(ProcessorPauseGateComponent::is_paused)
-            {
+            let is_paused = node
+                .get::<ProcessorPauseGateComponent>()
+                .is_some_and(ProcessorPauseGateComponent::is_paused);
+            if step_progress.finishes_every_step || is_paused {
                 processor_ids_that_take_bags_on_their_own_pace.insert(node.id().to_string());
             }
             reading.nodes_by_processor_id.insert(
@@ -123,9 +133,11 @@ impl StepLedgerReading {
                 StepLedgerEntryOfOneNode {
                     display_name: node.display_name.clone(),
                     step_progress,
-                    has_failed: node
-                        .get::<StateComponent>()
-                        .is_some_and(|state| state.current() == ProcessorState::Error),
+                    has_failed: processor_state == Some(ProcessorState::Error),
+                    is_restarting_its_helper_inside_the_barrier: processor_state
+                        == Some(ProcessorState::Restarting)
+                        && !is_paused
+                        && !step_progress.stands_outside_the_step_barrier,
                 },
             );
             let Some(metrics) = metrics else {
@@ -183,6 +195,8 @@ impl StepLedgerReading {
                     taken_bags,
                     dropped_bags,
                     is_wired,
+                    destination_is_restarting_its_helper: processor_ids_restarting_their_helper
+                        .contains(link.to_port().processor_id().as_str()),
                 },
             );
         }
@@ -197,47 +211,54 @@ impl StepLedgerReading {
             .map(|node| node.display_name.as_str())
     }
 
-    /// Whether step `step_index` closes on this reading: every node idle,
-    /// every node that finishes every step finished it, and every link carries
-    /// no bag beyond the ones `in_flight_before_the_ledger_saw_it` holds.
+    /// Whether step `step_index` closes on this reading: no node inside the
+    /// barrier restarting its helper, every node idle, every node that
+    /// finishes every step finished it, and every link carries no bag beyond the ones `in_flight_before_the_ledger_saw_it` holds.
     pub(crate) fn lets_the_step_close(
         &self,
         step_index: u64,
         in_flight_before_the_ledger_saw_it: &StepLedgerLinkBaselines,
     ) -> bool {
-        self.nodes_by_processor_id
-            .values()
-            .all(|node| node.step_progress.lets_the_step_close(step_index))
-            && self.links_by_link_id.iter().all(|(link_id, link)| {
-                link.bags_in_flight()
-                    <= in_flight_before_the_ledger_saw_it.bags_in_flight_when_first_seen(link_id)
-            })
+        self.nodes_by_processor_id.values().all(|node| {
+            !node.is_restarting_its_helper_inside_the_barrier
+                && node.step_progress.lets_the_step_close(step_index)
+        }) && self.links_by_link_id.iter().all(|(link_id, link)| {
+            link.bags_in_flight()
+                <= in_flight_before_the_ledger_saw_it.bags_in_flight_when_first_seen(link_id)
+        })
     }
 }
 
 /// The bags each link held in flight when its destination subscribed: a link
-/// wired mid-run joins with whatever its producer wrote before it, which will
-/// never reach it.
+/// wired mid-run joins with whatever its producer wrote before it, and a link
+/// whose destination's helper was restarted with whatever the dead helper
+/// left unread, neither of which will ever reach it. A baseline only falls
+/// after that, to what the link holds in flight once its destination takes a
+/// bag the baseline counted as never reaching it.
 #[derive(Debug, Default)]
 pub(crate) struct StepLedgerLinkBaselines {
     bags_in_flight_by_link_id: HashMap<String, u64>,
 }
 
 impl StepLedgerLinkBaselines {
-    /// Follow the links of `reading`: a link not wired yet is baselined at
-    /// what it holds in flight now, a wired one keeps the baseline it had when
-    /// it was first seen wired, also while it is off the balance, and a link
-    /// gone from the graph is forgotten.
+    /// Follow the links of `reading`: a link not wired yet, or whose
+    /// destination is restarting its helper, is baselined at what it holds in
+    /// flight now; a wired one keeps the baseline it had when it was first seen
+    /// so, also while it is off the balance, lowered to what it holds in
+    /// flight whenever that is less; and a link gone from the graph is
+    /// forgotten.
     pub(crate) fn follow_the_links_in(&mut self, reading: &StepLedgerReading) {
         self.bags_in_flight_by_link_id.retain(|link_id, _| {
             reading.links_by_link_id.contains_key(link_id)
                 || reading.link_ids_off_the_balance.contains(link_id)
         });
         for (link_id, link) in &reading.links_by_link_id {
-            if link.is_wired {
-                self.bags_in_flight_by_link_id
+            if link.is_wired && !link.destination_is_restarting_its_helper {
+                let baseline = self
+                    .bags_in_flight_by_link_id
                     .entry(link_id.clone())
                     .or_insert_with(|| link.bags_in_flight());
+                *baseline = (*baseline).min(link.bags_in_flight());
             } else {
                 self.bags_in_flight_by_link_id
                     .insert(link_id.clone(), link.bags_in_flight());
@@ -466,6 +487,7 @@ mod tests {
             display_name: "node".to_owned(),
             step_progress,
             has_failed: false,
+            is_restarting_its_helper_inside_the_barrier: false,
         }
     }
 
@@ -520,6 +542,7 @@ mod tests {
             taken_bags,
             dropped_bags,
             is_wired: true,
+            destination_is_restarting_its_helper: false,
         }
     }
 
@@ -613,6 +636,50 @@ mod tests {
             a_reading([AN_IDLE_REACTIVE_NODE], [a_link(6, 6, 0)])
                 .lets_the_step_close(0, &baselines)
         );
+    }
+
+    #[test]
+    fn a_node_restarting_its_helper_holds_the_step_open() {
+        let mut reading = a_reading([AN_IDLE_REACTIVE_NODE], []);
+        reading
+            .nodes_by_processor_id
+            .values_mut()
+            .for_each(|node| node.is_restarting_its_helper_inside_the_barrier = true);
+        assert!(!reading.lets_the_step_close(0, &StepLedgerLinkBaselines::default()));
+    }
+
+    #[test]
+    fn bags_a_restarted_helper_never_read_never_hold_a_step_open() {
+        let mut baselines = StepLedgerLinkBaselines::default();
+        baselines.follow_the_links_in(&a_reading([], [a_link(2, 0, 0)]));
+        let one_left_unread_by_a_helper_that_died =
+            a_reading([AN_IDLE_REACTIVE_NODE], [a_link(4, 1, 0)]);
+        baselines.follow_the_links_in(&one_left_unread_by_a_helper_that_died);
+        assert!(!one_left_unread_by_a_helper_that_died.lets_the_step_close(0, &baselines));
+
+        let mut its_helper_restarting = a_link(4, 1, 0);
+        its_helper_restarting.destination_is_restarting_its_helper = true;
+        baselines.follow_the_links_in(&a_reading([AN_IDLE_REACTIVE_NODE], [its_helper_restarting]));
+        let after_the_restart = a_reading([AN_IDLE_REACTIVE_NODE], [a_link(4, 1, 0)]);
+        baselines.follow_the_links_in(&after_the_restart);
+        assert!(after_the_restart.lets_the_step_close(0, &baselines));
+
+        let with_a_new_bag = a_reading([AN_IDLE_REACTIVE_NODE], [a_link(5, 1, 0)]);
+        baselines.follow_the_links_in(&with_a_new_bag);
+        assert!(!with_a_new_bag.lets_the_step_close(0, &baselines));
+    }
+
+    #[test]
+    fn a_bag_queued_for_a_restarted_helper_and_taken_lowers_the_baseline() {
+        let mut baselines = StepLedgerLinkBaselines::default();
+        let mut its_helper_restarting = a_link(4, 1, 0);
+        its_helper_restarting.destination_is_restarting_its_helper = true;
+        baselines.follow_the_links_in(&a_reading([], [its_helper_restarting]));
+        baselines.follow_the_links_in(&a_reading([], [a_link(4, 2, 0)]));
+
+        let one_left_unread_a_step_later = a_reading([AN_IDLE_REACTIVE_NODE], [a_link(5, 2, 0)]);
+        baselines.follow_the_links_in(&one_left_unread_a_step_later);
+        assert!(!one_left_unread_a_step_later.lets_the_step_close(0, &baselines));
     }
 
     #[test]

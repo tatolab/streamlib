@@ -815,7 +815,9 @@ impl BrowserHostTabOfOneNode {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let timestamp_ns = self.module_host.monotonic_now_ns();
+        let timestamp_ns = self
+            .module_host
+            .stream_time_ns_of_a_machine_instant(self.module_host.monotonic_now_ns());
         let record = PaintedPageVideoFrame {
             surface_id: painted_frame_texture.surface_id(),
             width,
@@ -876,7 +878,9 @@ impl BrowserHostTabOfOneNode {
             );
             return;
         }
-        let first_sample_timestamp_ns = timeline.stamp_the_next_packet(sample_count, arrived_at_ns);
+        let first_sample_timestamp_ns = self.module_host.stream_time_ns_of_a_machine_instant(
+            timeline.stamp_the_next_packet(sample_count, arrived_at_ns),
+        );
         let payload = timeline.audio_block_message_payload(
             &interleaved_samples,
             sample_count,
