@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.30](https://github.com/tatolab/streamlib/compare/v0.68.29...v0.68.30) (2026-11-06)
+
+
+### Features
+
+* **engine:** on macOS the claim table replaces the per-frame IOSurface port ([#3191](https://github.com/tatolab/streamlib/issues/3191)) ([90f1b3f](https://github.com/tatolab/streamlib/commit/90f1b3f1afb2b9f932af954678d6008483ae9860))
+
 ## [0.68.29](https://github.com/tatolab/streamlib/compare/v0.68.28...v0.68.29) (2026-11-06)
 
 

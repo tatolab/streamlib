@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-opus"
-version = "0.68.29"
+version = "0.68.30"
 description = "Opus encode and decode nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
