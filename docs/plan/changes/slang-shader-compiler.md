@@ -77,8 +77,7 @@ recorded here so the tickets need not re-derive them.
   debug info off. Slang keeps binding names without it, and the engine's reflection refuses
   Slang's debug instructions.
 - **The cache key** keeps every input that changes the output and names the compiler as
-  `slang <version>`, read from the global session's build tag at run time. The source language
-  joins the key.
+  `slang <version>`, read from the global session's build tag at run time.
 - **The target** is a parameter of the compiler: a stage and a backend. This change serves
   every stage the engine has today (compute, vertex, fragment and the ray-tracing stages) to
   SPIR-V. Another backend is a later change.
@@ -111,8 +110,9 @@ recorded here so the tickets need not re-derive them.
 
 - **The GLSL source contract** (`ARCHITECTURE.md:2087-2094`, "GLSL is the shader source
   contract"). It reads: Slang is the shader source contract. Python passes Slang text, and the
-  engine compiles it at construction with the same cache rule. Pre-compiled SPIR-V stays the escape hatch. The wheel
-  carries the Slang compiler, so authoring needs no toolchain beyond the wheel.
+  engine compiles it at construction with the same cache rule. Pre-compiled SPIR-V stays the
+  escape hatch. The wheel carries the Slang compiler, so authoring needs no toolchain beyond the
+  wheel.
 - **The wheel's contents** (`ARCHITECTURE.md:3755-3756`, "the wheel carries a C++ GLSL shader
   compiler"). It carries the Slang compiler libraries.
 - **`GlslPixelEffect`** (`ARCHITECTURE.md:2236`) is removed; `@node.shader` is the pixel-effect
