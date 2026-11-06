@@ -13,6 +13,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
+use streamlib::sdk::iceoryx2::RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES;
 
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
@@ -186,9 +187,6 @@ pub(crate) fn python_object_to_json_value(
         ))
     })
 }
-
-/// The most bytes one Records message's encoded dict may take.
-pub(crate) const RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES: usize = 64 * 1024;
 
 /// Encode `record`, a dict, as a Records message's msgpack payload, refused
 /// when it is not a dict, lacks one of `declared_names`, or encodes past

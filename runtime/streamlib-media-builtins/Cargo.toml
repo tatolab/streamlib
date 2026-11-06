@@ -19,6 +19,8 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.30", default-fea
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
+# A Records message is a msgpack map the conversion nodes read and write as values.
+rmpv = { workspace = true }
 tracing = { workspace = true }
 # `RelayTrackSource`: a MoQ subscriber of one track at a relay, reading the
 # broadcast's catalog in the stack's layout. Pinned exactly as the publisher in

@@ -14,9 +14,150 @@ from typing import ClassVar, Literal, TypedDict
 from ._built_in_node import BuiltInNode
 
 __all__ = [
+    "ArrayToChannels",
+    "ArrayToChannelsConfig",
+    "ChannelsToArray",
+    "ChannelsToArrayConfig",
+    "ChannelsToRecords",
+    "ChannelsToRecordsConfig",
+    "RecordsToChannels",
+    "RecordsToChannelsConfig",
     "RelayTrackSource",
     "RelayTrackSourceConfig",
 ]
+
+
+class _ArrayToChannelsConfigRequiredKeys(TypedDict):
+    """The keys `ArrayToChannels`'s config cannot leave out."""
+
+    channel_names: list[str]
+    """The names of the channels `channels` carries, one per row of the attribute."""
+
+    sample_rate: int
+    """The sample rate `channels` states, in samples per second per channel."""
+
+
+class ArrayToChannelsConfig(_ArrayToChannelsConfigRequiredKeys, total=False):
+    """`ArrayToChannels`'s config: the keys `stream_builder.add` takes."""
+
+    attribute: str
+    """The attribute of each Array frame read as the block's samples.
+
+    Default: `"samples"`.
+    """
+
+
+class ArrayToChannels(BuiltInNode[ArrayToChannelsConfig]):
+    """Converts one attribute of each Array frame on `array`, `attribute` (`samples` by
+    default), into one Channels block on `channels`. The attribute is a CPU `[channels,
+    samples]` tensor of `float32` or `float64`, one row per name in `channel_names`, and
+    its samples are copied once into the block. The blocks are stamped at `sample_rate`,
+    their start samples counted from the first block. A frame without the attribute, or
+    whose attribute is GPU-resident, of another dtype or of another shape, is refused
+    and writes nothing.
+
+    Inputs:
+        `array` (ordered): The Array frames whose `attribute` is converted.
+
+    Outputs:
+        `channels`: One Channels block per frame, one channel per name in
+            `channel_names`.
+
+    Config: `ArrayToChannelsConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:ArrayToChannels"
+
+
+class ChannelsToArrayConfig(TypedDict, total=False):
+    """`ChannelsToArray`'s config: the keys `stream_builder.add` takes."""
+
+
+class ChannelsToArray(BuiltInNode[ChannelsToArrayConfig]):
+    """Converts each Channels block on `channels` into one Array frame on `array`, whose
+    one CPU attribute `samples` holds the block's samples as a `[channels, samples]`
+    tensor of the block's sample type, `float32` or `float64`. The samples are copied
+    once, from the block into the frame. The block's sample rate, start sample and
+    channel names are not carried: an Array frame states none of them.
+
+    Inputs:
+        `channels` (ordered): The Channels blocks to convert.
+
+    Outputs:
+        `array`: One Array frame per block, its samples as the `samples` attribute.
+
+    Config: `ChannelsToArrayConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:ChannelsToArray"
+
+
+class _ChannelsToRecordsConfigRequiredKeys(TypedDict):
+    """The keys `ChannelsToRecords`'s config cannot leave out."""
+
+    channel_names: list[str]
+    """The key each channel's value is written under, in the block's channel order."""
+
+
+class ChannelsToRecordsConfig(_ChannelsToRecordsConfigRequiredKeys, total=False):
+    """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
+
+
+class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
+    """Converts each Channels block on `channels` into one Records message on `records`
+    holding the block's last sample of each channel as a float, keyed by that channel's
+    name in `channel_names`: latest-value control, such as a sensor's reading or a
+    fader's position, read by a node that takes Records. A block whose channel count is
+    not the number of names is refused and writes nothing; a block of no samples writes
+    nothing.
+
+    Inputs:
+        `channels` (newest): The Channels blocks whose latest values are read.
+
+    Outputs:
+        `records`: One record per block: each channel's last sample under its name.
+
+    Config: `ChannelsToRecordsConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
+
+
+class _RecordsToChannelsConfigRequiredKeys(TypedDict):
+    """The keys `RecordsToChannels`'s config cannot leave out."""
+
+    channel_names: list[str]
+    """The record keys read, one channel each, in channel order."""
+
+    sample_rate: int
+    """The sample rate `channels` states, in samples per second per channel."""
+
+
+class RecordsToChannelsConfig(_RecordsToChannelsConfigRequiredKeys, total=False):
+    """`RecordsToChannels`'s config: the keys `stream_builder.add` takes."""
+
+
+class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
+    """Converts each Records message on `records` into a Channels block of one `f64`
+    sample per channel on `channels`, one channel per key in `channel_names`:
+    latest-value control, such as a parameter an agent or a UI sets, read by a node that
+    takes Channels. A key the record leaves out keeps its channel's latest value, 0
+    until a record names it; a key not in `channel_names` is ignored. A value is an
+    integer or a float, or a boolean read as 1 or 0; a record that is not a map of
+    string keys, or that holds another value under a name, is refused and writes
+    nothing. Each block's start sample is the record's stamp since the first record's,
+    counted at `sample_rate`, and always past the block before it.
+
+    Inputs:
+        `records` (newest): The records whose named values are read.
+
+    Outputs:
+        `channels`: One sample per record of each channel in `channel_names`.
+
+    Config: `RecordsToChannelsConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
 
 
 class _RelayTrackSourceConfigRequiredKeys(TypedDict):

@@ -134,6 +134,22 @@ impl ChannelsBlockSampleType {
             Self::F64 => 8,
         }
     }
+
+    /// The dtype an Array attribute holding these samples states: `float32` or `float64`.
+    pub fn array_dtype_wire_name(self) -> &'static str {
+        match self {
+            Self::F32 => "float32",
+            Self::F64 => "float64",
+        }
+    }
+
+    /// The sample type an Array attribute's dtype `wire_name` holds, or `None`
+    /// for a dtype no Channels block carries.
+    pub fn from_array_dtype_wire_name(wire_name: &str) -> Option<Self> {
+        [Self::F32, Self::F64]
+            .into_iter()
+            .find(|sample_type| sample_type.array_dtype_wire_name() == wire_name)
+    }
 }
 
 /// The body of a Channels block descriptor. The payload is planar:
@@ -619,10 +635,119 @@ pub fn array_frame_cpu_data_offsets(
     (offsets, next_offset)
 }
 
+/// The most bytes one Records message's msgpack-encoded map may take.
+pub const RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES: usize = 64 * 1024;
+
+/// One CPU attribute an Array payload is packed from: its name, dtype wire
+/// name, shape, and data bytes in row-major order.
+#[derive(Clone, Copy, Debug)]
+pub struct ArrayFrameCpuAttributeToPack<'data> {
+    /// The attribute's name.
+    pub name: &'data str,
+    /// The element type's wire name, such as `float32`.
+    pub dtype: &'data str,
+    /// The dimensions, outermost first.
+    pub shape: &'data [u64],
+    /// The attribute's data.
+    pub data: &'data [u8],
+}
+
+/// An Array frame's descriptor body and payload holding `attributes`, each
+/// row in order and each attribute's data at its aligned offset; refused when
+/// a row does not pack.
+pub fn array_frame_payload_of_cpu_attributes(
+    attributes: &[ArrayFrameCpuAttributeToPack<'_>],
+) -> Result<(ArrayFrameDescriptorBody, Vec<u8>), ArrayFrameAttributeTableRefusal> {
+    let data_byte_lens: Vec<u64> = attributes
+        .iter()
+        .map(|attribute| attribute.data.len() as u64)
+        .collect();
+    let (data_offsets, payload_byte_len) =
+        array_frame_cpu_data_offsets(attributes.len(), &data_byte_lens);
+    let mut payload = vec![0u8; payload_byte_len as usize];
+    for (row_index, (attribute, data_offset)) in attributes.iter().zip(data_offsets).enumerate() {
+        let row = ArrayFrameAttributeRow {
+            name: attribute.name.to_string(),
+            dtype: attribute.dtype.to_string(),
+            shape: attribute.shape.to_vec(),
+            residency: ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset: data_offset,
+                byte_len: attribute.data.len() as u64,
+            },
+        };
+        let row_start = row_index * ARRAY_FRAME_ATTRIBUTE_ROW_BYTES;
+        payload[row_start..row_start + ARRAY_FRAME_ATTRIBUTE_ROW_BYTES]
+            .copy_from_slice(&row.to_row_bytes()?);
+        let data_start = data_offset as usize;
+        payload[data_start..data_start + attribute.data.len()].copy_from_slice(attribute.data);
+    }
+    Ok((
+        ArrayFrameDescriptorBody {
+            attribute_count: attributes.len() as u32,
+        },
+        payload,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind};
+
+    #[test]
+    fn a_packed_cpu_array_payload_reads_back_through_its_attribute_table() {
+        let samples: Vec<u8> = (0u8..24).collect();
+        let labels = [7u8, 8, 9];
+        let (body, payload) = array_frame_payload_of_cpu_attributes(&[
+            ArrayFrameCpuAttributeToPack {
+                name: "samples",
+                dtype: "float32",
+                shape: &[2, 3],
+                data: &samples,
+            },
+            ArrayFrameCpuAttributeToPack {
+                name: "labels",
+                dtype: "uint8",
+                shape: &[3],
+                data: &labels,
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(body.attribute_count, 2);
+        let rows = array_frame_attribute_table_of(body, &payload).unwrap();
+        let data_of = |row: &ArrayFrameAttributeRow| match row.residency {
+            ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                byte_len,
+            } => {
+                assert_eq!(
+                    payload_byte_offset % ARRAY_FRAME_CPU_DATA_ALIGNMENT_BYTES as u64,
+                    0
+                );
+                &payload[payload_byte_offset as usize..(payload_byte_offset + byte_len) as usize]
+            }
+            ArrayFrameAttributeResidency::GpuPoolSlot(_) => panic!("a CPU attribute"),
+        };
+        assert_eq!(
+            (
+                rows[0].name.as_str(),
+                rows[0].dtype.as_str(),
+                rows[0].shape.as_slice()
+            ),
+            ("samples", "float32", &[2u64, 3][..])
+        );
+        assert_eq!(data_of(&rows[0]), &samples[..]);
+        assert_eq!(
+            (
+                rows[1].name.as_str(),
+                rows[1].dtype.as_str(),
+                rows[1].shape.as_slice()
+            ),
+            ("labels", "uint8", &[3u64][..])
+        );
+        assert_eq!(data_of(&rows[1]), &labels[..]);
+    }
 
     #[test]
     fn the_image_frame_body_packs_the_slot_then_size_format_and_colour_at_their_offsets() {

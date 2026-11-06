@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 1
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 5
 
 
 @pytest.mark.parametrize(
@@ -72,3 +72,33 @@ def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
         "broadcast": "desk/pattern.hang",
         "track": "pattern/video",
     }
+
+
+@stream
+def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> None:
+    to_channels = stream_builder.add(
+        tatolab.stream.RecordsToChannels,
+        config={"channel_names": ["gain"], "sample_rate": 30},
+    )
+    to_array = stream_builder.add(tatolab.stream.ChannelsToArray)
+    back_to_channels = stream_builder.add(
+        tatolab.stream.ArrayToChannels,
+        config={"channel_names": ["gain"], "sample_rate": 30},
+    )
+    to_records = stream_builder.add(
+        tatolab.stream.ChannelsToRecords, config={"channel_names": ["gain"]}
+    )
+    stream_builder.connect(to_channels.output("channels"), to_array.input("channels"))
+    stream_builder.connect(to_array.output("array"), back_to_channels.input("array"))
+    stream_builder.connect(back_to_channels.output("channels"), to_records.input("channels"))
+
+
+def test_the_conversion_built_ins_compile_with_no_runtime_installed():
+    graph = compile_stream_to_graph(a_control_value_round_trip)
+
+    assert [node["type"] for node in graph["nodes"]] == [
+        "tatolab.stream:RecordsToChannels",
+        "tatolab.stream:ChannelsToArray",
+        "tatolab.stream:ArrayToChannels",
+        "tatolab.stream:ChannelsToRecords",
+    ]

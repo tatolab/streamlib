@@ -498,6 +498,19 @@ fn python_type_of(
             "number" => "float",
             "boolean" => "bool",
             "null" => "None",
+            "array" => {
+                let items = schema.get("items").with_context(|| {
+                    format!("{refused_item_label} is a JSON `array` with no `items` schema")
+                })?;
+                push_unique(
+                    &mut alternatives,
+                    format!(
+                        "list[{}]",
+                        python_type_of(items, definitions, refused_item_label)?
+                    ),
+                );
+                continue;
+            }
             other => {
                 bail!(
                     "{refused_item_label} has the JSON type `{other}`, which this generator does not render"
@@ -970,11 +983,37 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
     #[test]
     fn a_json_type_the_generator_does_not_render_is_refused_by_name() {
         let mut descriptor = frame_sink_descriptor_with_every_config_shape();
+        descriptor["config_schema"]["properties"]["title"] = json!({"type": "object"});
+        let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("`object`"), "{refusal}");
+        assert!(
+            refusal.contains("`FrameSink`'s config key `title`"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_json_array_renders_as_a_list_of_its_items_type() {
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
+        descriptor["config_schema"]["properties"]["device_id"] =
+            json!({"type": "array", "items": {"type": "string"}});
+        let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+        assert!(
+            rendered.contains("    device_id: list[str]\n"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_json_array_with_no_items_schema_is_refused_by_name() {
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
         descriptor["config_schema"]["properties"]["title"] = json!({"type": "array"});
         let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
-        assert!(refusal.contains("`array`"), "{refusal}");
+        assert!(refusal.contains("no `items` schema"), "{refusal}");
         assert!(
             refusal.contains("`FrameSink`'s config key `title`"),
             "{refusal}"
