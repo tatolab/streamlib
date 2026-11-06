@@ -24,7 +24,7 @@ impl GpuPoolClaimantProcess {
             return Ok(Self {
                 claimant: GpuPoolClaimantProcessId {
                     pid,
-                    start_time_in_clock_ticks_since_boot: start_time_in_clock_ticks_since_boot_of(
+                    incarnation_of_the_pid: incarnation_of_the_pid_of(
                         pid,
                     )?,
                 },
@@ -43,11 +43,11 @@ impl GpuPoolClaimantProcess {
         }
         // SAFETY: pidfd_open answered a fresh fd nothing else owns.
         let pidfd = unsafe { OwnedFd::from_raw_fd(raw_pidfd as libc::c_int) };
-        let start_time_in_clock_ticks_since_boot = start_time_in_clock_ticks_since_boot_of(pid)?;
+        let incarnation_of_the_pid = incarnation_of_the_pid_of(pid)?;
         let claimant_process = Self {
             claimant: GpuPoolClaimantProcessId {
                 pid,
-                start_time_in_clock_ticks_since_boot,
+                incarnation_of_the_pid,
             },
             pidfd_unless_it_is_this_process: Some(pidfd),
         };
@@ -161,14 +161,14 @@ impl GpuPoolClaimantProcess {
 /// Field 22 of `/proc/<pid>/stat`: when the process started, in clock ticks
 /// since boot. Fields are counted after the parenthesised command name, which
 /// may itself hold spaces and parentheses.
-fn start_time_in_clock_ticks_since_boot_of(pid: u32) -> Result<u64, String> {
+fn incarnation_of_the_pid_of(pid: u32) -> Result<u64, String> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .map_err(|failure| format!("reading /proc/{pid}/stat failed: {failure}"))?;
-    start_time_in_clock_ticks_since_boot_in_a_proc_stat_line(&stat)
+    incarnation_of_the_pid_in_a_proc_stat_line(&stat)
         .ok_or_else(|| format!("/proc/{pid}/stat states no start time"))
 }
 
-fn start_time_in_clock_ticks_since_boot_in_a_proc_stat_line(stat: &str) -> Option<u64> {
+fn incarnation_of_the_pid_in_a_proc_stat_line(stat: &str) -> Option<u64> {
     const FIELDS_AFTER_THE_COMMAND_NAME_BEFORE_THE_START_TIME: usize = 19;
     let (_, after_the_command_name) = stat.rsplit_once(')')?;
     after_the_command_name
@@ -189,7 +189,7 @@ mod tests {
         this_process.kill();
 
         assert!(!this_process.wait_until_it_has_exited());
-        assert!(this_process.claimant().start_time_in_clock_ticks_since_boot > 0);
+        assert!(this_process.claimant().incarnation_of_the_pid > 0);
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
                     987654 1000 50";
 
         assert_eq!(
-            start_time_in_clock_ticks_since_boot_in_a_proc_stat_line(stat),
+            incarnation_of_the_pid_in_a_proc_stat_line(stat),
             Some(987_654)
         );
     }
