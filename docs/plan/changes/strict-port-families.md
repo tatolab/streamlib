@@ -141,11 +141,10 @@ No new ADR.
   preview change.
 - **MODIFIED (§Processor model, `:1325`):** the example `ChannelsToImage` becomes
   `ChannelsToArray`, one of the six nodes below.
-- **[NEEDS DECISION] (§Control plane, the preview OPEN, `:3659-3662`):** it says it is
-  settled "in the change that builds the families", but this change leaves previews out (Notes).
-  Options: (a) re-point the OPEN at its own preview change, which builds on the family
-  layouts; (b) settle it here, which adds the loopback-relay publication to this change's
-  scope. Recommended: (a), so the families ship without a relay change riding on them.
+- **MODIFIED (§Control plane, the preview OPEN, `:3659-3662`):** "Settled in the change that
+  builds the families" becomes "Settled in the change that builds previews, on the family
+  layouts", and its tag stays `[strict-port-families]` until that change is named. Owner,
+  2026-11-06.
 - **MODIFIED (`sdk/tatolab-stream`):** adds `Input`, `Output`, the five families,
   `from_config`, and the read types `ImageFrame`, `ArrayFrame`, `ChannelsBlock` and
   `PacketsUnit`, with Protocols in `_node_context_protocols.py`. `ctx.inputs.read` and
