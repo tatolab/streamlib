@@ -31,6 +31,8 @@ of them can be invoked, adapted, or skipped as the situation calls for. Nothing 
 repo blocks a tool call or stops a session — no hook refuses or prompts on a workflow
 step. The one permission prompt left is an edit to the licence files (§Licensing).
 
+- `docs/plan/ROADMAP.md` is the order the active changes land in. Pick the next piece of work
+  from it; changing the order is the owner's call.
 - `/plan` is a quick orientation — it reads the plan statuses, open PRs and the tracker
   and suggests a next step.
 - The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets`
