@@ -73,7 +73,21 @@ No new ADR.
   from config unable to be required against; and a typed spec per name, which duplicates the
   runtime descriptor (owner, 2026-11-04). Names live per family: channel names (Channels), attribute names (Array) and
   record keys (Records). Image and Packets have no names; Packets states `codec=` instead, which
-  an input may require (`requires_codec=("h264",)`). [strict-port-families]
+  an input may require (`requires_codec=("h264",)`). A `from_config` name list is resolved again
+  on each live config update of its node, and an update that drops a name a wired link
+  requires is refused naming the link, so a link that passed `connect` stays valid.
+  *(Assumed; correct it if a live update should instead unwire the link.)* [strict-port-families]
+- **[NEEDS DECISION] (same entry): what an Image input states about formats.** An output
+  declares `formats=`, but nothing above stops an `rgba16f` output reaching an input that only
+  reads `rgba8` (the compositor's landing copy needs `rgba8_unorm`), so the frame fails after
+  the link is made. Options: (a) an Image input may state `formats=` too, and `connect` refuses
+  unless the two sets overlap, naming both; (b) formats stay output-only and the reader refuses
+  per frame, counted as a drop. Recommended: (a), the same check `requires=` already makes.
+- **[NEEDS DECISION] (same entry): do a Records output's names promise every key in every
+  write?** Options: (a) yes, `write` refuses a dict missing a declared name, naming it, so
+  `requires=` means the key is always there; (b) no, declared names say which keys may appear,
+  and a reader handles absence. Recommended: (a). It is one set check per write on a family
+  already capped at 64 KiB, and without it `requires=` promises nothing on Records.
 - **ADDED (same section, DECIDED):** Each family's keys and what a read returns:
   - `Image`: `Output(Image, formats=("rgba8",))`. A read returns `ImageFrame`, the borrowed GPU
     surface with `__dlpack__`, `.cpu()`, `.writable()`, size, format and colour.
@@ -145,8 +159,11 @@ No new ADR.
   speaker and browser audio become `Channels`. h264, h265, opus and webrtc tracks become
   `Packets`. Browser events and data, and rive `data`, become `Records`.
 - **MODIFIED (`RelayTrackSource`):** its config gains a required `family` (with `codec` for
-  Packets), because a relay track's family is the publisher's and connect needs it before the
-  catalog arrives.
+  Packets, and `names` for Channels, Array and Records, read through `from_config`), because a
+  relay track's family is the publisher's and connect needs it before the catalog arrives. When
+  the catalog arrives and disagrees with the configured family, codec or names, the source
+  fails naming the track and both values, never publishing a frame of the wrong shape.
+  *(Assumed.)*
 - **MODIFIED (scaffold, `runtime/tatolab-cli`):** `streamlib new` writes class-attribute ports.
 
 ## REMOVED
@@ -174,13 +191,15 @@ No new ADR.
 
 1. **Expand (engine and SDK):** families on `PortDescriptor` and the macro, the connect checks,
    `Input`/`Output` and the read types in `tatolab-stream`, and the descriptor kinds. A
-   decorator port reads as an unchecked `Records` port, so the old shape keeps running.
+   decorator port reads as an unchecked `Records` port, and `connect` skips the family, names
+   and codec checks on a link with one at either end, so a migrated camera still links to an unmigrated
+   consumer while tickets 3 and 4 run. Ticket 5 deletes that skip with the decorators.
 2. **Conversion nodes:** the six built-ins, with `ImageToArray`'s zero-copy proof.
 3. **Migrate the engine tree:** `RelayTrackSource`, the codec nodes, the test fixtures, the
    scaffold, and `VideoFrame`/`AudioBlock` to `ImageFrame`/`ChannelsBlock`.
 4. **Migrate `packages/`:** every module, one commit each.
 5. **Contract:** delete the decorators, `MsgpackCast`, `msgpack.py`, `video_frame.py`,
-   `audio_block.py` and the unchecked-Records fallback, and run the removal gate.
+   `audio_block.py` and the decorator-port skip in `connect`, and run the removal gate.
 
 ## Notes (not in scope)
 
