@@ -15,8 +15,8 @@ pub mod browser_host_tab_client;
 pub mod page_audio_blocks;
 pub mod page_data_messages;
 pub mod page_input_messages;
+pub mod painted_page_image_frame;
 pub mod painted_textures_adopted_by_the_node;
-pub mod video_frame_record;
 
 use std::sync::atomic::Ordering;
 

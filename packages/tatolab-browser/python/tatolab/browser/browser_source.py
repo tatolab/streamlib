@@ -7,7 +7,8 @@
 a tab in the machine's browser host: one Chromium (CEF) the runtime runs for
 every stream, giving each stream a profile of its own. Each frame the host
 paints is written from host memory into a texture from the node's output pool
-and published as a `VideoFrame`; the page's audio is published on `audio`;
+and published as an Image frame; the page's audio is published on `audio` as
+planar f32 Channels blocks;
 every `data` message reaches the page as a `tatolab:data` DOM event, and every
 `window.tatolab.publish(object)` call is written to `events`. Each wired
 `video_in_N` and `audio_in_N` reaches the page as a `MediaStreamTrack`,
@@ -24,8 +25,17 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextFullAccess, VideoFrame, log, node
-from tatolab.stream.catalog import BinaryEntry
+from tatolab.stream import (
+    Channels,
+    Image,
+    Input,
+    Output,
+    Records,
+    RuntimeContextFullAccess,
+    from_config,
+    log,
+    node,
+)
 
 from . import _native
 
@@ -35,6 +45,7 @@ AUDIO_OUTPUT_PORT = "audio"
 DATA_INPUT_PORT = "data"
 VIDEO_INPUT_PORTS = ("video_in_0", "video_in_1", "video_in_2", "video_in_3")
 AUDIO_INPUT_PORTS = ("audio_in_0", "audio_in_1", "audio_in_2", "audio_in_3")
+PAINTED_PAGE_TEXTURE_FORMAT = "rgba8_unorm"
 
 
 @dataclasses.dataclass
@@ -63,67 +74,72 @@ class BrowserSourceConfig:
     description="Renders a web page offscreen with Chromium and publishes its frames, audio and events",
 )
 class BrowserSource:
-    """A web page, published as RGBA `VideoFrame`s, audio blocks and event maps."""
+    """A web page, published as RGBA Image frames, Channels blocks and Records."""
 
     def __init__(self, config: BrowserSourceConfig) -> None:
         self._config = config
         self._rendering: "_native.BrowserPageRendering | None" = None
 
-    @node.input(delivery_profile="ordered")
-    def data(self) -> bytes:
-        """One msgpack map per message, dispatched to the page as `tatolab:data`."""
-        ...
-
-    @node.input(delivery_profile="newest")
-    def video_in_0(self) -> VideoFrame:
-        """A video the page takes as `window.tatolab.inputTrack("video_in_0")`."""
-        ...
-
-    @node.input(delivery_profile="newest")
-    def video_in_1(self) -> VideoFrame:
-        """A video the page takes as `window.tatolab.inputTrack("video_in_1")`."""
-        ...
-
-    @node.input(delivery_profile="newest")
-    def video_in_2(self) -> VideoFrame:
-        """A video the page takes as `window.tatolab.inputTrack("video_in_2")`."""
-        ...
-
-    @node.input(delivery_profile="newest")
-    def video_in_3(self) -> VideoFrame:
-        """A video the page takes as `window.tatolab.inputTrack("video_in_3")`."""
-        ...
-
-    @node.input(delivery_profile="ordered")
-    def audio_in_0(self) -> bytes:
-        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_0")`."""
-        ...
-
-    @node.input(delivery_profile="ordered")
-    def audio_in_1(self) -> bytes:
-        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_1")`."""
-        ...
-
-    @node.input(delivery_profile="ordered")
-    def audio_in_2(self) -> bytes:
-        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_2")`."""
-        ...
-
-    @node.input(delivery_profile="ordered")
-    def audio_in_3(self) -> bytes:
-        """Audio blocks the page takes as `window.tatolab.inputTrack("audio_in_3")`."""
-        ...
-
-    @node.output(description="The painted page, as VideoFrame records")
-    def video(self) -> VideoFrame: ...
-
-    @node.output(catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"))
-    def audio(self) -> None:
-        """Timestamped blocks of the page's interleaved f32 audio; a silent page publishes none."""
-
-    @node.output(catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"))
-    def events(self) -> None:
-        """One msgpack map per `window.tatolab.publish(object)` call."""
+    data = Input(
+        Records,
+        delivery="ordered",
+        description="One map per message, dispatched to the page as `tatolab:data`",
+    )
+    video_in_0 = Input(
+        Image,
+        delivery="newest",
+        description='A video the page takes as `window.tatolab.inputTrack("video_in_0")`',
+    )
+    video_in_1 = Input(
+        Image,
+        delivery="newest",
+        description='A video the page takes as `window.tatolab.inputTrack("video_in_1")`',
+    )
+    video_in_2 = Input(
+        Image,
+        delivery="newest",
+        description='A video the page takes as `window.tatolab.inputTrack("video_in_2")`',
+    )
+    video_in_3 = Input(
+        Image,
+        delivery="newest",
+        description='A video the page takes as `window.tatolab.inputTrack("video_in_3")`',
+    )
+    audio_in_0 = Input(
+        Channels,
+        delivery="ordered",
+        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_0")`',
+    )
+    audio_in_1 = Input(
+        Channels,
+        delivery="ordered",
+        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_1")`',
+    )
+    audio_in_2 = Input(
+        Channels,
+        delivery="ordered",
+        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_2")`',
+    )
+    audio_in_3 = Input(
+        Channels,
+        delivery="ordered",
+        description='Audio the page takes as `window.tatolab.inputTrack("audio_in_3")`',
+    )
+    video = Output(
+        Image,
+        formats=(PAINTED_PAGE_TEXTURE_FORMAT,),
+        description="The painted page, in sRGB",
+    )
+    audio = Output(
+        Channels,
+        rate=from_config("audio_sample_rate"),
+        dtype="f32",
+        description="The page's audio; a silent page publishes none",
+    )
+    events = Output(
+        Records,
+        description="One map per `window.tatolab.publish(object)` call",
+    )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         wired_video_input_ports = [

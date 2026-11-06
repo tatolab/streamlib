@@ -33,23 +33,24 @@ use tatolab_module_sdk::ModuleHostForeignDmaBuf;
 #[cfg(target_os = "macos")]
 use tatolab_module_sdk::ModuleHostForeignIOSurface;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostColorInfo, ModuleHostHostMemoryPixels, ModuleHostHostMemoryPixelsToFill,
-    ModuleHostInputPort, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
-    ModuleHostOutputPort, ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,
-    ModuleHostSurface,
+    ModuleHost, ModuleHostChannelsBlock, ModuleHostColorInfo, ModuleHostHostMemoryPixels,
+    ModuleHostHostMemoryPixelsToFill, ModuleHostInputPort, ModuleHostLogLevel,
+    ModuleHostNodeOutputTextureRequest, ModuleHostOutputPort, ModuleHostReadMessage,
+    ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState, ModuleHostSurface,
+    records_message_payload_descriptor,
 };
 
 use crate::page_audio_blocks::PageAudioStreamTimeline;
 use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
 };
-use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameRecord};
+use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameExtent};
 #[cfg(target_os = "linux")]
+use crate::painted_page_image_frame::image_frame_payload_descriptor_of_a_painted_page;
 use crate::painted_textures_adopted_by_the_node::PaintedTextureDmaBufIdentity;
 use crate::painted_textures_adopted_by_the_node::{
     PaintedTextureIdentity, PaintedTextureLayout, PaintedTexturesAdoptedByTheNode,
 };
-use crate::video_frame_record::PaintedPageVideoFrame;
 
 /// The `tracing` target this module's records carry.
 const BROWSER_LOG_TARGET: &str = "tatolab_browser";
@@ -818,16 +819,14 @@ impl BrowserHostTabOfOneNode {
         let timestamp_ns = self
             .module_host
             .stream_time_ns_of_a_machine_instant(self.module_host.monotonic_now_ns());
-        let record = PaintedPageVideoFrame {
-            surface_id: painted_frame_texture.surface_id(),
+        let image_frame = image_frame_payload_descriptor_of_a_painted_page(
+            painted_frame_texture,
+            PAINTED_FRAME_TEXTURE_FORMAT,
             width,
             height,
-            timestamp_ns,
-            frames_per_second: self.config.frame_rate,
-        }
-        .to_msgpack();
+        )?;
         self.video_output_port
-            .write(&record, Some(timestamp_ns), true)
+            .write_described(&[], Some(timestamp_ns), true, &image_frame)
             .map_err(|refusal| refusal.to_string())
     }
 
@@ -837,7 +836,7 @@ impl BrowserHostTabOfOneNode {
         }
         let written = events_msgpack_map_of_published_json(published_json).and_then(|payload| {
             self.events_output_port
-                .write(&payload, None, true)
+                .write_described(&payload, None, true, &records_message_payload_descriptor())
                 .map_err(|refusal| refusal.to_string())
         });
         match written {
@@ -878,18 +877,22 @@ impl BrowserHostTabOfOneNode {
             );
             return;
         }
-        let first_sample_timestamp_ns = self.module_host.stream_time_ns_of_a_machine_instant(
-            timeline.stamp_the_next_packet(sample_count, arrived_at_ns),
-        );
-        let payload = timeline.audio_block_message_payload(
+        let placement = timeline.place_the_next_packet(sample_count, arrived_at_ns);
+        let first_sample_timestamp_ns = self
+            .module_host
+            .stream_time_ns_of_a_machine_instant(placement.first_sample_monotonic_ns);
+        let channels_block =
+            timeline.channels_block_of_a_packet(placement.start_sample, sample_count);
+        let planar_payload = ModuleHostChannelsBlock::planar_f32_payload_of_interleaved_samples(
             &interleaved_samples,
-            sample_count,
-            first_sample_timestamp_ns,
+            timeline.channels(),
         );
-        match self
-            .audio_output_port
-            .write(&payload, Some(first_sample_timestamp_ns), true)
-        {
+        match self.audio_output_port.write_described(
+            &planar_payload,
+            Some(first_sample_timestamp_ns),
+            true,
+            &channels_block.payload_descriptor(),
+        ) {
             Ok(()) => {
                 self.counters
                     .audio_blocks_published
@@ -1299,17 +1302,13 @@ fn deliver_what_one_page_input_holds(
             let Some(message) = newest else {
                 return Ok(());
             };
-            match read_back_one_page_input_video_frame(
-                tab,
-                message.payload(),
-                read_back_rgba_pixels,
-            ) {
+            match read_back_one_page_input_video_frame(tab, &message, read_back_rgba_pixels) {
                 Ok(frame) => {
                     let delivery = TabProtocolMessageFromNode::DeliverPageInputVideoFrame {
                         input_port_name: input_port_name.clone(),
                         width: frame.width,
                         height: frame.height,
-                        timestamp_ns: frame.timestamp_ns,
+                        timestamp_ns: message.timestamp_ns(),
                         rgba_pixels: std::mem::take(read_back_rgba_pixels),
                     };
                     let outcome = tab.send_to_the_browser_host(&delivery);
@@ -1340,14 +1339,23 @@ fn deliver_what_one_page_input_holds(
                 .read()
                 .map_err(|refusal| refusal.to_string())?
             {
-                match PageInputAudioBlock::from_msgpack(message.payload()) {
+                let block = message
+                    .payload_descriptor()
+                    .map_err(|refusal| refusal.to_string())
+                    .and_then(|payload_descriptor| {
+                        PageInputAudioBlock::of_the_channels_block(
+                            &payload_descriptor,
+                            message.payload(),
+                        )
+                    });
+                match block {
                     Ok(block) => {
                         let outcome = tab.send_to_the_browser_host(
                             &TabProtocolMessageFromNode::DeliverPageInputAudioBlock {
                                 input_port_name: input_port_name.clone(),
                                 sample_rate: block.sample_rate,
                                 channel_count: block.channel_count,
-                                first_sample_timestamp_ns: block.first_sample_timestamp_ns,
+                                first_sample_timestamp_ns: message.timestamp_ns(),
                                 interleaved_samples_le_f32: block.interleaved_samples_le_f32,
                             },
                         );
@@ -1370,14 +1378,18 @@ fn deliver_what_one_page_input_holds(
     Ok(())
 }
 
-/// Read the surface a `VideoFrame` message names back into
+/// Read the pooled frame an Image frame message names back into
 /// `read_back_rgba_pixels` as packed RGBA rows.
 fn read_back_one_page_input_video_frame(
     tab: &BrowserHostTabOfOneNode,
-    video_frame_message: &[u8],
+    image_frame_message: &ModuleHostReadMessage,
     read_back_rgba_pixels: &mut Vec<u8>,
-) -> Result<PageInputVideoFrameRecord, String> {
-    let frame = PageInputVideoFrameRecord::from_msgpack(video_frame_message)?;
+) -> Result<PageInputVideoFrameExtent, String> {
+    let frame = PageInputVideoFrameExtent::of_the_image_frame(
+        &image_frame_message
+            .payload_descriptor()
+            .map_err(|refusal| refusal.to_string())?,
+    )?;
     let row_stride_bytes = u64::from(frame.width) * 4;
     let byte_count = usize::try_from(row_stride_bytes * u64::from(frame.height)).map_err(|_| {
         format!(
@@ -1386,9 +1398,8 @@ fn read_back_one_page_input_video_frame(
         )
     })?;
     read_back_rgba_pixels.resize(byte_count, 0);
-    let surface = tab
-        .module_host
-        .lend_surface_a_message_names(&frame.surface_id)
+    let surface = image_frame_message
+        .lend_pooled_gpu_frame()
         .map_err(|refusal| refusal.to_string())?;
     tab.module_host
         .read_surface_into_host_memory(

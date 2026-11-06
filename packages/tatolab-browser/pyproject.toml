@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 # A minimum, never an exact pin, as a third party's package depends on it.
-dependencies = ["tatolab-stream>=0.68.8"]
+dependencies = ["numpy>=2.1", "tatolab-stream>=0.68.8"]
 
 [project.entry-points."tatolab.nodes"]
 BrowserSource = "tatolab.browser.browser_source:BrowserSource"

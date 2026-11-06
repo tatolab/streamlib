@@ -13,12 +13,12 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   opens the tab over the versioned tab protocol (`tab-protocol/`), and writes
   each frame the host paints, handed over in shared memory, into a texture
   from the node's output pool (`surface_write_from_host_memory`), published as
-  an RGBA `VideoFrame`. Python never runs at frame or sample cadence.
-- `data` input: each msgpack map reaches the page as
+  an RGBA Image frame in sRGB. Python never runs at frame or sample cadence.
+- `data` input: each Records map reaches the page as
   `window.dispatchEvent(new CustomEvent("tatolab:data", { detail }))`.
-- `events` output: each `window.tatolab.publish(object)` call is one msgpack map.
-- `audio` output: what the page plays, as the house audio block (interleaved
-  `f32`, stereo, at `audio_sample_rate`). A silent page publishes nothing.
+- `events` output: each `window.tatolab.publish(object)` call is one Records map.
+- `audio` output: what the page plays, as planar `f32` Channels blocks at
+  `audio_sample_rate`. A silent page publishes nothing.
 - A page's renderer that crashes is reloaded by the host. When the host
   itself ends, the runtime starts it again under its restart backoff and each
   open page opens again in the new host. The node fails, shown in error in

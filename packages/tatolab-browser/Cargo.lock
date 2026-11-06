@@ -1097,7 +1097,6 @@ name = "tatolab-browser"
 version = "0.68.31"
 dependencies = [
  "pyo3",
- "rmp",
  "rmpv",
  "serde_json",
  "tatolab-browser-tab-protocol",
