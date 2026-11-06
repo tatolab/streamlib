@@ -27,14 +27,12 @@ from .v4l2_output_device_abi import (
     VIDIOC_QUERYCAP,
     VIDIOC_REQBUFS,
     VIDIOC_S_FMT,
-    VIDIOC_S_PARM,
     VIDIOC_STREAMOFF,
     VIDIOC_STREAMON,
     V4l2Buffer,
     V4l2Capability,
     V4l2Format,
     V4l2RequestBuffers,
-    V4l2StreamParm,
 )
 from .v4l2loopback_control_node import LOOPBACK_DEVICE_BUFFER_COUNT
 
@@ -151,11 +149,10 @@ class V4l2LoopbackOutputDevice:
         self,
         width: int,
         height: int,
-        fps: "int | None",
         yuyv_picture_color: ColorInfo,
         camera_name: str,
     ) -> StreamingOutputFormat:
-        """`S_FMT`, `S_PARM`, `REQBUFS`, `QUERYBUF` and `mmap`, `STREAMON`, in that order.
+        """`S_FMT`, `REQBUFS`, `QUERYBUF` and `mmap`, `STREAMON`, in that order.
 
         The loopback's poll returns nothing between `REQBUFS` and `STREAMON`,
         so a buffer queued before the start would never come back.
@@ -187,20 +184,6 @@ class V4l2LoopbackOutputDevice:
                 f'VirtualCameraSink "{camera_name}": the device set {width}x{height} '
                 f"bytesperline={bytesperline} sizeimage={sizeimage} rather than YUYV at 2×width"
             )
-
-        if fps is not None and fps > 0:
-            stream_parameters = V4l2StreamParm()
-            stream_parameters.type = V4L2_BUF_TYPE_VIDEO_OUTPUT
-            stream_parameters.parm.output.timeperframe.numerator = 1
-            stream_parameters.parm.output.timeperframe.denominator = fps
-            try:
-                fcntl.ioctl(self._device_fd, VIDIOC_S_PARM, stream_parameters)
-            except OSError as refusal:
-                log.debug(
-                    "VirtualCameraSink: S_PARM declined; readers keep the device's interval",
-                    camera=camera_name,
-                    error=str(refusal),
-                )
 
         request = _output_mmap_buffer_request(LOOPBACK_DEVICE_BUFFER_COUNT)
         self._ioctl(VIDIOC_REQBUFS, request, "REQBUFS")
