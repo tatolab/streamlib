@@ -1857,12 +1857,7 @@ fn image_frame_colour_the_image_states(image: &Bound<'_, PyAny>) -> PyResult<Ima
     }
     .filter(|colour| !colour.is_none());
     let Some(colour) = colour else {
-        return Ok(ImageFrameH273Colour {
-            primaries: H273_UNSPECIFIED,
-            transfer: H273_UNSPECIFIED,
-            matrix: H273_UNSPECIFIED,
-            range: H273_UNSPECIFIED,
-        });
+        return Ok(ImageFrameH273Colour::UNSPECIFIED);
     };
     let axis =
         |axis_name: &str| -> PyResult<Option<String>> { colour.getattr(axis_name)?.extract() };
@@ -2986,6 +2981,191 @@ mod tests {
         assert!(
             !row_lease.row().is_claimed(),
             "dropped reads let the slot go"
+        );
+    }
+
+    /// `ArrayToImage` copies a CPU `[h, w, 4]` attribute once into a pixel
+    /// buffer of its output pool, and the Image frame it describes reads back
+    /// as exactly those pixels, claimed from that buffer's slot.
+    /// Needs a Vulkan device; skips where none comes up.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn array_to_image_copies_a_cpu_attribute_into_a_pixel_buffer_read_back_as_the_image() {
+        use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+        use streamlib::sdk::context::{
+            GpuPoolClaimTablesOfOnePool, NativeNodeOutputPixelBufferFrame, SurfaceStore,
+        };
+        use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
+        use streamlib::sdk::iceoryx2::{
+            ArrayFrameCpuAttributeToPack, array_frame_payload_of_cpu_attributes,
+        };
+        use streamlib::sdk::rhi::{
+            PixelBuffer, PixelBufferPoolSlotId, PixelFormat, PublishedPixelBufferFrameId,
+        };
+        use streamlib_media_builtins::port_family_conversion::array_to_image::image_frame_of_the_array_frame;
+
+        const POOL_SLOT_KEY: &str = "array-to-image-slot";
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 16;
+        let host_device = match HostVulkanDevice::new() {
+            Ok(host_device) => host_device,
+            Err(unavailable) => {
+                tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+                return;
+            }
+        };
+        let exported = match HostVulkanBuffer::new_opaque_fd_export(
+            &host_device,
+            u64::from(WIDTH * 4 * HEIGHT),
+        ) {
+            Ok(exported) => exported,
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no OPAQUE_FD buffer export on this device ({unavailable})"
+                );
+                return;
+            }
+        };
+        let pool_slot = PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(exported),
+            WIDTH,
+            HEIGHT,
+            4,
+            PixelFormat::Rgba32,
+        );
+        let share = SurfaceShareUnderTest::start("array-to-image");
+        let engine_surface_store = SurfaceStore::new(
+            share.socket_path.to_string_lossy().into_owned(),
+            "engine:array-to-image".to_string(),
+        );
+        engine_surface_store
+            .connect()
+            .expect("the engine's store connects");
+        engine_surface_store
+            .register_buffer(POOL_SLOT_KEY, &pool_slot)
+            .expect("the engine registers the pool slot");
+        let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("array-to-image");
+        let row_lease = claim_tables_of_the_pool
+            .lease_a_row_for_a_slot(
+                share.check_out_leases().gpu_pool_claim_tables(),
+                POOL_SLOT_KEY,
+            )
+            .expect("the pool leases its slot a row");
+        row_lease.row().publish_generation(1);
+        share.publish_frame_generation_over_a_registered_pool_slot(POOL_SLOT_KEY, 1);
+        let exchange_client = share.exchange_client_labelled_importing_on(
+            "array-to-image",
+            Ok(host_device.physical_device_uuid()),
+        );
+
+        let pixels: Vec<u8> = (0..WIDTH * HEIGHT * 4)
+            .map(|byte_index| (byte_index * 7 % 251) as u8)
+            .collect();
+        let (array_body, array_payload) =
+            array_frame_payload_of_cpu_attributes(&[ArrayFrameCpuAttributeToPack {
+                name: "image",
+                dtype: "uint8",
+                shape: &[u64::from(HEIGHT), u64::from(WIDTH), 4],
+                data: &pixels,
+            }])
+            .expect("the attribute packs");
+        let mut pixel_buffers_acquired = 0;
+        let image_frame = image_frame_of_the_array_frame(
+            "image",
+            TextureFormat::Rgba8Unorm,
+            DataChannelPayloadDescriptor::array_frame(array_body),
+            &array_payload,
+            |width, height, pixel_format| {
+                pixel_buffers_acquired += 1;
+                assert_eq!(
+                    (width, height, pixel_format),
+                    (WIDTH, HEIGHT, PixelFormat::Rgba32)
+                );
+                Ok(NativeNodeOutputPixelBufferFrame {
+                    published_frame_id: PublishedPixelBufferFrameId::new(
+                        PixelBufferPoolSlotId::from_str(POOL_SLOT_KEY),
+                        1,
+                    ),
+                    pixel_buffer: pool_slot.clone(),
+                    gpu_pool_slot_frame: Some(GpuPoolSlotFrameDescriptorBody {
+                        pool: row_lease.table().pool_uuid(),
+                        slot: row_lease.row_index(),
+                        generation: 1,
+                        timeline_value: 0,
+                        image_layout: 0,
+                    }),
+                })
+            },
+        )
+        .expect("a CPU [h, w, 4] uint8 attribute converts");
+        assert_eq!(pixel_buffers_acquired, 1);
+
+        Python::initialize();
+        Python::attach(|python| {
+            put_the_stream_distribution_source_on_sys_path(python);
+            lend_the_typed_read_gpu_offer_to_this_interpreter(python);
+            let gpu = Bound::new(
+                python,
+                PythonGpuContextLimitedAccess::new_for_helper_process(Some(exchange_client)),
+            )
+            .unwrap();
+            let (source, destination) = one_wired_link(python, "array-to-image");
+            source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &[]).as_any(),
+                    Some(7),
+                    true,
+                    |_| Ok(image_frame),
+                )
+                .unwrap();
+            let read_image = destination
+                .read_from_input_port_offering_gpu_access(
+                    python,
+                    "frames_from_upstream",
+                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
+                    Some(&gpu),
+                )
+                .unwrap()
+                .expect("the image link received nothing");
+            let field = |name: &str| read_image.getattr(name).unwrap();
+            assert_eq!(
+                field("surface_id").extract::<String>().unwrap(),
+                format!("{POOL_SLOT_KEY}#1")
+            );
+            assert_eq!(field("width").extract::<u32>().unwrap(), WIDTH);
+            assert_eq!(field("height").extract::<u32>().unwrap(), HEIGHT);
+            assert_eq!(field("format").extract::<String>().unwrap(), "rgba8_unorm");
+            let capsule = read_image.call_method0("__dlpack__").unwrap();
+            // SAFETY: an unconsumed `__dlpack__` capsule carries a
+            // `ManagedTensor` under the name `dltensor`, whose data is the
+            // frame's host-mapped pixels while the capsule lives.
+            let pixels_read_back = unsafe {
+                let managed_tensor =
+                    pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
+                        as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
+                std::slice::from_raw_parts(
+                    (*managed_tensor).dl_tensor.data as *const u8,
+                    pixels.len(),
+                )
+                .to_vec()
+            };
+            assert!(
+                pixels_read_back == pixels,
+                "the Image frame reads back the attribute's pixels"
+            );
+            assert!(
+                row_lease.row().is_claimed(),
+                "the read frame holds its slot"
+            );
+            drop((capsule, read_image));
+            python.run(c"import gc; gc.collect()", None, None).unwrap();
+            withdraw_the_lent_typed_read_gpu_offer(python);
+        });
+        assert!(
+            !row_lease.row().is_claimed(),
+            "a dropped read lets the slot go"
         );
     }
 

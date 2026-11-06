@@ -9,7 +9,10 @@
 
 use std::sync::Arc;
 
-use super::{GpuContextFullAccess, ProcessorOutputPixelBufferPoolOfOneNativeNode};
+use super::{
+    GpuContextFullAccess, NativeNodeOutputPixelBufferFrame,
+    ProcessorOutputPixelBufferPoolOfOneNativeNode,
+};
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, RhiColorConverter, SourceLayoutInfo,
@@ -152,7 +155,11 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
         // The pooled buffer's id is the frame's surface id — the one key a
         // same-process consumer, the surface-share service and a CPU readback
         // all resolve the frame through.
-        let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = self
+        let NativeNodeOutputPixelBufferFrame {
+            published_frame_id: published_pixel_buffer_frame_id,
+            pixel_buffer: pooled_pixel_buffer,
+            ..
+        } = self
             .processor_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(self.width, self.height, PixelFormat::Rgba32)?;
 

@@ -36,6 +36,17 @@ pub struct ImageFrameH273Colour {
     pub range: u8,
 }
 
+impl ImageFrameH273Colour {
+    /// A frame that states no colour: H.273 code point 2, unspecified, on
+    /// every axis.
+    pub const UNSPECIFIED: Self = Self {
+        primaries: 2,
+        transfer: 2,
+        matrix: 2,
+        range: 2,
+    };
+}
+
 /// The body of an Image frame descriptor: the GPU pool slot the frame lives
 /// in, then its size, its pixel format and its colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
