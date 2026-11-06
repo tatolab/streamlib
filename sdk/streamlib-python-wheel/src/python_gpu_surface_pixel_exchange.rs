@@ -409,7 +409,6 @@ impl PixelExchangeTensorLayout {
 
     /// The contiguous row-major layout a tensor storage buffer declares:
     /// its own shape, element strides from the innermost dimension out.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn for_tensor_storage_buffer(
         tensor_layout: &streamlib::sdk::rhi::TensorStorageBufferLayout,
     ) -> PyResult<Self> {

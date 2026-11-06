@@ -168,7 +168,11 @@ fn a_frame_read_into_a_type_pins_its_surface_until_the_object_goes_away() {
 
         let frame = link
             .reader
-            .read(python, INPUT_PORT, Some(&frame_class(python)))
+            .read(
+                python,
+                pyo3::types::PyString::new(python, INPUT_PORT).as_any(),
+                Some(&frame_class(python)),
+            )
             .expect("the read")
             .expect("the wired input received nothing");
         assert!(
@@ -208,7 +212,11 @@ fn the_same_class_constructed_outside_a_read_claims_nothing() {
         publish_a_frame_message(python, &link, &surface_id);
         let frame = link
             .reader
-            .read(python, INPUT_PORT, Some(&frame_class))
+            .read(
+                python,
+                pyo3::types::PyString::new(python, INPUT_PORT).as_any(),
+                Some(&frame_class),
+            )
             .unwrap()
             .unwrap();
         drop(frame);

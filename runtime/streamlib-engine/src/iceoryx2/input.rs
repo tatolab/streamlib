@@ -1198,7 +1198,12 @@ impl InputMailboxesInner {
         match channel_user_header.payload_descriptor.known_kind() {
             Ok(
                 DataChannelPayloadDescriptorKind::Bytes
-                | DataChannelPayloadDescriptorKind::GpuPoolSlotFrame,
+                | DataChannelPayloadDescriptorKind::GpuPoolSlotFrame
+                | DataChannelPayloadDescriptorKind::ImageFrame
+                | DataChannelPayloadDescriptorKind::ChannelsBlock
+                | DataChannelPayloadDescriptorKind::PacketsUnit
+                | DataChannelPayloadDescriptorKind::RecordsMessage
+                | DataChannelPayloadDescriptorKind::ArrayFrame,
             ) => {}
             Err(refusal) => {
                 return Err(Error::Link(format!(

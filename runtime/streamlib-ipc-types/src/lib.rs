@@ -19,6 +19,7 @@
 use iceoryx2::prelude::*;
 
 mod gpu_pool_claim_table;
+mod port_family_payload_descriptor_bodies;
 pub use gpu_pool_claim_table::{
     GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS,
     GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT, GPU_POOL_CLAIM_TABLE_ROW_BYTES,
@@ -26,6 +27,7 @@ pub use gpu_pool_claim_table::{
     GPU_POOL_CLAIM_TABLE_ROW_PUBLISHED_GENERATION_OFFSET, GPU_POOL_CLAIM_TABLE_ROWS,
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled, GpuPoolSlotRehandTest,
 };
+pub use port_family_payload_descriptor_bodies::*;
 
 /// The initial iceoryx2 slot capacity every channel publisher is primed at.
 ///
@@ -624,6 +626,21 @@ pub enum DataChannelPayloadDescriptorKind {
     /// The payload names a slot of a GPU pool; the body is a
     /// [`GpuPoolSlotFrameDescriptorBody`].
     GpuPoolSlotFrame = 1,
+    /// An Image frame; the body is an [`ImageFrameDescriptorBody`] and the
+    /// payload is empty.
+    ImageFrame = 2,
+    /// A Channels block; the body is a [`ChannelsBlockDescriptorBody`] and
+    /// the payload is its planar samples.
+    ChannelsBlock = 3,
+    /// A Packets unit; the body is a [`PacketsUnitDescriptorBody`] and the
+    /// payload is the unit's bytes.
+    PacketsUnit = 4,
+    /// A Records message; the body is zero and the payload is the record,
+    /// msgpack-encoded by the runtime.
+    RecordsMessage = 5,
+    /// An Array frame; the body is an [`ArrayFrameDescriptorBody`] and the
+    /// payload starts with its attribute table, then each CPU attribute's data.
+    ArrayFrame = 6,
 }
 
 impl DataChannelPayloadDescriptorKind {
@@ -632,6 +649,11 @@ impl DataChannelPayloadDescriptorKind {
         match wire_kind {
             0 => Some(Self::Bytes),
             1 => Some(Self::GpuPoolSlotFrame),
+            2 => Some(Self::ImageFrame),
+            3 => Some(Self::ChannelsBlock),
+            4 => Some(Self::PacketsUnit),
+            5 => Some(Self::RecordsMessage),
+            6 => Some(Self::ArrayFrame),
             _ => None,
         }
     }
@@ -662,6 +684,48 @@ impl DataChannelPayloadDescriptor {
     pub fn gpu_pool_slot_frame(body: GpuPoolSlotFrameDescriptorBody) -> Self {
         Self {
             kind: DataChannelPayloadDescriptorKind::GpuPoolSlotFrame as u32,
+            body: body.to_descriptor_body(),
+        }
+    }
+
+    /// The descriptor of an Image frame.
+    pub fn image_frame(body: ImageFrameDescriptorBody) -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::ImageFrame as u32,
+            body: body.to_descriptor_body(),
+        }
+    }
+
+    /// The descriptor of a Channels block.
+    pub fn channels_block(body: ChannelsBlockDescriptorBody) -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::ChannelsBlock as u32,
+            body: body.to_descriptor_body(),
+        }
+    }
+
+    /// The descriptor of a Packets unit, refused when its codec name does not fit.
+    pub fn packets_unit(
+        body: &PacketsUnitDescriptorBody,
+    ) -> Result<Self, PacketsUnitCodecNameDoesNotFit> {
+        Ok(Self {
+            kind: DataChannelPayloadDescriptorKind::PacketsUnit as u32,
+            body: body.to_descriptor_body()?,
+        })
+    }
+
+    /// The descriptor of a Records message.
+    pub const fn records_message() -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::RecordsMessage as u32,
+            body: [0u8; DATA_CHANNEL_PAYLOAD_DESCRIPTOR_BODY_BYTES],
+        }
+    }
+
+    /// The descriptor of an Array frame.
+    pub fn array_frame(body: ArrayFrameDescriptorBody) -> Self {
+        Self {
+            kind: DataChannelPayloadDescriptorKind::ArrayFrame as u32,
             body: body.to_descriptor_body(),
         }
     }

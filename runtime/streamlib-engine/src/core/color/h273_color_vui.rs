@@ -139,6 +139,25 @@ pub fn h273_color_vui_from_color_info_axis_names(
     })
 }
 
+/// The `ColorInfo` axis names `vui` spells — primaries, transfer, matrix
+/// and range — with an absent axis, or a byte no name spells, as `None`.
+pub fn color_info_axis_names_of_h273_color_vui(vui: &H273ColorVui) -> [Option<&'static str>; 4] {
+    let axis_name = |names: &[(&'static str, u8)], byte: Option<u8>| {
+        let byte = byte?;
+        names
+            .iter()
+            .find(|(_, known_byte)| *known_byte == byte)
+            .map(|(name, _)| *name)
+    };
+    [
+        axis_name(&PRIMARIES_NAMES, vui.primaries),
+        axis_name(&TRANSFER_NAMES, vui.transfer),
+        axis_name(&MATRIX_NAMES, vui.matrix),
+        vui.full_range
+            .map(|full_range| if full_range { "full" } else { "limited" }),
+    ]
+}
+
 /// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
 /// Unspecified and for any value the engine has no id for.
 fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
@@ -238,6 +257,36 @@ mod tests {
                 matrix: Some(matrix::SMPTE170M),
                 full_range: Some(false),
             }
+        );
+    }
+
+    #[test]
+    fn every_color_info_axis_name_round_trips_through_its_h273_byte() {
+        for primaries_name in PRIMARIES_NAMES.map(|(name, _)| name) {
+            for (transfer_name, matrix_name) in TRANSFER_NAMES
+                .map(|(name, _)| name)
+                .into_iter()
+                .zip(MATRIX_NAMES.map(|(name, _)| name).into_iter().cycle())
+            {
+                let names = [
+                    Some(primaries_name),
+                    Some(transfer_name),
+                    Some(matrix_name),
+                    Some("full"),
+                ];
+                let described = h273_color_vui_from_color_info_axis_names(
+                    names[0], names[1], names[2], names[3],
+                )
+                .expect("every name is one ColorInfo declares");
+                assert_eq!(color_info_axis_names_of_h273_color_vui(&described), names);
+            }
+        }
+        assert_eq!(
+            color_info_axis_names_of_h273_color_vui(&H273ColorVui {
+                primaries: Some(primaries::UNSPECIFIED),
+                ..H273ColorVui::default()
+            }),
+            [None; 4]
         );
     }
 

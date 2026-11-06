@@ -99,11 +99,18 @@ No new ADR.
     (CPU) or a GPU pool slot reference (GPU). An unchanged GPU attribute's row re-points at its
     slot; CPU data is written each message. Owner, 2026-11-06. Rejected: one tensor per
     message, which drops the mapping of names (owner, 2026-11-06).
+  - Writes take the family's object: an Image write takes a GPU surface the node acquired
+    or read, a Channels write a `[channel][sample]` array, an Array write a mapping of name
+    to a CPU array or GPU surface; the runtime builds each descriptor. Owner, 2026-11-06.
+  - A read through the port attribute (`ctx.inputs.read(self.audio)`) returns the family's
+    type; a read by name keeps returning the raw `PortPayloadBorrow`. Owner, 2026-11-06.
   - `Channels`: `Output(Channels, names=(…) | from_config(…), rate=… | from_config(…),
     dtype="f32" | "f64")`. A read returns `ChannelsBlock`, planar `[channel][sample]` with
     `start_sample` and the rate. The input's `window=` takes today's `AudioWindowContract`.
   - `Packets`: `Output(Packets, codec="h264")`. A read returns `PacketsUnit`, borrowed
-    bytes with `pts`, `starts_group` (the keyframe) and `codec`.
+    bytes with `pts`, `starts_group` (the keyframe) and `codec`. `codec=` is optional: a
+    Packets port without one is a plain byte stream, and an input stating no
+    `requires_codec=` takes any Packets output.
   - `Records`: `Output(Records, names=(…))`. `write(port, {...})` takes a plain dict of at most
     64 KiB, encoded, and a read returns a `dict`. The catalog marks a Records port unchecked.
   [strict-port-families]

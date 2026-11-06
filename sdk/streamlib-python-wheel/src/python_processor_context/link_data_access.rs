@@ -3,11 +3,14 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor;
+use pyo3::types::{PyBytes, PyDict, PyString};
+use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, PacketsUnitDescriptorBody};
 
+use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_port_payload::PythonPortPayloadLoan;
-use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_processor_link_data_access::{
+    PortPayloadReadShape, PythonProcessorLinkDataAccess,
+};
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
 
@@ -35,19 +38,20 @@ impl PythonLinkInputDataReader {
     /// that does not fit raises here rather than travelling on. `from_bytes` is
     /// offered this processor's GPU capability while it runs — see
     /// `gpu_limited_access_of_the_typed_read_in_progress`.
-    #[pyo3(signature = (port_name, *, into = None))]
+    #[pyo3(signature = (port, *, into = None))]
     fn read<'py>(
         &self,
         python: Python<'py>,
-        port_name: &str,
+        port: &Bound<'py, PyAny>,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let (port_name, read_shape) = input_port_and_read_shape_named_by(port, into)?;
         self.link_data_access
             .get()
             .read_from_input_port_offering_gpu_access(
                 python,
-                port_name,
-                into,
+                &port_name,
+                read_shape,
                 Some(self.gpu_limited_access_context.bind(python)),
             )
     }
@@ -56,13 +60,15 @@ impl PythonLinkInputDataReader {
     fn read_with_timestamp<'py>(
         &self,
         python: Python<'py>,
-        port_name: &str,
+        port: &Bound<'py, PyAny>,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
+        let (port_name, read_shape) = input_port_and_read_shape_named_by(port, None)?;
         self.link_data_access
             .get()
             .read_from_input_port_with_timestamp_offering_gpu_access(
                 python,
-                port_name,
+                &port_name,
+                read_shape,
                 Some(self.gpu_limited_access_context.bind(python)),
             )
     }
@@ -74,19 +80,20 @@ impl PythonLinkInputDataReader {
     /// This is how a many-input processor tells them apart: the name is the
     /// source channel the link subscribed to, which the engine knows and a
     /// producer cannot misstate.
-    #[pyo3(signature = (port_name, *, into = None))]
+    #[pyo3(signature = (port, *, into = None))]
     fn read_from_inbound_link<'py>(
         &self,
         python: Python<'py>,
-        port_name: &str,
+        port: &Bound<'py, PyAny>,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
+        let (port_name, read_shape) = input_port_and_read_shape_named_by(port, into)?;
         self.link_data_access
             .get()
             .read_from_input_port_naming_its_inbound_link(
                 python,
-                port_name,
-                into,
+                &port_name,
+                read_shape,
                 Some(self.gpu_limited_access_context.bind(python)),
             )
     }
@@ -97,19 +104,20 @@ impl PythonLinkInputDataReader {
     /// What a many-track sink needs to restate a producer's own timing: the
     /// link names the producer and the stamp is the one that producer wrote,
     /// which is the source frame's instant rather than the moment of the read.
-    #[pyo3(signature = (port_name, *, into = None))]
+    #[pyo3(signature = (port, *, into = None))]
     fn read_from_inbound_link_with_timestamp<'py>(
         &self,
         python: Python<'py>,
-        port_name: &str,
+        port: &Bound<'py, PyAny>,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
+        let (port_name, read_shape) = input_port_and_read_shape_named_by(port, into)?;
         self.link_data_access
             .get()
             .read_from_input_port_naming_its_inbound_link_and_timestamp(
                 python,
-                port_name,
-                into,
+                &port_name,
+                read_shape,
                 Some(self.gpu_limited_access_context.bind(python)),
             )
     }
@@ -119,17 +127,18 @@ impl PythonLinkInputDataReader {
     /// the link — or `None`.
     ///
     /// `into` casts the payload as it does for `read`.
-    #[pyo3(signature = (port_name, *, into = None))]
+    #[pyo3(signature = (port, *, into = None))]
     fn read_message<'py>(
         &self,
         python: Python<'py>,
-        port_name: &str,
+        port: &Bound<'py, PyAny>,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let (port_name, read_shape) = input_port_and_read_shape_named_by(port, into)?;
         self.link_data_access.get().read_message_from_input_port(
             python,
-            port_name,
-            into,
+            &port_name,
+            read_shape,
             Some(self.gpu_limited_access_context.bind(python)),
         )
     }
@@ -193,6 +202,39 @@ impl PythonLinkInputDataReader {
     }
 }
 
+/// The input port `port` names, a name or an `Input` attribute, and what its
+/// read hands back: through an attribute, the family's type; by name, the raw
+/// borrow or what `into` casts it to.
+fn input_port_and_read_shape_named_by<'target, 'py>(
+    port: &Bound<'py, PyAny>,
+    into: Option<&'target Bound<'py, PyAny>>,
+) -> PyResult<(String, PortPayloadReadShape<'target, 'py>)> {
+    if port.is_instance_of::<PyString>() {
+        return Ok((
+            port.extract()?,
+            PortPayloadReadShape::by_name_cast_into(into),
+        ));
+    }
+    let port_name = port_attribute_name(port, "Input")?;
+    let read_shape = match into {
+        Some(into) => PortPayloadReadShape::CastInto(into),
+        None => PortPayloadReadShape::FamilyType,
+    };
+    Ok((port_name, read_shape))
+}
+
+/// The port name a `tatolab.stream` `Input` or `Output` attribute names.
+fn port_attribute_name(port: &Bound<'_, PyAny>, expected_class: &str) -> PyResult<String> {
+    let class_name = port.get_type().name()?.to_string();
+    if class_name != expected_class {
+        return Err(PyTypeError::new_err(format!(
+            "a port is named by a str or a tatolab.stream {expected_class} attribute; got a \
+             {class_name}"
+        )));
+    }
+    port.getattr("port_name")?.extract()
+}
+
 /// A processor's output ports, as `ctx.outputs`.
 #[pyclass(name = "LinkOutputDataWriter", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkOutputDataWriter {
@@ -212,26 +254,40 @@ impl PythonLinkOutputDataWriter {
     /// payload passing that frame's id as `pooled_gpu_frame`, carries the
     /// frame's descriptor for its readers to claim it by.
     #[pyo3(signature = (
-        port_name,
+        port,
         payload,
         timestamp_ns = None,
         starts_group = true,
         *,
         pooled_gpu_frame = None,
+        start_sample = None,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn write(
         &self,
         python: Python<'_>,
-        port_name: &str,
+        port: &Bound<'_, PyAny>,
         payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
         starts_group: bool,
         pooled_gpu_frame: Option<&str>,
+        start_sample: Option<u64>,
     ) -> PyResult<()> {
+        if !port.is_instance_of::<PyString>() {
+            return self.write_through_an_output_port_attribute(
+                python,
+                port,
+                payload,
+                timestamp_ns,
+                starts_group,
+                start_sample,
+            );
+        }
+        let port_name: String = port.extract()?;
         let gpu_limited_access = self.gpu_limited_access_context.get();
         self.link_data_access.get().write_described_by(
             python,
-            port_name,
+            &port_name,
             payload,
             timestamp_ns,
             starts_group,
@@ -254,6 +310,30 @@ impl PythonLinkOutputDataWriter {
                 .unwrap_or_else(DataChannelPayloadDescriptor::bytes)),
             },
         )
+    }
+
+    /// Publish `samples`, a C-contiguous `[channel][sample]` float32 or
+    /// float64 array, as one Channels block on `port_name`.
+    #[pyo3(signature = (port_name, samples, *, start_sample, sample_rate, timestamp_ns = None))]
+    fn write_channels_block(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        samples: &Bound<'_, PyAny>,
+        start_sample: u64,
+        sample_rate: u32,
+        timestamp_ns: Option<i64>,
+    ) -> PyResult<()> {
+        self.link_data_access
+            .get()
+            .write_channels_block_to_output_port(
+                python,
+                port_name,
+                samples,
+                start_sample,
+                sample_rate,
+                timestamp_ns,
+            )
     }
 
     /// Loan `payload_byte_len` bytes on `port_name` to fill in place, as
@@ -401,3 +481,108 @@ mod surface_id_a_msgpack_record_names_tests {
 /// deliberately somebody else's.
 #[cfg(all(test, target_os = "linux"))]
 mod typed_read_claim_tests;
+
+/// The names an `Output` attribute states on its class; none for names it
+/// reads from config, which only the parent resolves.
+fn names_the_output_port_attribute_states(port: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    match port.getattr("names")? {
+        names if names.is_instance_of::<pyo3::types::PyTuple>() => names.extract(),
+        _ => Ok(Vec::new()),
+    }
+}
+
+impl PythonLinkOutputDataWriter {
+    /// Write `payload` as the family of the `Output` attribute `port` declares.
+    fn write_through_an_output_port_attribute(
+        &self,
+        python: Python<'_>,
+        port: &Bound<'_, PyAny>,
+        payload: &Bound<'_, PyAny>,
+        timestamp_ns: Option<i64>,
+        starts_group: bool,
+        start_sample: Option<u64>,
+    ) -> PyResult<()> {
+        let port_name = port_attribute_name(port, "Output")?;
+        let family: String = port
+            .getattr("family")?
+            .getattr("declaration_name")?
+            .extract()?;
+        let link_data_access = self.link_data_access.get();
+        match family.as_str() {
+            "Records" => {
+                let declared_names = names_the_output_port_attribute_states(port)?;
+                let record_payload =
+                    records_message_payload_of(&port_name, payload, &declared_names)?;
+                link_data_access.write_described_by(
+                    python,
+                    &port_name,
+                    PyBytes::new(python, &record_payload).as_any(),
+                    timestamp_ns,
+                    starts_group,
+                    |_| Ok(DataChannelPayloadDescriptor::records_message()),
+                )
+            }
+            "Packets" => {
+                let codec: Option<String> = port.getattr("codec")?.extract()?;
+                let unit = PacketsUnitDescriptorBody {
+                    codec: codec.unwrap_or_default(),
+                };
+                let descriptor = DataChannelPayloadDescriptor::packets_unit(&unit)
+                    .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+                link_data_access.write_described_by(
+                    python,
+                    &port_name,
+                    payload,
+                    timestamp_ns,
+                    starts_group,
+                    |_| Ok(descriptor),
+                )
+            }
+            "Channels" => {
+                let start_sample = start_sample.ok_or_else(|| {
+                    PyTypeError::new_err(format!(
+                        "a write on Channels output port {port_name:?} names the block's first \
+                         sample: write(self.{port_name}, samples, start_sample=…)"
+                    ))
+                })?;
+                let sample_rate: u32 = port.getattr("rate")?.extract().map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "Channels output port {port_name:?} states no rate on its class; write \
+                         its blocks with write_channels_block(port, samples, start_sample=…, \
+                         sample_rate=…)"
+                    ))
+                })?;
+                link_data_access.write_channels_block_to_output_port(
+                    python,
+                    &port_name,
+                    payload,
+                    start_sample,
+                    sample_rate,
+                    timestamp_ns,
+                )
+            }
+            "Image" => link_data_access.write_image_frame_to_output_port(
+                python,
+                &port_name,
+                payload,
+                self.gpu_limited_access_context.get(),
+                timestamp_ns,
+            ),
+            "Array" => {
+                let declared_names = names_the_output_port_attribute_states(port)?;
+                link_data_access.write_array_frame_to_output_port(
+                    python,
+                    &port_name,
+                    payload,
+                    &declared_names,
+                    self.gpu_limited_access_context.get(),
+                    timestamp_ns,
+                )
+            }
+            other => Err(PyTypeError::new_err(format!(
+                "output port {port_name:?} declares family {other:?}, which is none of Image, \
+                 Array, Channels, Packets, Records"
+            ))),
+        }
+    }
+}

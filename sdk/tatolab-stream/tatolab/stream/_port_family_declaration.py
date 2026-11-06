@@ -11,11 +11,16 @@ frame flows.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Generic, Optional, TypeVar, Union
 
 if TYPE_CHECKING:
+    from ._node_context_protocols import ChannelsBlock, PacketsUnit
+    from .array_frame import ArrayFrame
+    from .image_frame import ImageFrame
     from ._node_declaration import AudioWindowContract
     from .catalog import CatalogEntry
+
+_PortFamilyReadType = TypeVar("_PortFamilyReadType", covariant=True)
 
 __all__ = [
     "Array",
@@ -31,8 +36,11 @@ __all__ = [
 ]
 
 
-class PortFamily:
-    """One of the five memory layouts a port carries; a link joins two ports of one family."""
+class PortFamily(Generic[_PortFamilyReadType]):
+    """One of the five memory layouts a port carries; a link joins two ports of one family.
+
+    Its type parameter is what a read through a port of the family returns.
+    """
 
     __slots__ = ("_declaration_name", "_wire_name")
 
@@ -49,15 +57,15 @@ class PortFamily:
         return self._declaration_name
 
 
-Image: Final = PortFamily("Image")
+Image: Final[PortFamily[ImageFrame]] = PortFamily("Image")
 """A GPU surface with its size, pixel format and colour."""
-Array: Final = PortFamily("Array")
+Array: Final[PortFamily[ArrayFrame]] = PortFamily("Array")
 """Named tensors, on the GPU or the CPU."""
-Channels: Final = PortFamily("Channels")
+Channels: Final[PortFamily[ChannelsBlock]] = PortFamily("Channels")
 """Named sample channels at one rate."""
-Packets: Final = PortFamily("Packets")
+Packets: Final[PortFamily[PacketsUnit]] = PortFamily("Packets")
 """Encoded units of one codec."""
-Records: Final = PortFamily("Records")
+Records: Final[PortFamily["dict[str, Any]"]] = PortFamily("Records")
 """A dict per message, keyed by the declared names."""
 
 _PORT_FAMILIES: Final = (Image, Array, Channels, Packets, Records)
@@ -97,8 +105,10 @@ def from_config(config_key: str) -> PortNamesFromConfig:
     return PortNamesFromConfig(config_key)
 
 
-def _refuse_a_port_family_that_is_not_one(family: object, declared_as: str) -> PortFamily:
-    if not isinstance(family, PortFamily):
+def _refuse_a_port_family_that_is_not_one(
+    family: "PortFamily[_PortFamilyReadType]", declared_as: str
+) -> "PortFamily[_PortFamilyReadType]":
+    if not isinstance(family, PortFamily):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise TypeError(
             f"{declared_as}({family!r}) — a port's family is one of tatolab.stream's "
             f"{', '.join(repr(each) for each in _PORT_FAMILIES)}"
@@ -115,10 +125,10 @@ def _tuple_of_strings(value: object, key: str) -> "tuple[str, ...]":
     return tuple(value)
 
 
-class _DeclaredPortAttribute:
+class _DeclaredPortAttribute(Generic[_PortFamilyReadType]):
     __slots__ = ("_port_name", "family", "description")
 
-    def __init__(self, family: PortFamily, description: str) -> None:
+    def __init__(self, family: "PortFamily[_PortFamilyReadType]", description: str) -> None:
         self._port_name: Optional[str] = None
         self.family = family
         if not isinstance(description, str):
@@ -148,7 +158,7 @@ class _DeclaredPortAttribute:
                 )
 
 
-class Input(_DeclaredPortAttribute):
+class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     """An input port of one family, declared as a class attribute: `audio = Input(Channels, delivery="ordered")`.
 
     `delivery=` is required: `"newest"` drains to the most recent message,
@@ -164,7 +174,7 @@ class Input(_DeclaredPortAttribute):
 
     def __init__(
         self,
-        family: PortFamily,
+        family: "PortFamily[_PortFamilyReadType]",
         *,
         delivery: Optional[str] = None,
         borrow_quota: Optional[int] = None,
@@ -233,7 +243,7 @@ class Input(_DeclaredPortAttribute):
         return f"Input({self.family!r}, delivery={self.delivery!r})"
 
 
-class Output(_DeclaredPortAttribute):
+class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
     """An output port of one family, declared as a class attribute: `video = Output(Image)`.
 
     `names=` states the output's names (Array, Channels, Records), as a tuple of
@@ -247,7 +257,7 @@ class Output(_DeclaredPortAttribute):
 
     def __init__(
         self,
-        family: PortFamily,
+        family: "PortFamily[_PortFamilyReadType]",
         *,
         names: "Union[tuple[str, ...], PortNamesFromConfig, None]" = None,
         codec: Optional[str] = None,

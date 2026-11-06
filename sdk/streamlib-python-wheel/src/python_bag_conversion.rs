@@ -51,6 +51,18 @@ pub(crate) fn cast_payload_into_read_target<'py>(
     from_bytes.call1((payload,))
 }
 
+/// Call `family_type` with `keyword_arguments` while this read offers its GPU
+/// capability, as a family type a read through a port attribute builds is
+/// constructed.
+pub(crate) fn family_type_built_offering_gpu_access<'py>(
+    family_type: &Bound<'py, PyAny>,
+    keyword_arguments: &Bound<'py, PyDict>,
+    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
+    family_type.call((), Some(keyword_arguments))
+}
+
 /// The name a refusal gives an `into=` target: a class by its own name, any
 /// other object by its type's.
 fn name_of_the_read_target_for_error_message(read_target: &Bound<'_, PyAny>) -> String {
@@ -173,6 +185,77 @@ pub(crate) fn python_object_to_json_value(
              `str` or a list of ints"
         ))
     })
+}
+
+/// The most bytes one Records message's encoded dict may take.
+pub(crate) const RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES: usize = 64 * 1024;
+
+/// Encode `record`, a dict, as a Records message's msgpack payload, refused
+/// when it is not a dict, lacks one of `declared_names`, or encodes past
+/// [`RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES`], naming the port.
+pub(crate) fn records_message_payload_of(
+    port_name: &str,
+    record: &Bound<'_, PyAny>,
+    declared_names: &[String],
+) -> PyResult<Vec<u8>> {
+    let mapping = record.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "a write on Records output port {port_name:?} takes a dict; got a {}",
+            python_type_name_for_error_message(record, "value")
+        ))
+    })?;
+    let missing_names: Vec<&String> = declared_names
+        .iter()
+        .filter(|name| !mapping.contains(name.as_str()).unwrap_or(false))
+        .collect();
+    if !missing_names.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "a write on Records output port {port_name:?} is missing the declared keys \
+             {missing_names:?}; every write carries each name the port declares"
+        )));
+    }
+    let value = named_map_to_msgpack_value(mapping, ContainersEnclosingAValue::OUTERMOST).map_err(
+        |refusal| {
+            PyErr::from_type(
+                refusal.get_type(record.py()),
+                format!(
+                    "a write on Records output port {port_name:?}: {}",
+                    refusal.value(record.py())
+                ),
+            )
+        },
+    )?;
+    let mut encoded = Vec::new();
+    rmpv::encode::write_value(&mut encoded, &value)
+        .map_err(|encode_failure| PyValueError::new_err(encode_failure.to_string()))?;
+    if encoded.len() > RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES {
+        return Err(PyValueError::new_err(format!(
+            "a write on Records output port {port_name:?} encodes to {} bytes, past the \
+             {RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES} a Records message may take",
+            encoded.len()
+        )));
+    }
+    Ok(encoded)
+}
+
+/// Decode a Records message's msgpack payload into the dict it carries.
+pub(crate) fn records_message_dict_of<'py>(
+    python: Python<'py>,
+    port_name: &str,
+    payload: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let mut remaining = payload;
+    let value = rmpv::decode::read_value(&mut remaining).map_err(|decode_failure| {
+        PyValueError::new_err(format!(
+            "a Records message on {port_name:?} does not decode: {decode_failure}"
+        ))
+    })?;
+    if !matches!(value, Value::Map(_)) {
+        return Err(PyValueError::new_err(format!(
+            "a Records message on {port_name:?} carries no dict"
+        )));
+    }
+    msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
 /// The most containers one value may nest, the outermost counted, as it

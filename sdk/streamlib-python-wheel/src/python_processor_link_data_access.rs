@@ -23,26 +23,40 @@ use std::sync::{Arc, OnceLock};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyDict, PyType};
+use pyo3::types::{PyBytes, PyDict, PyMapping, PyTuple, PyType};
+use streamlib::sdk::color::h273_color_vui::{
+    H273_UNSPECIFIED, H273ColorVui, color_info_axis_names_of_h273_color_vui,
+    h273_color_vui_from_color_info_axis_names,
+};
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, DataChannelPayloadDescriptor,
-    DataChannelPayloadDescriptorKind, GpuPoolSlotFrameDescriptorBody,
-    HelperProcessLossCountBoardWriter, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
-    InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner,
-    ReadMode, ResolvedAudioWindowContract, StreamClockBoardPublishListener,
+    ARRAY_FRAME_ATTRIBUTE_ROW_BYTES, ArrayFrameAttributeResidency, ArrayFrameAttributeRow,
+    ArrayFrameDescriptorBody, ChannelEgressConfig, ChannelTrustTier, ChannelsBlockDescriptorBody,
+    ChannelsBlockSampleType, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+    GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter,
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node, ImageFrameDescriptorBody,
+    ImageFrameH273Colour, InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName,
+    InputMailboxesInner, InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort,
+    OutputWriterInner, PacketsUnitDescriptorBody, ReadMode, ResolvedAudioWindowContract,
+    StreamClockBoardPublishListener, array_frame_attribute_table_of, array_frame_cpu_data_offsets,
     input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
+use streamlib::sdk::rhi::{TensorElementType, TextureFormat};
 
 use crate::python_bag_conversion::{
-    cast_payload_into_read_target, python_type_name_for_error_message,
+    cast_payload_into_read_target, family_type_built_offering_gpu_access,
+    python_type_name_for_error_message, records_message_dict_of,
+};
+use crate::python_port_family_read_types::{
+    PythonArrayFrameCpuAttribute, PythonChannelsBlock, PythonPacketsUnit,
 };
 use crate::python_port_payload::{PythonPortPayloadBorrow, PythonPortPayloadLoan};
-use crate::python_processor_context::PythonGpuContextLimitedAccess;
+use crate::python_processor_context::{
+    PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess,
+};
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
 /// One node's links, as seen from Python.
@@ -319,7 +333,7 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -335,7 +349,9 @@ impl PythonProcessorLinkDataAccess {
                 port_name,
                 message.payload,
                 message.payload_descriptor,
-                into,
+                message.timestamp_ns,
+                message.group_boundary,
+                read_shape,
                 offered_gpu_limited_access,
             )
             .map(Some),
@@ -350,6 +366,7 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -366,7 +383,9 @@ impl PythonProcessorLinkDataAccess {
                     port_name,
                     message.payload,
                     message.payload_descriptor,
-                    None,
+                    message.timestamp_ns,
+                    message.group_boundary,
+                    read_shape,
                     offered_gpu_limited_access,
                 )?),
                 Some(message.timestamp_ns),
@@ -384,14 +403,14 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
         Ok(self
             .read_from_input_port_naming_its_inbound_link_and_timestamp(
                 python,
                 port_name,
-                into,
+                read_shape,
                 offered_gpu_limited_access,
             )?
             .map(|(payload, inbound_link_name, _timestamp_ns)| (payload, inbound_link_name)))
@@ -406,14 +425,14 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
         Ok(self
             .read_message_naming_its_inbound_link_with_its_payload_cast(
                 python,
                 port_name,
-                into,
+                read_shape,
                 offered_gpu_limited_access,
             )?
             .map(|(payload, message, inbound_link_name)| {
@@ -432,7 +451,7 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         static TATOLAB_STREAM_MESSAGE_CLASS: PyOnceLock<Py<PyType>> = PyOnceLock::new();
@@ -440,7 +459,7 @@ impl PythonProcessorLinkDataAccess {
             .read_message_naming_its_inbound_link_with_its_payload_cast(
                 python,
                 port_name,
-                into,
+                read_shape,
                 offered_gpu_limited_access,
             )?
         else {
@@ -467,7 +486,7 @@ impl PythonProcessorLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        into: Option<&Bound<'py, PyAny>>,
+        read_shape: PortPayloadReadShape<'_, 'py>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, MessageReadFromInputPort, InboundLinkName)>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -485,7 +504,9 @@ impl PythonProcessorLinkDataAccess {
             port_name,
             std::mem::take(&mut message.payload),
             message.payload_descriptor,
-            into,
+            message.timestamp_ns,
+            message.group_boundary,
+            read_shape,
             offered_gpu_limited_access,
         )?;
         Ok(Some((payload, message, inbound_link_name)))
@@ -525,17 +546,95 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
+/// What a read hands back for a message's payload.
+#[derive(Clone, Copy)]
+pub(crate) enum PortPayloadReadShape<'target, 'py> {
+    /// The `PortPayloadBorrow` of the sample: a read by name.
+    RawBorrow,
+    /// The family's own type, built from the message's descriptor kind: a
+    /// read through a port attribute.
+    FamilyType,
+    /// What `into.from_bytes` builds from the borrow.
+    CastInto(&'target Bound<'py, PyAny>),
+}
+
+impl<'target, 'py> PortPayloadReadShape<'target, 'py> {
+    /// The shape a read by name asks for: cast by `into`, or the raw borrow.
+    pub(crate) fn by_name_cast_into(into: Option<&'target Bound<'py, PyAny>>) -> Self {
+        into.map_or(Self::RawBorrow, Self::CastInto)
+    }
+}
+
 /// One message's payload as a `PortPayloadBorrow`, or what `into.from_bytes`
 /// builds from that borrow when `into` names a target — the half every read
 /// shares once the payload is in hand.
+#[allow(clippy::too_many_arguments)]
 fn payload_borrowed_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,
     payload: InputPortMessagePayload,
     payload_descriptor: DataChannelPayloadDescriptor,
-    into: Option<&Bound<'py, PyAny>>,
+    timestamp_ns: i64,
+    group_boundary: MessageGroupBoundary,
+    read_shape: PortPayloadReadShape<'_, 'py>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let into = match read_shape {
+        PortPayloadReadShape::CastInto(into) => Some(into),
+        PortPayloadReadShape::RawBorrow | PortPayloadReadShape::FamilyType => None,
+    };
+    if matches!(read_shape, PortPayloadReadShape::FamilyType) {
+        match payload_descriptor.known_kind() {
+            Ok(DataChannelPayloadDescriptorKind::ChannelsBlock) => {
+                let block =
+                    ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
+                return Ok(Bound::new(
+                    python,
+                    PythonChannelsBlock::holding(port_name, payload, block, timestamp_ns)?,
+                )?
+                .into_any());
+            }
+            Ok(DataChannelPayloadDescriptorKind::RecordsMessage) => {
+                return records_message_dict_of(python, port_name, payload.bytes());
+            }
+            Ok(DataChannelPayloadDescriptorKind::ImageFrame) => {
+                return image_frame_of_the_read(
+                    python,
+                    port_name,
+                    ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+                    timestamp_ns,
+                    offered_gpu_limited_access,
+                );
+            }
+            Ok(DataChannelPayloadDescriptorKind::ArrayFrame) => {
+                return array_frame_of_the_read(
+                    python,
+                    port_name,
+                    payload,
+                    ArrayFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+                    timestamp_ns,
+                    offered_gpu_limited_access,
+                );
+            }
+            Ok(DataChannelPayloadDescriptorKind::PacketsUnit) => {
+                let unit =
+                    PacketsUnitDescriptorBody::from_descriptor_body(&payload_descriptor.body);
+                let payload_borrow =
+                    Bound::new(python, PythonPortPayloadBorrow::holding(payload, None))?;
+                return Ok(Bound::new(
+                    python,
+                    PythonPacketsUnit {
+                        payload: payload_borrow.unbind(),
+                        pts: timestamp_ns,
+                        starts_group: group_boundary == MessageGroupBoundary::StartsGroup,
+                        codec: unit.codec,
+                    },
+                )?
+                .into_any());
+            }
+            _ => {}
+        }
+    }
     let mut pooled_gpu_frame_claim = None;
     if let (Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame), Some(gpu_limited_access)) =
         (payload_descriptor.known_kind(), offered_gpu_limited_access)
@@ -569,6 +668,173 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
         ),
         None => Ok(payload_borrow),
     }
+}
+
+/// The surface id a pooled GPU frame a read carried is published under, with
+/// the claim the read took on it; refused where the read offers no GPU
+/// capability or no claim table this helper holds covers the frame.
+fn claimed_pooled_gpu_frame_of_the_read(
+    python: Python<'_>,
+    port_name: &str,
+    pooled_frame: GpuPoolSlotFrameDescriptorBody,
+    offered_gpu_limited_access: Option<&Bound<'_, PythonGpuContextLimitedAccess>>,
+    what_the_read_carries: &str,
+) -> PyResult<(String, Option<PooledGpuFrameClaimHeldByARead>)> {
+    let gpu_limited_access = offered_gpu_limited_access.ok_or_else(|| {
+        PyRuntimeError::new_err(format!(
+            "{what_the_read_carries} on {port_name:?} lives in a GPU pool slot, and this read \
+             offers no GPU capability to claim it with"
+        ))
+    })?;
+    let claim = gpu_limited_access
+        .get()
+        .note_and_claim_the_pooled_gpu_frame_a_read_carries(python, pooled_frame)?;
+    let surface_id = gpu_limited_access
+        .get()
+        .published_frame_id_of_the_pooled_gpu_frame(&pooled_frame)
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "{what_the_read_carries} on {port_name:?} names a GPU pool slot no claim table \
+                 this helper holds covers"
+            ))
+        })?;
+    Ok((surface_id, claim))
+}
+
+/// The `tatolab.stream.video_frame.ColorInfo` an Image frame's H.273 codes spell.
+fn color_info_of_the_image_frame_colour<'py>(
+    python: Python<'py>,
+    colour: ImageFrameH273Colour,
+) -> PyResult<Bound<'py, PyAny>> {
+    let [primaries, transfer, matrix, range] =
+        color_info_axis_names_of_h273_color_vui(&H273ColorVui {
+            primaries: Some(colour.primaries),
+            transfer: Some(colour.transfer),
+            matrix: Some(colour.matrix),
+            full_range: match colour.range {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            },
+        });
+    let axes = PyDict::new(python);
+    axes.set_item("primaries", primaries)?;
+    axes.set_item("transfer", transfer)?;
+    axes.set_item("matrix", matrix)?;
+    axes.set_item("range", range)?;
+    python
+        .import("tatolab.stream.video_frame")?
+        .getattr("ColorInfo")?
+        .call((), Some(&axes))
+}
+
+/// The `ImageFrame` an Image descriptor states, its slot claimed.
+fn image_frame_of_the_read<'py>(
+    python: Python<'py>,
+    port_name: &str,
+    image_frame: ImageFrameDescriptorBody,
+    timestamp_ns: i64,
+    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let format = TextureFormat::from_repr_value(image_frame.format).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "an Image frame on {port_name:?} names texture format {}, which this reader does \
+             not know",
+            image_frame.format
+        ))
+    })?;
+    let (surface_id, _claim_held_while_the_frame_claims) = claimed_pooled_gpu_frame_of_the_read(
+        python,
+        port_name,
+        image_frame.slot,
+        offered_gpu_limited_access,
+        "an Image frame",
+    )?;
+    let fields = PyDict::new(python);
+    fields.set_item("surface_id", surface_id)?;
+    fields.set_item("width", image_frame.width)?;
+    fields.set_item("height", image_frame.height)?;
+    fields.set_item("format", format.wire_name())?;
+    fields.set_item(
+        "colour",
+        color_info_of_the_image_frame_colour(python, image_frame.colour)?,
+    )?;
+    fields.set_item("timestamp_ns", timestamp_ns)?;
+    family_type_built_offering_gpu_access(
+        &python
+            .import("tatolab.stream.image_frame")?
+            .getattr("ImageFrame")?,
+        &fields,
+        offered_gpu_limited_access,
+    )
+}
+
+/// The `ArrayFrame` an Array payload's attribute table states: each CPU
+/// attribute borrowed in the sample, each GPU attribute's slot claimed.
+fn array_frame_of_the_read<'py>(
+    python: Python<'py>,
+    port_name: &str,
+    payload: InputPortMessagePayload,
+    array_frame: ArrayFrameDescriptorBody,
+    timestamp_ns: i64,
+    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let rows = array_frame_attribute_table_of(array_frame, payload.bytes()).map_err(|refusal| {
+        PyValueError::new_err(format!("an Array frame on {port_name:?}: {refusal}"))
+    })?;
+    let payload_base_address = payload.bytes().as_ptr() as usize;
+    let borrowed_payload = Arc::new(parking_lot::Mutex::new(payload));
+    let array_frame_module = python.import("tatolab.stream.array_frame")?;
+    let attributes = PyDict::new(python);
+    let mut claims_held_while_each_attribute_claims = Vec::new();
+    for row in &rows {
+        if attributes.contains(&row.name)? {
+            return Err(PyValueError::new_err(format!(
+                "an Array frame on {port_name:?} names attribute {:?} twice",
+                row.name
+            )));
+        }
+        let attribute = match row.residency {
+            ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                byte_len,
+            } => Bound::new(
+                python,
+                PythonArrayFrameCpuAttribute::over(
+                    port_name,
+                    &borrowed_payload,
+                    payload_base_address,
+                    row,
+                    payload_byte_offset,
+                    byte_len,
+                )?,
+            )?
+            .into_any(),
+            ArrayFrameAttributeResidency::GpuPoolSlot(pooled_frame) => {
+                let (surface_id, claim) = claimed_pooled_gpu_frame_of_the_read(
+                    python,
+                    port_name,
+                    pooled_frame,
+                    offered_gpu_limited_access,
+                    &format!("Array attribute {:?}", row.name),
+                )?;
+                claims_held_while_each_attribute_claims.push(claim);
+                let fields = PyDict::new(python);
+                fields.set_item("surface_id", surface_id)?;
+                fields.set_item("dtype", &row.dtype)?;
+                fields.set_item("shape", PyTuple::new(python, &row.shape)?)?;
+                family_type_built_offering_gpu_access(
+                    &array_frame_module.getattr("ArrayFrameGpuAttribute")?,
+                    &fields,
+                    offered_gpu_limited_access,
+                )?
+            }
+        };
+        attributes.set_item(&row.name, attribute)?;
+    }
+    array_frame_module
+        .getattr("ArrayFrame")?
+        .call1((attributes, timestamp_ns))
 }
 
 /// Build a helper process's own data plane, with its own iceoryx2 node.
@@ -1014,7 +1280,12 @@ impl PythonProcessorLinkDataAccess {
         port_name: &str,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        self.read_from_input_port_offering_gpu_access(python, port_name, into, None)
+        self.read_from_input_port_offering_gpu_access(
+            python,
+            port_name,
+            PortPayloadReadShape::by_name_cast_into(into),
+            None,
+        )
     }
 
     /// The next message's payload on `port_name` with its stamp, or
@@ -1024,7 +1295,12 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'py>,
         port_name: &str,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
-        self.read_from_input_port_with_timestamp_offering_gpu_access(python, port_name, None)
+        self.read_from_input_port_with_timestamp_offering_gpu_access(
+            python,
+            port_name,
+            PortPayloadReadShape::RawBorrow,
+            None,
+        )
     }
 
     /// Whether a message is waiting on `port_name`, without consuming it.
@@ -1118,6 +1394,228 @@ impl PythonProcessorLinkDataAccess {
 }
 
 impl PythonProcessorLinkDataAccess {
+    /// Publish `samples`, a `[channel][sample]` array, as one Channels block
+    /// on `port_name` starting at `start_sample`, at `sample_rate`.
+    pub(crate) fn write_channels_block_to_output_port(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        samples: &Bound<'_, PyAny>,
+        start_sample: u64,
+        sample_rate: u32,
+        timestamp_ns: Option<i64>,
+    ) -> PyResult<()> {
+        if sample_rate == 0 {
+            return Err(PyValueError::new_err(format!(
+                "write_channels_block() on output port {port_name:?} takes a sample_rate above 0"
+            )));
+        }
+        let (held_samples, sample_type, channel_count, samples_per_channel) =
+            PythonBufferHeldForOneWrite::of_planar_channel_samples(port_name, samples)?;
+        let block = ChannelsBlockDescriptorBody {
+            start_sample,
+            sample_rate,
+            channel_count,
+            samples_per_channel,
+            sample_type: sample_type as u32,
+        };
+        drop(held_samples);
+        self.write_described_by(python, port_name, samples, timestamp_ns, true, |_| {
+            Ok(DataChannelPayloadDescriptor::channels_block(block))
+        })
+    }
+
+    /// Publish `image`, an `ImageFrame` this node read or a GPU surface it
+    /// acquired from a pool, as one Image frame on `port_name`.
+    pub(crate) fn write_image_frame_to_output_port(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        image: &Bound<'_, PyAny>,
+        gpu_limited_access: &PythonGpuContextLimitedAccess,
+        timestamp_ns: Option<i64>,
+    ) -> PyResult<()> {
+        let not_an_image = || {
+            PyTypeError::new_err(format!(
+                "a write on Image output port {port_name:?} takes an ImageFrame this node read \
+                 or a texture it acquired from a pool; got a {}",
+                python_type_name_for_error_message(image, "value")
+            ))
+        };
+        let surface_id: String = image
+            .getattr_opt("surface_id")?
+            .ok_or_else(not_an_image)?
+            .extract()
+            .map_err(|_| not_an_image())?;
+        let slot = gpu_limited_access
+            .descriptor_of_the_pooled_gpu_frame_named(&surface_id)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "a write on Image output port {port_name:?} names surface {surface_id:?}, \
+                     which is no pooled GPU frame this node acquired or read"
+                ))
+            })?;
+        let format_name: String = image.getattr("format")?.extract()?;
+        let format = TextureFormat::from_wire_name(&format_name).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "a write on Image output port {port_name:?} names format {format_name:?}, which \
+                 is no texture format an Image frame carries"
+            ))
+        })?;
+        let image_frame = ImageFrameDescriptorBody {
+            slot,
+            width: image.getattr("width")?.extract()?,
+            height: image.getattr("height")?.extract()?,
+            format: format as u32,
+            colour: image_frame_colour_the_image_states(image)?,
+        };
+        self.write_described_by(
+            python,
+            port_name,
+            PyBytes::new(python, &[]).as_any(),
+            timestamp_ns,
+            true,
+            |_| Ok(DataChannelPayloadDescriptor::image_frame(image_frame)),
+        )
+    }
+
+    /// Publish `attributes`, a mapping of name to a C-contiguous CPU array or
+    /// a tensor surface this node acquired from a pool, as one Array frame on
+    /// `port_name`; refused when a name in `declared_names` is missing.
+    pub(crate) fn write_array_frame_to_output_port(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        attributes: &Bound<'_, PyAny>,
+        declared_names: &[String],
+        gpu_limited_access: &PythonGpuContextLimitedAccess,
+        timestamp_ns: Option<i64>,
+    ) -> PyResult<()> {
+        let attributes = attributes.cast::<PyMapping>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "a write on Array output port {port_name:?} takes a mapping of attribute name \
+                 to a CPU array or a GPU tensor surface; got a {}",
+                python_type_name_for_error_message(attributes, "value")
+            ))
+        })?;
+        for declared_name in declared_names {
+            if !attributes.contains(declared_name)? {
+                return Err(PyValueError::new_err(format!(
+                    "a write on Array output port {port_name:?} is missing attribute \
+                     {declared_name:?}, which the port declares in names="
+                )));
+            }
+        }
+        let mut rows = Vec::new();
+        let mut cpu_data_held = Vec::new();
+        for item in attributes.items()?.iter() {
+            let (name, value): (String, Bound<'_, PyAny>) = item.extract()?;
+            match value.getattr_opt("surface_id")? {
+                Some(surface_id) => {
+                    let surface_id: String = surface_id.extract()?;
+                    let pooled_frame = gpu_limited_access
+                        .descriptor_of_the_pooled_gpu_frame_named(&surface_id)
+                        .ok_or_else(|| {
+                            PyValueError::new_err(format!(
+                                "Array attribute {name:?} on {port_name:?} names surface \
+                                 {surface_id:?}, which is no pooled GPU frame this node \
+                                 acquired or read"
+                            ))
+                        })?;
+                    let (Some(dtype), Some(shape)) = (
+                        value.getattr("dtype")?.extract::<Option<String>>()?,
+                        value.getattr("shape")?.extract::<Option<Vec<u64>>>()?,
+                    ) else {
+                        return Err(PyValueError::new_err(format!(
+                            "Array attribute {name:?} on {port_name:?} names surface \
+                             {surface_id:?}, which is pixels rather than a tensor: acquire it \
+                             with acquire_storage_buffer_from_node_output_pool"
+                        )));
+                    };
+                    rows.push(ArrayFrameAttributeRow {
+                        name,
+                        dtype,
+                        shape,
+                        residency: ArrayFrameAttributeResidency::GpuPoolSlot(pooled_frame),
+                    });
+                }
+                None => {
+                    let (held, format, shape) = PythonBufferHeldForOneWrite::of_c_contiguous_array(
+                        port_name,
+                        &value,
+                        "a mapping whose values are C-contiguous arrays or GPU tensor surfaces",
+                    )?;
+                    let dtype = array_attribute_element_type_of_the_buffer_format(&format)
+                        .ok_or_else(|| {
+                            PyTypeError::new_err(format!(
+                                "Array attribute {name:?} on {port_name:?} has buffer format \
+                                 {format:?}; an attribute's elements are one of {}",
+                                TensorElementType::ALL
+                                    .map(TensorElementType::wire_name)
+                                    .join(", ")
+                            ))
+                        })?;
+                    let byte_len = held.bytes().len() as u64;
+                    rows.push(ArrayFrameAttributeRow {
+                        name,
+                        dtype: dtype.wire_name().to_string(),
+                        shape,
+                        residency: ArrayFrameAttributeResidency::Cpu {
+                            payload_byte_offset: 0,
+                            byte_len,
+                        },
+                    });
+                    cpu_data_held.push((rows.len() - 1, held));
+                }
+            }
+        }
+        let cpu_data_byte_lens: Vec<u64> = cpu_data_held
+            .iter()
+            .map(|(_, held)| held.bytes().len() as u64)
+            .collect();
+        let (cpu_data_offsets, payload_byte_len) =
+            array_frame_cpu_data_offsets(rows.len(), &cpu_data_byte_lens);
+        let mut payload = vec![0u8; payload_byte_len as usize];
+        for ((row_index, held), offset) in cpu_data_held.iter().zip(&cpu_data_offsets) {
+            if let ArrayFrameAttributeResidency::Cpu {
+                payload_byte_offset,
+                ..
+            } = &mut rows[*row_index].residency
+            {
+                *payload_byte_offset = *offset;
+            }
+            let start = *offset as usize;
+            payload[start..start + held.bytes().len()].copy_from_slice(held.bytes());
+        }
+        drop(cpu_data_held);
+        for (row_index, row) in rows.iter().enumerate() {
+            let row_bytes = row.to_row_bytes().map_err(|refusal| {
+                PyValueError::new_err(format!(
+                    "a write on Array output port {port_name:?}: {refusal}"
+                ))
+            })?;
+            let start = row_index * ARRAY_FRAME_ATTRIBUTE_ROW_BYTES;
+            payload[start..start + ARRAY_FRAME_ATTRIBUTE_ROW_BYTES].copy_from_slice(&row_bytes);
+        }
+        let array_frame = ArrayFrameDescriptorBody {
+            attribute_count: u32::try_from(rows.len()).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "a write on Array output port {port_name:?} holds {} attributes, past what \
+                     an Array frame states",
+                    rows.len()
+                ))
+            })?,
+        };
+        self.write_described_by(
+            python,
+            port_name,
+            PyBytes::new(python, &payload).as_any(),
+            timestamp_ns,
+            true,
+            |_| Ok(DataChannelPayloadDescriptor::array_frame(array_frame)),
+        )
+    }
+
     /// [`Self::write_to_output_port`], the message's header carrying the
     /// descriptor `descriptor_of_the_payload` answers for the payload's bytes.
     pub(crate) fn write_described_by(
@@ -1174,6 +1672,56 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
+/// The H.273 codes an `ImageFrame`'s `colour`, or a `VideoFrame`'s
+/// `color_info`, spells; unspecified when the object states neither.
+fn image_frame_colour_the_image_states(image: &Bound<'_, PyAny>) -> PyResult<ImageFrameH273Colour> {
+    let colour = match image.getattr_opt("colour")? {
+        Some(colour) => Some(colour),
+        None => image.getattr_opt("color_info")?,
+    }
+    .filter(|colour| !colour.is_none());
+    let Some(colour) = colour else {
+        return Ok(ImageFrameH273Colour {
+            primaries: H273_UNSPECIFIED,
+            transfer: H273_UNSPECIFIED,
+            matrix: H273_UNSPECIFIED,
+            range: H273_UNSPECIFIED,
+        });
+    };
+    let axis =
+        |axis_name: &str| -> PyResult<Option<String>> { colour.getattr(axis_name)?.extract() };
+    let (primaries, transfer, matrix, range) = (
+        axis("primaries")?,
+        axis("transfer")?,
+        axis("matrix")?,
+        axis("range")?,
+    );
+    let vui = h273_color_vui_from_color_info_axis_names(
+        primaries.as_deref(),
+        transfer.as_deref(),
+        matrix.as_deref(),
+        range.as_deref(),
+    )
+    .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+    Ok(ImageFrameH273Colour {
+        primaries: vui.primaries.unwrap_or(H273_UNSPECIFIED),
+        transfer: vui.transfer.unwrap_or(H273_UNSPECIFIED),
+        matrix: vui.matrix.unwrap_or(H273_UNSPECIFIED),
+        range: vui.full_range.map_or(H273_UNSPECIFIED, u8::from),
+    })
+}
+
+/// The tensor element type a buffer's struct format string names.
+fn array_attribute_element_type_of_the_buffer_format(format: &str) -> Option<TensorElementType> {
+    match format {
+        "f" => Some(TensorElementType::Float32),
+        "e" => Some(TensorElementType::Float16),
+        "B" => Some(TensorElementType::Uint8),
+        "i" => Some(TensorElementType::Int32),
+        _ => None,
+    }
+}
+
 /// The contiguous buffer a write was handed, held for as long as its bytes are
 /// copied out.
 struct PythonBufferHeldForOneWrite {
@@ -1212,6 +1760,94 @@ impl PythonBufferHeldForOneWrite {
         // SAFETY: `PyObject_GetBuffer` succeeded, so the view is filled.
         let view = unsafe { Box::from_raw(Box::into_raw(view).cast::<pyo3::ffi::Py_buffer>()) };
         Ok(Self { view })
+    }
+
+    /// Hold `array`'s buffer as a C-contiguous array, answering its struct
+    /// format string and its extents, or refuse it naming what `what` takes.
+    fn of_c_contiguous_array(
+        port_name: &str,
+        array: &Bound<'_, PyAny>,
+        what: &str,
+    ) -> PyResult<(Self, String, Vec<u64>)> {
+        let mut view = Box::new(std::mem::MaybeUninit::<pyo3::ffi::Py_buffer>::zeroed());
+        // SAFETY: as in `of`; the flags ask for the shape and the format too.
+        let got = unsafe {
+            pyo3::ffi::PyObject_GetBuffer(
+                array.as_ptr(),
+                view.as_mut_ptr(),
+                pyo3::ffi::PyBUF_C_CONTIGUOUS | pyo3::ffi::PyBUF_FORMAT,
+            )
+        };
+        if got != 0 {
+            let refusal = PyErr::fetch(array.py());
+            return Err(PyTypeError::new_err(format!(
+                "a write on output port {port_name:?} takes {what}; got a {} ({refusal})",
+                python_type_name_for_error_message(array, "value")
+            )));
+        }
+        // SAFETY: `PyObject_GetBuffer` succeeded, so the view is filled.
+        let held = Self {
+            view: unsafe { Box::from_raw(Box::into_raw(view).cast::<pyo3::ffi::Py_buffer>()) },
+        };
+        let format = if held.view.format.is_null() {
+            "B".to_string()
+        } else {
+            // SAFETY: a filled view's non-null `format` is a NUL-terminated struct string.
+            unsafe { std::ffi::CStr::from_ptr(held.view.format) }
+                .to_string_lossy()
+                .trim_start_matches(['@', '=', '<'])
+                .to_string()
+        };
+        let extents = if held.view.shape.is_null() {
+            vec![held.view.len as u64]
+        } else {
+            // SAFETY: a view asked for its shape holds `ndim` extents at `shape`.
+            unsafe { std::slice::from_raw_parts(held.view.shape, held.view.ndim as usize) }
+                .iter()
+                .map(|&extent| extent as u64)
+                .collect()
+        };
+        Ok((held, format, extents))
+    }
+
+    /// Hold `samples`' buffer as a C-contiguous `[channel][sample]` array of
+    /// `float32` or `float64`, or refuse it naming what it got.
+    fn of_planar_channel_samples(
+        port_name: &str,
+        samples: &Bound<'_, PyAny>,
+    ) -> PyResult<(Self, ChannelsBlockSampleType, u32, u32)> {
+        let what = "a C-contiguous [channel][sample] float32 or float64 array";
+        let (held, format, extents) = Self::of_c_contiguous_array(port_name, samples, what)?;
+        let sample_type = match format.as_str() {
+            "f" => ChannelsBlockSampleType::F32,
+            "d" => ChannelsBlockSampleType::F64,
+            other => {
+                return Err(PyTypeError::new_err(format!(
+                    "a write on Channels output port {port_name:?} takes {what}; got buffer \
+                     format {other:?}"
+                )));
+            }
+        };
+        let [channel_count, samples_per_channel] = extents[..] else {
+            return Err(PyValueError::new_err(format!(
+                "a write on Channels output port {port_name:?} takes {what}; got {} dimensions",
+                extents.len()
+            )));
+        };
+        let extent = |extent: u64| {
+            u32::try_from(extent).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "a write on Channels output port {port_name:?}: an extent of {extent} is \
+                     past what a Channels block states"
+                ))
+            })
+        };
+        Ok((
+            held,
+            sample_type,
+            extent(channel_count)?,
+            extent(samples_per_channel)?,
+        ))
     }
 
     fn bytes(&self) -> &[u8] {
@@ -1331,6 +1967,7 @@ fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::python_bag_conversion::records_message_payload_of;
     use pyo3::types::{PyBytes, PyDict, PyString};
 
     /// Unique per test: every test in this process shares one iceoryx2 domain,
@@ -1431,6 +2068,497 @@ mod tests {
         });
     }
 
+    /// The next message on the one-link fixture's input, read as its family's type.
+    fn read_as_the_family_type<'py>(
+        python: Python<'py>,
+        destination: &PythonProcessorLinkDataAccess,
+    ) -> Bound<'py, PyAny> {
+        destination
+            .read_from_input_port_offering_gpu_access(
+                python,
+                "frames_from_upstream",
+                PortPayloadReadShape::FamilyType,
+                None,
+            )
+            .unwrap()
+            .expect("the wired input received nothing")
+    }
+
+    /// A `[channel][sample]` array written as a Channels block reads back as a
+    /// `ChannelsBlock` stating its shape, rate and first sample through a port
+    /// attribute, and as the raw borrow by name.
+    #[test]
+    fn a_channels_block_written_from_a_planar_array_reads_back_as_a_channels_block() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "channels-block");
+            let samples = python
+                .eval(
+                    c"memoryview(__import__('array').array('f', [0.0, 0.5, 1.0, -1.0, -0.5, 0.25])).cast('B').cast('f', [2, 3])",
+                    None,
+                    None,
+                )
+                .unwrap();
+            for _ in 0..2 {
+                source
+                    .write_channels_block_to_output_port(
+                        python,
+                        "frames_to_downstream",
+                        &samples,
+                        96_000,
+                        48_000,
+                        None,
+                    )
+                    .unwrap();
+            }
+
+            let received = read_as_the_family_type(python, &destination);
+            assert!(received.cast::<PythonChannelsBlock>().is_ok());
+            let attribute = |name: &str| received.getattr(name).unwrap();
+            assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 2);
+            assert_eq!(
+                attribute("samples_per_channel").extract::<u32>().unwrap(),
+                3
+            );
+            assert_eq!(attribute("sample_rate").extract::<u32>().unwrap(), 48_000);
+            assert_eq!(attribute("start_sample").extract::<u64>().unwrap(), 96_000);
+            assert_eq!(attribute("dtype").extract::<String>().unwrap(), "f32");
+
+            let by_name = destination
+                .read_from_input_port(python, "frames_from_upstream", None)
+                .unwrap()
+                .expect("the second block arrived");
+            assert_eq!(
+                PythonPortPayloadBorrow::bytes_the_read_borrowed(&by_name).len(),
+                2 * 3 * 4,
+                "a read by name hands back the raw borrow"
+            );
+
+            let one_dimensional = python
+                .eval(c"__import__('array').array('f', [0.0, 1.0])", None, None)
+                .unwrap();
+            let refusal = source
+                .write_channels_block_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &one_dimensional,
+                    0,
+                    48_000,
+                    None,
+                )
+                .expect_err("a 1-D array is not [channel][sample]");
+            assert!(
+                refusal.to_string().contains("got 1 dimensions"),
+                "{refusal}"
+            );
+        });
+    }
+
+    /// A dict written as a Records message reads back as the same dict, and a
+    /// dict missing a declared key is refused naming it.
+    #[test]
+    fn a_records_message_round_trips_a_dict_and_refuses_a_missing_declared_key() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "records-message");
+            let record = python
+                .eval(
+                    c"{'kind': 'tap', 'at': 3, 'extra': [1.5, None]}",
+                    None,
+                    None,
+                )
+                .unwrap();
+            let declared_names = vec!["kind".to_string(), "at".to_string()];
+            let encoded =
+                records_message_payload_of("frames_to_downstream", &record, &declared_names)
+                    .unwrap();
+            source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &encoded).as_any(),
+                    None,
+                    true,
+                    |_| Ok(DataChannelPayloadDescriptor::records_message()),
+                )
+                .unwrap();
+
+            let received = read_as_the_family_type(python, &destination);
+            assert!(received.eq(&record).unwrap(), "got {received}");
+
+            let missing_at = python.eval(c"{'kind': 'tap'}", None, None).unwrap();
+            let refusal =
+                records_message_payload_of("frames_to_downstream", &missing_at, &declared_names)
+                    .expect_err("`at` is declared");
+            assert!(refusal.to_string().contains("\"at\""), "{refusal}");
+        });
+    }
+
+    /// The stream distribution's source root on `sys.path`, where the family
+    /// types a read builds live; a `cargo test` run has no installed
+    /// `tatolab-stream`.
+    fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>) {
+        let stream_distribution_source_root =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
+        let sys_path = python.import("sys").unwrap().getattr("path").unwrap();
+        if !sys_path.contains(stream_distribution_source_root).unwrap() {
+            sys_path
+                .call_method1("insert", (0, stream_distribution_source_root))
+                .unwrap();
+        }
+    }
+
+    /// Lend this interpreter the one runtime callable a family type's claim
+    /// reaches, as the runtime lends `tatolab.runtime._engine` to a node's.
+    #[cfg(target_os = "linux")]
+    fn lend_the_typed_read_gpu_offer_to_this_interpreter(python: Python<'_>) {
+        let lent_engine = pyo3::types::PyModule::new(python, "_engine").unwrap();
+        lent_engine
+            .add_function(
+                pyo3::wrap_pyfunction!(
+                    crate::python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
+                    &lent_engine
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let sys_modules = python.import("sys").unwrap().getattr("modules").unwrap();
+        sys_modules
+            .set_item(
+                "tatolab.runtime",
+                pyo3::types::PyModule::new(python, "tatolab.runtime").unwrap(),
+            )
+            .unwrap();
+        sys_modules
+            .set_item("tatolab.runtime._engine", lent_engine)
+            .unwrap();
+    }
+
+    /// Take back what [`lend_the_typed_read_gpu_offer_to_this_interpreter`]
+    /// lent, so later tests in this interpreter see no runtime lent.
+    #[cfg(target_os = "linux")]
+    fn withdraw_the_lent_typed_read_gpu_offer(python: Python<'_>) {
+        python
+            .run(
+                c"import sys\n\
+                  sys.modules.pop('tatolab.runtime._engine', None)\n\
+                  sys.modules.pop('tatolab.runtime', None)\n\
+                  import tatolab.stream._runtime_lend as lend\n\
+                  lend._native_callables_resolved_by_name.clear()\n",
+                None,
+                None,
+            )
+            .unwrap();
+    }
+
+    /// An Array frame of CPU attributes reads back as a mapping of name to a
+    /// tensor borrowed in the sample, each stating its dtype and shape; a
+    /// write missing a declared name is refused naming it.
+    #[test]
+    fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
+        Python::initialize();
+        Python::attach(|python| {
+            put_the_stream_distribution_source_on_sys_path(python);
+            let (source, destination) = one_wired_link(python, "array-frame");
+            let no_gpu = PythonGpuContextLimitedAccess::new_for_helper_process(None);
+            let attributes = python
+                .eval(
+                    c"{'boxes': memoryview(bytes(range(24))).cast('f', [2, 3]), \
+                       'labels': memoryview(bytes([7, 8, 9]))}",
+                    None,
+                    None,
+                )
+                .unwrap();
+            source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &attributes,
+                    &["boxes".to_string()],
+                    &no_gpu,
+                    Some(42),
+                )
+                .unwrap();
+
+            let received = read_as_the_family_type(python, &destination);
+            assert_eq!(received.len().unwrap(), 2);
+            assert_eq!(
+                received
+                    .getattr("timestamp_ns")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                42
+            );
+            for (name, dtype, shape, expected_bytes) in [
+                (
+                    "boxes",
+                    "float32",
+                    vec![2u64, 3],
+                    (0u8..24).collect::<Vec<_>>(),
+                ),
+                ("labels", "uint8", vec![3], vec![7, 8, 9]),
+            ] {
+                let attribute = received.get_item(name).unwrap();
+                let attribute = attribute
+                    .cast::<PythonArrayFrameCpuAttribute>()
+                    .expect("a CPU attribute reads as an ArrayFrameCpuAttribute");
+                assert_eq!(attribute.get().dtype(), dtype);
+                assert_eq!(attribute.get().shape(), shape);
+                assert_eq!(
+                    attribute.get().attribute_bytes_for_tests(),
+                    &expected_bytes[..],
+                    "{name}"
+                );
+            }
+
+            let missing_boxes = python
+                .eval(c"{'labels': memoryview(bytes([1]))}", None, None)
+                .unwrap();
+            let refusal = source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &missing_boxes,
+                    &["boxes".to_string()],
+                    &no_gpu,
+                    None,
+                )
+                .expect_err("`boxes` is declared");
+            assert!(refusal.to_string().contains("\"boxes\""), "{refusal}");
+
+            let float64 = python
+                .eval(c"{'boxes': memoryview(bytes(8)).cast('d')}", None, None)
+                .unwrap();
+            let refusal = source
+                .write_array_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &float64,
+                    &[],
+                    &no_gpu,
+                    None,
+                )
+                .expect_err("float64 is no tensor element type");
+            assert!(refusal.to_string().contains("float32"), "{refusal}");
+        });
+    }
+
+    /// An Image frame over a claim-tabled pool slot reads back as an
+    /// `ImageFrame` naming the slot's published frame, its size, format and
+    /// colour, holding the slot while it lives; written on, it publishes the
+    /// same frame again. Needs a Vulkan device; skips where none comes up.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_image_frame_reads_back_claimed_and_writes_on_as_the_same_frame() {
+        use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+        use streamlib::sdk::context::{GpuPoolClaimTablesOfOnePool, SurfaceStore};
+        use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
+        use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+
+        const POOL_SLOT_KEY: &str = "image-frame-round-trip-slot";
+        let host_device = match HostVulkanDevice::new() {
+            Ok(host_device) => host_device,
+            Err(unavailable) => {
+                tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+                return;
+            }
+        };
+        let exported = match HostVulkanBuffer::new_opaque_fd_export(&host_device, 64 * 4 * 16) {
+            Ok(exported) => exported,
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no OPAQUE_FD buffer export on this device ({unavailable})"
+                );
+                return;
+            }
+        };
+        let pool_slot = PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(exported),
+            64,
+            16,
+            4,
+            PixelFormat::Bgra32,
+        );
+        let share = SurfaceShareUnderTest::start("image-frame-round-trip");
+        let engine_surface_store = SurfaceStore::new(
+            share.socket_path.to_string_lossy().into_owned(),
+            "engine:image-frame-round-trip".to_string(),
+        );
+        engine_surface_store
+            .connect()
+            .expect("the engine's store connects");
+        engine_surface_store
+            .register_buffer(POOL_SLOT_KEY, &pool_slot)
+            .expect("the engine registers the pool slot");
+        let mut claim_tables_of_the_pool =
+            GpuPoolClaimTablesOfOnePool::named("image-frame-round-trip");
+        let row_lease = claim_tables_of_the_pool
+            .lease_a_row_for_a_slot(
+                share.check_out_leases().gpu_pool_claim_tables(),
+                POOL_SLOT_KEY,
+            )
+            .expect("the pool leases its slot a row");
+        row_lease.row().publish_generation(1);
+        share.publish_frame_generation_over_a_registered_pool_slot(POOL_SLOT_KEY, 1);
+        let exchange_client = share.exchange_client_labelled_importing_on(
+            "image-frame-round-trip",
+            Ok(host_device.physical_device_uuid()),
+        );
+
+        Python::initialize();
+        Python::attach(|python| {
+            put_the_stream_distribution_source_on_sys_path(python);
+            lend_the_typed_read_gpu_offer_to_this_interpreter(python);
+            let gpu = Bound::new(
+                python,
+                PythonGpuContextLimitedAccess::new_for_helper_process(Some(exchange_client)),
+            )
+            .unwrap();
+            let image_frame = ImageFrameDescriptorBody {
+                slot: GpuPoolSlotFrameDescriptorBody {
+                    pool: row_lease.table().pool_uuid(),
+                    slot: row_lease.row_index(),
+                    generation: 1,
+                    timeline_value: 0,
+                    image_layout: 0,
+                },
+                width: 64,
+                height: 16,
+                format: TextureFormat::Bgra8Unorm as u32,
+                colour: ImageFrameH273Colour {
+                    primaries: 1,
+                    transfer: 13,
+                    matrix: 1,
+                    range: 1,
+                },
+            };
+            let read_image_frame_on = |destination: &PythonProcessorLinkDataAccess| {
+                destination
+                    .read_from_input_port_offering_gpu_access(
+                        python,
+                        "frames_from_upstream",
+                        PortPayloadReadShape::FamilyType,
+                        Some(&gpu),
+                    )
+                    .unwrap()
+                    .expect("the wired input received nothing")
+            };
+            let (source, destination) = one_wired_link(python, "image-frame-read");
+            source
+                .write_described_by(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &[]).as_any(),
+                    Some(7),
+                    true,
+                    |_| Ok(DataChannelPayloadDescriptor::image_frame(image_frame)),
+                )
+                .unwrap();
+            let frame = read_image_frame_on(&destination);
+            let field = |name: &str| frame.getattr(name).unwrap();
+            assert_eq!(
+                field("surface_id").extract::<String>().unwrap(),
+                format!("{POOL_SLOT_KEY}#1")
+            );
+            assert_eq!(field("width").extract::<u32>().unwrap(), 64);
+            assert_eq!(field("height").extract::<u32>().unwrap(), 16);
+            assert_eq!(field("format").extract::<String>().unwrap(), "bgra8_unorm");
+            assert_eq!(field("timestamp_ns").extract::<i64>().unwrap(), 7);
+            let colour = field("colour");
+            for (axis, name) in [
+                ("primaries", "bt709"),
+                ("transfer", "srgb"),
+                ("matrix", "bt709"),
+                ("range", "full"),
+            ] {
+                assert_eq!(
+                    colour.getattr(axis).unwrap().extract::<String>().unwrap(),
+                    name
+                );
+            }
+            assert!(row_lease.row().is_claimed(), "a read frame holds its slot");
+
+            let (source_on, destination_on) = one_wired_link(python, "image-frame-write-on");
+            source_on
+                .write_image_frame_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    &frame,
+                    gpu.get(),
+                    None,
+                )
+                .unwrap();
+            let frame_written_on = read_image_frame_on(&destination_on);
+            for name in ["surface_id", "width", "height", "format", "colour"] {
+                assert!(
+                    frame_written_on
+                        .getattr(name)
+                        .unwrap()
+                        .eq(frame.getattr(name).unwrap())
+                        .unwrap(),
+                    "{name} survives the write on"
+                );
+            }
+            drop((frame, frame_written_on));
+            python.run(c"import gc; gc.collect()", None, None).unwrap();
+            withdraw_the_lent_typed_read_gpu_offer(python);
+        });
+        assert!(
+            !row_lease.row().is_claimed(),
+            "a dropped frame lets its slot go"
+        );
+    }
+
+    /// A Packets unit reads back with its bytes, its stamp, whether a decoder
+    /// may start at it and its codec; a plain byte stream names no codec.
+    #[test]
+    fn a_packets_unit_reads_back_with_its_stamp_group_flag_and_codec() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "packets-unit");
+            for (codec, starts_group) in [("h264", false), ("", true)] {
+                let descriptor =
+                    DataChannelPayloadDescriptor::packets_unit(&PacketsUnitDescriptorBody {
+                        codec: codec.to_string(),
+                    })
+                    .unwrap();
+                source
+                    .write_described_by(
+                        python,
+                        "frames_to_downstream",
+                        PyBytes::new(python, b"\x00\x00\x01").as_any(),
+                        Some(42),
+                        starts_group,
+                        |_| Ok(descriptor),
+                    )
+                    .unwrap();
+            }
+            for (codec, starts_group) in [("h264", false), ("", true)] {
+                let unit = read_as_the_family_type(python, &destination);
+                assert!(unit.cast::<PythonPacketsUnit>().is_ok());
+                assert_eq!(
+                    unit.getattr("codec").unwrap().extract::<String>().unwrap(),
+                    codec
+                );
+                assert_eq!(unit.getattr("pts").unwrap().extract::<i64>().unwrap(), 42);
+                assert_eq!(
+                    unit.getattr("starts_group")
+                        .unwrap()
+                        .extract::<bool>()
+                        .unwrap(),
+                    starts_group
+                );
+                assert_eq!(
+                    PythonPortPayloadBorrow::bytes_the_read_borrowed(
+                        &unit.getattr("payload").unwrap()
+                    ),
+                    b"\x00\x00\x01"
+                );
+            }
+        });
+    }
+
     /// Groups an engine-internal writer declared given up upstream reach a
     /// helper's reader as `lost_since_last_read` on the next message, through
     /// the same mailboxes a native reader runs.
@@ -1459,7 +2587,7 @@ mod tests {
                 .read_message_naming_its_inbound_link_with_its_payload_cast(
                     python,
                     "frames_from_upstream",
-                    None,
+                    PortPayloadReadShape::RawBorrow,
                     None,
                 )
                 .unwrap()

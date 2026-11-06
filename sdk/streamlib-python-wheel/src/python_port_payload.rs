@@ -504,7 +504,7 @@ unsafe fn fill_buffer_view_over(
 
 /// Refuse what a CPU payload cannot honour: a copy, a device other than the
 /// CPU, or a stream to order against.
-fn refuse_a_dlpack_request_a_cpu_payload_cannot_meet(
+pub(crate) fn refuse_a_dlpack_request_a_cpu_payload_cannot_meet(
     stream: Option<&Bound<'_, PyAny>>,
     dl_device: Option<(i32, i32)>,
     copy: Option<bool>,

@@ -44,6 +44,9 @@ from ._node_context_protocols import (
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
 from ._node_context_protocols import NodeLinkDataAccess as NodeLinkDataAccess
+from ._node_context_protocols import ArrayFrameCpuAttribute as ArrayFrameCpuAttribute
+from ._node_context_protocols import ChannelsBlock as ChannelsBlock
+from ._node_context_protocols import PacketsUnit as PacketsUnit
 from ._node_context_protocols import PortPayloadBorrow as PortPayloadBorrow
 from ._node_context_protocols import PortPayloadLoan as PortPayloadLoan
 from ._node_context_protocols import (
@@ -113,14 +116,21 @@ from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
 from .video_frame import VideoFrame as VideoFrame
+from .array_frame import ArrayFrame as ArrayFrame
+from .array_frame import ArrayFrameGpuAttribute as ArrayFrameGpuAttribute
+from .image_frame import ImageFrame as ImageFrame
 
 __all__ = [
     "AccelerationStructureHandle",
     "Array",
+    "ArrayFrame",
+    "ArrayFrameCpuAttribute",
+    "ArrayFrameGpuAttribute",
     "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
     "Channels",
+    "ChannelsBlock",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -137,6 +147,7 @@ __all__ = [
     "GraphicsKernel",
     "IOSurfaceMachPortExport",
     "Image",
+    "ImageFrame",
     "Input",
     "KernelDispatchBatch",
     "LinkInputDataReader",
@@ -160,6 +171,7 @@ __all__ = [
     "OpaqueFdAllocationExport",
     "Output",
     "Packets",
+    "PacketsUnit",
     "PixelAccessToOneClaimedSurface",
     "PortFamily",
     "PortNamesFromConfig",
