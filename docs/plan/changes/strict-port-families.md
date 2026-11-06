@@ -83,11 +83,12 @@ No new ADR.
   that states none reads any format. Owner, 2026-11-06.
   Rejected: formats on outputs only, refused per frame as a drop — the link fails silently
   after it is made (owner, 2026-11-06). [strict-port-families]
-- **[NEEDS DECISION] (same entry): do a Records output's names promise every key in every
-  write?** Options: (a) yes, `write` refuses a dict missing a declared name, naming it, so
-  `requires=` means the key is always there; (b) no, declared names say which keys may appear,
-  and a reader handles absence. Recommended: (a). It is one set check per write on a family
-  already capped at 64 KiB, and without it `requires=` promises nothing on Records.
+- **ADDED (same entry, DECIDED):** A Records output's declared names are keys every write
+  carries: `write` refuses a dict missing one, naming it and the port, so an input's
+  `requires=` means the key is always there. Keys beyond the declared names pass through.
+  Owner, 2026-11-06.
+  Rejected: declared names as keys that may appear — `requires=` would promise nothing on
+  Records (owner, 2026-11-06). [strict-port-families]
 - **ADDED (same section, DECIDED):** Each family's keys and what a read returns:
   - `Image`: `Output(Image, formats=("rgba8",))`. A read returns `ImageFrame`, the borrowed GPU
     surface with `__dlpack__`, `.cpu()`, `.writable()`, size, format and colour.
