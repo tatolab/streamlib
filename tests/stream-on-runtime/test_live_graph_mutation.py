@@ -68,14 +68,16 @@ LIVE_ADDED_EFFECT_SOURCE = '''\
 import dataclasses
 
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack, unpack
 
 
 @dataclasses.dataclass
@@ -87,24 +89,20 @@ class LiveAddedEffectConfig:
 class LiveAddedEffect:
     """Republishes each frame on a texture of its own and counts them."""
 
+    video_from_upstream = Input(Image, delivery="newest")
+    video_to_downstream = Output(Image)
+
     def __init__(self, config: LiveAddedEffectConfig) -> None:
         self.marker = config.marker
         self.frames = 0
-
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
-
-    @node.output()
-    def video_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None:
             return
-        frame = VideoFrame.from_bytes(payload)
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as upstream:
             upstream.lock(read_only=True)
             try:
@@ -119,10 +117,11 @@ class LiveAddedEffect:
             texture.as_numpy()[...] = pixels
         finally:
             texture.unlock()
-        republished = unpack(payload)
-        republished["surface_id"] = texture.surface_id
-        republished.pop("texture_layout", None)
-        ctx.outputs.write("video_to_downstream", pack(republished))
+        ctx.outputs.write(
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(texture, frame.colour),
+            timestamp_ns=frame.timestamp_ns,
+        )
         self.frames += 1
         if self.frames == 1:
             log.info(f"MARKER:{self.marker}")
@@ -452,6 +451,8 @@ import os
 import time
 
 from tatolab.stream import (
+    Image,
+    Input,
     RuntimeContextLimitedAccess,
     node,
 )
@@ -464,11 +465,10 @@ if "STREAMLIB_ENTRYPOINT" in os.environ:
 class SlowlyImportingSink:
     """Reads and drops every frame."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("video_from_upstream")
+        ctx.inputs.read(self.video_from_upstream)
 '''
 
 

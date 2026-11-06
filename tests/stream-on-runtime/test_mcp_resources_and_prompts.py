@@ -41,7 +41,7 @@ from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.requires_gpu
 
-FIRST_MARKED_BAG_TIMEOUT_SECONDS = 30.0
+FIRST_MARKED_FRAME_TIMEOUT_SECONDS = 30.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 
 Answered = TypeVar("Answered")
@@ -57,63 +57,76 @@ ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from tatolab.stream import StreamBuilder, stream
 from tatolab.testpattern import TestPatternSource
-from processors.marked_bag_sink import MarkedBagSink
+from processors.marked_frame_sink import MarkedFrameSink
 
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     source = stream_builder.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
-    sink = stream_builder.add(MarkedBagSink, name="sink")
-    stream_builder.connect(source.output("video"), sink.input("bags_from_upstream"))
+    sink = stream_builder.add(MarkedFrameSink, name="sink")
+    stream_builder.connect(source.output("video"), sink.input("video_from_upstream"))
 '''
 
 # Both `{delivery_profile}` slots are filled per run, so each way the effect's
 # input can relate to the sink's — the same profile, a shallower one, a deeper
 # one — meets a live node.
-BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
-from tatolab.stream import RuntimeContextLimitedAccess, node
-from tatolab.stream.msgpack import pack, unpack
+FRAME_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
+from tatolab.stream import (
+    ColorInfo,
+    Image,
+    ImageFrameToWrite,
+    Input,
+    Output,
+    RuntimeContextLimitedAccess,
+    node,
+)
+
+MARKED_FRAME_COLOUR = ColorInfo(primaries="bt2020", transfer="srgb", range="full")
 
 
 @node
-class BagMarkingEffect:
-    """Forwards every message with one key added, so a consumer can tell it passed through."""
+class FrameMarkingEffect:
+    """Forwards every frame described as BT.2020, so a consumer can tell it passed through."""
 
-    @node.input(delivery_profile="{delivery_profile}")
-    def bags_from_upstream(self) -> None: ...
-
-    @node.output()
-    def marked_bags_to_downstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="{delivery_profile}")
+    marked_video_to_downstream = Output(Image)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("bags_from_upstream")
-        if payload is not None:
-            marked_message = {{**unpack(payload), "marked_by_inserted_effect": True}}
-            ctx.outputs.write("marked_bags_to_downstream", pack(marked_message))
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is not None:
+            ctx.outputs.write(
+                self.marked_video_to_downstream,
+                ImageFrameToWrite(
+                    surface_id=frame.surface_id,
+                    width=frame.width,
+                    height=frame.height,
+                    format=frame.format,
+                    colour=MARKED_FRAME_COLOUR,
+                ),
+                timestamp_ns=frame.timestamp_ns,
+            )
 '''
 
-MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
-from tatolab.stream import RuntimeContextLimitedAccess, log, node
-from tatolab.stream.msgpack import unpack
+MARKED_FRAME_SINK_SOURCE_TEMPLATE = '''\
+from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, log, node
 
 
 @node
-class MarkedBagSink:
-    """Says so once when a message arrives carrying the inserted effect's mark."""
+class MarkedFrameSink:
+    """Says so once when a frame arrives carrying the inserted effect's BT.2020 mark."""
+
+    video_from_upstream = Input(Image, delivery="{delivery_profile}")
 
     def __init__(self) -> None:
         self.announced = False
 
-    @node.input(delivery_profile="{delivery_profile}")
-    def bags_from_upstream(self) -> None: ...
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("bags_from_upstream")
-        if payload is None or self.announced:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.announced:
             return
-        if unpack(payload).get("marked_by_inserted_effect"):
+        if frame.colour.primaries == "bt2020":
             self.announced = True
-            log.info("MARKER:SINK_RECEIVED_A_MARKED_BAG")
+            log.info("MARKER:SINK_RECEIVED_A_MARKED_FRAME")
 '''
 
 NUMBERED_STEP = re.compile(r"^\d+\. `([a-z_]+)` — (.*)$")
@@ -233,10 +246,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     app_directory = make_tatolab_project(
         {
             "processors/__init__.py": "",
-            "processors/bag_marking_effect.py": BAG_MARKING_EFFECT_SOURCE_TEMPLATE.format(
+            "processors/frame_marking_effect.py": FRAME_MARKING_EFFECT_SOURCE_TEMPLATE.format(
                 delivery_profile=inserted_input_delivery_profile
             ),
-            "processors/marked_bag_sink.py": MARKED_BAG_SINK_SOURCE_TEMPLATE.format(
+            "processors/marked_frame_sink.py": MARKED_FRAME_SINK_SOURCE_TEMPLATE.format(
                 delivery_profile=sink_input_delivery_profile
             ),
             "stream.py": STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK,
@@ -284,7 +297,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     catalog_paths = [
         entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]
     ] + [installed["node"]["type"] for installed in catalog_of_the_stream["installed"]]
-    inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
+    inserted_type = "processors.frame_marking_effect:FrameMarkingEffect"
 
     # The prompt's three arguments, bound by the names the listing gave them:
     # the stream, the link's id, and a catalog import path.
@@ -370,14 +383,14 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     assert downstream_link["source"]["node"] == added_node_name
     assert downstream_link["target"] == replaced_link["target"]
     assert await_added_node_state(client, stream_id, added_node_name, "Running") == "Running", (
-        "the splice is only carrying bags once the inserted node runs; a node "
+        "the splice is only carrying frames once the inserted node runs; a node "
         "stuck Idle is a helper that never started it"
     )
 
-    # The sink announces from its own processor interpreter only once a bag
+    # The sink announces from its own processor interpreter only once a frame
     # carrying the inserted effect's mark reaches it: frames really pass
     # through the splice.
-    tatolabd.await_marker("SINK_RECEIVED_A_MARKED_BAG", timeout=FIRST_MARKED_BAG_TIMEOUT_SECONDS)
+    tatolabd.await_marker("SINK_RECEIVED_A_MARKED_FRAME", timeout=FIRST_MARKED_FRAME_TIMEOUT_SECONDS)
 
     # The virtual camera recipe names a type this node's catalog actually holds.
     source_endpoint = replaced_link["source"]

@@ -43,7 +43,7 @@ def test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source(
         glsl_pixel_effect_probes.FRAME_WIDTH,
         glsl_pixel_effect_probes.FRAME_HEIGHT,
     ]
-    assert observed["timestamp_carried"]
+    assert observed["colour_carried"]
     assert observed["mismatched_pixels"] == 0
 
 

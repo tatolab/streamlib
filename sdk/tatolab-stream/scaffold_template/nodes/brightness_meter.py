@@ -10,8 +10,9 @@ swap the mean for a call to a model server and the app keeps its frame rate.
 
 import numpy
 from tatolab.stream import (
+    Image,
+    Input,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -25,11 +26,10 @@ class BrightnessMeter:
 
     next_brightness_report_at_ns: int = 0
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if frame is None or ctx.time < self.next_brightness_report_at_ns:
             return

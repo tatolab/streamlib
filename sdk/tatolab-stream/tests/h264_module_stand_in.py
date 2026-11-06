@@ -12,16 +12,13 @@ holds the real declaration. Written beside a project, it joins the installed
 from pathlib import Path
 
 H264_MODULE_PROCESSORS_STAND_IN_SOURCE = (
-    "from tatolab.stream import node\n"
+    "from tatolab.stream import Image, Input, Output, Packets, node\n"
     "\n"
     "\n"
     '@node(execution="manual")\n'
     "class H264Encoder:\n"
-    '    @node.input(delivery_profile="ordered")\n'
-    "    def video(self) -> None: ...\n"
-    "\n"
-    "    @node.output()\n"
-    "    def encoded_video(self) -> None: ...\n"
+    '    video = Input(Image, delivery="ordered")\n'
+    '    encoded_video = Output(Packets, codec="h264")\n'
 )
 
 H264_MODULE_PACKAGE_STAND_IN_SOURCE = "from .processors import H264Encoder as H264Encoder\n"

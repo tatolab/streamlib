@@ -212,6 +212,26 @@ def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: st
     )
 
 
+@pytest.mark.parametrize("module_path", [EFFECT_MODULE_PATH, METER_MODULE_PATH])
+def test_each_node_declares_its_ports_as_family_class_attributes(module_path: str):
+    """The scaffold is the shape an author copies, so its ports are `Input` and
+    `Output` class attributes of the Image family and no decorator port."""
+    node_source = template_text(module_path)
+    port_declarations = [
+        ast.unparse(statement.value)
+        for class_definition in ast.walk(ast.parse(node_source))
+        if isinstance(class_definition, ast.ClassDef)
+        for statement in class_definition.body
+        if isinstance(statement, ast.Assign)
+        and isinstance(statement.value, ast.Call)
+        and ast.unparse(statement.value.func) in ("Input", "Output")
+    ]
+
+    assert "@node.input" not in node_source and "@node.output" not in node_source
+    assert port_declarations, f"{module_path} declares no family port"
+    assert all(declaration.split("(")[1].startswith("Image") for declaration in port_declarations)
+
+
 def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     """The effect in the video path runs on the GPU, and the numpy node reads an
     explicit CPU view off a fan-out, so the slow door never sits on the path to

@@ -814,12 +814,12 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
     edited = scaffolded_effect_source
     for anchor, replacement in (
         (
-            "    VideoFrame,\n",
-            "    VideoFrame,\n    log,\n",
+            "    RuntimeContextLimitedAccess,\n    node,\n",
+            "    RuntimeContextLimitedAccess,\n    log,\n    node,\n",
         ),
         (
-            '    @node.input(delivery_profile="newest")',
-            '    announced = False\n\n    @node.input(delivery_profile="newest")',
+            '    video_from_upstream = Input(Image, delivery="newest")',
+            '    announced = False\n\n    video_from_upstream = Input(Image, delivery="newest")',
         ),
         (
             "        ctx.outputs.write(",

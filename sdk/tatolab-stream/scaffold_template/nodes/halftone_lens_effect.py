@@ -9,10 +9,11 @@ name the engine spawns this node's child interpreter with.
 
 from tatolab.stream import (
     GlslPixelEffect,
+    Image,
+    Input,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
-    msgpack,
     node,
 )
 
@@ -57,11 +58,8 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest")
+    video_to_downstream = Output(Image)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.halftone_lens_pixel_effect = GlslPixelEffect.compile(
@@ -72,13 +70,13 @@ class HalftoneLensEffect:
         self.first_frame_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None:
             return
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
-        halftone_frame_record = self.halftone_lens_pixel_effect.apply_to_frame(
+        halftone_frame = self.halftone_lens_pixel_effect.apply_to_frame(
             ctx.gpu_limited_access,
             frame,
             dials={
@@ -86,4 +84,6 @@ class HalftoneLensEffect:
                 "frame_size": (frame.width, frame.height),
             },
         )
-        ctx.outputs.write("video_to_downstream", msgpack.pack(halftone_frame_record))
+        ctx.outputs.write(
+            self.video_to_downstream, halftone_frame, timestamp_ns=frame.timestamp_ns
+        )

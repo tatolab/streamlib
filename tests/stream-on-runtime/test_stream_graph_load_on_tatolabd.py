@@ -73,6 +73,9 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
 # The keys a built-in's config cannot leave out; every other built-in loads with none.
 CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
     RelayTrackSource: {"broadcast": "desk/camera-rig.hang", "track": "camerasource/video"},
+    _built_in_nodes.ArrayToChannels: {"channel_names": ["left", "right"], "sample_rate": 48_000},
+    _built_in_nodes.ChannelsToRecords: {"channel_names": ["level"]},
+    _built_in_nodes.RecordsToChannels: {"channel_names": ["level"], "sample_rate": 48_000},
 }
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
@@ -564,5 +567,5 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
         "loaded-pattern",
         "video",
         "loaded-sink",
-        "bags_from_upstream",
+        "video_from_upstream",
     ) in served_link_ends, served_link_ends

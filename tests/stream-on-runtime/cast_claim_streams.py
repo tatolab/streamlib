@@ -53,46 +53,24 @@ def untyped_read_holds_nothing_probe_off_the_camera(stream_builder: StreamBuilde
 
 
 @stream
-def a_user_authored_cast_reaches_its_pixels_bare_probe_off_the_test_pattern(
+def the_image_frame_reaches_its_pixels_bare_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:
     _add_the_probe_off(
         stream_builder,
         _add_the_test_pattern(stream_builder),
-        cast_claim_probes.AUserAuthoredCastReachesItsPixelsBareProbe,
+        cast_claim_probes.TheImageFrameReachesItsPixelsBareProbe,
     )
 
 
 @stream
-def the_shipped_video_frame_reaches_its_pixels_bare_probe_off_the_test_pattern(
-    stream_builder: StreamBuilder,
-) -> None:
-    _add_the_probe_off(
-        stream_builder,
-        _add_the_test_pattern(stream_builder),
-        cast_claim_probes.TheShippedVideoFrameReachesItsPixelsBareProbe,
-    )
-
-
-@stream
-def a_user_authored_cast_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera(
+def the_image_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera(
     stream_builder: StreamBuilder,
 ) -> None:
     _add_the_probe_off(
         stream_builder,
         _add_the_camera(stream_builder),
-        cast_claim_probes.AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe,
-    )
-
-
-@stream
-def the_shipped_video_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera(
-    stream_builder: StreamBuilder,
-) -> None:
-    _add_the_probe_off(
-        stream_builder,
-        _add_the_camera(stream_builder),
-        cast_claim_probes.TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe,
+        cast_claim_probes.TheImageFrameReachesItsPixelsAsADeviceTensorProbe,
     )
 
 

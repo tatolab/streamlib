@@ -12,7 +12,6 @@ from video_codec_blocks_probes import (
     DecodedVideoFrameProbe,
     EncodedFrameProbe,
     EncodedFrameTimestampProbe,
-    TestPatternFrameRepublishedAsAnImageFrame,
 )
 
 
@@ -49,8 +48,7 @@ def _add_a_codec_round_trip_with_probes(
 ) -> None:
     """A test pattern encoded and decoded back, with no Python in the frame path.
 
-    `TestPatternSource → TestPatternFrameRepublishedAsAnImageFrame →
-    <codec>Encoder → <codec>Decoder → DecodedVideoFrameProbe`.
+    `TestPatternSource → <codec>Encoder → <codec>Decoder → DecodedVideoFrameProbe`.
     The pattern's extent is 320×180, an extent both codecs pad (to 320×192:
     the 16-sample macroblock and the 64-sample CTU agree on it), so the decoded
     probe seeing 320×180 is the conformance crop proven from Python.
@@ -72,15 +70,11 @@ def _add_a_codec_round_trip_with_probes(
             "keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS,
         },
     )
-    pattern_as_image_frames = stream_builder.add(TestPatternFrameRepublishedAsAnImageFrame)
     decoder = stream_builder.add(decoder_class)
     encoded_frame_probe = stream_builder.add(EncodedFrameProbe)
     encoded_frame_timestamp_probe = stream_builder.add(EncodedFrameTimestampProbe)
     decoded_frame_probe = stream_builder.add(DecodedVideoFrameProbe)
-    stream_builder.connect(
-        pattern.output("video"), pattern_as_image_frames.input("video_from_upstream")
-    )
-    stream_builder.connect(pattern_as_image_frames.output("video"), encoder.input("video"))
+    stream_builder.connect(pattern.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
     stream_builder.connect(
         encoder.output("encoded_video"),

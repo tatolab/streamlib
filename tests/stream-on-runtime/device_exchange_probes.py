@@ -26,6 +26,9 @@ import traceback
 import numpy
 
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    Input,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -59,30 +62,22 @@ def _report(probe_body) -> None:
 
 
 class _FrameProbeBase:
-    """Reads exactly one frame message, then reports through `_report`."""
+    """Reads exactly one Image frame, held against producer reuse while it lives, then reports through `_report`."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.frames_seen = 0
 
-    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> dict:
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.frames_seen >= 1:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        frame = VideoFrame.from_bytes(payload)
-        frame_held_against_producer_reuse = (
-            ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
-        )
-        try:
-            _report(lambda: self._probe(ctx, frame))
-        finally:
-            del frame_held_against_producer_reuse
+        _report(lambda: self._probe(ctx, frame))
 
 
 @node
@@ -1274,22 +1269,8 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         mx.eval(array)
 
 
-class _TypedFrameProbeBase(_FrameProbeBase):
-    """Reads its one frame `into=VideoFrame`, the read that takes the claim the
-    frame object's own doors — the bare capsule, `writable()` — ride."""
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.frames_seen >= 1:
-            return
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
-        if frame is None:
-            return
-        self.frames_seen += 1
-        _report(lambda: self._probe(ctx, frame))
-
-
 @node
-class MlxReadsTheFrameProbe(_TypedFrameProbeBase):
+class MlxReadsTheFrameProbe(_FrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
 
@@ -1324,7 +1305,7 @@ def _frame_pixels_now(ctx, surface_id: str):
 
 
 @node
-class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
+class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
 
@@ -1352,7 +1333,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
 
 
 @node
-class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
+class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
     in a buffer of MLX's own and the frame never sees it — whatever the scope
@@ -1381,7 +1362,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
 
 
 @node
-class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
+class MlxWholeArrayAssignmentMissesTheFrameProbe(_FrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
     evaluated inside the scope."""

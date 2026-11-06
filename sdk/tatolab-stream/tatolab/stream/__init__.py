@@ -131,6 +131,7 @@ from .video_frame import VideoFrame as VideoFrame
 from .array_frame import ArrayFrame as ArrayFrame
 from .array_frame import ArrayFrameGpuAttribute as ArrayFrameGpuAttribute
 from .image_frame import ImageFrame as ImageFrame
+from .image_frame import ImageFrameToWrite as ImageFrameToWrite
 
 __all__ = [
     "AccelerationStructureHandle",
@@ -168,6 +169,7 @@ __all__ = [
     "IOSurfaceMachPortExport",
     "Image",
     "ImageFrame",
+    "ImageFrameToWrite",
     "ImageToArray",
     "ImageToArrayConfig",
     "Input",

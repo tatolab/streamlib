@@ -19,8 +19,10 @@ import pytest
 from tatolab.stream import (
     GlslPixelEffect,
     GpuContextFullAccess,
+    ColorInfo,
     GpuContextLimitedAccess,
-    VideoFrame,
+    ImageFrame,
+    ImageFrameToWrite,
     glsl_pixel_effect,
 )
 
@@ -108,22 +110,26 @@ def refusal_of_compile(effect_glsl: str = INVERT_GLSL, dials: "dict[str, Any] | 
     return str(refusal.value)
 
 
-def frame(width: int = 20, height: int = 12) -> VideoFrame:
-    return VideoFrame(
+BT709_FULL_RANGE = ColorInfo(primaries="bt709", range="full")
+
+
+def frame(width: int = 20, height: int = 12) -> ImageFrame:
+    return ImageFrame(
         surface_id="camera#7",
         width=width,
         height=height,
+        format="rgba8_unorm",
+        colour=BT709_FULL_RANGE,
         timestamp_ns=123_456,
-        color_info={"primaries": "bt709", "range": "full"},
     )
 
 
 def apply(
     effect: GlslPixelEffect, dials: "dict[str, Any] | None" = None
-) -> "tuple[dict[str, Any], GpuLimitedAccessStandIn]":
+) -> "tuple[ImageFrameToWrite, GpuLimitedAccessStandIn]":
     gpu = GpuLimitedAccessStandIn()
-    bag = effect.apply_to_frame(cast(GpuContextLimitedAccess, gpu), frame(), dials=dials)
-    return bag, gpu
+    frame_to_write = effect.apply_to_frame(cast(GpuContextLimitedAccess, gpu), frame(), dials=dials)
+    return frame_to_write, gpu
 
 
 def refusal_of_apply(effect: GlslPixelEffect, dials: "dict[str, Any]") -> str:
@@ -252,7 +258,7 @@ def test_a_dial_supplied_the_wrong_shape_is_refused_naming_it(glsl_type: str, va
 
 def test_an_apply_lands_the_frame_then_dispatches_over_its_extent() -> None:
     effect, full_access = compiled()
-    bag, limited_access = apply(effect)
+    frame_to_write, limited_access = apply(effect)
 
     assert limited_access.calls == [
         "acquire rgba8_unorm 20x12",
@@ -262,10 +268,10 @@ def test_an_apply_lands_the_frame_then_dispatches_over_its_extent() -> None:
     dispatch = full_access.kernel.dispatches[0]
     assert dispatch["group_count"] == (3, 2, 1)
     assert dispatch["bindings"]["streamlib_source"].surface_id == "texture#1"
-    assert bag == {
-        "surface_id": "texture#3",
-        "width": 20,
-        "height": 12,
-        "timestamp_ns": 123_456,
-        "color_info": {"primaries": "bt709", "range": "full"},
-    }
+    assert frame_to_write == ImageFrameToWrite(
+        surface_id="texture#3",
+        width=20,
+        height=12,
+        format="rgba8_unorm",
+        colour=BT709_FULL_RANGE,
+    )

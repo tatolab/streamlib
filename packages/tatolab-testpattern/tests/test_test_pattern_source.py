@@ -32,15 +32,12 @@ from tatolab.testpattern import (
 )
 
 
-def test_the_node_is_a_continuous_source_with_one_msgpack_video_output():
+def test_the_node_is_a_continuous_source_with_one_rgba8_image_output():
     output_ports = getattr(TestPatternSource, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
 
     assert getattr(TestPatternSource, NODE_DECLARATION_INPUT_PORTS_STAMP) == []
     assert [port["name"] for port in output_ports] == ["video"]
-    assert output_ports[0]["catalog_entry"] == {
-        "section": "binary",
-        "entry": {"mode": "snapshot", "mime": "application/msgpack"},
-    }
+    assert output_ports[0]["family"] == {"family": "image", "formats": ["rgba8_unorm"]}
     assert getattr(TestPatternSource, NODE_DECLARATION_EXECUTION_STAMP) == {
         "mode": "continuous",
         "interval_ms": 33,

@@ -20,8 +20,8 @@ the published frame id retired with it. A scene that never moves would
 make the typed half vacuous, so scene motion is measured separately.
 
 The host-side bare-protocol probes need only a GPU. They reach a delivered
-frame's pixels through the object itself and consume the capsule with plain
-numpy, so every part of the seam is real — the resolved handle, the read-only
+Image frame's pixels through the object itself and consume the capsule with
+plain numpy, so every part of the seam is real — the resolved handle, the read-only
 lock, the engine-minted capsule — while the consumer needs no CUDA build.
 
 The device-side bare-protocol probes need a camera and a torch built for the
@@ -31,9 +31,8 @@ they keep the camera deliberately: a capture surface is an imported V4L2
 DMA-BUF where a test pattern is engine-allocated, so it is the harder subject
 for a device export.
 
-Both bare-protocol families run for a cast type the wheel never heard of as
-well as for `VideoFrame`, because a protocol that only worked for the shipped
-class would be the privilege the plan says it must not have.
+The bare-protocol and write-door probes read an Image port, so the object
+they hold is the `ImageFrame` the read returns.
 """
 
 import json
@@ -41,18 +40,17 @@ import os
 import struct
 import traceback
 import zlib
-from dataclasses import dataclass
-
 import numpy
 
 from tatolab.stream import (
-    ClaimedSurfacePixelAccess,
+    Image,
+    Input,
     RuntimeContextLimitedAccess,
     VideoFrame,
     log,
     node,
 )
-from tatolab.stream.msgpack import MsgpackCast, unpack
+from tatolab.stream.msgpack import unpack
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
@@ -282,21 +280,6 @@ class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
         return ctx.inputs.read("video_from_upstream")
 
 
-@dataclass(frozen=True, init=False)
-class UserAuthoredVideoFrameCast(ClaimedSurfacePixelAccess, MsgpackCast):
-    """A cast type the wheel never heard of: name the fields, inherit the
-    constructor and `from_bytes`, get the protocol.
-
-    A source's message carries keys this type does not declare; they are dropped,
-    which is the open-map rule every cast type rides.
-    """
-
-    surface_id: str
-    width: int
-    height: int
-    timestamp_ns: int
-
-
 class _BareProtocolProbe:
     """Reach a delivered frame's pixels through the object itself.
 
@@ -307,18 +290,15 @@ class _BareProtocolProbe:
     takes the capsule.
     """
 
-    # `newest`: an unclaimed message's id is only good for pool-depth frames
-    # after publish, and this probe reads exactly one frame at whatever moment
-    # it starts — a queue of stale messages would refuse on arrival for reasons that
-    # have nothing to do with the protocol under test.
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    # `newest`: this probe reads exactly one frame at whatever moment it
+    # starts, so a queue of stale messages would only delay it.
+    video_from_upstream = Input(Image, delivery="newest")
 
     def __init__(self) -> None:
         self.reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
-        raise NotImplementedError
+        return ctx.inputs.read(self.video_from_upstream)
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         raise NotImplementedError
@@ -416,41 +396,14 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
 
 
 @node
-class AUserAuthoredCastReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
-    """The no-privilege half: a type the wheel does not ship gets the protocol
-    by composing the shipped piece, and nothing else."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
+class TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
+    """The `ImageFrame` an Image read returns reaches its pixels through the
+    object itself, and reaches the surface's own pixels."""
 
 
 @node
-class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
-    """The parity half: `VideoFrame` is built from that same piece, so it must
-    reach its pixels the same way and reach the same pixels."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
-
-
-@node
-class AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe(
-    _BareProtocolDeviceSideProbe
-):
-    """The no-privilege half with a real GPU package taking the capsule."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
-
-
-@node
-class TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe(
-    _BareProtocolDeviceSideProbe
-):
-    """The parity half on the device side."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+class TheImageFrameReachesItsPixelsAsADeviceTensorProbe(_BareProtocolDeviceSideProbe):
+    """The same on the device side, with a real GPU package taking the capsule."""
 
 
 # ---- the write doors: an edit through the object, seen on the surface -------
@@ -508,9 +461,6 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.writable() as t:` — a CUDA package editing a live frame in
     place, with the edit on the surface once the block ends."""
 
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
-
     def _edit_the_top_rows(self, frame) -> None:
         import torch
 
@@ -524,9 +474,6 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
     the way out, and the surface follows its floor's publication rule — the
     complete frame the engine already held on Linux, the stores that landed
     before the raise on macOS."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
@@ -566,9 +513,6 @@ class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.cpu() as img:` — the named slow path, editing a live frame
     through plain numpy with no CUDA consumer anywhere in it."""
 
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
-
     def _edit_the_top_rows(self, frame) -> None:
         with frame.cpu() as host_pixels:
             host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
@@ -584,9 +528,6 @@ class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
     this measures; a discard claim here would be a claim the mapping cannot
     keep.
     """
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         the_exception_propagated = False

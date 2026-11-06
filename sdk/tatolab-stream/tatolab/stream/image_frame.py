@@ -12,11 +12,15 @@ surface against producer reuse while it lives and speaks `__dlpack__`, with
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 from .video_frame import ColorInfo
 
-__all__ = ["ImageFrame"]
+if TYPE_CHECKING:
+    from ._gpu_protocols import GpuSurfaceHandle
+
+__all__ = ["ImageFrame", "ImageFrameToWrite"]
 
 
 @dataclass(frozen=True, init=False)
@@ -52,4 +56,31 @@ class ImageFrame(ClaimedSurfacePixelAccess):
             format=format,
             colour=colour,
             timestamp_ns=timestamp_ns,
+        )
+
+
+@dataclass(frozen=True)
+class ImageFrameToWrite:
+    """An Image frame a node publishes from a texture it acquired from a pool.
+
+    `ctx.outputs.write(self.video_out, frame_to_write)` publishes the texture's
+    slot with this extent, format and colour; the write's own `timestamp_ns`
+    stamps it.
+    """
+
+    surface_id: str
+    width: int
+    height: int
+    format: str
+    colour: ColorInfo
+
+    @classmethod
+    def of_texture(cls, texture: "GpuSurfaceHandle", colour: ColorInfo) -> "ImageFrameToWrite":
+        """The frame `texture` holds, described by `colour`."""
+        return cls(
+            surface_id=texture.surface_id,
+            width=texture.width,
+            height=texture.height,
+            format=texture.format,
+            colour=colour,
         )

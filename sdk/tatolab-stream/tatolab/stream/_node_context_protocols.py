@@ -755,7 +755,8 @@ class LinkOutputDataWriter(Protocol):
 
         Written through an `Output` attribute, `payload` is the family's object
         and the runtime builds its descriptor: an Image write takes an
-        `ImageFrame` this node read or a texture it acquired from a pool, an
+        `ImageFrame` this node read, an `ImageFrameToWrite`, or a texture it
+        acquired from a pool, whose colour is then unspecified, an
         Array write a mapping of name to a C-contiguous array or a tensor
         surface, a Channels write a `[channel][sample]` array with
         `start_sample`, a Packets write the unit's bytes, and a Records write a
