@@ -476,7 +476,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, strict-port-families)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -993,7 +993,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart; unbuilt: the five port families, subgraphs; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families; unbuilt: the five port families, subgraphs; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
