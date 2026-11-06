@@ -7,7 +7,7 @@
 A thread there creates a Vulkan device on the runtime's GPU through the
 consumer RHI, builds rive-runtime's Vulkan renderer on it, and per frame draws
 the `.riv` state machine into a texture from the node's output pool and
-publishes a `VideoFrame` naming it. No frame is copied, and Python never runs
+publishes an Image frame in its slot. No frame is copied, and Python never runs
 at frame cadence.
 """
 
@@ -16,11 +16,12 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextFullAccess, VideoFrame, node
+from tatolab.stream import Image, Input, Output, Records, RuntimeContextFullAccess, node
 
 from . import _native
 
 VIDEO_OUTPUT_PORT = "video"
+RENDERED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 DATA_INPUT_PORT = "data"
 
 
@@ -46,9 +47,9 @@ class RiveSourceConfig:
     description="Plays a Rive state machine, drawing each frame straight into the stream on the GPU",
 )
 class RiveSource:
-    """A `.riv` file's state machine, published as RGBA `VideoFrame`s over transparency.
+    """A `.riv` file's state machine, published as RGBA Image frames over transparency.
 
-    Each `data` message is a msgpack map from view-model property path to value,
+    Each `data` record is a map from view-model property path to value,
     applied to the artboard's default view-model instance: a number to a number
     property, text to a string or enum property, a boolean to a boolean
     property, `0xAARRGGBB` or `"#RRGGBB"` to a colour property, and anything but
@@ -60,12 +61,16 @@ class RiveSource:
         self._config = config
         self._rendering: "_native.RiveSceneRendering | None" = None
 
-    @node.input(delivery_profile="ordered")
-    def data(self) -> None:
-        """Msgpack maps from view-model property path to value."""
-
-    @node.output(description="RGBA frames of the animation, as VideoFrame records")
-    def video(self) -> VideoFrame: ...
+    data = Input(
+        Records,
+        delivery="ordered",
+        description="Maps from view-model property path to value",
+    )
+    video = Output(
+        Image,
+        formats=(RENDERED_FRAME_TEXTURE_FORMAT,),
+        description="RGBA frames of the animation, colour unspecified",
+    )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both ports to this wheel's frame thread.

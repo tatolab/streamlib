@@ -446,7 +446,6 @@ name = "tatolab-rive"
 version = "0.68.31"
 dependencies = [
  "pyo3",
- "rmp",
  "rmpv",
  "streamlib-consumer-rhi",
  "streamlib-surface-client",
