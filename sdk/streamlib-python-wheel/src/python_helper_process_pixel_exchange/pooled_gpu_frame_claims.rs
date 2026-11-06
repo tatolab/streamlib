@@ -178,6 +178,19 @@ impl HelperProcessGpuExchangeClient {
             .descriptor_of_the_frame_named(published_frame_id)
     }
 
+    /// The id the pooled frame `pooled_frame` is published under, once a read
+    /// of it taught this helper its slot's key.
+    pub(crate) fn published_frame_id_of_the_pooled_gpu_frame(
+        &self,
+        pooled_frame: &GpuPoolSlotFrameDescriptorBody,
+    ) -> Option<String> {
+        self.gpu_pool_claim_tables
+            .pool_slot_key_of(pooled_frame)
+            .map(|pool_slot_key| {
+                published_frame_id_of_pool_slot(&pool_slot_key, pooled_frame.generation)
+            })
+    }
+
     fn fetch_the_claim_table_of_gpu_pool(
         &self,
         pool: [u8; 16],

@@ -20,9 +20,11 @@ if TYPE_CHECKING:
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
     from .catalog import CatalogEntry
     from ._message import Message
+    from ._port_family_declaration import Input, Output
 
 _MessageReadTarget = TypeVar("_MessageReadTarget")
 _MessageReadTarget_co = TypeVar("_MessageReadTarget_co", covariant=True)
+_PortFamilyReadType = TypeVar("_PortFamilyReadType")
 
 
 @runtime_backed_protocol
@@ -53,6 +55,122 @@ class PortPayloadBorrow(Protocol):
         ...
 
     def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
+@runtime_backed_protocol
+class ChannelsBlock(Protocol):
+    """A Channels block a read returned: planar samples borrowed in the sample they arrived in.
+
+    `numpy.from_dlpack(block)` is a read-only `[channel][sample]` array over the
+    sample, with no copy. The sample counts against its link's borrow quota
+    while the block or any tensor over it lives.
+    """
+
+    @property
+    def start_sample(self) -> int:
+        """The stream-wide index of the block's first sample."""
+        ...
+
+    @property
+    def sample_rate(self) -> int:
+        """Samples per second, per channel."""
+        ...
+
+    @property
+    def channel_count(self) -> int:
+        """How many channels the block holds."""
+        ...
+
+    @property
+    def samples_per_channel(self) -> int:
+        """How many samples each channel holds."""
+        ...
+
+    @property
+    def dtype(self) -> str:
+        """The sample type, `"f32"` or `"f64"`."""
+        ...
+
+    @property
+    def timestamp_ns(self) -> int:
+        """The stream time the block was stamped with, in nanoseconds."""
+        ...
+
+    def __dlpack__(
+        self,
+        *,
+        stream: Any | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any:
+        """The samples as a read-only `[channel][sample]` CPU tensor over the sample.
+
+        `copy=True`, a device other than the CPU and a stream are refused.
+        """
+        ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
+@runtime_backed_protocol
+class ArrayFrameCpuAttribute(Protocol):
+    """One CPU attribute of an Array frame a read returned: a row-major tensor borrowed in the sample.
+
+    `numpy.from_dlpack(attribute)` reads it in place. The sample counts against
+    its link's borrow quota while any attribute of the frame lives.
+    """
+
+    @property
+    def dtype(self) -> str:
+        """The element type's wire name, such as `"float32"`."""
+        ...
+
+    @property
+    def shape(self) -> list[int]:
+        """The dimensions, outermost first."""
+        ...
+
+    def __dlpack__(
+        self,
+        *,
+        stream: Any | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any:
+        """The attribute as a read-only CPU tensor over the sample.
+
+        `copy=True`, a device other than the CPU and a stream are refused.
+        """
+        ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
+@runtime_backed_protocol
+class PacketsUnit(Protocol):
+    """A Packets unit a read returned: its bytes borrowed in the sample, with its stamp and codec."""
+
+    @property
+    def payload(self) -> PortPayloadBorrow:
+        """The unit's bytes, a borrow of the sample."""
+        ...
+
+    @property
+    def pts(self) -> int:
+        """The presentation stamp, in stream nanoseconds."""
+        ...
+
+    @property
+    def starts_group(self) -> bool:
+        """Whether a decoder may start at this unit: a keyframe, or any unit of a plain byte stream."""
+        ...
+
+    @property
+    def codec(self) -> str:
+        """The codec the bytes are encoded with, or `""` for a plain byte stream."""
+        ...
 
 
 @runtime_backed_protocol
@@ -413,24 +531,32 @@ class LinkInputDataReader(Protocol):
 
     @overload
     def read(
-        self, port_name: str, *, into: None = None
+        self, port: Input[_PortFamilyReadType], *, into: None = None
+    ) -> _PortFamilyReadType | None: ...
+    @overload
+    def read(
+        self, port: str, *, into: None = None
     ) -> PortPayloadBorrow | None: ...
     @overload
     def read(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[_MessageReadTarget],
     ) -> _MessageReadTarget | None: ...
     def read(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next message's payload on `port_name`, or `None` when none is waiting.
+        """The next message's payload on `port`, or `None` when none is waiting.
 
-        The payload is a `PortPayloadBorrow` of the sample it arrived in. With
+        Read through an `Input` attribute — `read(self.audio)` — the payload is
+        the port family's type, built from the message's descriptor:
+        `ImageFrame`, `ArrayFrame`, `ChannelsBlock`, `PacketsUnit`, or a `dict`
+        for Records. Read by name, it is a `PortPayloadBorrow` of the sample it
+        arrived in. With
         `into`, the borrow is handed to `into.from_bytes` and its result
         returned, so a payload that does not fit raises here, at the consuming
         read. `into=VideoFrame` constructs and validates;
@@ -439,30 +565,43 @@ class LinkInputDataReader(Protocol):
         """
         ...
 
+    @overload
     def read_with_timestamp(
-        self, port_name: str
-    ) -> tuple[PortPayloadBorrow, int] | tuple[None, None]:
-        """The next message's payload on `port_name` with its timestamp, or `(None, None)`."""
+        self, port: Input[_PortFamilyReadType]
+    ) -> tuple[_PortFamilyReadType, int] | tuple[None, None]: ...
+    @overload
+    def read_with_timestamp(
+        self, port: str
+    ) -> tuple[PortPayloadBorrow, int] | tuple[None, None]: ...
+    def read_with_timestamp(self, port: str | Input[Any]) -> Any:
+        """The next message's payload on `port` with its timestamp, or `(None, None)`.
+
+        The payload is typed as `read` types it.
+        """
         ...
 
     @overload
     def read_from_inbound_link(
-        self, port_name: str, *, into: None = None
+        self, port: Input[_PortFamilyReadType], *, into: None = None
+    ) -> tuple[_PortFamilyReadType, str] | None: ...
+    @overload
+    def read_from_inbound_link(
+        self, port: str, *, into: None = None
     ) -> tuple[PortPayloadBorrow, str] | None: ...
     @overload
     def read_from_inbound_link(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[_MessageReadTarget],
     ) -> tuple[_MessageReadTarget, str] | None: ...
     def read_from_inbound_link(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next message's payload on `port_name` with the link it arrived on, or `None`.
+        """The next message's payload on `port` with the link it arrived on, or `None`.
 
         Any number of links may enter one input port, each a separate producer.
         The name is the source channel the link subscribed to —
@@ -476,22 +615,26 @@ class LinkInputDataReader(Protocol):
 
     @overload
     def read_from_inbound_link_with_timestamp(
-        self, port_name: str, *, into: None = None
+        self, port: Input[_PortFamilyReadType], *, into: None = None
+    ) -> tuple[_PortFamilyReadType, str, int] | None: ...
+    @overload
+    def read_from_inbound_link_with_timestamp(
+        self, port: str, *, into: None = None
     ) -> tuple[PortPayloadBorrow, str, int] | None: ...
     @overload
     def read_from_inbound_link_with_timestamp(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[_MessageReadTarget],
     ) -> tuple[_MessageReadTarget, str, int] | None: ...
     def read_from_inbound_link_with_timestamp(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next message's payload on `port_name` with its link and its timestamp.
+        """The next message's payload on `port` with its link and its timestamp.
 
         The stamp is the one the producer wrote — the source frame's instant,
         not the moment of the read.
@@ -500,22 +643,26 @@ class LinkInputDataReader(Protocol):
 
     @overload
     def read_message(
-        self, port_name: str, *, into: None = None
+        self, port: Input[_PortFamilyReadType], *, into: None = None
+    ) -> Message[_PortFamilyReadType] | None: ...
+    @overload
+    def read_message(
+        self, port: str, *, into: None = None
     ) -> Message[PortPayloadBorrow] | None: ...
     @overload
     def read_message(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[_MessageReadTarget],
     ) -> Message[_MessageReadTarget] | None: ...
     def read_message(
         self,
-        port_name: str,
+        port: str | Input[Any],
         *,
         into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next message on `port_name` with its stamp, group flag, losses and link, or `None`.
+        """The next message on `port` with its stamp, group flag, losses and link, or `None`.
 
         `lost_since_last_read` counts the messages its link lost since the
         previous message read from that link, so a reader that needs every
@@ -574,16 +721,47 @@ class LinkOutputDataWriter(Protocol):
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """
 
+    @overload
     def write(
         self,
-        port_name: str,
+        port: str,
         payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
         *,
         pooled_gpu_frame: str | None = None,
+    ) -> None: ...
+    @overload
+    def write(
+        self,
+        port: Output[Any],
+        payload: Any,
+        timestamp_ns: int | None = None,
+        starts_group: bool = True,
+        *,
+        start_sample: int | None = None,
+    ) -> None: ...
+    def write(
+        self,
+        port: str | Output[Any],
+        payload: Any,
+        timestamp_ns: int | None = None,
+        starts_group: bool = True,
+        *,
+        pooled_gpu_frame: str | None = None,
+        start_sample: int | None = None,
     ) -> None:
-        """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
+        """Publish one message carrying a copy of `payload` to every downstream link on `port`.
+
+        Written through an `Output` attribute, `payload` is the family's object
+        and the runtime builds its descriptor: an Image write takes an
+        `ImageFrame` this node read or a texture it acquired from a pool, an
+        Array write a mapping of name to a C-contiguous array or a tensor
+        surface, a Channels write a `[channel][sample]` array with
+        `start_sample`, a Packets write the unit's bytes, and a Records write a
+        `dict` of at most 64 KiB carrying every declared name.
+
+        Written by name:
 
         `payload` is any contiguous buffer — `bytes`, a `memoryview`, a numpy
         array — and `tatolab.stream.msgpack.pack` encodes a record. Omitting `timestamp_ns` stamps stream time now.
@@ -596,6 +774,22 @@ class LinkOutputDataWriter(Protocol):
         reader claims the frame with no request. `pooled_gpu_frame` names the
         frame explicitly for any other payload; an id naming no such frame
         raises `ValueError`.
+        """
+        ...
+
+    def write_channels_block(
+        self,
+        port_name: str,
+        samples: Buffer,
+        *,
+        start_sample: int,
+        sample_rate: int,
+        timestamp_ns: int | None = None,
+    ) -> None:
+        """Publish `samples`, a C-contiguous `[channel][sample]` float32 or float64 array, as one Channels block.
+
+        For a Channels port whose rate comes from config, which its class
+        cannot state.
         """
         ...
 

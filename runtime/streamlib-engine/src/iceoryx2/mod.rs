@@ -100,12 +100,17 @@ pub use node::{
 };
 pub use output::{ChannelEgressConfig, OutputPortPayloadLoan, OutputWriter, OutputWriterInner};
 pub use payload::{
-    ChannelTrustTier, DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES, DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP,
-    DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelPayloadCacheLine, DataChannelPayloadDescriptor,
-    DataChannelPayloadDescriptorKind, DataChannelSamplePayloadRefusal, DataChannelSampleUserHeader,
-    GpuPoolSlotFrameDescriptorBody, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
+    ARRAY_FRAME_ATTRIBUTE_ROW_BYTES, ArrayFrameAttributeResidency, ArrayFrameAttributeRow,
+    ArrayFrameAttributeTableRefusal, ArrayFrameDescriptorBody, ChannelTrustTier,
+    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DATA_CHANNEL_PAYLOAD_ALIGNMENT_BYTES,
+    DATA_CHANNEL_SAMPLE_FLAG_STARTS_GROUP, DEFAULT_EXPECTED_PAYLOAD_BYTES,
+    DataChannelPayloadCacheLine, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+    DataChannelSamplePayloadRefusal, DataChannelSampleUserHeader, GpuPoolSlotFrameDescriptorBody,
+    ImageFrameDescriptorBody, ImageFrameH273Colour, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
+    PacketsUnitCodecNameDoesNotFit, PacketsUnitDescriptorBody, PortKey,
     RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES, data_channel_payload_bytes_of,
+    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES, array_frame_attribute_table_of,
+    array_frame_cpu_data_offsets, data_channel_payload_bytes_of,
     data_channel_payload_cache_lines_for,
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;

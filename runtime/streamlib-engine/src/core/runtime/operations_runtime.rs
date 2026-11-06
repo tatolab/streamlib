@@ -1065,7 +1065,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
                 vec![an_output(
                     "video",
                     PortFamilyDeclaration {
-                        formats: vec!["rgba16f".into()],
+                        formats: vec!["rgba16_float".into()],
                         ..PortFamilyDeclaration::of_family(PortFamily::Image)
                     },
                 )],
@@ -1075,7 +1075,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
                 vec![an_input(
                     "video",
                     Some(PortFamilyDeclaration {
-                        formats: vec!["rgba8".into()],
+                        formats: vec!["rgba8_unorm".into()],
                         ..PortFamilyDeclaration::of_family(PortFamily::Image)
                     }),
                 )],
@@ -1200,11 +1200,11 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
             OutputLinkPortRef::new(render, "video"),
             InputLinkPortRef::new(compositor, "video"),
         )
-        .expect_err("rgba16f never reaches an rgba8-only input")
+        .expect_err("rgba16_float never reaches an rgba8_unorm-only input")
         .to_string();
 
         assert!(
-            refusal.contains("rgba16f") && refusal.contains("rgba8"),
+            refusal.contains("rgba16_float") && refusal.contains("rgba8_unorm"),
             "{refusal}"
         );
     }

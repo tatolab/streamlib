@@ -161,7 +161,7 @@ pub(crate) struct PythonGpuContextLimitedAccess {
 }
 
 impl PythonGpuContextLimitedAccess {
-    pub(super) fn new_for_helper_process(
+    pub(crate) fn new_for_helper_process(
         helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
     ) -> Self {
         Self {
@@ -186,6 +186,20 @@ impl PythonGpuContextLimitedAccess {
         }
         let _ = (python, pooled_frame);
         Ok(None)
+    }
+
+    /// The surface id the pooled frame a read carried is published under;
+    /// `None` where this helper holds no claim table covering it.
+    pub(crate) fn published_frame_id_of_the_pooled_gpu_frame(
+        &self,
+        pooled_frame: &streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody,
+    ) -> Option<String> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.published_frame_id_of_the_pooled_gpu_frame(pooled_frame);
+        }
+        let _ = pooled_frame;
+        None
     }
 
     /// Whether this node read or acquired any pooled GPU frame a write could

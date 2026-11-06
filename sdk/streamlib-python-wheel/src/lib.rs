@@ -25,6 +25,7 @@ mod python_logging;
 mod python_metal_framework_queue_synchronization;
 mod python_module_host_table;
 mod python_monotonic_timer;
+mod python_port_family_read_types;
 mod python_port_payload;
 mod python_processor_context;
 mod python_processor_declaration;
@@ -37,6 +38,9 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
+    module.add_class::<python_port_family_read_types::PythonChannelsBlock>()?;
+    module.add_class::<python_port_family_read_types::PythonPacketsUnit>()?;
+    module.add_class::<python_port_family_read_types::PythonArrayFrameCpuAttribute>()?;
     module.add_function(wrap_pyfunction!(
         python_processor_link_data_access::open_node_link_data_access_for_helper_process,
         module

@@ -162,6 +162,18 @@ impl HelperGpuPoolClaimTables {
         Some(pool_slot_key)
     }
 
+    /// The key of the slot `frame`'s claim table row is leased to, when this
+    /// helper knows it.
+    pub(crate) fn pool_slot_key_of(
+        &self,
+        frame: &GpuPoolSlotFrameDescriptorBody,
+    ) -> Option<String> {
+        self.pool_slot_key_by_pool_and_row
+            .lock()
+            .get(&(frame.pool, frame.slot))
+            .cloned()
+    }
+
     /// Remember `frame` as the newest of the slot `published_frame_id` names:
     /// a frame this helper acquired from its own output pool.
     pub(crate) fn note_an_acquired_pooled_frame(

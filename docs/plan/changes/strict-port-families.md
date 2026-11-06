@@ -79,10 +79,15 @@ No new ADR.
   *(Assumed; correct it if a live update should instead unwire the link.)* [strict-port-families]
 - **ADDED (same entry, DECIDED):** An Image input may state `formats=`, the pixel formats it
   reads, and `connect` refuses a link unless the output's and the input's sets overlap, naming
-  both ports and both sets, so an `rgba16f` output never reaches an `rgba8`-only input. An input
-  that states none reads any format. Owner, 2026-11-06.
+  both ports and both sets, so an `rgba16_float` output never reaches an `rgba8_unorm`-only
+  input. An input that states none reads any format. Owner, 2026-11-06.
   Rejected: formats on outputs only, refused per frame as a drop — the link fails silently
   after it is made (owner, 2026-11-06). [strict-port-families]
+- **ADDED (same entry, DECIDED):** `formats=` spells the engine's texture format wire names
+  (`rgba8_unorm`, `rgba16_float`, …), refused at declaration otherwise, and an Image output's
+  write refuses a frame whose format its `formats=` does not name. Owner, 2026-11-06.
+  Rejected: short names such as `rgba8` with a mapping onto the texture formats — a second
+  vocabulary to keep in step with the RHI (owner, 2026-11-06). [strict-port-families]
 - **ADDED (same entry, DECIDED):** A Records output's declared names are keys every write
   carries: `write` refuses a dict missing one, naming it and the port, so an input's
   `requires=` means the key is always there. Keys beyond the declared names pass through.
@@ -90,7 +95,7 @@ No new ADR.
   Rejected: declared names as keys that may appear — `requires=` would promise nothing on
   Records (owner, 2026-11-06). [strict-port-families]
 - **ADDED (same section, DECIDED):** Each family's keys and what a read returns:
-  - `Image`: `Output(Image, formats=("rgba8",))`. A read returns `ImageFrame`, the borrowed GPU
+  - `Image`: `Output(Image, formats=("rgba8_unorm",))`. A read returns `ImageFrame`, the borrowed GPU
     surface with `__dlpack__`, `.cpu()`, `.writable()`, size, format and colour.
   - `Array`: `Output(Array, names=(…), residency="gpu" | "cpu")`. A read returns `ArrayFrame`,
     a mapping of name to a borrowed tensor (DLPack), each with its dtype and shape. An
@@ -99,11 +104,18 @@ No new ADR.
     (CPU) or a GPU pool slot reference (GPU). An unchanged GPU attribute's row re-points at its
     slot; CPU data is written each message. Owner, 2026-11-06. Rejected: one tensor per
     message, which drops the mapping of names (owner, 2026-11-06).
+  - Writes take the family's object: an Image write takes a GPU surface the node acquired
+    or read, a Channels write a `[channel][sample]` array, an Array write a mapping of name
+    to a CPU array or GPU surface; the runtime builds each descriptor. Owner, 2026-11-06.
+  - A read through the port attribute (`ctx.inputs.read(self.audio)`) returns the family's
+    type; a read by name keeps returning the raw `PortPayloadBorrow`. Owner, 2026-11-06.
   - `Channels`: `Output(Channels, names=(…) | from_config(…), rate=… | from_config(…),
     dtype="f32" | "f64")`. A read returns `ChannelsBlock`, planar `[channel][sample]` with
     `start_sample` and the rate. The input's `window=` takes today's `AudioWindowContract`.
   - `Packets`: `Output(Packets, codec="h264")`. A read returns `PacketsUnit`, borrowed
-    bytes with `pts`, `starts_group` (the keyframe) and `codec`.
+    bytes with `pts`, `starts_group` (the keyframe) and `codec`. `codec=` is optional: a
+    Packets port without one is a plain byte stream, and an input stating no
+    `requires_codec=` takes any Packets output. Owner, 2026-11-06.
   - `Records`: `Output(Records, names=(…))`. `write(port, {...})` takes a plain dict of at most
     64 KiB, encoded, and a read returns a `dict`. The catalog marks a Records port unchecked.
   [strict-port-families]

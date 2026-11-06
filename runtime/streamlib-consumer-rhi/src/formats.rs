@@ -98,6 +98,21 @@ impl TextureFormat {
         }
     }
 
+    /// The format a `repr(u32)` value names, as a descriptor carries it.
+    pub fn from_repr_value(repr_value: u32) -> Option<Self> {
+        [
+            Self::Rgba8Unorm,
+            Self::Rgba8UnormSrgb,
+            Self::Bgra8Unorm,
+            Self::Bgra8UnormSrgb,
+            Self::Rgba16Float,
+            Self::Rgba32Float,
+            Self::Nv12,
+        ]
+        .into_iter()
+        .find(|format| *format as u32 == repr_value)
+    }
+
     /// The lowercase snake-case name the escalate wire and the Python
     /// surface spell this format as.
     pub fn wire_name(&self) -> &'static str {
