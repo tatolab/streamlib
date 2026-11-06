@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.31](https://github.com/tatolab/streamlib/compare/v0.68.30...v0.68.31) (2026-11-06)
+
+
+### Features
+
+* **codecs:** the codec bodies read Image frames and write Packets units ([#3218](https://github.com/tatolab/streamlib/issues/3218)) ([ca54075](https://github.com/tatolab/streamlib/commit/ca540757c56114b7ec5458b97831d2b2d7ab0af5)), closes [#3199](https://github.com/tatolab/streamlib/issues/3199)
+
 ## [0.68.30](https://github.com/tatolab/streamlib/compare/v0.68.29...v0.68.30) (2026-11-06)
 
 
