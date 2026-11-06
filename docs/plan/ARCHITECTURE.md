@@ -1901,7 +1901,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2704, #2713; stream-identity-and-persistence — SHIPPED #2960,
   #2965]
 
-## Graphics (RHI / GPU) — SHIPPED
+## Graphics (RHI / GPU) — IN-FLIGHT (→ slang-shader-compiler)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the

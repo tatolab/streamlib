@@ -18,17 +18,25 @@ asks why every Python processor is a child process.
 
 1. Helper-process placement is the only execution placement StreamLib has: every Python
    processor runs in its own child process, spawned by the Rust engine as an exec of
-   ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, never a
-   pool — with its own interpreter and its own GIL.
+   ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, ~~never a
+   pool~~ — with its own interpreter and its own GIL.
    > Superseded 2026-10-02 by `package-split-and-lend.md`: the exec is the stream's own venv
    > interpreter running the runtime's processor-interpreter bootstrap by path, with the
    > runtime's lend directory and then the project on `PYTHONPATH`. One child, one interpreter,
    > one GIL per processor stands.
-2. In-process hosting of a Python processor is banned outright — not a default, not a
-   fallback, not an engine policy choice, not a latency optimisation — because the axis
+   > Amended 2026-11-06 by `lightweight-node-kinds.md`: this holds for a Python **class**
+   > node (`@node`). A `@node.pure` function gets no process of its own: it runs inside the
+   > Python node that reads it, in a per-stream pool only if real graphs need one, and in
+   > its own process after it crashes or stalls its host.
+2. ~~In-process hosting of a Python processor is banned outright — not a default, not a
+   fallback, not an engine policy choice, not a latency optimisation —~~ because the axis
    being optimised is isolation, not latency: no processor may ever block, stall, or degrade
    another, and that dora-style isolation at Holoscan-class performance is why StreamLib
    exists.
+   > Superseded 2026-11-06 by `lightweight-node-kinds.md`: no Python **class** node is hosted
+   > in another node's process, and isolation between class nodes stands. A pure function,
+   > whose state and time are parameters, runs inside its reader's interpreter; a crash
+   > breadcrumb moves it to its own process if it takes the reader down.
 3. The ban is scoped to Python processor hosting — the engine's native built-ins stay in the
    app process, `rt.run()` still owns the main thread with the GIL released, and the
    GIL-release contract survives only so the wheel's blocking bindings never stall their own
