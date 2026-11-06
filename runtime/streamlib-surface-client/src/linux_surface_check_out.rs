@@ -10,6 +10,7 @@ use std::os::fd::{FromRawFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
 
 use crate::linux::{MAX_SCM_RIGHTS_FDS, send_request_with_fds};
+use crate::refusal_the_surface_share_service_answered;
 
 /// The fds a `check_out` answer delivered, split into plane memory and the
 /// trailing timeline semaphores the registration states it carries.
@@ -57,11 +58,6 @@ fn first_pixel_plane_stride_a_registration_states(response: &serde_json::Value) 
         .first()?
         .as_u64()
         .filter(|&stride| stride > 0)
-}
-
-/// The refusal the service answered a request with, if it answered one.
-pub fn refusal_the_surface_share_service_answered(response: &serde_json::Value) -> Option<&str> {
-    response.get("error").and_then(|value| value.as_str())
 }
 
 /// The resource type a `check_out` answer names; a registration that names

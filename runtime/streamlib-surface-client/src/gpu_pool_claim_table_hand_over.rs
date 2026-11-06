@@ -95,6 +95,11 @@ impl GpuPoolClaimTableHandOver {
     }
 }
 
+/// The refusal the service answered a request with, if it answered one.
+pub fn refusal_the_surface_share_service_answered(response: &serde_json::Value) -> Option<&str> {
+    response.get("error").and_then(|value| value.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

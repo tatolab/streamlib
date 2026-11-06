@@ -36,7 +36,7 @@ pub use gpu_pool_claim_table_hand_over::{
     SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
     SURFACE_SHARE_POOL_SLOT_ROW_FIELD, SURFACE_SHARE_POOL_SLOTS_FIELD,
     SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, gpu_pool_uuid_of_its_wire_name,
-    gpu_pool_uuid_wire_name,
+    gpu_pool_uuid_wire_name, refusal_the_surface_share_service_answered,
 };
 
 pub use published_frame_id_grammar::{
@@ -62,8 +62,8 @@ pub use linux_surface_check_out::{
     CheckedOutTextureMemory, SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD,
     SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT, SurfaceShareCheckOutFds,
     check_out_surface_on_surface_share, device_uuid_of_its_hex_spelling,
-    publish_image_layout_on_surface_share, refusal_the_surface_share_service_answered,
-    release_check_out_on_surface_share, resource_type_of_a_check_out,
+    publish_image_layout_on_surface_share, release_check_out_on_surface_share,
+    resource_type_of_a_check_out,
 };
 
 #[cfg(target_os = "macos")]
