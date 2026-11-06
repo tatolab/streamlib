@@ -6,6 +6,7 @@
 //! exited, never a later process that reuses its pid.
 
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use streamlib_surface_client::SurfaceShareMachSenderAuditIdentity;
 
@@ -15,6 +16,9 @@ use crate::core::context::{GpuPoolClaimTables, GpuPoolClaimantProcessId};
 pub(crate) struct GpuPoolClaimantProcess {
     claimant: GpuPoolClaimantProcessId,
     exit_watch_unless_it_is_this_process: Option<OwnedFd>,
+    /// Set once the watch reports the exit: the kernel delivers that note
+    /// once, so a later wait must not ask the kqueue again.
+    exit_was_seen: AtomicBool,
 }
 
 impl GpuPoolClaimantProcess {
@@ -33,6 +37,7 @@ impl GpuPoolClaimantProcess {
             return Ok(Self {
                 claimant,
                 exit_watch_unless_it_is_this_process: None,
+                exit_was_seen: AtomicBool::new(false),
             });
         }
         // SAFETY: kqueue takes no arguments and answers a fresh fd or -1.
@@ -77,6 +82,7 @@ impl GpuPoolClaimantProcess {
         Ok(Self {
             claimant,
             exit_watch_unless_it_is_this_process: Some(exit_watch),
+            exit_was_seen: AtomicBool::new(false),
         })
     }
 
@@ -109,6 +115,9 @@ impl GpuPoolClaimantProcess {
         let Some(exit_watch) = &self.exit_watch_unless_it_is_this_process else {
             return false;
         };
+        if self.exit_was_seen.load(Ordering::Acquire) {
+            return true;
+        }
         let timeout = timeout_seconds.map(|seconds| libc::timespec {
             tv_sec: seconds as libc::time_t,
             tv_nsec: 0,
@@ -132,6 +141,7 @@ impl GpuPoolClaimantProcess {
             };
             if ready > 0 {
                 if seen.fflags & libc::NOTE_EXIT != 0 {
+                    self.exit_was_seen.store(true, Ordering::Release);
                     return true;
                 }
                 continue;
@@ -202,6 +212,10 @@ mod tests {
         claimant_process.kill();
 
         assert!(claimant_process.has_exited_within(Some(10)));
+        assert!(
+            claimant_process.has_exited_within(None),
+            "an exit already seen is not waited for again"
+        );
         child.wait().expect("the child is reaped");
     }
 

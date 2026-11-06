@@ -1133,6 +1133,23 @@ fn handle_lookup(
     state: &IOSurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<OwnedMachSendRight>) {
+    answer_a_lookup(state, request, LookupReplyPorts::Minted)
+}
+
+/// Whether a lookup's reply carries fresh rights to the surface and its
+/// timeline pair, or only the registration: a peer that holds the slot's
+/// import is minted nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LookupReplyPorts {
+    Minted,
+    WithheldFromAPeerHoldingTheSlotImport,
+}
+
+fn answer_a_lookup(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+    reply_ports_wanted: LookupReplyPorts,
+) -> (serde_json::Value, Vec<OwnedMachSendRight>) {
     let Some(surface_id) = requested_surface_id(request) else {
         return (
             serde_json::json!({"error": "missing surface_id"}),
@@ -1148,33 +1165,13 @@ fn handle_lookup(
             Vec::new(),
         );
     };
-    let iosurface_port = match create_iosurface_mach_send_right(&registration.iosurface) {
-        Ok(iosurface_port) => iosurface_port,
-        Err(unminted) => {
-            return (
-                serde_json::json!({"error": unminted.to_string()}),
-                Vec::new(),
-            );
-        }
-    };
-    let mut reply_ports = vec![iosurface_port];
-    let carries_timeline_pair = match &registration.timeline_send_rights {
-        Some(timeline_send_rights) => match (
-            timeline_send_rights.produce_done.try_clone(),
-            timeline_send_rights.consume_done.try_clone(),
-        ) {
-            (Ok(produce_done), Ok(consume_done)) => {
-                reply_ports.extend([produce_done, consume_done]);
-                true
-            }
-            (Err(unminted), _) | (_, Err(unminted)) => {
-                return (
-                    serde_json::json!({"error": unminted.to_string()}),
-                    Vec::new(),
-                );
-            }
+    let carries_timeline_pair = registration.timeline_send_rights.is_some();
+    let reply_ports = match reply_ports_wanted {
+        LookupReplyPorts::Minted => match ports_a_lookup_reply_carries(&registration) {
+            Ok(reply_ports) => reply_ports,
+            Err(unminted) => return (serde_json::json!({"error": unminted}), Vec::new()),
         },
-        None => false,
+        LookupReplyPorts::WithheldFromAPeerHoldingTheSlotImport => Vec::new(),
     };
     let mut reply = serde_json::json!({
         "surface_id": surface_id,
@@ -1200,6 +1197,32 @@ fn handle_lookup(
     }
     echo_the_tensor_layout_onto_a_lookup_reply(&mut reply, registration.tensor_layout.as_ref());
     (reply, reply_ports)
+}
+
+/// A fresh send right to the registration's IOSurface, then one to each edge
+/// of its timeline pair when it has one.
+fn ports_a_lookup_reply_carries(
+    registration: &IOSurfaceShareRegistration,
+) -> Result<Vec<OwnedMachSendRight>, String> {
+    let mut reply_ports = vec![
+        create_iosurface_mach_send_right(&registration.iosurface)
+            .map_err(|unminted| unminted.to_string())?,
+    ];
+    if let Some(timeline_send_rights) = &registration.timeline_send_rights {
+        reply_ports.push(
+            timeline_send_rights
+                .produce_done
+                .try_clone()
+                .map_err(|unminted| unminted.to_string())?,
+        );
+        reply_ports.push(
+            timeline_send_rights
+                .consume_done
+                .try_clone()
+                .map_err(|unminted| unminted.to_string())?,
+        );
+    }
+    Ok(reply_ports)
 }
 
 /// Publish the layout a helper left a texture in, for the next holder to
@@ -1290,18 +1313,23 @@ fn handle_check_out(
             Vec::new(),
         );
     };
-    let (response, mut reply_ports) = handle_lookup(state, request);
-    if response.get("error").is_some() {
-        return (response, reply_ports);
-    }
     let peer_holds_the_pool_slot_import = split_pool_slot_and_frame_generation(surface_id)
         .is_some()
         && request
             .get(SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD)
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-    if peer_holds_the_pool_slot_import {
-        reply_ports.clear();
+    let (response, reply_ports) = answer_a_lookup(
+        state,
+        request,
+        if peer_holds_the_pool_slot_import {
+            LookupReplyPorts::WithheldFromAPeerHoldingTheSlotImport
+        } else {
+            LookupReplyPorts::Minted
+        },
+    );
+    if response.get("error").is_some() {
+        return (response, reply_ports);
     }
     match record_check_out_lease_or_refusal(state.check_out_leases(), surface_id, lease_holder) {
         Ok(()) => (response, reply_ports),

@@ -20,8 +20,8 @@ use super::pool_slot_import_cache::{
 use super::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_RESPONSE_TIMEOUT,
-    refuse_check_out_the_service_declined, response_field,
+    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST,
+    SURFACE_SHARE_RESPONSE_TIMEOUT, refuse_check_out_the_service_declined, response_field,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
@@ -384,11 +384,6 @@ impl HelperCheckedOutSurface {
         }
     }
 }
-
-/// How many connections a helper sets aside after a timeout before it stops
-/// asking the service anything: each one stays open, and a service that has
-/// outwaited the timeout this often has stopped answering.
-const SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST: usize = 4;
 
 impl HelperProcessGpuExchangeClient {
     /// One request/response over the cached surface-share connection,

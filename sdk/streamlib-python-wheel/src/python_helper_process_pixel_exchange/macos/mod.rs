@@ -20,9 +20,9 @@ use super::pool_slot_import_cache::{
 use super::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer,
-    SurfaceShareTransferredHandle, refuse_check_out_the_service_declined,
-    required_positive_u32_check_out_metadata_field,
+    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST,
+    SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer, SurfaceShareTransferredHandle,
+    refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
 };
 
 mod foreign_iosurface;
@@ -412,6 +412,17 @@ impl HelperProcessGpuExchangeClient {
         let open_connection = match connection.as_ref() {
             Some(open_connection) => Arc::clone(open_connection),
             None => {
+                let connections_set_aside = self
+                    .surface_share_mach_connections_set_aside_after_a_failure
+                    .lock()
+                    .len();
+                if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "the surface-share service has failed {connections_set_aside} requests, \
+                         so this helper asks it nothing more; the connections it set aside stay \
+                         open, keeping the frames claimed on them held, until this helper stops"
+                    )));
+                }
                 let opened = self.open_surface_share_mach_connection()?;
                 self.pool_slot_imports_by_pool_slot.drop_every_import();
                 *connection = Some(Arc::clone(&opened));

@@ -582,6 +582,12 @@ type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>
 /// The service answers from in-memory state and duplicated handles, never GPU
 /// work, so this bounds only a service that has stopped answering — and with
 /// it the time every other thread waits on the connection's lock.
+/// How many connections a helper sets aside after a failed or timed-out
+/// request before it stops asking the service anything: each one stays open,
+/// and a service that has failed this often has stopped answering.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST: usize = 4;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const SURFACE_SHARE_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
