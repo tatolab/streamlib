@@ -15,7 +15,9 @@ use pyo3::prelude::*;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
-use tatolab_module_sdk::{ModuleHost, ModuleHostLogLevel, ModuleHostOutputPort};
+use tatolab_module_sdk::{
+    ModuleHost, ModuleHostLogLevel, ModuleHostOutputPort, packets_unit_payload_descriptor,
+};
 
 pub mod error;
 pub mod h264_rtp_depacketiser;
@@ -337,8 +339,10 @@ impl WhepPlayerOutputPorts for WhepPlayerOutputPortsLentByTheModuleHost {
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String> {
+        let packets_unit = packets_unit_payload_descriptor(port.packets_unit_codec_name())
+            .map_err(|refusal| refusal.to_string())?;
         self.output_port(port)
-            .write(media_frame, Some(timestamp_ns), starts_group)
+            .write_described(media_frame, Some(timestamp_ns), starts_group, &packets_unit)
             .map_err(|refusal| refusal.to_string())
     }
 
