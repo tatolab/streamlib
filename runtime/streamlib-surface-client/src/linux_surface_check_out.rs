@@ -48,15 +48,6 @@ pub struct CheckedOutPixelBuffer {
 /// pitches in, first plane first.
 pub const SURFACE_SHARE_PIXEL_PLANE_STRIDES_FIELD: &str = "pixel_plane_strides";
 
-/// The `check_out` request field a helper sets when it already holds its own
-/// import of the published frame's pool slot; the service then answers the
-/// frame's metadata and sends no handle.
-pub const SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD: &str = "holds_pool_slot_import";
-
-/// The reply field listing the pool slot keys the engine unregistered since
-/// this connection was last answered, among those it handed memory for.
-pub const SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD: &str = "retired_pool_slots";
-
 /// The first plane's row pitch a registration states, padding included;
 /// `None` when it states no plane layout.
 fn first_pixel_plane_stride_a_registration_states(response: &serde_json::Value) -> Option<u64> {

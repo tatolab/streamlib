@@ -24,9 +24,7 @@ impl GpuPoolClaimantProcess {
             return Ok(Self {
                 claimant: GpuPoolClaimantProcessId {
                     pid,
-                    incarnation_of_the_pid: incarnation_of_the_pid_of(
-                        pid,
-                    )?,
+                    incarnation_of_the_pid: incarnation_of_the_pid_of(pid)?,
                 },
                 pidfd_unless_it_is_this_process: None,
             });

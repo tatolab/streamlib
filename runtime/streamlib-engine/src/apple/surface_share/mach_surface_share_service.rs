@@ -9,7 +9,7 @@
 //! death; everything after the connect rides that unlisted port, and every
 //! message is still checked against the connection's audit identity.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 use std::thread;
@@ -20,19 +20,23 @@ use objc2_io_surface::IOSurfaceRef;
 use parking_lot::Mutex;
 use streamlib_surface_client::{
     OwnedMachPortSet, OwnedMachReceiveRight, OwnedMachSendRight, ReceivedSurfaceShareMachMessage,
-    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_HAS_CONSUME_DONE_PORT,
-    SURFACE_SHARE_HAS_PRODUCE_DONE_PORT, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
-    SURFACE_SHARE_MACH_REPLY_MESSAGE_ID, SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
-    SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE, SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED,
+    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+    SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,
+    SURFACE_SHARE_HAS_CONSUME_DONE_PORT, SURFACE_SHARE_HAS_PRODUCE_DONE_PORT,
+    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+    SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID, SURFACE_SHARE_MACH_REPLY_MESSAGE_ID,
+    SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID, SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE,
+    SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED, SURFACE_SHARE_POOL_SLOT_ROW_FIELD,
+    SURFACE_SHARE_POOL_SLOTS_FIELD, SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD,
     SurfaceShareMachMessageReceiveBuffer, SurfaceShareMachSenderAuditIdentity,
-    check_in_surface_share_mach_service, receive_surface_share_mach_traffic,
-    request_dead_name_notification, send_surface_share_mach_message,
+    check_in_surface_share_mach_service, gpu_pool_uuid_of_its_wire_name, gpu_pool_uuid_wire_name,
+    receive_surface_share_mach_traffic, request_dead_name_notification,
+    send_surface_share_mach_message, split_pool_slot_and_frame_generation,
 };
 
 use crate::apple::iosurface::{
     RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
 };
-use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
     answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
@@ -41,7 +45,9 @@ use crate::core::context::surface_share_wire_verbs::{
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
     stated_current_image_layout, tensor_layout_of_a_storage_buffer_registration,
 };
+use crate::core::context::{GpuPoolClaimantProcessId, SurfaceCheckOutLeaseHolderId};
 
+use super::gpu_pool_claimant_process::GpuPoolClaimantProcess;
 use super::state::{
     IOSurfaceShareRegistration, IOSurfaceShareState, RegisteredTextureImage,
     SharedTimelineSendRights,
@@ -369,6 +375,66 @@ struct ConnectedSurfaceSharePeer {
     sender: SurfaceShareMachSenderAuditIdentity,
     lease_holder: SurfaceCheckOutLeaseHolderId,
     observed_runtime_id: Option<String>,
+    pool_slot_keys_handed_an_iosurface: PoolSlotKeysHandedAnIOSurfaceOnThisConnection,
+    claimant_process_handed_a_column: Option<GpuPoolClaimantProcess>,
+}
+
+impl ConnectedSurfaceSharePeer {
+    /// The claimant this connection's peer claims as, held the first time it
+    /// is handed a column; refused when its process cannot be held.
+    fn claimant_handed_columns_on_this_connection(
+        &mut self,
+    ) -> Result<GpuPoolClaimantProcessId, String> {
+        if let Some(claimant_process) = &self.claimant_process_handed_a_column {
+            return Ok(claimant_process.claimant());
+        }
+        let claimant_process = GpuPoolClaimantProcess::hold_the_peer(self.sender)?;
+        let claimant = claimant_process.claimant();
+        self.claimant_process_handed_a_column = Some(claimant_process);
+        Ok(claimant)
+    }
+}
+
+/// The pool slot keys this connection was handed an IOSurface port for, so
+/// the connection can tell its peer when the engine unregisters one.
+#[derive(Default)]
+struct PoolSlotKeysHandedAnIOSurfaceOnThisConnection {
+    pool_slot_keys: HashSet<String>,
+}
+
+impl PoolSlotKeysHandedAnIOSurfaceOnThisConnection {
+    fn remember(&mut self, pool_slot_key: &str) {
+        if !self.pool_slot_keys.contains(pool_slot_key) {
+            self.pool_slot_keys.insert(pool_slot_key.to_string());
+        }
+    }
+
+    /// Forget every remembered key `state` no longer registers and list them
+    /// on `reply` under `retired_pool_slots`. Keys are never reused, so a key
+    /// absent from the table is retired for good.
+    fn list_the_retired_ones_on_the_reply(
+        &mut self,
+        state: &IOSurfaceShareState,
+        reply: &mut serde_json::Value,
+    ) {
+        let mut retired_pool_slots: Vec<String> = Vec::new();
+        self.pool_slot_keys.retain(|pool_slot_key| {
+            let still_registered = state.is_registered(pool_slot_key);
+            if !still_registered {
+                retired_pool_slots.push(pool_slot_key.clone());
+            }
+            still_registered
+        });
+        if retired_pool_slots.is_empty() {
+            return;
+        }
+        if let Some(reply_fields) = reply.as_object_mut() {
+            reply_fields.insert(
+                SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD.to_string(),
+                retired_pool_slots.into(),
+            );
+        }
+    }
 }
 
 struct ConnectionWaitingForAdmission {
@@ -520,6 +586,9 @@ impl MachSurfaceShareServiceLoop {
                         sender,
                         lease_holder: self.state.check_out_leases().mint_holder_id(),
                         observed_runtime_id: None,
+                        pool_slot_keys_handed_an_iosurface:
+                            PoolSlotKeysHandedAnIOSurfaceOnThisConnection::default(),
+                        claimant_process_handed_a_column: None,
                     },
                 );
             }
@@ -622,12 +691,7 @@ impl MachSurfaceShareServiceLoop {
             match serde_json::from_slice::<serde_json::Value>(&message.json_payload) {
                 Ok(request) => {
                     latch_the_first_named_runtime_id(&mut peer.observed_runtime_id, &request);
-                    answer_surface_share_request(
-                        &self.state,
-                        &request,
-                        message.ports,
-                        peer.lease_holder,
-                    )
+                    answer_a_connected_peers_request(&self.state, &request, message.ports, peer)
                 }
                 Err(invalid_json) => (
                     serde_json::json!({"error": format!("invalid JSON: {invalid_json}")}),
@@ -648,7 +712,7 @@ impl MachSurfaceShareServiceLoop {
                 message.sender.pid,
                 unsent
             );
-            self.close_connection(message.received_on_port);
+            self.close_connection(message.received_on_port, true);
         }
     }
 
@@ -665,14 +729,39 @@ impl MachSurfaceShareServiceLoop {
             .map(|(request_port, _)| *request_port)
             .collect();
         for request_port in dead_connections {
-            self.close_connection(request_port);
+            self.close_connection(request_port, false);
         }
     }
 
-    fn close_connection(&mut self, request_port: mach_port_name_t) {
-        let Some(peer) = self.connected_peers.remove(&request_port) else {
+    /// Close one connection, releasing what it held. Its peer's claim table
+    /// columns clear once the peer's process has exited, and a peer whose
+    /// connection the service dropped is stopped first.
+    fn close_connection(
+        &mut self,
+        request_port: mach_port_name_t,
+        the_service_dropped_the_connection: bool,
+    ) {
+        let Some(mut peer) = self.connected_peers.remove(&request_port) else {
             return;
         };
+        if let Some(claimant_process) = peer.claimant_process_handed_a_column.take() {
+            let claim_tables = Arc::clone(self.state.check_out_leases());
+            let watched = thread::Builder::new()
+                .name("surface-share-claimant-exit".into())
+                .spawn(move || {
+                    claimant_process.clear_its_columns_once_it_has_exited(
+                        claim_tables.gpu_pool_claim_tables(),
+                        the_service_dropped_the_connection,
+                    )
+                });
+            if let Err(unspawned) = watched {
+                tracing::warn!(
+                    "[Surface share] could not watch pid {} for its exit, so its claim table \
+                     columns stay held: {unspawned}",
+                    peer.sender.pid
+                );
+            }
+        }
         let out_of_process_runtime_id = peer
             .observed_runtime_id
             .as_deref()
@@ -707,6 +796,145 @@ fn refuse_connection(
         Vec::new(),
         Some(CONNECT_ANSWER_SEND_TIMEOUT),
     );
+}
+
+/// Answer one request on a connected peer's connection: the verbs that hand
+/// over a pool's claim table or slots, and the pool slots retired since the
+/// connection was last answered, besides every connection-free verb.
+fn answer_a_connected_peers_request(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+    received_ports: Vec<OwnedMachSendRight>,
+    peer: &mut ConnectedSurfaceSharePeer,
+) -> (serde_json::Value, Vec<OwnedMachSendRight>) {
+    let op = request
+        .get("op")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let (mut response, reply_ports) = match op {
+        SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP => {
+            match peer.claimant_handed_columns_on_this_connection() {
+                Ok(claimant) => handle_claim_table_of_gpu_pool(state, request, claimant),
+                Err(refusal) => (serde_json::json!({ "error": refusal }), Vec::new()),
+            }
+        }
+        SURFACE_SHARE_IMPORT_POOL_SLOT_OP => {
+            handle_import_pool_slot(state, request, &mut peer.pool_slot_keys_handed_an_iosurface)
+        }
+        _ => {
+            let (response, reply_ports) =
+                answer_surface_share_request(state, request, received_ports, peer.lease_holder);
+            if op == "check_out"
+                && !reply_ports.is_empty()
+                && let Some((pool_slot_key, _)) =
+                    requested_surface_id(request).and_then(split_pool_slot_and_frame_generation)
+            {
+                peer.pool_slot_keys_handed_an_iosurface
+                    .remember(pool_slot_key);
+            }
+            (response, reply_ports)
+        }
+    };
+    peer.pool_slot_keys_handed_an_iosurface
+        .list_the_retired_ones_on_the_reply(state, &mut response);
+    (response, reply_ports)
+}
+
+/// Hand a peer the claim table a `GpuPoolSlotFrame` descriptor names: a send
+/// right to the table's Mach memory entry, the column the peer's process
+/// claims in, and the pool slot key leased to each row. A peer past the
+/// table's last column is refused.
+fn handle_claim_table_of_gpu_pool(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+    claimant: GpuPoolClaimantProcessId,
+) -> (serde_json::Value, Vec<OwnedMachSendRight>) {
+    let Some(pool_uuid) = request
+        .get(SURFACE_SHARE_GPU_POOL_FIELD)
+        .and_then(serde_json::Value::as_str)
+        .and_then(gpu_pool_uuid_of_its_wire_name)
+    else {
+        return (
+            serde_json::json!({"error": "missing or malformed pool"}),
+            Vec::new(),
+        );
+    };
+    let Some(table) = state
+        .check_out_leases()
+        .gpu_pool_claim_tables()
+        .table_named(&pool_uuid)
+    else {
+        return (
+            serde_json::json!({"error": "no GPU pool holds that claim table"}),
+            Vec::new(),
+        );
+    };
+    let claimant_column = match table.claimant_column_of(claimant) {
+        Ok(column) => column,
+        Err(refusal) => {
+            return (
+                serde_json::json!({"error": refusal.to_string()}),
+                Vec::new(),
+            );
+        }
+    };
+    let memory_entry = match table.shared_rows().memory_entry_send_right() {
+        Ok(memory_entry) => memory_entry,
+        Err(unminted) => {
+            return (
+                serde_json::json!({
+                    "error": format!("the claim table's memory entry minted no send right: {unminted}")
+                }),
+                Vec::new(),
+            );
+        }
+    };
+    let pool_slots: Vec<serde_json::Value> = table
+        .pool_slot_keys_by_row()
+        .into_iter()
+        .map(|(row_index, pool_slot_key)| {
+            serde_json::json!({
+                SURFACE_SHARE_POOL_SLOT_ROW_FIELD: row_index,
+                "surface_id": pool_slot_key,
+            })
+        })
+        .collect();
+    (
+        serde_json::json!({
+            SURFACE_SHARE_GPU_POOL_FIELD: gpu_pool_uuid_wire_name(&pool_uuid),
+            SURFACE_SHARE_CLAIMANT_COLUMN_FIELD: claimant_column.index(),
+            SURFACE_SHARE_POOL_SLOTS_FIELD: pool_slots,
+        }),
+        vec![memory_entry],
+    )
+}
+
+/// Hand a peer one pool slot's IOSurface port, and its timeline pair when it
+/// has one, under its pool slot key and with no lease: what keeps the slot
+/// from reuse is the peer's claim in the pool's claim table, per frame.
+fn handle_import_pool_slot(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+    pool_slot_keys_handed_an_iosurface: &mut PoolSlotKeysHandedAnIOSurfaceOnThisConnection,
+) -> (serde_json::Value, Vec<OwnedMachSendRight>) {
+    let Some(pool_slot_key) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+    if split_pool_slot_and_frame_generation(pool_slot_key).is_some() {
+        return (
+            serde_json::json!({"error": "import_pool_slot names a pool slot key, never a \
+                                published frame id"}),
+            Vec::new(),
+        );
+    }
+    let (response, reply_ports) = handle_lookup(state, request);
+    if response.get("error").is_none() {
+        pool_slot_keys_handed_an_iosurface.remember(pool_slot_key);
+    }
+    (response, reply_ports)
 }
 
 /// Answer one request, returning the reply and the ports it carries.
@@ -1048,8 +1276,9 @@ fn answer_timeline_import_refused(
 }
 
 /// `lookup` plus a claim: the surface is pinned against producer reuse until
-/// this connection releases it or closes. A refused lease releases the port
-/// already minted, unsent.
+/// this connection releases it or closes. A peer that states it holds its own
+/// import of a published frame's pool slot is sent no port. A refused lease
+/// releases the ports already minted, unsent.
 fn handle_check_out(
     state: &IOSurfaceShareState,
     request: &serde_json::Value,
@@ -1061,9 +1290,18 @@ fn handle_check_out(
             Vec::new(),
         );
     };
-    let (response, reply_ports) = handle_lookup(state, request);
+    let (response, mut reply_ports) = handle_lookup(state, request);
     if response.get("error").is_some() {
         return (response, reply_ports);
+    }
+    let peer_holds_the_pool_slot_import = split_pool_slot_and_frame_generation(surface_id)
+        .is_some()
+        && request
+            .get(SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    if peer_holds_the_pool_slot_import {
+        reply_ports.clear();
     }
     match record_check_out_lease_or_refusal(state.check_out_leases(), surface_id, lease_holder) {
         Ok(()) => (response, reply_ports),

@@ -12,6 +12,7 @@
 //! message.
 
 pub mod cross_process_timeline_pair;
+mod gpu_pool_claimant_process;
 pub mod mach_surface_share_service;
 pub mod state;
 
