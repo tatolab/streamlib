@@ -3,9 +3,9 @@ name: Linux Runtime Tarball
 # The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
 # `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
 # portability gate over it at the 2.28 glibc floor. Called by
-# reusable-distributions.yml: as a dry run on every push to `main`, so a change
-# needing a newer glibc symbol or a system library manylinux lacks fails on the
-# commit that made it, and at release, where a failure withholds the release.
+# reusable-distributions.yml at release, where a change needing a newer glibc
+# symbol or a system library manylinux lacks withholds the release, and on a
+# dry run dispatched by hand.
 on:
   workflow_call:
     inputs:

@@ -32,8 +32,7 @@ name: Distributions
 # original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
 # extension wheels, whose compiled `_native` differs byte for byte from the
 # files PyPI already holds, so their upload fails on a hash mismatch. A dry run
-# builds and checks every distribution and stops short of PyPI;
-# distribution-dry-run.yml runs one on every push to `main`.
+# builds and checks every distribution and stops short of PyPI.
 on:
   workflow_call:
     inputs:
