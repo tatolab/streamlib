@@ -7,7 +7,7 @@
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
-    ArrayFrameCpuAttributeToPack, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
+    ArrayFrameCpuAttributeToPack, DataChannelPayloadDescriptor,
     array_frame_payload_of_cpu_attributes,
 };
 use streamlib::sdk::processors::ReactiveProcessor;
@@ -48,17 +48,21 @@ pub struct ChannelsToArray;
 impl ReactiveProcessor for ChannelsToArray::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(CHANNELS_INPUT_PORT)? {
-            let (payload_descriptor, payload) = array_frame_of_the_channels_block(
+            match array_frame_of_the_channels_block(
                 message.payload_descriptor,
                 message.payload.bytes(),
-            )?;
-            self.outputs.write_bytes_described_by(
-                ARRAY_OUTPUT_PORT,
-                &payload,
-                message.timestamp_ns,
-                message.group_boundary,
-                payload_descriptor,
-            )?;
+            ) {
+                Ok((payload_descriptor, payload)) => self.outputs.write_bytes_described_by(
+                    ARRAY_OUTPUT_PORT,
+                    &payload,
+                    message.timestamp_ns,
+                    message.group_boundary,
+                    payload_descriptor,
+                )?,
+                Err(refusal) => {
+                    tracing::warn!(%refusal, "ChannelsToArray wrote nothing for a message")
+                }
+            }
         }
         Ok(())
     }
@@ -76,10 +80,7 @@ pub fn array_frame_of_the_channels_block(
         payload_descriptor,
         payload,
     )?;
-    let dtype = match block.sample_type {
-        ChannelsBlockSampleType::F32 => "float32",
-        ChannelsBlockSampleType::F64 => "float64",
-    };
+    let dtype = block.sample_type.array_dtype_wire_name();
     let shape = [
         u64::from(block.body.channel_count),
         u64::from(block.body.samples_per_channel),
@@ -102,7 +103,7 @@ pub fn array_frame_of_the_channels_block(
 mod tests {
     use streamlib::sdk::iceoryx2::{
         ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, ChannelsBlockDescriptorBody,
-        array_frame_attribute_table_of,
+        ChannelsBlockSampleType, array_frame_attribute_table_of,
     };
 
     use super::*;

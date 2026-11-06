@@ -19,26 +19,24 @@ pub(crate) struct ChannelsBlockReadByAConversion<'payload> {
 }
 
 impl ChannelsBlockReadByAConversion<'_> {
-    /// Every sample of channel `channel_index`, widened to `f64`.
-    pub(crate) fn samples_of_channel_as_f64(&self, channel_index: usize) -> Vec<f64> {
-        let samples_per_channel = self.body.samples_per_channel as usize;
+    /// The last sample of channel `channel_index`, widened to `f64`; the
+    /// block holds at least one sample per channel.
+    pub(crate) fn last_sample_of_channel_as_f64(&self, channel_index: usize) -> f64 {
         let sample_byte_len = self.sample_type.sample_byte_len();
-        let channel_run_byte_len = samples_per_channel * sample_byte_len;
-        let channel_run = &self.planar_payload
-            [channel_index * channel_run_byte_len..(channel_index + 1) * channel_run_byte_len];
+        let channel_run_end =
+            (channel_index + 1) * self.body.samples_per_channel as usize * sample_byte_len;
+        let last_sample = &self.planar_payload[channel_run_end - sample_byte_len..channel_run_end];
         match self.sample_type {
-            ChannelsBlockSampleType::F32 => channel_run
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|sample| f64::from(f32::from_le_bytes(*sample)))
-                .collect(),
-            ChannelsBlockSampleType::F64 => channel_run
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|sample| f64::from_le_bytes(*sample))
-                .collect(),
+            ChannelsBlockSampleType::F32 => {
+                let mut sample = [0u8; 4];
+                sample.copy_from_slice(last_sample);
+                f64::from(f32::from_le_bytes(sample))
+            }
+            ChannelsBlockSampleType::F64 => {
+                let mut sample = [0u8; 8];
+                sample.copy_from_slice(last_sample);
+                f64::from_le_bytes(sample)
+            }
         }
     }
 }

@@ -134,6 +134,22 @@ impl ChannelsBlockSampleType {
             Self::F64 => 8,
         }
     }
+
+    /// The dtype an Array attribute holding these samples states: `float32` or `float64`.
+    pub fn array_dtype_wire_name(self) -> &'static str {
+        match self {
+            Self::F32 => "float32",
+            Self::F64 => "float64",
+        }
+    }
+
+    /// The sample type an Array attribute's dtype `wire_name` holds, or `None`
+    /// for a dtype no Channels block carries.
+    pub fn from_array_dtype_wire_name(wire_name: &str) -> Option<Self> {
+        [Self::F32, Self::F64]
+            .into_iter()
+            .find(|sample_type| sample_type.array_dtype_wire_name() == wire_name)
+    }
 }
 
 /// The body of a Channels block descriptor. The payload is planar:

@@ -15,6 +15,8 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
+use super::channels_to_array::CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME;
+use super::conversion_node_config_refusals::refuse_a_channels_output_config;
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
 const ARRAY_INPUT_PORT: &str = "array";
@@ -36,7 +38,7 @@ pub struct ArrayToChannelsConfig {
 }
 
 fn default_samples_attribute_name() -> String {
-    "samples".to_string()
+    CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME.to_string()
 }
 
 /// A node given no config names no channels, and is refused at setup.
@@ -81,7 +83,7 @@ pub struct ArrayToChannels {
 
 impl ReactiveProcessor for ArrayToChannels::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        refuse_a_channels_output_config_naming_nothing(
+        refuse_a_channels_output_config(
             "ArrayToChannels",
             &self.config.channel_names,
             self.config.sample_rate,
@@ -90,12 +92,18 @@ impl ReactiveProcessor for ArrayToChannels::Processor {
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(ARRAY_INPUT_PORT)? {
-            let (payload_descriptor, payload) = channels_block_of_the_array_frame(
+            let (payload_descriptor, payload) = match channels_block_of_the_array_frame(
                 &self.config,
                 self.next_start_sample,
                 message.payload_descriptor,
                 message.payload.bytes(),
-            )?;
+            ) {
+                Ok(block) => block,
+                Err(refusal) => {
+                    tracing::warn!(%refusal, "ArrayToChannels wrote nothing for a message");
+                    continue;
+                }
+            };
             let block_body =
                 ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
             self.next_start_sample += u64::from(block_body.samples_per_channel);
@@ -109,28 +117,6 @@ impl ReactiveProcessor for ArrayToChannels::Processor {
         }
         Ok(())
     }
-}
-
-/// Refuse at setup a Channels output config that names no channel or states
-/// a sample rate of 0, naming `node_type_name`.
-pub(crate) fn refuse_a_channels_output_config_naming_nothing(
-    node_type_name: &str,
-    channel_names: &[String],
-    sample_rate: u32,
-) -> Result<()> {
-    if channel_names.is_empty() {
-        return Err(Error::Configuration(format!(
-            "{node_type_name}: `channel_names` names no channel; it names one per channel the \
-             output carries"
-        )));
-    }
-    if sample_rate == 0 {
-        return Err(Error::Configuration(format!(
-            "{node_type_name}: `sample_rate` is 0; it is the output's samples per second per \
-             channel"
-        )));
-    }
-    Ok(())
 }
 
 /// The Channels block holding `config.attribute` of the Array frame
@@ -166,16 +152,14 @@ pub fn channels_block_of_the_array_frame(
                     .collect::<Vec<_>>()
             ))
         })?;
-    let sample_type = match attribute.dtype.as_str() {
-        "float32" => ChannelsBlockSampleType::F32,
-        "float64" => ChannelsBlockSampleType::F64,
-        other => {
-            return Err(Error::PortError(format!(
-                "ArrayToChannels: attribute {attribute_name:?} is {other}; a Channels block \
-                 carries float32 or float64"
-            )));
-        }
-    };
+    let sample_type = ChannelsBlockSampleType::from_array_dtype_wire_name(&attribute.dtype)
+        .ok_or_else(|| {
+            Error::PortError(format!(
+                "ArrayToChannels: attribute {attribute_name:?} is {}; a Channels block carries \
+                 float32 or float64",
+                attribute.dtype
+            ))
+        })?;
     let channel_count = config.channel_names.len() as u64;
     let [attribute_channel_count, samples_per_channel] = attribute.shape[..] else {
         return Err(Error::PortError(format!(

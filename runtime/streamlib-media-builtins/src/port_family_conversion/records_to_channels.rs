@@ -14,7 +14,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
-use super::array_to_channels::refuse_a_channels_output_config_naming_nothing;
+use super::conversion_node_config_refusals::refuse_a_channels_output_config;
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
 const RECORDS_INPUT_PORT: &str = "records";
@@ -40,8 +40,9 @@ pub struct RecordsToChannelsConfig {
                   its channel's latest value, 0 until a record names it; a key not in \
                   `channel_names` is ignored. A value is an integer or a float, or a boolean \
                   read as 1 or 0; a record that is not a map of string keys, or that holds \
-                  another value under a name, is refused and writes nothing. The blocks are \
-                  stamped at `sample_rate`, their start samples counted from the first block.",
+                  another value under a name, is refused and writes nothing. Each block's start \
+                  sample is the record's stamp since the first record's, counted at \
+                  `sample_rate`, and always past the block before it.",
     execution = reactive,
     config = crate::port_family_conversion::records_to_channels::RecordsToChannelsConfig,
     input(
@@ -61,12 +62,13 @@ pub struct RecordsToChannelsConfig {
 )]
 pub struct RecordsToChannels {
     latest_value_of_each_channel: Vec<f64>,
+    first_record_timestamp_ns: Option<i64>,
     next_start_sample: u64,
 }
 
 impl ReactiveProcessor for RecordsToChannels::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        refuse_a_channels_output_config_naming_nothing(
+        refuse_a_channels_output_config(
             "RecordsToChannels",
             &self.config.channel_names,
             self.config.sample_rate,
@@ -77,14 +79,28 @@ impl ReactiveProcessor for RecordsToChannels::Processor {
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(RECORDS_INPUT_PORT)? {
-            let (payload_descriptor, payload) = channels_block_of_the_records_message(
+            let first_record_timestamp_ns = *self
+                .first_record_timestamp_ns
+                .get_or_insert(message.timestamp_ns);
+            let start_sample = start_sample_of_a_record_stamped(
+                message.timestamp_ns - first_record_timestamp_ns,
+                self.config.sample_rate,
+            )
+            .max(self.next_start_sample);
+            let (payload_descriptor, payload) = match channels_block_of_the_records_message(
                 &self.config,
                 &mut self.latest_value_of_each_channel,
-                self.next_start_sample,
+                start_sample,
                 message.payload_descriptor,
                 message.payload.bytes(),
-            )?;
-            self.next_start_sample += 1;
+            ) {
+                Ok(block) => block,
+                Err(refusal) => {
+                    tracing::warn!(%refusal, "RecordsToChannels wrote nothing for a message");
+                    continue;
+                }
+            };
+            self.next_start_sample = start_sample + 1;
             self.outputs.write_bytes_described_by(
                 CHANNELS_OUTPUT_PORT,
                 &payload,
@@ -95,6 +111,17 @@ impl ReactiveProcessor for RecordsToChannels::Processor {
         }
         Ok(())
     }
+}
+
+/// The sample index, at `sample_rate`, of a record stamped
+/// `nanoseconds_since_the_first_record` after the first; 0 for one stamped
+/// before it.
+pub fn start_sample_of_a_record_stamped(
+    nanoseconds_since_the_first_record: i64,
+    sample_rate: u32,
+) -> u64 {
+    let nanoseconds = u128::try_from(nanoseconds_since_the_first_record).unwrap_or_default();
+    u64::try_from(nanoseconds * u128::from(sample_rate) / 1_000_000_000).unwrap_or(u64::MAX)
 }
 
 /// The one-sample Channels block holding, per name in `config`, the value
@@ -268,6 +295,14 @@ mod tests {
 
         assert!(refusal.contains("\"gain\""), "{refusal}");
         assert_eq!(latest, vec![0.5, 0.0]);
+    }
+
+    #[test]
+    fn a_records_start_sample_is_its_stamp_since_the_first_at_the_sample_rate() {
+        assert_eq!(start_sample_of_a_record_stamped(0, 30), 0);
+        assert_eq!(start_sample_of_a_record_stamped(500_000_000, 30), 15);
+        assert_eq!(start_sample_of_a_record_stamped(10_000_000_000, 30), 300);
+        assert_eq!(start_sample_of_a_record_stamped(-1, 30), 0);
     }
 
     #[test]

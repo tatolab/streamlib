@@ -13,6 +13,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
+use super::conversion_node_config_refusals::refuse_channel_names_naming_none_or_one_twice;
 use super::port_family_messages_read_by_a_conversion::channels_block_read_by_a_conversion;
 
 const CHANNELS_INPUT_PORT: &str = "channels";
@@ -55,25 +56,36 @@ pub struct ChannelsToRecords;
 
 impl ReactiveProcessor for ChannelsToRecords::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        if self.config.channel_names.is_empty() {
-            return Err(Error::Configuration(
-                "ChannelsToRecords: `channel_names` names no channel; it names one key per \
-                 channel the input carries"
-                    .into(),
-            ));
+        refuse_channel_names_naming_none_or_one_twice(
+            "ChannelsToRecords",
+            &self.config.channel_names,
+        )?;
+        let encoded_byte_len =
+            encoded_record_of_latest_values(&self.config.channel_names, |_| 0.0)?.len();
+        if encoded_byte_len > RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES {
+            return Err(Error::Configuration(format!(
+                "ChannelsToRecords: a record of the {} names in `channel_names` encodes to \
+                 {encoded_byte_len} bytes, past the {RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES} a \
+                 Records message may take",
+                self.config.channel_names.len()
+            )));
         }
         Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(CHANNELS_INPUT_PORT)? {
-            let Some(records_payload) = records_message_of_the_channels_block(
+            let records_payload = match records_message_of_the_channels_block(
                 &self.config,
                 message.payload_descriptor,
                 message.payload.bytes(),
-            )?
-            else {
-                continue;
+            ) {
+                Ok(Some(records_payload)) => records_payload,
+                Ok(None) => continue,
+                Err(refusal) => {
+                    tracing::warn!(%refusal, "ChannelsToRecords wrote nothing for a message");
+                    continue;
+                }
             };
             self.outputs.write_bytes_described_by(
                 RECORDS_OUTPUT_PORT,
@@ -112,19 +124,25 @@ pub fn records_message_of_the_channels_block(
     if block.body.samples_per_channel == 0 {
         return Ok(None);
     }
-    let latest_value_by_channel_name: Vec<(rmpv::Value, rmpv::Value)> = config
-        .channel_names
+    encoded_record_of_latest_values(&config.channel_names, |channel_index| {
+        block.last_sample_of_channel_as_f64(channel_index)
+    })
+    .map(Some)
+}
+
+/// The msgpack map holding, under each of `channel_names` in order, the value
+/// `latest_value_of_channel` gives for its index.
+fn encoded_record_of_latest_values(
+    channel_names: &[String],
+    latest_value_of_channel: impl Fn(usize) -> f64,
+) -> Result<Vec<u8>> {
+    let latest_value_by_channel_name = channel_names
         .iter()
         .enumerate()
         .map(|(channel_index, channel_name)| {
-            let latest_value = block
-                .samples_of_channel_as_f64(channel_index)
-                .last()
-                .copied()
-                .unwrap_or_default();
             (
                 rmpv::Value::from(channel_name.as_str()),
-                rmpv::Value::F64(latest_value),
+                rmpv::Value::F64(latest_value_of_channel(channel_index)),
             )
         })
         .collect();
@@ -134,15 +152,7 @@ pub fn records_message_of_the_channels_block(
         &rmpv::Value::Map(latest_value_by_channel_name),
     )
     .map_err(|encode_failure| Error::BagEncodeFailed(encode_failure.to_string()))?;
-    if encoded.len() > RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES {
-        return Err(Error::PortError(format!(
-            "ChannelsToRecords: a record of {} channels encodes to {} bytes, past the \
-             {RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES} a Records message may take",
-            config.channel_names.len(),
-            encoded.len()
-        )));
-    }
-    Ok(Some(encoded))
+    Ok(encoded)
 }
 
 #[cfg(test)]

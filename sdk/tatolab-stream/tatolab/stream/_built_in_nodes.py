@@ -145,8 +145,8 @@ class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
     until a record names it; a key not in `channel_names` is ignored. A value is an
     integer or a float, or a boolean read as 1 or 0; a record that is not a map of
     string keys, or that holds another value under a name, is refused and writes
-    nothing. The blocks are stamped at `sample_rate`, their start samples counted from
-    the first block.
+    nothing. Each block's start sample is the record's stamp since the first record's,
+    counted at `sample_rate`, and always past the block before it.
 
     Inputs:
         `records` (newest): The records whose named values are read.
