@@ -1,7 +1,5 @@
 # Helper-process placement only
 
-<!-- check-no-in-process-placement:allow-file — this ADR must name the banned model to ban it -->
-
 Rationale for the `[helper-process-placement-only]` entries in `docs/plan/ARCHITECTURE.md`,
 decided by the owner 2026-08-04, direction confirmed verbatim the same day. Supersedes the
 placement clauses of `importable-python-library.md`, the `__main__` bullet of
@@ -42,8 +40,12 @@ asks why every Python processor is a child process.
    `app.py`.
 5. Shipped in-process hosting is legacy ripped out inside #1714 with no parallel
    coexistence; #1714 takes the critical path and grows to carry cross-process bags and
-   pixel exchange; and the ban is held by a `.claude/rules/placement.md` stop-work rule,
-   hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.
+   pixel exchange; ~~and the ban is held by a `.claude/rules/placement.md` stop-work rule,
+   hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.~~
+   > Superseded 2026-11-06 by owner ruling: the rule file, the reviewer hard-fails and the
+   > gate are retired — rules do not dictate architecture; the plan does. The plan's
+   > placement entry is amended by `docs/plan/changes/lightweight-node-kinds.md`, which
+   > keeps a Python class node in its own process and adds node kinds that run without one.
 
 ## Why
 
@@ -136,11 +138,12 @@ spec-forbidden).
   `[NEEDS DECISION]` — its module-global queues assume a shared interpreter.
 - The GIL-release contract narrows to protecting each interpreter's own threads; the
   #1702 spike's numbers are retracted as placement evidence (annotated at the source).
-- Enforcement lands as its own operating-model PR per `.claude/rules/flow.md`:
+- ~~Enforcement lands as its own operating-model PR per `.claude/rules/flow.md`:
   `.claude/rules/placement.md` (stop-work shapes and the app-process boundary), hard-fail
   insertions in `review-pr` and `rust-craftsmanship-reviewer`, and the
   `check-no-in-process-placement` xtask gate (vocabulary now; the behavioural
   no-hosting-in-the-parent test lands with #1714 — the app's own registration import
   is parent-side by construction; hosting is what never is). "In-process" is retired as
   a word for the surviving app-process senses — the glossary now says **app-process** —
-  so the banned term stays unambiguous and greppable.
+  so the banned term stays unambiguous and greppable.~~
+  > Superseded 2026-11-06 by owner ruling: the enforcement is retired (see item 5).
