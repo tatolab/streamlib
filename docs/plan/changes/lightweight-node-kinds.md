@@ -233,8 +233,9 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   `@node.shader`; a function's type is its import path, as a class's is.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1776-1778`) becomes DECIDED as evaluation
   islands.
-- **The built-ins entry** (`ARCHITECTURE.md:540-550`). The ops join `RelayTrackSource` as the
-  runtime's own nodes: general-purpose engine primitives, not media nodes.
+- **The built-ins entry** (`ARCHITECTURE.md:540-550`). The ops are the runtime's own nodes:
+  general-purpose engine primitives, not media nodes. Nothing here depends on which other
+  built-ins remain.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
 
