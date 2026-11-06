@@ -3,19 +3,18 @@
 
 """The cast-claim contract, over a live camera, in the real placement.
 
-`[surface-id-lifetime-contract]` says the claim on a frame's pixels is taken at
-the typed cast — the moment a consumer names what it is holding — and released
-when that object drops; a consumer that reads the bag as a dict takes none and
-rides pool depth instead. Both halves are load-bearing: the first is what lets
-a processor outlive the producer's ring, and the second is what keeps the
-strictness dial optional rather than compulsory.
+`[surface-id-lifetime-contract]` says the claim on a frame's pixels is taken
+when an Image read builds its `ImageFrame` and released when that object drops,
+after which the frame's id rides pool depth like any other. Both halves are
+load-bearing: the first is what lets a processor outlive the producer's ring,
+and the second is what keeps a dropped frame from pinning a slot.
 
 Proving it needs all the real parts at once — a producer whose pool actually
 cycles, a consumer one process away, and the surface-share service between
 them — so these start a `cast_claim_streams` stream on `tatolabd` against the
 rig's camera (`camera_under_test`) and assert on the probe's own report. The
-A/B is the whole design: the two probes differ in one line, `into=VideoFrame`
-versus nothing, and must reach opposite outcomes. Either one passing alone
+A/B is the whole design: the two probes differ in one line, holding the
+`ImageFrame` versus dropping it, and must reach opposite outcomes. Either one passing alone
 proves little.
 
 `[cast-object-tensor-protocol]` then says that same object *is* the tensor
@@ -55,13 +54,13 @@ pytestmark = pytest.mark.requires_gpu
 
 STREAM_BY_PROBE_AND_SOURCE = {
     (
-        "TypedCastHoldsItsFrameProbe",
+        "TheHeldImageFrameKeepsItsSlotProbe",
         "camera",
-    ): cast_claim_streams.typed_cast_holds_its_frame_probe_off_the_camera,
+    ): cast_claim_streams.the_held_image_frame_keeps_its_slot_probe_off_the_camera,
     (
-        "UntypedReadHoldsNothingProbe",
+        "ADroppedImageFrameReleasesItsSlotProbe",
         "camera",
-    ): cast_claim_streams.untyped_read_holds_nothing_probe_off_the_camera,
+    ): cast_claim_streams.a_dropped_image_frame_releases_its_slot_probe_off_the_camera,
     (
         "TheImageFrameReachesItsPixelsBareProbe",
         "test_pattern",
@@ -130,17 +129,19 @@ def _require_a_moving_scene(observation: dict) -> None:
 
 
 @pytest.mark.rig_only_capability(reason="a camera")
-def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
+def test_a_held_image_frame_claims_its_slot_and_outlives_the_producers_ring(
     start_tatolabd_running_stream,
 ):
-    """`read(port, into=VideoFrame)` takes the claim, and holding the object is
-    what keeps the producer off that slot.
+    """An Image read takes the claim, and holding the `ImageFrame` is what keeps
+    the producer off that slot.
 
     No handle, no view, no context manager — the frame alone. A lease that rode
     any of those instead would release at `close()` and let the camera recycle
     the slot underneath a consumer that is still holding the frame.
     """
-    observation = run_claim_probe(start_tatolabd_running_stream, "TypedCastHoldsItsFrameProbe")
+    observation = run_claim_probe(
+        start_tatolabd_running_stream, "TheHeldImageFrameKeepsItsSlotProbe"
+    )
     _require_a_moving_scene(observation)
 
     assert observation["claim_taken"] is True, (
@@ -160,21 +161,23 @@ def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
 
 
 @pytest.mark.rig_only_capability(reason="a camera")
-def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
+def test_a_dropped_image_frame_releases_its_slot_and_is_refused_once_the_slot_cycles(
     start_tatolabd_running_stream,
 ):
-    """The control, and the half that keeps the dial optional.
+    """The control: the claim ends when the `ImageFrame` drops.
 
-    A bag read as a dict claims nothing by design — a consumer may want its own
-    frame type, or none. What the contract owes that consumer is not protection
-    it did not ask for, but a *loud* failure: outwaiting pool depth is an
-    error naming the recycling, never somebody else's pixels served silently.
+    What the contract owes a consumer that keeps only the id is not protection
+    it let go of, but a *loud* failure: outwaiting pool depth is an error
+    naming the recycling, never somebody else's pixels served silently.
     """
-    observation = run_claim_probe(start_tatolabd_running_stream, "UntypedReadHoldsNothingProbe")
+    observation = run_claim_probe(
+        start_tatolabd_running_stream, "ADroppedImageFrameReleasesItsSlotProbe"
+    )
     _require_a_moving_scene(observation)
 
-    assert observation["claim_taken"] is False, (
-        "an untyped read must take no claim; taking one would make the strictness dial compulsory"
+    assert observation["claim_taken"] is True, (
+        "the read must offer the frame a claim, so the control differs from the "
+        "held probe only in dropping it"
     )
     assert observation["late_read_refused_as_recycled"], (
         "the recycled id resolved instead of being refused — a stale id "

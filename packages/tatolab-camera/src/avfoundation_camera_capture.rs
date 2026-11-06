@@ -41,12 +41,12 @@ use crate::camera_frame_publication::{
     CONVERTED_FRAME_TEXTURE_USAGE, CameraCaptureRefusal, CaptureLoopReportingWindow,
     FRAMES_BETWEEN_REPORTS,
 };
+use crate::camera_image_frame::image_frame_payload_descriptor_of_a_converted_frame;
 use crate::capture_timestamp::{monotonic_now_ns, resolve_a_monotonic_device_stamp};
 use crate::captured_frame_colour_description::{
     CapturedFrameColourDescription, matrix_name_or_the_players_fallback,
 };
 use crate::core_video_colour_description::colour_description_of_core_video_pixel_buffer;
-use crate::video_frame_record::PublishedVideoFrame;
 
 /// `'420v'`: biplanar 4:2:0 8-bit, video range.
 const CORE_VIDEO_NV12_VIDEO_RANGE: u32 = u32::from_be_bytes(*b"420v");
@@ -767,17 +767,14 @@ impl AvFoundationFrameDelivery {
         let timestamp_ns = self
             .module_host
             .stream_time_ns_of_a_machine_instant(capture_instant_ns);
-        let record = PublishedVideoFrame {
-            surface_id: converted_frame_texture.surface_id(),
-            width: self.format.width,
-            height: self.format.height,
-            timestamp_ns,
-            nominal_frames_per_second: self.format.nominal_frames_per_second,
-            colour,
-        }
-        .to_msgpack();
+        let image_frame = image_frame_payload_descriptor_of_a_converted_frame(
+            &converted_frame_texture,
+            self.format.width,
+            self.format.height,
+            &colour,
+        )?;
         self.video_output_port
-            .write(&record, Some(timestamp_ns), true)
+            .write_described(&[], Some(timestamp_ns), true, &image_frame)
             .map_err(|refusal| refusal.to_string())
     }
 
@@ -917,7 +914,7 @@ impl TatolabCameraSampleBufferDelegate {
 }
 
 /// The camera streaming from AVFoundation's own queues, each frame published
-/// as a `VideoFrame` on the lent output port.
+/// as an Image frame on the lent output port.
 pub struct AvFoundationZeroCopyCameraCapture {
     format: NegotiatedAvFoundationCaptureFormat,
     capture_session_control: Arc<Mutex<AvFoundationCaptureSessionControl>>,

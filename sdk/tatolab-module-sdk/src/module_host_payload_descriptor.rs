@@ -97,7 +97,38 @@ fn u32_at(body: &[u8; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES], offset: 
     ])
 }
 
+/// The texture formats an Image frame names, each as its wire name and the
+/// engine's `TextureFormat` `repr(u32)` value the descriptor carries.
+const IMAGE_FRAME_TEXTURE_FORMATS: &[(&str, u32)] = &[
+    ("rgba8_unorm", 0),
+    ("rgba8_unorm_srgb", 1),
+    ("bgra8_unorm", 2),
+    ("bgra8_unorm_srgb", 3),
+    ("rgba16_float", 4),
+    ("rgba32_float", 5),
+    ("nv12", 6),
+];
+
 impl ModuleHostImageFrame {
+    /// The `texture_format` value of the format `wire_name` spells, as an
+    /// output pool texture request names it; `None` for a name the engine has
+    /// no format for.
+    pub fn texture_format_of_the_wire_name(wire_name: &str) -> Option<u32> {
+        IMAGE_FRAME_TEXTURE_FORMATS
+            .iter()
+            .find(|(name, _)| *name == wire_name)
+            .map(|&(_, texture_format)| texture_format)
+    }
+
+    /// The wire name of the format `texture_format` names, the inverse of
+    /// [`Self::texture_format_of_the_wire_name`].
+    pub fn wire_name_of_the_texture_format(texture_format: u32) -> Option<&'static str> {
+        IMAGE_FRAME_TEXTURE_FORMATS
+            .iter()
+            .find(|(_, value)| *value == texture_format)
+            .map(|&(name, _)| name)
+    }
+
     /// The Image frame `payload_descriptor` states, refusing another kind.
     pub fn of_the_payload_descriptor(
         payload_descriptor: &ModuleHostTablePayloadDescriptor,
@@ -220,6 +251,24 @@ mod tests {
         assert_eq!(
             ModuleHostImageFrame::of_the_payload_descriptor(&written).unwrap(),
             frame
+        );
+    }
+
+    #[test]
+    fn a_texture_format_reads_back_through_its_wire_name() {
+        for &(wire_name, texture_format) in IMAGE_FRAME_TEXTURE_FORMATS {
+            assert_eq!(
+                ModuleHostImageFrame::texture_format_of_the_wire_name(wire_name),
+                Some(texture_format)
+            );
+            assert_eq!(
+                ModuleHostImageFrame::wire_name_of_the_texture_format(texture_format),
+                Some(wire_name)
+            );
+        }
+        assert_eq!(
+            ModuleHostImageFrame::texture_format_of_the_wire_name("r8"),
+            None
         );
     }
 

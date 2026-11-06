@@ -15,7 +15,7 @@ if sys.platform == "linux":
 
     @final
     class V4l2ZeroCopyCameraCapture:
-        """A camera publishing `VideoFrame`s on a lent output port from a thread this wheel owns."""
+        """A camera publishing Image frames on a lent output port from a thread this wheel owns."""
 
         def __new__(
             cls,
@@ -71,7 +71,7 @@ if sys.platform == "darwin":
 
     @final
     class AvFoundationZeroCopyCameraCapture:
-        """A camera publishing `VideoFrame`s on a lent output port from AVFoundation's own queues."""
+        """A camera publishing Image frames on a lent output port from AVFoundation's own queues."""
 
         def __new__(
             cls,

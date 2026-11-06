@@ -13,8 +13,8 @@ no engine crate.
     `420v` or `420f`.
 
   Per frame, the capture thread takes a texture from the node's output pool,
-  has the engine convert the filled buffer into it on the GPU, and publishes a
-  `VideoFrame` naming it, from `start()` on. No frame is copied on the CPU, and Python never runs
+  has the engine convert the filled buffer into it on the GPU, and publishes an
+  Image frame in its slot, from `start()` on. No frame is copied on the CPU, and Python never runs
   at frame cadence. `device_id` names a V4L2 node such as `/dev/video0` on
   Linux and an AVFoundation unique ID on macOS.
 - On macOS, camera access is asked for only by a `CameraSource`, and only in a

@@ -35,20 +35,24 @@ def _add_the_probe_off(
 
 
 @stream
-def typed_cast_holds_its_frame_probe_off_the_camera(stream_builder: StreamBuilder) -> None:
+def the_held_image_frame_keeps_its_slot_probe_off_the_camera(
+    stream_builder: StreamBuilder,
+) -> None:
     _add_the_probe_off(
         stream_builder,
         _add_the_camera(stream_builder),
-        cast_claim_probes.TypedCastHoldsItsFrameProbe,
+        cast_claim_probes.TheHeldImageFrameKeepsItsSlotProbe,
     )
 
 
 @stream
-def untyped_read_holds_nothing_probe_off_the_camera(stream_builder: StreamBuilder) -> None:
+def a_dropped_image_frame_releases_its_slot_probe_off_the_camera(
+    stream_builder: StreamBuilder,
+) -> None:
     _add_the_probe_off(
         stream_builder,
         _add_the_camera(stream_builder),
-        cast_claim_probes.UntypedReadHoldsNothingProbe,
+        cast_claim_probes.ADroppedImageFrameReleasesItsSlotProbe,
     )
 
 

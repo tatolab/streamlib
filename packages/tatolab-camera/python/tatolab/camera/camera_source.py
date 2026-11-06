@@ -8,7 +8,7 @@ camera and adopts each
 capture buffer once through the module host table — a V4L2 driver buffer
 exported as a DMA-BUF on Linux, an AVFoundation IOSurface on macOS — and per
 frame converts it on the GPU into a texture from the node's output pool and
-publishes a `VideoFrame` naming it once `start()` runs. Python runs at setup,
+publishes an Image frame in its slot once `start()` runs. Python runs at setup,
 start and stop, never at frame cadence.
 """
 
@@ -18,11 +18,12 @@ import dataclasses
 import sys
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextFullAccess, VideoFrame, log, node
+from tatolab.stream import Image, Output, RuntimeContextFullAccess, log, node
 
 from . import _native
 
 VIDEO_OUTPUT_PORT = "video"
+CONVERTED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 
 if sys.platform == "darwin":
     _CameraCapture = _native.AvFoundationZeroCopyCameraCapture
@@ -57,14 +58,17 @@ class CameraSourceConfig:
     ),
 )
 class CameraSource:
-    """A camera, published as RGBA `VideoFrame`s."""
+    """A camera, published as RGBA Image frames."""
 
     def __init__(self, config: CameraSourceConfig) -> None:
         self._config = config
         self._capture: "_CameraCapture | None" = None
 
-    @node.output(description="RGBA frames from the camera, as VideoFrame records")
-    def video(self) -> VideoFrame: ...
+    video = Output(
+        Image,
+        formats=(CONVERTED_FRAME_TEXTURE_FORMAT,),
+        description="RGBA frames from the camera, each colour as captured",
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `video` to the native half and open the camera, so a camera that
