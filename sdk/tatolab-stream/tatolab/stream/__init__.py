@@ -24,6 +24,8 @@ from . import log as log
 from . import msgpack as msgpack
 from ._built_in_nodes import ArrayToChannels as ArrayToChannels
 from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
+from ._built_in_nodes import ArrayToImage as ArrayToImage
+from ._built_in_nodes import ArrayToImageConfig as ArrayToImageConfig
 from ._built_in_nodes import ChannelsToArray as ChannelsToArray
 from ._built_in_nodes import ChannelsToArrayConfig as ChannelsToArrayConfig
 from ._built_in_nodes import ChannelsToRecords as ChannelsToRecords
@@ -138,6 +140,8 @@ __all__ = [
     "ArrayFrameGpuAttribute",
     "ArrayToChannels",
     "ArrayToChannelsConfig",
+    "ArrayToImage",
+    "ArrayToImageConfig",
     "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",

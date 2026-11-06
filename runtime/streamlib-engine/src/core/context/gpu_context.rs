@@ -135,6 +135,25 @@ pub(super) fn published_pixel_buffer_frame_id(
     )
 }
 
+/// The descriptor a reader claims a pixel-buffer slot's most recent frame by,
+/// or `None` when the slot leases no claim-table row.
+pub(super) fn gpu_pool_slot_frame_of_the_pixel_buffer_slot(
+    slot: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
+) -> Option<streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody> {
+    slot.resource()
+        .gpu_pool_claim_table_row
+        .as_ref()
+        .map(
+            |claim_table_row| streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody {
+                pool: claim_table_row.table().pool_uuid(),
+                slot: claim_table_row.row_index(),
+                generation: slot.published_frame_generation(),
+                timeline_value: 0,
+                image_layout: 0,
+            },
+        )
+}
+
 /// Ring pool of pixel buffers for a given (width, height, format).
 ///
 /// Buffers are pre-allocated at pool creation. `acquire()` cycles through
@@ -7035,9 +7054,7 @@ mod tests {
                 LEASE_TEST_SURFACE_HEIGHT,
                 PixelFormat::Rgba32,
             )
-            .map(|(published_frame_id, _returned_to_the_pool_immediately)| {
-                published_frame_id.to_string()
-            })
+            .map(|frame| frame.published_frame_id.to_string())
     }
 
     /// Each slot of `shape`'s shared ring, in ring order, with the generation
@@ -7241,6 +7258,63 @@ mod tests {
                 .is_err()
     }
 
+    /// Each frame a native node's output pool hands out names the claim-table
+    /// row of its slot at the generation it published, so a reader in another
+    /// process claims exactly that frame.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_native_nodes_frame_names_its_slots_claim_table_row_at_the_generation_it_published() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            tracing::warn!("no GPU device, so the native node claim-table row test skips");
+            return;
+        };
+        let live_service =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-described-node");
+        for _ in 0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD + 1 {
+            let frame = native_node
+                .acquire_the_next_output_pixel_buffer(
+                    LEASE_TEST_SURFACE_WIDTH,
+                    LEASE_TEST_SURFACE_HEIGHT,
+                    PixelFormat::Rgba32,
+                )
+                .expect("a node under its cap is served");
+            let gpu_pool_slot_frame = frame
+                .gpu_pool_slot_frame
+                .expect("a slot the surface-share service shares leases a claim-table row");
+            let claim_table = live_service
+                .check_out_leases()
+                .gpu_pool_claim_tables()
+                .table_named(&gpu_pool_slot_frame.pool)
+                .expect("the frame names a claim table the service holds");
+            let pool_slot_key = claim_table
+                .pool_slot_keys_by_row()
+                .into_iter()
+                .find_map(|(row_index, pool_slot_key)| {
+                    (row_index == gpu_pool_slot_frame.slot).then_some(pool_slot_key)
+                })
+                .expect("the frame names a leased row");
+            let published_frame_id = frame.published_frame_id.to_string();
+            assert!(
+                same_pool_slot(&published_frame_id, &pool_slot_key),
+                "row {} is slot {pool_slot_key}, and the frame is {published_frame_id}",
+                gpu_pool_slot_frame.slot
+            );
+            assert_eq!(
+                gpu_pool_slot_frame.generation,
+                frame.published_frame_id.frame_generation()
+            );
+            assert_eq!(
+                claim_table.shared_rows().rows()[gpu_pool_slot_frame.slot as usize]
+                    .published_generation(),
+                gpu_pool_slot_frame.generation,
+                "the row publishes the generation the frame names"
+            );
+        }
+    }
+
     /// A torn-down node's pool frees each slot nothing holds — registration
     /// released, last frame refused as recycled — and hands each held slot
     /// back to the shared ring, generation kept, freed by the next acquire
@@ -7262,7 +7336,11 @@ mod tests {
         let mut frames_the_node_published = Vec::new();
         let mut buffer_held_in_this_process = None;
         for _ in 0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD {
-            let (published_frame_id, buffer) = native_node
+            let super::super::NativeNodeOutputPixelBufferFrame {
+                published_frame_id,
+                pixel_buffer: buffer,
+                ..
+            } = native_node
                 .acquire_the_next_output_pixel_buffer(
                     LEASE_TEST_SURFACE_WIDTH,
                     LEASE_TEST_SURFACE_HEIGHT,
@@ -8116,7 +8194,11 @@ mod tests {
             PRE_ALLOCATED_SLOTS_THE_SHARED_RING_KEEPS_PAST_ONE_NATIVE_NODES_ROTATION
         );
 
-        let (new_shapes_frame, new_shapes_buffer) = native_node
+        let super::super::NativeNodeOutputPixelBufferFrame {
+            published_frame_id: new_shapes_frame,
+            pixel_buffer: new_shapes_buffer,
+            ..
+        } = native_node
             .acquire_the_next_output_pixel_buffer(
                 LEASE_TEST_SURFACE_WIDTH * 2,
                 LEASE_TEST_SURFACE_HEIGHT,

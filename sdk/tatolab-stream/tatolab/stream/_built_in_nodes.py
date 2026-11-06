@@ -16,6 +16,8 @@ from ._built_in_node import BuiltInNode
 __all__ = [
     "ArrayToChannels",
     "ArrayToChannelsConfig",
+    "ArrayToImage",
+    "ArrayToImageConfig",
     "ChannelsToArray",
     "ChannelsToArrayConfig",
     "ChannelsToRecords",
@@ -69,6 +71,47 @@ class ArrayToChannels(BuiltInNode[ArrayToChannelsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:ArrayToChannels"
+
+
+class ArrayToImageConfig(TypedDict, total=False):
+    """`ArrayToImage`'s config: the keys `stream_builder.add` takes."""
+
+    attribute: str
+    """The attribute of each Array frame read as the image.
+
+    Default: `"image"`.
+    """
+
+    format: str
+    """The texture format each Image frame states, by its wire name.
+
+    Default: `"rgba8_unorm"`.
+    """
+
+
+class ArrayToImage(BuiltInNode[ArrayToImageConfig]):
+    """Converts one attribute of each Array frame on `array`, `attribute` (`image` by
+    default), into one Image frame on `image` stating `format` (`rgba8_unorm` by
+    default; also `rgba8_unorm_srgb`, `bgra8_unorm`, `bgra8_unorm_srgb`, `rgba16_float`
+    and `rgba32_float`). The attribute is an `[h, w, 4]` tensor of the format's element
+    type, its channels in the format's order: `uint8` for the 8-bit formats, `float16`
+    for `rgba16_float` and `float32` for `rgba32_float`. A GPU attribute's pool slot
+    becomes the Image frame's slot and nothing is copied, so the slot holds what
+    `format` states, as an attribute `ImageToArray` wrote does. A CPU attribute is
+    copied once into a pixel buffer from this node's own output pool. A frame without
+    the attribute, or whose attribute is of another dtype or another shape, is refused
+    and writes nothing. Each Image frame states no colour.
+
+    Inputs:
+        `array` (newest): The Array frames whose `attribute` is converted.
+
+    Outputs:
+        `image`: One Image frame per Array frame.
+
+    Config: `ArrayToImageConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:ArrayToImage"
 
 
 class ChannelsToArrayConfig(TypedDict, total=False):

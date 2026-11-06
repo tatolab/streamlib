@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock};
 use super::SurfaceStore;
 use super::gpu_context::{
     PixelBufferPoolKey, PixelBufferPoolManager, PixelBufferPoolSlot,
-    published_pixel_buffer_frame_id,
+    gpu_pool_slot_frame_of_the_pixel_buffer_slot, published_pixel_buffer_frame_id,
 };
 use super::processor_output_surface_pool::{
     ProcessorOutputSurfacePool, ProcessorOutputSurfacePoolHandOff,
@@ -22,10 +22,22 @@ use super::processor_output_surface_pool::{
 use crate::core::Result;
 use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
 use crate::core::runtime::LoadedStreamTag;
+use streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody;
 
 /// How many frames a native node's output pool keeps in rotation before it
 /// reuses one.
 pub(super) const NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH: usize = 4;
+
+/// One frame a native node's output pool hands out.
+pub struct NativeNodeOutputPixelBufferFrame {
+    /// The id the frame is published under.
+    pub published_frame_id: PublishedPixelBufferFrameId,
+    /// The buffer the frame's pixels are written into.
+    pub pixel_buffer: PixelBuffer,
+    /// The descriptor a reader claims the frame by, or `None` when its slot
+    /// leases no claim-table row.
+    pub gpu_pool_slot_frame: Option<GpuPoolSlotFrameDescriptorBody>,
+}
 
 /// The pixel buffers one native built-in node publishes its frames in,
 /// borrowed from the runtime's shared pixel-buffer pool, handed back to it
@@ -72,7 +84,7 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
+    ) -> Result<NativeNodeOutputPixelBufferFrame> {
         let shape = PixelBufferPoolKey {
             width,
             height,
@@ -105,10 +117,15 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
                 shared_pixel_buffer_pool_manager.minted_frame_generations(),
             )?
         {
-            let handed_off = shared_pixel_buffer_pool_manager
+            let (published_frame_id, pixel_buffer) = shared_pixel_buffer_pool_manager
                 .publish_the_handed_off_frame_in_the_buffer_cache(reused_slot);
+            let gpu_pool_slot_frame = gpu_pool_slot_frame_of_the_pixel_buffer_slot(reused_slot);
             shared_pixel_buffer_pool_manager.free_at_most_one_slot_due_to_be_freed();
-            return Ok(handed_off);
+            return Ok(NativeNodeOutputPixelBufferFrame {
+                published_frame_id,
+                pixel_buffer,
+                gpu_pool_slot_frame,
+            });
         }
 
         let lent_slot = shared_pixel_buffer_pool_manager.lend_a_slot_to_a_native_node_output_pool(
@@ -116,10 +133,11 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
             *loaded_stream_the_owning_node_runs_in,
         )?;
         match output_pool.hand_off_a_slot_its_lender_already_republished(lent_slot) {
-            Ok(handed_off_slot) => Ok((
-                published_pixel_buffer_frame_id(handed_off_slot),
-                handed_off_slot.resource().buffer.clone(),
-            )),
+            Ok(handed_off_slot) => Ok(NativeNodeOutputPixelBufferFrame {
+                published_frame_id: published_pixel_buffer_frame_id(handed_off_slot),
+                pixel_buffer: handed_off_slot.resource().buffer.clone(),
+                gpu_pool_slot_frame: gpu_pool_slot_frame_of_the_pixel_buffer_slot(handed_off_slot),
+            }),
             Err(ProcessorOutputSurfacePoolRefusedLentSlot { refusal, slot }) => {
                 shared_pixel_buffer_pool_manager
                     .take_back_slots_lent_to_a_native_node_output_pool(shape, [*slot]);
