@@ -13,8 +13,8 @@ or WGSL.
 ## Decision
 
 Slang is the shader source language, and one Slang compiler inside the engine builds every
-kernel: user kernels at construction, the engine's own shaders at build time. GLSL stays an
-accepted input through Slang's GLSL front end. The compiler takes a target, so a fragment
+kernel: user kernels at construction, the engine's own shaders at build time. Slang is the only
+source language; GLSL is retired. The compiler takes a target, so a fragment
 stage for a material graph, or Metal and WGSL output, is a parameter rather than a second
 compiler.
 
@@ -36,6 +36,9 @@ stays.
 
 ## Rejected alternatives
 
+- **Slang with GLSL still accepted through its GLSL front end** — a second language to
+  document, a parameter, a library and a set of front-end gaps, for compatibility nobody needs
+  yet (owner, 2026-11-06).
 - **Stay on GLSL** — no composition, so shader-node fusion and material graphs become string
   templating.
 - **HLSL through DXC** — interfaces but no generic composition of the kind fusion needs, and a
@@ -53,5 +56,5 @@ stays.
   stalls, the owner maintains it.
 - Slang's debug info is off: the engine's reflection cannot parse its non-semantic debug
   instructions, and binding names survive without it.
-- GLSL input inherits the gaps of Slang's GLSL front end; a refused GLSL shader is rewritten
-  in Slang.
+- Every GLSL shader in the engine tree is rewritten in Slang, and `GlslPixelEffect` gives way
+  to `@node.shader`; consumers' GLSL ports as backlog.

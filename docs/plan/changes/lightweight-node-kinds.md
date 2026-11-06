@@ -471,5 +471,5 @@ Assumed unless overruled:
 - Measure a helper's real cost (wheel import, idle memory, iceoryx2 and Vulkan setup) and the
   per-message hop before phase 3; phase 1 removes the hop for compiled function nodes.
 - The shader examples in `examples/` and the scaffold's `HalftoneLensEffect` move to
-  `@node.shader` as consumer backlog. Retiring `GlslPixelEffect` is a separate owner call.
+  `@node.shader` as consumer backlog. `GlslPixelEffect` is removed by `slang-shader-compiler`.
 - A thread pool for native class nodes is a separate change.

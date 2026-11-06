@@ -18,8 +18,9 @@ GLSL text to `create_compute_kernel`, `create_graphics_kernel` and
 - **One shader compiler: Slang**, linked by the engine for run-time kernels and used by the
   build scripts for the engine's own shaders. `shaderc` and `glslc` leave the tree.
 - **Slang is the source idiom.** Every engine shader and every example of the kernel API is
-  written in Slang. GLSL stays accepted as a second source language through Slang's own GLSL
-  front end, so existing GLSL and `GlslPixelEffect` keep compiling. See [NEEDS DECISION 1].
+  written in Slang. Slang is the only source language: GLSL is retired, and every GLSL shader in
+  the engine tree is rewritten in Slang. `GlslPixelEffect` is replaced by `@node.shader`
+  (`lightweight-node-kinds`). See DECIDED 1.
 - **The compiler takes a target**, compute SPIR-V today, so a later change can ask it for a
   fragment stage or another backend without a second compiler.
 - **Nothing changes after compilation.** Reflection, binding by the shader's own names, the
@@ -71,7 +72,7 @@ recorded here so the tickets need not re-derive them.
   It replaces `glsl_shader_source_compiler.rs` and keeps its role and its cache.
 - **The binding is `shader-slang`, pinned by exact version** behind that module. Its three
   missing calls, loading from a source string, `findAndCheckEntryPoint`, and a global session
-  with GLSL enabled, go through its raw tables in that module only. Nothing else imports it.
+  go through its raw tables in that module only. Nothing else imports it.
 - **Compile settings:** SPIR-V 1.4 for Vulkan 1.2, optimisation on with the optimiser shipped,
   debug info off. Slang keeps binding names without it, and the engine's reflection refuses
   Slang's debug instructions.
@@ -81,15 +82,15 @@ recorded here so the tickets need not re-derive them.
 - **The target** is a parameter of the compiler: a stage and a backend. This change serves
   every stage the engine has today (compute, vertex, fragment and the ray-tracing stages) to
   SPIR-V. Another backend is a later change.
-- **A source language is declared, never sniffed:** the kernel constructors take
-  `source_language`, `"slang"` by default. A compiler diagnostic names the line of the
-  source the caller passed, in Slang's own words.
+- **One source language.** The kernel constructors take Slang text and nothing else; there is
+  no language parameter. A compiler diagnostic names the line of the source the caller passed,
+  in Slang's own words.
 
 ### Packaging
 
 - The wheel's lend and `tatolabd` carry `libslang-compiler` and `libslang-glslang` for each
-  floor, beside the engine, as the bundled Vulkan driver is carried. GLSL input also needs
-  `libslang-glsl-module`, which ships with them.
+  floor, beside the engine, as the bundled Vulkan driver is carried. `libslang-glsl-module` is
+  not shipped.
 - They come from Slang's release archives, pinned by version and checksum and staged by a
   script the build calls. A library whose glibc floor is above `manylinux_2_28`, or whose macOS
   minimum is above 26.0, is refused by the stage script, and that floor builds Slang from
@@ -99,22 +100,23 @@ recorded here so the tickets need not re-derive them.
 
 ### The engine's own shaders
 
-- The engine's and `streamlib-vulkan-video`'s shaders are rewritten in Slang, one file each,
-  and the build scripts compile them through the same library.
-- The five that Slang's GLSL front end refuses are among them, so no shader depends on the
-  front end's gaps.
+- Every GLSL shader in the engine tree is rewritten in Slang, one file each: the engine's
+  (`vulkan/rhi/shaders`, 21), `streamlib-vulkan-video`'s (2), `packages/test-fixtures`' (6) and
+  the SDK's GLSL kernels (`model_input_tensor_kernel.py`). The build scripts compile them
+  through the same library.
+- Consumers' GLSL (`examples/`, `packages/tatolab-testpattern`, the scaffold's
+  `HalftoneLensEffect`) moves to `@node.shader` as consumer backlog.
 
 ## MODIFIED
 
 - **The GLSL source contract** (`ARCHITECTURE.md:2087-2094`, "GLSL is the shader source
-  contract"). It reads: Slang is the shader source contract. Python passes Slang text, or GLSL
-  through Slang's GLSL front end with `source_language="glsl"`, and the engine compiles it at
-  construction with the same cache rule. Pre-compiled SPIR-V stays the escape hatch. The wheel
+  contract"). It reads: Slang is the shader source contract. Python passes Slang text, and the
+  engine compiles it at construction with the same cache rule. Pre-compiled SPIR-V stays the escape hatch. The wheel
   carries the Slang compiler, so authoring needs no toolchain beyond the wheel.
 - **The wheel's contents** (`ARCHITECTURE.md:3755-3756`, "the wheel carries a C++ GLSL shader
   compiler"). It carries the Slang compiler libraries.
-- **`GlslPixelEffect`** (`ARCHITECTURE.md:2236`). It keeps its GLSL body and compiles through
-  Slang's GLSL front end. Its future is decided with `lightweight-node-kinds`' `@node.shader`.
+- **`GlslPixelEffect`** (`ARCHITECTURE.md:2236`) is removed; `@node.shader` is the pixel-effect
+  node (`lightweight-node-kinds`).
 - **The capability refusals** (`ARCHITECTURE.md:1934-1937`). A subgroup refusal reads Slang's
   SPIR-V as it reads shaderc's today.
 - **`docs/decisions/python-kernel-api.md`** item 4 and its compiler rationale are struck in
@@ -126,26 +128,26 @@ recorded here so the tickets need not re-derive them.
 - REMOVED: glsl_shader_source_compiler
 - REMOVED: VENDORED_GLSL_COMPILER_VERSION
 - REMOVED: glslc
+- REMOVED: GlslPixelEffect
+- REMOVED: sdk/tatolab-stream/tatolab/stream/glsl_pixel_effect.py
+- REMOVED: tests/stream-on-runtime/test_glsl_pixel_effect.py
+- REMOVED: sdk/tatolab-stream/tests/test_glsl_pixel_effect_refusals.py
 
 ## Decisions
 
-- **[NEEDS DECISION 1] Keep GLSL as an accepted source language?** Slang's GLSL front end
-  compiled 27 of the repo's 33 GLSL shaders unchanged.
-  - *Keep it*, declared with `source_language="glsl"`. Existing user kernels, `GlslPixelEffect`
-    and pasted shader code keep working; the front end's gaps (ray-generation `traceRayEXT`,
-    `texelFetch` on a separate `texture2D`) refuse with Slang's diagnostic.
-  - *Slang only.* One language to document; every consumer kernel ports.
-  *Recommendation:* keep it. It costs a 1.3 MB library and one keyword, and the cache and the
-  compiler stay one.
+- **DECIDED 1 — Slang only (owner, 2026-11-06).** GLSL is retired as a source language rather
+  than accepted through Slang's GLSL front end: nobody depends on StreamLib's GLSL yet, and one
+  language means one compile path, no language parameter, no `libslang-glsl-module`, and no
+  front-end gaps to document. Rejected: keeping GLSL with `source_language="glsl"`.
 - Assumed unless overruled: the entry point stays `main` by default, as today, and any name
   is accepted, since Slang renames entry points where glslang would not.
 
 ## Proof
 
 - Every engine kernel test passes with `shaderc` gone from `Cargo.lock`.
-- A Slang compute kernel from Python reflects its binding names and dispatches, and a GLSL one
-  with `source_language="glsl"` does the same.
-- A GLSL ray-generation shader refuses at construction with Slang's diagnostic, never a crash.
+- A Slang compute kernel from Python reflects its binding names and dispatches.
+- No GLSL file remains in the engine tree, and a kernel constructor given GLSL text refuses with
+  Slang's diagnostic, never a crash.
 - A recompile of a cached source is a cache hit; a compiler version change is a miss.
 - The portability proof passes with the Slang libraries in the lend, on both floors.
 - `Build (macOS)` is green with the Slang libraries staged and signed.
@@ -154,7 +156,8 @@ recorded here so the tickets need not re-derive them.
 
 1. The Slang compiler module and the packaging, behind the existing constructors: a Slang
    compute kernel from Python, on both floors.
-2. The engine's own shaders in Slang through the build scripts; `shaderc` and `glslc` removed.
+2. The engine tree's shaders in Slang through the build scripts; `shaderc`, `glslc` and
+   `GlslPixelEffect` removed.
 
 ## Notes (not in scope)
 
