@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.28](https://github.com/tatolab/streamlib/compare/v0.68.27...v0.68.28) (2026-11-06)
+
+
+### Features
+
+* **watch-page:** ?video_only shows the playing video alone, fitted to the page ([#3179](https://github.com/tatolab/streamlib/issues/3179)) ([eb263ea](https://github.com/tatolab/streamlib/commit/eb263ead8ec8b16be565dff84d82e693c7d8aa88))
+
 ## [0.68.27](https://github.com/tatolab/streamlib/compare/v0.68.26...v0.68.27) (2026-11-05)
 
 
