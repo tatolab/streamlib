@@ -16,8 +16,8 @@ asks why every Python processor is a child process.
 
 ## The direction, verbatim (owner-confirmed)
 
-1. Helper-process placement is the only execution placement StreamLib has: every Python
-   processor runs in its own child process, spawned by the Rust engine as an exec of
+1. ~~Helper-process placement is the only execution placement StreamLib has: every Python
+   processor runs~~ A Python class node runs in its own child process, spawned by the Rust engine as an exec of
    ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, ~~never a
    pool~~ — with its own interpreter and its own GIL.
    > Superseded 2026-10-02 by `package-split-and-lend.md`: the exec is the stream's own venv
