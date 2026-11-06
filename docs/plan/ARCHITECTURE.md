@@ -661,19 +661,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stale id fails loudly at resolve and checkout as a recycled-frame error, never
   resolving to the slot's newer pixels. The pool slot backing a held surface is
   never rehanded to a producer — in-process via the existing refcount, cross-process
-  via a checkout lease minted by the surface-share service at checkout, released
-  explicitly by the consumer and reclaimed on connection drop. The claim is taken
-  at the typed cast — the moment a consumer names what it is holding — and released
-  when that object drops; the read offers the constructing type the means to take
-  one, on terms equally open to any authored class, and takes none for a consumer
-  that reads the payload untyped. Publish-to-claim transit rides pool depth, and so
-  does an untyped read: the strictness dial is also the safety dial — depth bounds
-  the window, and outwaiting it loses the frame, never serves somebody else's pixels:
-  the claim refuses the id by name as recycled, and the consumer counts the message
-  as a drop on the link it arrived on, a loss and never an error (owner,
-  2026-10-24). The
+  via a claim in the pool's claim table (§Processor model), cleared once its holder is
+  reaped, or for a surface outside a pool a checkout lease minted by the surface-share
+  service, released explicitly by the consumer and reclaimed on connection drop. A read of a message carrying a pooled
+  frame's descriptor claims the frame while its borrow lives; the typed cast — the moment
+  a consumer names what it is holding — takes its own claim, released when that object
+  drops, on terms equally open to any authored class. Publish-to-claim transit rides the
+  pool's reserve, `rotation_depth` plus every link's mailbox depth and borrow quota, so a
+  frame a mailbox accepted is never outwaited by its slot. A frame that is outwaited
+  anyway is lost, never served with somebody else's pixels: the claim refuses the id by
+  name as recycled, and the consumer counts the message as a drop on the link it arrived
+  on, a loss and never an error (owner, 2026-10-24). The
   engine inspects no message content anywhere. The producer never waits on a consumer:
-  its node's output pool skips leased slots and grows to its cap; at the cap, or past
+  its node's output pool skips held slots and grows to its cap; at the cap, or past
   the runtime's memory budget (§Graphics), the producer drops its own frame — a slow
   consumer costs memory, then its own node's frames, never another processor's
   cadence; only the runtime's memory budget is shared between nodes. A
@@ -682,7 +682,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   surface's pooled backing whenever one exists, read-only; texture-backed export
   remains for surfaces with no pooled backing (kernel outputs).
   [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877;
-  shared-pools-bounded-by-memory-budget — SHIPPED #2741]
+  shared-pools-bounded-by-memory-budget — SHIPPED #2741; zero-copy-data-plane — SHIPPED #3174,
+  #3191]
 - **DECIDED** — The cast object is the tensor-protocol producer: a cast type that
   claims its surface exposes pixel access on the object itself, and the performance
   gradient is spelled, not policed. The bare object speaks `__dlpack__` /
@@ -992,14 +993,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, zero-copy-data-plane; unbuilt: the five port families and their zero-copy data plane, subgraphs; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart; unbuilt: the five port families, subgraphs; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
   type declaration, connect never inspects or compares types and never warns, no read
-  path examines a tag, and the frame header carries no schema ident. `write(port, payload:
-  bytes, timestamp_ns=, starts_group=)` and `read(port) -> bytes` move bytes, with
-  `read(port, into=T)` calling `T.from_bytes`; msgpack is a helper the stream package ships,
+  path examines a tag, and the sample's user header carries no schema ident. `write(port,
+  payload, timestamp_ns=, starts_group=)` and `read(port) -> PortPayloadBorrow` move bytes,
+  with `read(port, into=T)` calling `T.from_bytes`; msgpack is a helper the stream package ships,
   `tatolab.stream.msgpack` — `pack`, `unpack`, and `MsgpackCast` and
   `msgpack_typed_dict_cast`, giving a dataclass or a TypedDict its `from_bytes` — never an
   encoding the engine or the runtime portion applies behind a call. A built-in writes bytes
@@ -1012,7 +1013,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   own declared contract and never in the forwarding path, so the engine inspects a payload on
   exactly the ports that asked it to. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
-  compares nothing, and the frame header still carries no schema ident. Owner, 2026-10-16
+  compares nothing, and the user header still carries no schema ident. Owner, 2026-10-16
   and 2026-10-17. [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED
   #2033; moq-relays — SHIPPED #2821, #2850; amended by strict-port-families: a link joins two
   ports of one family, `connect` compares it, and msgpack leaves user code]
@@ -1100,7 +1101,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2270]
 - **DECIDED** — A message the iceoryx2 subscriber ring overwrites is counted. Every channel's
   data service carries a per-channel 64-bit sequence number in an iceoryx2 user header —
-  never in the frame header, which stays exactly as it is. A number is consumed once a
+  never in the payload, which stays exactly as written. A number is consumed once a
   sample reaches the send, unless the send fails before delivering to anyone; a message refused
   at the ceiling or never loaned consumes none. Each subscriber keeps the last number it
   received per producing publisher, the first sample after wiring its baseline, so a
@@ -1116,7 +1117,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that fail before any delivery consume no number; the other three consume one, because
   iceoryx2 does not report a partial delivery, and a subscriber the failed send never
   reached therefore reads a real loss. **The header is one engine type**,
-  `DataChannelBagUserHeader`, with its iceoryx2 type name pinned so a move
+  `DataChannelSampleUserHeader`, with its iceoryx2 type name pinned so a move
   never changes its identity, and a source-walking gate refuses a data `publish_subscribe`
   builder outside the node wrapper so no site can open a service without it. **A gap and an
   eviction never double-count**: a ring gap is a message never received and an eviction is a message
@@ -1211,7 +1212,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never commits or forwards a stream it knows is broken. No consumer drops or passes on
   encoded frames blindly. The information that makes both possible travels as
   ordinary message fields the producer writes and the consumer casts, never as a tag in the
-  frame header and never as engine-visible type. [delivery-profile-vocabulary]
+  user header and never as engine-visible type. [delivery-profile-vocabulary]
 - **OPEN** — Reflecting a link's drop count back to its producing port, so a producer
   can react to pressure it cannot otherwise see: intended, do not build until the first
   encoded-domain link exists — nothing in the tree reads it before an encoder does.
@@ -1332,40 +1333,108 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   to an author or an agent (owner, 2026-11-03).
 - **OPEN** — How a port's names and `requires=` are spelled beyond the shape above. Decided with
   the change that builds the families. [strict-port-families]
-- **DECIDED** — The data plane is zero-copy by family. Each family's descriptor is a fixed
-  `#[repr(C)]` value in the iceoryx2 user header, `FrameHeader` leaves the payload, and the
-  payload starts 64-byte aligned. A read borrows the sample in place — a pyclass owning it,
-  offering the buffer protocol and `__dlpack__` — with borrows bounded per port, past which the
-  link drops and counts, and a borrow stays counted while any export of it lives. A write loans
-  its destination (`with ctx.loan(port, …) as out:`) and publishes on exit. An Image or GPU
-  Array crosses as `{pool, slot, generation, timeline_value}`: the surface service hands a
-  pool's slot set to each processor interpreter once, which imports every slot once, and a
-  per-pool claim table in shared memory replaces the per-frame socket check-out, its generation
-  re-check refusing a recycled frame and the engine clearing a dead interpreter's claims. The
-  Linux import-once ships first and on its own (the entry below). Every descriptor, being a
-  cross-language ABI, carries a layout regression test. Owner, 2026-11-03. [strict-port-families;
-  zero-copy-data-plane]
-- **DECIDED** — On Linux a helper imports each pool slot once. It keeps one import per pool
-  slot key (the memory, and for a texture the rebuilt image and its joined timeline pair),
-  and a `check_out` of a published frame id whose slot it holds says so
-  (`holds_pool_slot_import: true`); the service records the lease and answers the frame's
-  metadata, `current_image_layout` included, with no fds. Every frame still takes and
-  releases its checkout lease, and the retired-frame refusal answers first, cached or not.
-  Only a published frame id (`<slot>#<generation>`) is cached; any other surface is imported
-  per check-out. Each connection remembers the pool slot keys it handed memory for, and the
-  next reply after one is unregistered lists it in `retired_pool_slots`; the helper drops
-  that import, and drops every import when its connection is replaced. A cached import is
-  never a claim: it pins nothing on the engine's side, dies with the helper, and the engine
-  rehands a slot by its leases alone. Rejected: a bounded helper cache, whose bound is a
+- **DECIDED** — The data plane is zero-copy. Every channel data service carries one
+  `#[repr(C)]` user header, `DataChannelSampleUserHeader`: `sequence_number`,
+  `messages_lost_upstream_before_this_one`, `timestamp_ns`, `payload_byte_len`, `flags`
+  (`starts_group`) and `payload_descriptor`. The payload starts at offset 0 of the sample and
+  carries nothing but payload, 64-byte aligned by its element type,
+  `DataChannelPayloadCacheLine` (`#[repr(C, align(64))]`), and not by iceoryx2's
+  `payload_alignment(64)`, which strides every element of a `[u8]` slice at 64 bytes; a payload
+  of n bytes takes `n.div_ceil(64)` lines, bounded by `payload_byte_len`. The descriptor,
+  `DataChannelPayloadDescriptor`, is `kind: u32` and a 60-byte body, 64 bytes in all. A `Bytes`
+  payload is the sample's bytes, with a zero body. A `GpuPoolSlotFrame` body is `pool` (the
+  pool's UUID), `slot`, `generation`, `timeline_value` and `image_layout`, the raw
+  `VkImageLayout` the producer left the image in (0 for a buffer slot), with the rest zero; the
+  layout travels in the descriptor, never through a surface-share request or a claim table
+  cell. Each family adds a kind and gives its layout the body, and a reader refuses a kind it
+  does not know, never guessing at it. Every `#[repr(C)]` value the data plane puts in shared
+  memory — the header, the descriptor, each body, the claim table row — carries a layout
+  regression test, and Python mirrors none of them: it reads them through the wheel.
+  A read borrows. `read(port)` returns a `PortPayloadBorrow` owning the sample: the read-only
+  buffer protocol (`memoryview(payload)` without a copy), `__dlpack__` / `__dlpack_device__` for
+  a `Bytes` payload as a 1-D `uint8` CPU tensor, and `bytes(payload)` as its one explicit copy.
+  A borrow stays counted while any `memoryview` or DLPack capsule over it lives, and
+  `read(port, into=T)` hands `T.from_bytes` the borrow. A write loans: `with
+  ctx.outputs.loan(port, payload_byte_len, timestamp_ns=None, starts_group=True) as out:` hands
+  out a writable `PortPayloadLoan`, published on a clean exit and given back unpublished when
+  the block raises. Leaving the block while an export of the loan lives raises `BufferError` and
+  gives the sample back, because a published sample never changes under its readers, and a
+  `write` or a second loan on a port whose loan is open is refused naming it, so a port's order
+  is its write order and its publisher loans one sample at a time. `write(port, payload)` copies
+  any contiguous buffer through the same loan door. The mailbox queues samples, each with the
+  per-link attribution it carries; eviction drops the oldest and counts it against its link. A
+  channel subscriber borrows up to the service's creation depth plus the largest quota a port
+  may state plus one, the sample being admitted, because iceoryx2 fixes the limit when the
+  service is created; each link holds itself to its own depth and quota inside it. Owner,
+  2026-11-03; loan edges, owner, 2026-11-05. [strict-port-families; zero-copy-data-plane —
+  SHIPPED #3168, #3174, #3191]
+  Rejected: publishing a loan while an export of it lives, and several open loans per port
+  (owner, 2026-11-05).
+- **DECIDED** — A slow reader costs only itself. Each link has its own borrow quota, stated on
+  the input port (`borrow_quota=`, default 2, at most 8, never on the output): the samples, and
+  for a GPU frame the claims, its reader may hold beyond its mailbox. Past it the link drops
+  the newest frame and counts it in its own `messages_dropped`, and no other link is affected.
+  A producer's output pool is sized from what its links keep: wiring a link records that link's
+  mailbox depth and quota, unwiring forgets them and the pool shrinks lazily, and a queued
+  `GpuPoolSlotFrame` holds no claim until it is read, so the pool keeps `rotation_depth` unheld
+  slots plus every link's mailbox depth and quota, and a frame a mailbox accepted is never
+  outwaited by its slot. No reader ever copies to escape its quota; memory grows with fan-out,
+  and that is accepted. Owner, 2026-11-04; mailboxes counted, owner, 2026-11-05.
+  [zero-copy-data-plane — SHIPPED #3168, #3174]
+  Rejected: one quota per output — a slow reader holding slots starves a timely one; a copy
+  past quota — a hidden slow path the ADR forbids (owner, 2026-11-04); and publish-to-claim
+  transit riding pool depth, refused at the cast as a drop (owner, 2026-11-05).
+- **DECIDED** — A GPU pool frame crosses as its descriptor and is claimed in shared memory. The
+  first time a helper meets a frame of a pool, the surface-share service hands it the pool's
+  claim table, the helper's column in it and the pool's slots; the helper imports each slot once
+  (the entry below), and a descriptor naming a slot it has not imported makes one more
+  request, which is how a slot added by growth crosses. The table is a memfd on Linux and a Mach
+  memory entry on macOS: one 64-byte-aligned row per slot, holding `published_generation:
+  AtomicU64` and one `AtomicU32` claim count per claimant column, up to 64 columns. Every
+  operation is `SeqCst`, and `published_generation`'s top bit is `RETIRING`. A reader claims
+  frame `g` by incrementing its column, then loading the generation, and keeps the claim only
+  if it equals `g`; otherwise it decrements and refuses the frame as recycled, the
+  retired-frame refusal's place. The engine rehands a slot under its ring lock only after
+  reading every column zero, storing `g | RETIRING`, and reading every column zero again; a
+  claim between the two reads makes it store `g` back and treat the slot as held. It then
+  writes the slot and publishes `g + 1`. A claim says nothing about GPU work: the reader waits
+  on `produce_done` at `timeline_value`, and releases only once its own GPU reads have
+  completed, signalling `consume_done` host-side at that release, so a zero count means no
+  reader's GPU work still reads the slot. On macOS a reader also raises the IOSurface use count,
+  the platform half of its claim, because the ring also asks the kernel. The read takes a
+  claim its `PortPayloadBorrow` holds until it drops, and the typed cast takes its own, held
+  while the cast object lives; a refused claim fails a typed read
+  and leaves an untyped one its payload, logged. The claim replaces the per-frame `check_out`
+  and `release_check_out` for a pooled frame; the checkout path stays for non-pool surfaces
+  (foreign adoptions, export stagings) and for a pool whose table the service refuses, such as
+  one past its 64th claimant, which that helper reads through per-frame checkouts. A dead
+  interpreter's claims die with it: a column clears only once its process is reaped — on macOS
+  the service watches each claimant with a kqueue `NOTE_EXIT` — including a helper restart,
+  and the ring re-runs its availability test for those pools. Every connection the service
+  drops, an oversized or malformed message included, is a helper fail-stop: the engine kills
+  that helper and reaps it before its column clears, so a column is never reused while its
+  holder can still run. A loom model of the claim and the rehand proves no interleaving leaves
+  a reader holding a claim on a rehanded slot. Owner, 2026-11-03; column clearing and the
+  checkout fallback, owner, 2026-11-05. [zero-copy-data-plane — SHIPPED #3174, #3191]
+  Rejected: clearing a column on connection close, which leaves a live reader on a reused slot
+  (owner, 2026-11-05).
+- **DECIDED** — A helper imports each pool slot once, on both floors. It keeps one import per
+  pool slot key (the memory, and for a texture the rebuilt image and its joined timeline
+  pair), filled by the claim table's hand-over or by `import_pool_slot`, which sends one
+  slot's memory and takes no lease. A `check_out` of a published frame id whose slot it holds
+  says so (`holds_pool_slot_import: true`), and the service records the lease and answers the
+  frame's metadata, `current_image_layout` included, with no fds or ports; the retired-frame
+  refusal answers first, cached or not. Only a published frame id (`<slot>#<generation>`) is
+  cached; any other surface is imported per check-out. Each connection remembers the pool
+  slot keys it handed memory for, and the next reply after one is unregistered lists it in
+  `retired_pool_slots`; the helper drops that import, and drops every import when its
+  connection is replaced, a failed request's included. A cached import is never a claim: it
+  pins nothing on the engine's side, dies with the helper, and the engine rehands a slot by its
+  claims and leases alone. Rejected: a bounded helper cache, whose bound is a
   guess, and never evicting, which leaks a pool's memory per rebuild (owner, 2026-11-03).
   Measured on an RTX 3090 at 1080p: a frame's check-out to release fell from about 940 µs to
-  36 µs. [linux-pool-slot-import-once — SHIPPED #3151]
-- **OPEN** — Fan-out under zero copy: a borrow pins the producer's own slot, so readers of one
-  output share its pool, and a slow reader that holds slots can starve a timely one. Direction
-  (review, not decided): each link gets its own borrow quota and the pool is sized for the
-  producer's in-flight frames plus every link's quota, so a link past its quota drops only its
-  own frames and no reader ever copies; memory grows with fan-out. Settled in the change that
-  builds the data plane. [zero-copy-data-plane]
+  36 µs. [linux-pool-slot-import-once — SHIPPED #3151; zero-copy-data-plane — SHIPPED
+  #3174, #3191]
 - **DECIDED** — The families migrate the whole tree in the same work: every built-in port, every
   cast type, the stream package, the scaffold and the first-party modules in `packages/`.
   Records carries a node not yet converted. Owner, 2026-11-03. [strict-port-families]
@@ -1494,7 +1563,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port. Surfaces are private and never `kIOSurfaceIsGlobal` — a global surface is readable by
   any process on the machine — so the port carries the surface and never the id. A client's
   death arrives as a dead-name notification and releases its checkout leases, and its
-  registrations too if it was another process. A pooled pixel-buffer slot is a private
+  registrations too if it was another process; its claim table columns clear only once a
+  kqueue `NOTE_EXIT` watch on its pid has seen the process exit. A pooled pixel-buffer slot is a private
   IOSurface imported as the slot's buffer; it carries no timeline on either floor, and the
   pool rehands it only when no lease holds it and the kernel reports its surface not in use —
   a Mach port in flight or a use count in any process; a helper raises the use count while it
@@ -1504,13 +1574,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   64 at once, and is then refused and given no port. **A killed holder's in-use answer clears
   promptly but asynchronously** — 100–400 µs after the reap under load — so a slot is skipped
   for one more acquire, never rehanded early. **A cached `IOSurfaceRef` does not pin a
-  slot**: the helper caches one import per pool slot, as a Linux helper does, raises the use
-  count only while it holds a frame, and empties the cache when the service dies. **A Mach
+  slot**: the helper imports each pool slot once, as a Linux helper does, from the claim
+  table's hand-over with no port per frame, raises the use count only while it holds a frame
+  as the platform half of its claim, drops a slot a reply lists in `retired_pool_slots`, and
+  empties the cache when its connection is replaced or the service dies. **A Mach
   request has no response timeout** (the Linux socket has 10 s); a pending request wakes when the service dies, never
   on a timer. The capability-secure rendezvous, an unlisted `mach_ports_register` stash,
   needs helpers spawned by `posix_spawn`, which the spawn host's `pre_exec` closures prevent;
   that move is #2368, its own change with its own Linux proof.
-  [macos-platform-floor — SHIPPED #2360, #2361]
+  [macos-platform-floor — SHIPPED #2360, #2361; zero-copy-data-plane — SHIPPED #3191]
 - **DECIDED** — Where a surface carries a cross-process timeline on Apple, it carries it as
   Metal shared events, and no engine GPU wait is ever on a value a peer signals. The pair
   crosses with every texture a helper acquires through the escalate path: the engine mints
@@ -2104,13 +2176,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `acquire_texture_from_processor_output_pool` and
   `acquire_storage_buffer_from_processor_output_pool` on both GPU capabilities, riding an
   optional `processor_output_pool {pool_key, rotation_depth}` on the two acquire ops. It
-  rotates through `rotation_depth` slots, grows while consumers hold frames to a cap of 16,
-  and at the cap refuses by name so the producer drops its own frame; this cap is the only
+  keeps `rotation_depth` unheld slots plus every link's mailbox depth and borrow quota on its
+  outputs, grows while consumers hold frames to a cap of 16, or to that reserve plus the links'
+  quotas when that is more, and at the cap refuses by name so the producer drops its own frame; this cap is the only
   count on a node's pooled frames, the shared pools below capping no shape. A descriptor
   change replaces the pool, bridge teardown releases every slot and frees each one no holder
   still has, and a retired id is refused as recycled at resolve. `ProcessorOutputTextureRing` keeps its spelling and asks this pool for
   every frame; `ModelInputTensorKernel` asks its tensor side directly. Handing out a reused
-  slot is bookkeeping only — a lease scan and a generation mint, entering neither the
+  slot is bookkeeping only — a claim and lease scan and a generation mint, entering neither the
   escalate gate nor a device-idle wait; only growth allocates under the gate. Nothing
   therefore drains a slot's earlier readers before its next write, so every write into a slot
   orders itself: a draw's colour-target barrier sources `ALL_COMMANDS` / `MEMORY_WRITE`, as
@@ -2118,7 +2191,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
   rotation, which would be a second system deciding slot reuse.
   [engine-steps — SHIPPED #2427, #2429, #2503, #2546; shared-pools-bounded-by-memory-budget —
-  SHIPPED #2741, #2743; amended by
+  SHIPPED #2741, #2743; zero-copy-data-plane — SHIPPED #3174; amended by
   tatolab-names: on the Python surface the two acquire methods become
   `…_from_node_output_pool` and the ring `NodeOutputTextureRing` (§Packages, no public Python
   name says "processor")]
@@ -2583,7 +2656,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   CoreAudio arm — and it is published
   through the timestamped write, never the implicit one, whose `MediaClock::now()`
   would stamp the moment of publication rather than the instant of capture. Both the
-  message field and the frame header therefore carry the same device-derived value, in the
+  message field and the user header therefore carry the same device-derived value, in the
   same epoch a video frame's timestamp carries, which is the whole of block-level A/V
   sync: joining audio to camera frames is subtracting two integers.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991; macos-capability-parity —
@@ -2910,7 +2983,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   parsed from the SPS the arm emits, so no arm's profile is misstated — and the coded extent,
   before crop, ride the port's catalog entry, which the encoder writes after its first frame;
   colour rides the bitstream's VUI; a sync point is the envelope's `starts_group`; the
-  timestamp rides the frame header like every message's. A message the decoder cannot read is
+  timestamp rides the user header like every message's. A message the decoder cannot read is
   refused by name, never reshaped — the audio wire codec's doctrine — and a decoded frame is
   an ordinary `VideoFrame`. Loss on an ordered encoded link is the engine's per-link count the
   reader exposes as `lost_since_last_read`: a decoder enters a stream only at a
@@ -3019,7 +3092,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port's catalog entry is a hang audio entry: `codec` (`"opus"`), `sampleRate` (`48000`,
   Opus's own clock), `numberOfChannels`, and the `OpusHead` bytes in `description`, whose
   PreSkip is the encoder's lookahead in 48 kHz samples, which a decoder trims. The stamp rides
-  the frame header and names the packet's first sample, carried from the window block the
+  the user header and names the packet's first sample, carried from the window block the
   encoder consumed with the timestamped write. `OpusDecoder` reads the channels and the
   pre-skip from the upstream entry's `OpusHead`, falling back to the packet's TOC for the
   channels. Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;

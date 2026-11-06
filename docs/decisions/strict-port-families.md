@@ -61,10 +61,22 @@ code: Records takes plain dicts and encodes them itself.
   first-party modules in `packages/` included. Records can carry a node not yet converted.
 - The descriptors are a cross-language ABI across Python, Rust and the module host table,
   and each carries a layout regression test.
-- A held borrow pins a shared-memory slot; borrows per port are bounded, and past the bound
-  the link drops and counts, so a slow reader costs only itself.
+- A held borrow pins a shared-memory slot; borrows ~~per port~~ per link are bounded, and past
+  the bound the link drops and counts, so a slow reader costs only itself.
+  > ~~per port~~ — Superseded 2026-11-04 by the owner's choice of a borrow quota per link: one
+  > quota per output lets a slow reader holding slots starve a timely one.
 - The claim table's cross-process atomics need a written memory-ordering argument and
-  crash-reclaim tests; a mistake serves recycled pixels.
+  crash-reclaim tests; a mistake serves recycled pixels. The argument: every operation is
+  `SeqCst`, so there is one total order. A reader claims frame `g` by incrementing its column
+  and then loading `published_generation`, keeping the claim only if it reads `g`. The engine
+  rehands a slot only after reading every column zero, storing `g | RETIRING`, and reading
+  every column zero again. If the reader's increment precedes the engine's second read, the
+  engine sees the claim and backs off, storing `g` back; that reader saw `g` and holds a valid
+  claim. If it follows, the reader's load follows the `RETIRING` store, so the reader refuses.
+  A reader that refuses during a back-off loses a frame it was in time for: a count, never
+  wrong pixels. A claimant that dies mid-claim leaves its column non-zero until its process is
+  reaped, which is the only time a column clears. A loom model of the claim against the
+  rehand, and crash-reclaim tests of a reaped claimant's column, prove it.
 - Records is the one family with no brake; built-ins never publish Records for data that fits
   another family, and the catalog marks a Records port as unchecked.
 - `ImageToArray` has to be zero-copy where the layouts match, or authors route around it.

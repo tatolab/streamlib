@@ -140,9 +140,11 @@ built-in publishes on means you skipped it.
   bootstrap uses needs its `_engine.pyi` entry.
 - **A message's payload is bytes; typing is load-bearing on the read side and absent inside
   the record on the write side.** `write(port_name, payload, timestamp_ns=None,
-  starts_group=True)` refuses anything that is not `bytes`, under pyright and at runtime.
-  `read(port_name)` narrows to `bytes | None`, and `read(port_name, into=T)` to `T | None`
-  through `T.from_bytes`, catching a wrong attribute. The dict handed to
+  starts_group=True)` copies any contiguous buffer and refuses anything else, under pyright
+  and at runtime; `loan(port_name, payload_byte_len)` fills a sample in place.
+  `read(port_name)` narrows to `PortPayloadBorrow | None`, a borrow of the sample with no
+  copy, and `read(port_name, into=T)` to `T | None` through `T.from_bytes`, catching a wrong
+  attribute. The dict handed to
   `tatolab.stream.msgpack.pack` is checked by nothing — a typo'd key, a `str` where the wire
   wants an `int`, and a missing required key all reach the runtime silently — unless a
   `MsgpackCast` dataclass's `to_bytes` builds it. Spell a record against the wire contract
