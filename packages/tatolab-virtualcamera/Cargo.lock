@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-virtualcamera"
-version = "0.68.29"
+version = "0.68.30"
 dependencies = [
  "pyo3",
  "tatolab-module-sdk",
