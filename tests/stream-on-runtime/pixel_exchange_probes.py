@@ -17,7 +17,7 @@ from typing import TypedDict
 
 import numpy
 
-from tatolab.stream import VideoFrame, log, node
+from tatolab.stream import Image, Input, Output, log, node
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32
@@ -250,18 +250,16 @@ class InvertingEffect:
     opens CPU access, and edits the engine's own memory in place.
     """
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.frames_seen = 0
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.frames_seen >= 1:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        frame = VideoFrame.from_bytes(payload)
 
         def probe() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -304,36 +302,28 @@ class ReportingInvertingEffectConfig(TypedDict, total=False):
 class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
-    It claims its first frame for the rest of its life, so the verifier
+    It holds its first frame for the rest of its life, so the verifier
     downstream resolves the same pixels whatever the producer does next, and
-    sends that frame's message on every call: no link promises delivery, and a
-    message written before the verifier's interpreter subscribed is lost.
+    writes that frame on every call: no link promises delivery, and a frame
+    written before the verifier's interpreter subscribed is lost.
     `skip_edit` makes it the negative control: it reports the inverted digest
     and leaves the pixels alone.
     """
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
-
-    @node.output()
-    def video_to_downstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
+    video_to_downstream = Output(Image)
 
     def __init__(self, config: ReportingInvertingEffectConfig) -> None:
         self.skip_edit = config.get("skip_edit", False)
-        self.claim_on_the_edited_frame = None
-        self.edited_frame_payload = None
+        self.edited_frame = None
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if self.edited_frame_payload is not None:
-            ctx.outputs.write("video_to_downstream", self.edited_frame_payload)
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if self.edited_frame is not None:
+            ctx.outputs.write(self.video_to_downstream, self.edited_frame)
             return
-        if payload is None:
+        if frame is None:
             return
-        frame = VideoFrame.from_bytes(payload)
-        self.claim_on_the_edited_frame = (
-            ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
-        )
 
         def edit() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -351,8 +341,8 @@ class ReportingInvertingEffect:
             }
 
         _report(edit)
-        self.edited_frame_payload = payload
-        ctx.outputs.write("video_to_downstream", payload)
+        self.edited_frame = frame
+        ctx.outputs.write(self.video_to_downstream, frame)
 
 
 @node
@@ -360,18 +350,16 @@ class FrameDigestVerifier:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.reported:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bytes(payload)
 
         def verify() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:

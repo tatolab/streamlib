@@ -564,5 +564,5 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
         "loaded-pattern",
         "video",
         "loaded-sink",
-        "bags_from_upstream",
+        "video_from_upstream",
     ) in served_link_ends, served_link_ends

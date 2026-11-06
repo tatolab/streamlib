@@ -97,18 +97,17 @@ def {stream_function_name}(stream_builder: StreamBuilder) -> None:
 '''
 #: The project's reader, in its own module: a processor's only legal home.
 PROJECT_FRAME_READER_SOURCE = '''\
-from tatolab.stream import RuntimeContextLimitedAccess, node
+from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
 
 
 @node
 class PatternFrameReader:
     """Reads each frame it receives and keeps none."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("video_from_upstream")
+        ctx.inputs.read(self.video_from_upstream)
 '''
 PROJECT_STREAM_NODE_COUNT = 2
 EXPOSED_NODE = "pattern"

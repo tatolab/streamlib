@@ -26,6 +26,9 @@ import traceback
 import numpy
 
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    Input,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -59,30 +62,22 @@ def _report(probe_body) -> None:
 
 
 class _FrameProbeBase:
-    """Reads exactly one frame message, then reports through `_report`."""
+    """Reads exactly one Image frame, held against producer reuse while it lives, then reports through `_report`."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.frames_seen = 0
 
-    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> dict:
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.frames_seen >= 1:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        frame = VideoFrame.from_bytes(payload)
-        frame_held_against_producer_reuse = (
-            ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
-        )
-        try:
-            _report(lambda: self._probe(ctx, frame))
-        finally:
-            del frame_held_against_producer_reuse
+        _report(lambda: self._probe(ctx, frame))
 
 
 @node

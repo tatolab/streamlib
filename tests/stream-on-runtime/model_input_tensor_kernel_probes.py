@@ -16,6 +16,8 @@ from typing import Any, Callable, Tuple, TypedDict
 
 from tatolab.stream import (
     GpuSurfaceHandle,
+    Image,
+    Input,
     ModelInputTensorChannelOrder,
     ModelInputTensorDtype,
     ModelInputTensorFit,
@@ -23,7 +25,6 @@ from tatolab.stream import (
     ModelInputTensorLayout,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -220,8 +221,7 @@ class ModelInputTensorMatrixProbe:
     """Applies a kernel per layout x dtype of one fit to the first frame and
     reports each tensor's largest error against torch."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self, config: ModelInputTensorMatrixProbeConfig) -> None:
         self.compiled_mean = (
@@ -249,7 +249,7 @@ class ModelInputTensorMatrixProbe:
         }
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
@@ -288,8 +288,7 @@ class NonRgbaSourceRefusalProbe:
     """Hands the kernel a `bgra32` pixel buffer and a tensor surface, and
     reports each refusal."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -298,7 +297,7 @@ class NonRgbaSourceRefusalProbe:
         self.kernel = ModelInputTensorKernel.compile(ctx.gpu_full_access, width=32, height=24)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
@@ -341,8 +340,7 @@ class PadBottomRightExtentChangeProbe:
     RGBA pixel buffer written from numpy, then to the frame again — each
     tensor at its own source's extent, each compared with torch."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -358,7 +356,7 @@ class PadBottomRightExtentChangeProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True

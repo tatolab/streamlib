@@ -20,10 +20,8 @@ proves little.
 
 `[cast-object-tensor-protocol]` then says that same object *is* the tensor
 protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
-the resolve and the lock absorbed. That half is proven here for a cast type the
-wheel never heard of as well as for `VideoFrame` — a protocol that only worked
-for the shipped class would be exactly the privilege the plan says it must not
-have. Its write doors close the gradient, and the only place they can be proven
+the resolve and the lock absorbed. That half is proven here for the `ImageFrame` an
+Image read returns. Its write doors close the gradient, and the only place they can be proven
 is one with a real producer behind the frame: an edit through `writable()` or
 `cpu()` is checked by resolving the surface again from scratch, because
 published means every *other* holder observes it.
@@ -65,21 +63,13 @@ STREAM_BY_PROBE_AND_SOURCE = {
         "camera",
     ): cast_claim_streams.untyped_read_holds_nothing_probe_off_the_camera,
     (
-        "AUserAuthoredCastReachesItsPixelsBareProbe",
+        "TheImageFrameReachesItsPixelsBareProbe",
         "test_pattern",
-    ): cast_claim_streams.a_user_authored_cast_reaches_its_pixels_bare_probe_off_the_test_pattern,
+    ): cast_claim_streams.the_image_frame_reaches_its_pixels_bare_probe_off_the_test_pattern,
     (
-        "TheShippedVideoFrameReachesItsPixelsBareProbe",
-        "test_pattern",
-    ): cast_claim_streams.the_shipped_video_frame_reaches_its_pixels_bare_probe_off_the_test_pattern,
-    (
-        "AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe",
+        "TheImageFrameReachesItsPixelsAsADeviceTensorProbe",
         "camera",
-    ): cast_claim_streams.a_user_authored_cast_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera,
-    (
-        "TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe",
-        "camera",
-    ): cast_claim_streams.the_shipped_video_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera,
+    ): cast_claim_streams.the_image_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera,
     (
         "TheGpuWriteDoorEditsTheFrameProbe",
         "test_pattern",
@@ -225,35 +215,15 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
 
 
 @pytest.mark.rig_only_capability(reason="CUDA")
-def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
+def test_the_image_frame_reaches_its_pixels_with_no_ceremony(
     start_tatolabd_running_stream,
 ):
-    """The no-privilege claim, against a real surface: a type the wheel never
-    heard of composes the shipped piece and hands its pixels to a DLPack
-    consumer.
-
-    No `resolve_surface`, no `lock`, no context manager anywhere in the
-    probe — the object the read handed back is the tensor-protocol producer.
-    """
+    """The `ImageFrame` an Image read returns hands its pixels to a DLPack
+    consumer with no `resolve_surface`, no `lock` and no context manager, and
+    they are the surface's own pixels."""
     observation = run_claim_probe(
         start_tatolabd_running_stream,
-        "AUserAuthoredCastReachesItsPixelsBareProbe",
-        source="test_pattern",
-    )
-
-    _assert_the_bare_view_is_this_frames_pixels(observation)
-
-
-@pytest.mark.rig_only_capability(reason="CUDA")
-def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
-    start_tatolabd_running_stream,
-):
-    """The parity half: `VideoFrame` is built from the same composable, so it
-    must reach its pixels through the same path with the same result. A
-    difference here is a privilege the plan does not grant it."""
-    observation = run_claim_probe(
-        start_tatolabd_running_stream,
-        "TheShippedVideoFrameReachesItsPixelsBareProbe",
+        "TheImageFrameReachesItsPixelsBareProbe",
         source="test_pattern",
     )
 
@@ -289,7 +259,7 @@ def _require_a_device_consumer() -> None:
 
 
 @pytest.mark.rig_only_capability(reason="CUDA")
-def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
+def test_the_image_frame_reaches_torch_as_a_device_tensor(
     start_tatolabd_running_stream,
 ):
     """`torch.from_dlpack(frame)` off a live camera frame, in a real helper
@@ -297,19 +267,7 @@ def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
     """
     _require_a_device_consumer()
     observation = run_claim_probe(
-        start_tatolabd_running_stream, "AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe"
-    )
-
-    _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
-
-
-@pytest.mark.rig_only_capability(reason="CUDA")
-def test_the_shipped_video_frame_reaches_torch_as_a_device_tensor(
-    start_tatolabd_running_stream,
-):
-    _require_a_device_consumer()
-    observation = run_claim_probe(
-        start_tatolabd_running_stream, "TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe"
+        start_tatolabd_running_stream, "TheImageFrameReachesItsPixelsAsADeviceTensorProbe"
     )
 
     _assert_the_bare_device_tensor_is_this_frames_pixels(observation)

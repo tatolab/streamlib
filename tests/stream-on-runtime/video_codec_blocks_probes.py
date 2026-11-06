@@ -12,8 +12,6 @@ the way a moq-dev player does — each message a media frame, a keyframe
 opening a group, the port's catalog entry naming the codec.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
 `DecodedVideoFrameProbe` reads the far side of the decoder as Image frames.
-`TestPatternFrameRepublishedAsAnImageFrame` stands between the pattern, which
-still publishes `VideoFrame` records, and the encoder, which reads Image frames.
 
 The two stamp reports are uncapped, unlike the cast report. Each probe is its
 own helper process attaching at its own pace, so a short window on either side
@@ -25,7 +23,7 @@ import dataclasses
 import json
 
 from hang_media_frame_reading import split_hang_legacy_container_media_frame
-from tatolab.stream import ColorInfo, Image, Input, Output, VideoFrame, log, node
+from tatolab.stream import Image, Input, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -46,48 +44,6 @@ ENCODED_FRAMES_REPORTED = 40
 DECODED_STAMPS_REPORTED = 30
 
 ENCODED_PORT = "encoded_video_from_upstream"
-
-
-TEST_PATTERN_FRAME_FORMAT = "rgba8_unorm"
-
-
-@dataclasses.dataclass(frozen=True)
-class _TestPatternFrameAsAnImage:
-    """The fields an Image write reads off a pooled frame this node read."""
-
-    surface_id: str
-    width: int
-    height: int
-    format: str
-    colour: "ColorInfo | None"
-
-
-@node
-class TestPatternFrameRepublishedAsAnImageFrame:
-    """Reads the pattern's `VideoFrame` records and writes each frame on as an Image frame."""
-
-    __test__ = False
-
-    video = Output(Image)
-
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
-
-    def process(self, ctx) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
-        if frame is None:
-            return
-        ctx.outputs.write(
-            self.video,
-            _TestPatternFrameAsAnImage(
-                surface_id=frame.surface_id,
-                width=frame.width,
-                height=frame.height,
-                format=TEST_PATTERN_FRAME_FORMAT,
-                colour=frame.color_info,
-            ),
-            timestamp_ns=frame.timestamp_ns,
-        )
 
 
 @node

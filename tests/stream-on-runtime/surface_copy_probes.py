@@ -19,9 +19,10 @@ import numpy
 from tatolab.stream import (
     ComputeKernel,
     GpuSurfaceHandle,
+    Image,
+    Input,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -85,8 +86,7 @@ class FrameLandingProbe:
     nothing landed a frame in, and the check must fail.
     """
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     kernel: ComputeKernel
     landing_texture: GpuSurfaceHandle
@@ -110,11 +110,10 @@ class FrameLandingProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.reported:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bytes(payload)
         gpu = ctx.gpu_limited_access
 
         def land_and_invert() -> dict:
@@ -150,18 +149,16 @@ class FrameLandingProbe:
 class CopyRefusalProbe:
     """Asks for each copy the engine must refuse, and reports what it said."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("video_from_upstream")
-        if payload is None or self.reported:
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bytes(payload)
         gpu = ctx.gpu_limited_access
 
         def refusals() -> dict:

@@ -47,4 +47,4 @@ def named_pattern_into_a_named_sink(stream_builder: StreamBuilder) -> None:
         TestPatternSource, name="Loaded Pattern", config={"width": 320, "height": 180}
     )
     sink = stream_builder.add(LoadedFrameSink, name="Loaded Sink")
-    stream_builder.connect(pattern.output("video"), sink.input("bags_from_upstream"))
+    stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))

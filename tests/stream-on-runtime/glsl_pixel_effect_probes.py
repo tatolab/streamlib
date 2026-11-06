@@ -18,9 +18,11 @@ from tatolab.stream import (
     GlslPixelEffect,
     GlslPixelEffectDialType,
     GpuContextLimitedAccess,
+    Image,
+    ImageFrame,
+    Input,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -131,8 +133,7 @@ class InvertingEffectProbe:
     which the invert check must fail.
     """
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self, config: InvertingEffectProbeConfig) -> None:
         self.effect_glsl = EFFECT_GLSL_BY_NAME[config.get("effect", "invert")]
@@ -144,7 +145,7 @@ class InvertingEffectProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
@@ -154,16 +155,16 @@ class InvertingEffectProbe:
             self.claim_on_the_source_frame = gpu.claim_surface_against_producer_reuse(
                 frame.surface_id
             )
-            output_bag = self.effect.apply_to_frame(gpu, frame, dials={"strength": 1.0})
+            output_frame = self.effect.apply_to_frame(gpu, frame, dials={"strength": 1.0})
             source = _pixels_of(gpu, frame.surface_id)
             expected = source.copy()
             expected[:, :, :3] = 255 - expected[:, :, :3]
             return {
-                "output_extent": [output_bag["width"], output_bag["height"]],
-                "timestamp_carried": output_bag["timestamp_ns"] == frame.timestamp_ns,
+                "output_extent": [output_frame.width, output_frame.height],
+                "colour_carried": output_frame.colour == frame.colour,
                 "source_is_not_uniform": bool((source != source[0, 0]).any()),
                 "mismatched_pixels": _mismatched_pixels(
-                    _pixels_of(gpu, output_bag["surface_id"]), expected
+                    _pixels_of(gpu, output_frame.surface_id), expected
                 ),
             }
 
@@ -175,8 +176,7 @@ class PreDeclaredHelpersProbe:
     """Applies one effect per pre-declared helper to the first frame and
     reports each one's mismatch against the same picture made with numpy."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -188,7 +188,7 @@ class PreDeclaredHelpersProbe:
         }
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
@@ -208,7 +208,7 @@ class PreDeclaredHelpersProbe:
             }
             return {
                 name: _mismatched_pixels(
-                    _pixels_of(gpu, effect.apply_to_frame(gpu, frame)["surface_id"]),
+                    _pixels_of(gpu, effect.apply_to_frame(gpu, frame).surface_id),
                     expected_by_name[name],
                 )
                 for name, effect in self.effects.items()
@@ -222,8 +222,7 @@ class EveryDialTypeProbe:
     """Applies an effect that paints one colour out of every dial type and
     reports the distinct pixels it wrote."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -236,15 +235,15 @@ class EveryDialTypeProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
         gpu = ctx.gpu_limited_access
 
         def apply_and_read() -> "dict[str, Any]":
-            output_bag = self.effect.apply_to_frame(gpu, frame, dials=EVERY_DIAL_TYPE_VALUES)
-            output = _pixels_of(gpu, output_bag["surface_id"])
+            output_frame = self.effect.apply_to_frame(gpu, frame, dials=EVERY_DIAL_TYPE_VALUES)
+            output = _pixels_of(gpu, output_frame.surface_id)
             return {
                 "distinct_pixels": numpy.unique(output.reshape(-1, 4), axis=0).tolist()
             }
@@ -257,8 +256,7 @@ class CompilerDiagnosticLineProbe:
     """Compiles a body with a mistake on its third line and reports the line
     numbers the compiler's diagnostic names."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def compile_and_read_the_diagnostic() -> "dict[str, Any]":
@@ -287,8 +285,7 @@ class CopyRefusedFrameProbe:
     """Applies an effect to a `bgra` frame, as a camera may publish, which the
     engine copy refuses to land, and reports what the effect said."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -302,14 +299,16 @@ class CopyRefusedFrameProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         self.reported = True
-        bgra_frame = VideoFrame(
+        bgra_frame = ImageFrame(
             surface_id=self.bgra_pixel_buffer.surface_id,
             width=FRAME_WIDTH,
             height=FRAME_HEIGHT,
+            format="bgra8_unorm",
+            colour=frame.colour,
             timestamp_ns=frame.timestamp_ns,
         )
 
