@@ -13,19 +13,27 @@ Today every node is a processor. A Python `@node` class gets its own child proce
 native processor gets its own OS thread. There is nothing smaller.
 
 **After this change:**
-- **One graph, four node kinds.** Every node has the same ports, families, links and `type`.
-  What differs is its kind, declared by a contract about its code; the runtime derives where
-  it runs. No placement surface and no dial.
+- **One graph, three node kinds.** Every node has the same ports, families, links and `type`.
+  What differs is its kind, declared by a contract about what its code does; the runtime
+  derives where it runs. No placement surface and no dial.
 
   | Kind | Author writes | Contract | Runs |
   | --- | --- | --- | --- |
-  | op | a native function on the module SDK's op contract; the runtime bundles `tatolab-ops` (`Lerp`, `Lfo`, `Clamp`) | native, bounded | inside the read of the node that reads it |
-  | `@node.shader` | a Slang function | Images and values in, an Image out, no side effects | on the GPU; a chain fuses into one kernel |
-  | `@node.pure` | a Python function | no hidden state; state and time are parameters | inside the Python node that reads it |
-  | `@node` class | a class with a lifecycle | anything: GPU, devices, threads, state | its own process, as today |
+  | shader | a Slang function, `@node.shader` | Images and values in, an Image out, no side effects | on the GPU; a chain fuses into one kernel |
+  | pure | a function in Python (`@node.pure`) or Rust (`#[pure_node]`, `tatolab-module-sdk`) | outputs from inputs only; state and time are parameters | inside the node that reads it |
+  | class | a class with a lifecycle, `@node` | anything: devices, network, files, threads, GPU | its own process, as today |
 
-- **The rule an agent needs:** a class is a process; a function runs wherever the runtime puts
-  it, and never gets a process of its own unless it crashes its reader.
+- **Which to reach for:** pixels in and an Image out is a shader. Computing from inputs (maths,
+  logic, a join, a curve, a custom lerp of numbers) is a pure function: Python by default, Rust
+  when it is hot or a native node reads it. Touching the world, or holding a resource across
+  calls, is a class.
+- **Language is not a kind.** A Rust pure node and a Python one keep the same contract. The
+  language only changes where it can run: Rust runs inside any reader, Python inside a Python
+  reader, or the pool in phase 4.
+- **The runtime's own small nodes** (`Lerp`, `Lfo`, `Clamp`, …) are Rust pure nodes in the
+  bundled first-party module `tatolab-ops`, built on the same SDK as anyone's.
+- **The rule an agent needs:** a class is a process; a function, shader or pure, runs wherever
+  the runtime puts it, and never gets a process of its own unless it crashes its reader.
 - **The kind travels in the graph and the catalog**, so an agent reads it and an editor draws it.
 - **One run loop.** A helper runs the engine's own Rust runner and calls Python's `process()`
   in-process, so reactive, continuous and the island wake rules are written once.
@@ -69,7 +77,8 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Node kind
 
-- Every graph node and catalog entry carries `kind`: `op`, `shader`, `pure` or `process`.
+- Every graph node and catalog entry carries `kind`: `shader`, `pure` or `class`, and a pure
+  node its `language`, `python` or `rust`.
   `graph` and `/api/registry` render it, beside each port's `family`. Kind and family are
   separate axes: a family says what flows on a wire, a kind says how a node's code runs.
 - Linking rules: a shader takes Images and values and returns an Image; a pure function takes
@@ -82,20 +91,20 @@ The order is: the families, then variables, then the gateway and track nodes.
   instance's `process()` in-process. The bootstrap keeps the lifecycle commands, imports and
   describe; it no longer schedules. Every rule below is written once, in Rust.
 
-### Ops
+### Pure nodes in Rust, and `tatolab-ops`
 
-- **One SDK for every op.** An op is native code written against the op contract in
-  `tatolab-module-sdk`, and a node type in its own module's namespace. The ops that come with
-  the runtime are the first-party module `tatolab-ops` (`tatolab.ops:Lerp`), bundled and built
-  exactly the way a third party builds a module of ops; nothing in the engine knows their
-  names. Two modules may both ship a `Lerp`, told apart by import path.
-- **The op contract** extends the module host table with one op entry. Per op, a module's
-  native half exports its descriptor (ports, families, config, whether it keeps state) and an
-  evaluate function the read seam calls with the input values, config, `now` and its state,
-  returning its outputs. It is the one place the engine calls module code, it is versioned
-  with the table, and it is loaded only in a helper: no op, first-party or not, runs in
+- **The pure-node contract** in `tatolab-module-sdk` is the Rust form of `@node.pure`. A
+  `#[pure_node]` function declares its ports, families, config and state in its signature, as
+  the Python form does; the module's native half exports its descriptor and an evaluate entry
+  the read seam calls with the input values, config, `now` and its state, returning its outputs.
+  The module lists it in its `tatolab.nodes` entry points like any node, so its type is its
+  import path. Two modules may both ship a `Lerp`, told apart by import path.
+- The entry extends the module host table: the one place the engine calls module code, versioned
+  with the table, and loaded only in a helper. No node code, first-party or not, runs in
   `tatolabd`.
-- `tatolab-ops` carries:
+- **`tatolab-ops`** is a first-party module of Rust pure nodes, bundled with the runtime and built
+  exactly the way a third party builds one; nothing in the engine knows their names
+  (`tatolab.ops:Lerp`). It carries:
   - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`, `Absolute`,
     `Modulo`.
   - Shaping: `Lerp`, `Clamp`, `Remap`, `Smoothstep`, `Step`.
@@ -109,24 +118,25 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### Evaluation islands
 
-- The compiler groups each connected run of op, shader and pure nodes into an **island**.
+- The compiler groups each connected run of shader and pure nodes into an **island**.
   Inside an island a link is a function call; at its edge a link is an ordinary channel with
   its family. The graph stays flat: an island is a compile result, never a container.
 - **Where an island runs:**
-  - **Ops and pure nodes read by a helper** run inside that helper's read: an island output is
-    a synthetic port in `InputMailboxesInner`, and a read evaluates it. No process, no thread,
-    no processor instance.
+  - **Pure nodes read by a helper** run inside that helper's read: an island output is a
+    synthetic port in `InputMailboxesInner`, and a read evaluates it. No process, no thread, no
+    processor instance. A Rust pure node runs inside any reader's read, a module's native half
+    included.
   - **Shaders** run on one native evaluator per stream in `tatolabd`, which owns the device,
     and publish on a channel. A shader's code is Slang the engine compiles, never module code.
-  - **A stateful op or pure node that feeds several readers** runs in one op helper per
+  - **A stateful pure node that feeds several readers** runs in one pure-node helper per
     stream, spawned only when the stream has such a node, and publishes on a channel. One
     state never has two copies.
-  - **A pure island read by a module's native half** runs on the evaluator's pool (phase 4) or
-    the port is refused by name, since that read holds no GIL.
+  - **A Python pure island read by a module's native half** runs on the pool (phase 4) or the
+    port is refused by name, since that read holds no GIL.
 - **The island pass** runs between plan and PREPARE: union-find over lightweight nodes, a host
   per island, cycle refusal. It re-runs on every live `connect` and `disconnect`, touching only
   the islands the edit changes. Island nodes skip PREPARE and SPAWN.
-- **The wiring envelope** gains an island payload for the reader: the op DAG, its config and
+- **The wiring envelope** gains an island payload for the reader: the island's node DAG, its config and
   the upstream channels the reader now subscribes to.
 - This settles the execution-flavors OPEN: the flavor is derived from the kind, and no node
   declares a dial.
@@ -144,7 +154,7 @@ The order is: the families, then variables, then the gateway and track nodes.
   `Random` agree. See [NEEDS DECISION 2].
 - **Time.** `now` is the reader's `ctx.time` at the read, in integer nanoseconds on the
   stream's monotonic clock. Reproducible in stepped mode; read-time in real-time mode.
-- **Cycles.** The island pass refuses a cycle unless it passes through a delay op (`Lag`,
+- **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
   `SampleAndHold`), which reads the last evaluation's state.
 - **Literal pins.** An unlinked input takes `config[<parameter>]`, else its default; a config
   change is live through `update_config`. See [NEEDS DECISION 3].
@@ -157,7 +167,7 @@ The order is: the families, then variables, then the gateway and track nodes.
 ### The state board
 
 - Each stream has a board of fixed-size state slots, modelled on the loss-count board: the
-  parent creates it, the host writes it. A stateful op or pure node keeps its state there,
+  parent creates it, the host writes it. A stateful pure node keeps its state there,
   keyed by node name, so it survives a helper restart and a re-island, is persisted in the
   stream record on reload, and `graph` can show it.
 
@@ -188,7 +198,7 @@ def blend(a: ImageFrame, b: ImageFrame, amount: float) -> ImageFrame: ...
 - **Prerequisite:** dispatch moves from the shared host fence to asynchronous submission with
   timeline signalling, so one stream's shaders do not serialise every other's.
 
-### `@node.pure`
+### `@node.pure` in Python
 
 ```python
 @node.pure
@@ -214,8 +224,10 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   It refuses by name calls to `time.*`, `random.*`, `open`, `socket`, `threading`,
   `os.urandom` and `datetime.now`, `global` and `nonlocal`, closures, and referenced mutable
   globals. It cannot see aliased, dynamic or transitive access; a function that cheats computes
-  wrong values but cannot crash anything outside its interpreter.
-- **A crash breadcrumb.** Before each pure call the helper writes the node's name to its board.
+  wrong values but cannot crash anything outside its interpreter. A Rust pure node is held to
+  the same contract by review, not a lint.
+- **A crash breadcrumb.** Before each pure call, in either language, the helper writes the node's
+  name to its board.
   When a helper dies with the breadcrumb set, its restart moves that node out to its own
   process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
   the cost. See [NEEDS DECISION 5].
@@ -251,42 +263,43 @@ both and defines neither.
     reference to its gateway node, and a track the same way; neither is ever a record on a link.
   - A get with no setter, two setters of one name, or a get read as the wrong family or node type
     is refused by name at `connect`.
-- **Inside an island** a resolved variable is the link it resolved to, so a get feeding an op is
+- **Inside an island** a resolved variable is the link it resolved to, so a get feeding a pure node is
   a function call like any other.
 
 ### Viewers
 
 An island holds its latest values, so a viewer of a lightweight node's output reads them through
 whatever read path `gateway-nodes` settles, at no process cost. Relays, gateways, tracks and
-previews are class or runtime-supplied nodes a person places, never ops, because they touch the
-network or the device.
+previews are class nodes a person places, never pure nodes, because they touch the network or
+the device.
 
 ### What Tato Studio reads
 
 - `kind` and `family` on every `graph` node and port, from the real runtime.
-- A palette: category per node type, ops listed as types, and a project's shader and pure
-  nodes listed without running their code.
+- A palette: category per node type, every installed module's pure nodes, `tatolab-ops`
+  included, and a project's shader and pure nodes listed without running their code.
 - Where each lightweight node runs: its host node, its fused group, promoted or not.
-- The source-writing edit verbs accept op, shader and pure types and write an idiomatic
+- The source-writing edit verbs accept shader and pure types and write an idiomatic
   `stream.py` line.
 - Log records and state attribute a lightweight node by its own name, not its host's process.
 
 ## MODIFIED
 
 - **The placement entry** (`ARCHITECTURE.md:1529-1546`). It reads: a Python **class** node runs
-  in its own child process, exec'd from the stream's venv, never fork; ops and shaders run
-  without a process; pure Python runs inside its Python reader, in a pool only in phase 4, and
+  in its own child process, exec'd from the stream's venv, never fork; shaders and Rust pure
+  nodes run without a process; Python pure nodes run inside their Python reader, in a pool only in phase 4, and
   in its own process after a crash or a stall. "No processor may ever block another" holds
   between class nodes.
 - **The class-identity entry** (`ARCHITECTURE.md:1732`). `@node` gains `@node.pure` and
-  `@node.shader`; a function's type is its import path, as a class's is.
+  `@node.shader`, and a module's `#[pure_node]` is a node type too; a function's type is its
+  import path, as a class's is.
 - **The execution-flavors OPEN** (`ARCHITECTURE.md:1775-1777`) becomes DECIDED as evaluation
   islands.
-- **The built-ins entry** (`ARCHITECTURE.md:539-549`). The ops are a first-party module,
-  `tatolab-ops`, bundled with the runtime and built on the same op contract any module uses, so
-  the runtime still ships no node of its own.
-- **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the op entry, the one place
-  the engine calls module code, and only in a helper.
+- **The built-ins entry** (`ARCHITECTURE.md:539-549`). `tatolab-ops` is a first-party module of
+  Rust pure nodes, bundled with the runtime and built on the SDK any module uses, so the runtime
+  still ships no node of its own.
+- **The module host table entry** (`ARCHITECTURE.md:550-559`) gains the pure-node entry, the one
+  place the engine calls module code, and only in a helper.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
 - **The variables entry** (`ARCHITECTURE.md:1833-1844`): a variable carries only the five
@@ -339,9 +352,11 @@ Assumed unless overruled:
 
 - `Lfo → Remap → <Python class>` runs with exactly one child process, the class's, beside the
   class case in `tests/stream-on-runtime/test_helper_placement.py`.
-- `connect` and `disconnect` re-island live, and a cycle without a delay op is refused by name.
-- A stateful op keeps its state across a helper restart and a stream reload.
-- A stateful op feeding two readers gives both the same value.
+- `connect` and `disconnect` re-island live, and a cycle without a delay node is refused by name.
+- A fixture module's Rust pure node joins an island beside `tatolab-ops`' and is read by a
+  module's native half.
+- A stateful pure node keeps its state across a helper restart and a stream reload.
+- A stateful pure node feeding two readers gives both the same value.
 - Two streams' shader dispatches no longer serialise on one host fence.
 - One `@node.shader` runs Image in, Image out, with no Python process.
 - A three-node point-wise shader chain records one submission per frame, matches the unfused
@@ -356,19 +371,19 @@ Assumed unless overruled:
 
 ## Tickets (expected)
 
-1. Ops at the read seam:
-   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the op contract in
-      `tatolab-module-sdk`; `tatolab-ops` with `Lfo`, `Remap`, `Clamp`; a fixture module's op
-      joining an island beside them.
+1. Rust pure nodes at the read seam:
+   1. `kind` in the descriptor, catalog and `graph`; the one run loop; the pure-node contract in
+      `tatolab-module-sdk`; `tatolab-ops` with `Lfo`, `Remap`, `Clamp`; a fixture module's pure
+      node joining an island beside them.
    2. The island pass on live edits, with cycle refusal.
-   3. Literal pins and the full op set.
-   4. Stateful ops on the state board.
-   5. Fan-out of a stateful op in the per-stream op helper.
+   3. Literal pins and the full `tatolab-ops` set.
+   4. Stateful pure nodes on the state board.
+   5. Fan-out of a stateful pure node in the per-stream pure-node helper.
 2. Shaders:
    1. Asynchronous GPU submission.
    2. One `@node.shader` on the native evaluator.
    3. Fusion under the split rule.
-3. Inline pure Python:
+3. Pure nodes in Python:
    1. `@node.pure` with `Time` and `State`, inline in a Python reader.
    2. The purity lint.
    3. The crash breadcrumb and promotion on crash.
@@ -379,7 +394,7 @@ Assumed unless overruled:
 ## Notes (not in scope)
 
 - Measure a helper's real cost (wheel import, idle memory, iceoryx2 and Vulkan setup) and the
-  per-message hop before phase 3; phase 1 removes the hop entirely.
+  per-message hop before phase 3; phase 1 removes the hop for Rust pure nodes.
 - The shader examples in `examples/` and the scaffold's `HalftoneLensEffect` move to
   `@node.shader` as consumer backlog. Retiring `GlslPixelEffect` is a separate owner call.
 - A thread pool for native class nodes is a separate change.
