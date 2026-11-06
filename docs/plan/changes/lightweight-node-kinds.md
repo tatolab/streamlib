@@ -181,7 +181,7 @@ The order is: the families, then variables, then the gateway and track nodes.
 - **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
   `SampleAndHold`), which reads the last evaluation's state.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
-  (§Inputs and config). See [NEEDS DECISION 3].
+  (§Inputs and config).
 - **A control value on a wire.** An island edge carrying one value is Channels with an
   irregular control rate: one sample per message, rate unset. See [NEEDS DECISION 4].
 - **The step ledger** leaves links inside an island off its balance; edge links count as today.
@@ -387,8 +387,8 @@ Each carries a recommendation that is built if nobody overrules it.
   or wait for matching timestamps? *Recommendation:* latest of each; no input waits on another.
 - **[NEEDS DECISION 2] Evaluation count.** Once per change, memoised, or once per pull
   (Blueprint)? *Recommendation:* once per change; a per-pull `Random` read twice disagrees.
-- **[NEEDS DECISION 3] Pins.** Unlinked inputs take config, else default, or every number is a
-  wired `Constant`? *Recommendation:* config, else default, as Blueprint's pins do.
+- **DECIDED 3 — Pins (owner, 2026-11-06).** An unlinked input takes its pin value, else its
+  default, as Blueprint's pins do; settled with DECIDED 7.
 - **[NEEDS DECISION 4] A control value on a wire.** Channels with an irregular control rate, or
   Records? *Recommendation:* Channels, which keeps control values where the plan puts them.
 - **[NEEDS DECISION 5] A crash in an inline function node.** Breadcrumb and promotion on crash, or
