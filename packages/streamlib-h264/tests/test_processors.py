@@ -28,7 +28,7 @@ from tatolab.h264.processors import (
 )
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
-from tatolab.stream import log, msgpack
+from tatolab.stream import log
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -170,11 +170,8 @@ def test_an_encoder_whose_device_is_refused_drains_and_stops_inside_its_budget(e
     encoder = H264Encoder(H264EncoderConfig())
     context = encoder_wired.encoder_context
     encoder.start(context)
-    video_frame = msgpack.pack(
-        {"surface_id": "surface-never-published", "width": 64, "height": 64, "timestamp_ns": 1}
-    )
     for _ in range(3):
-        encoder_wired.source.outputs.write(VIDEO_INPUT_PORT, video_frame)
+        encoder_wired.source.outputs.write(VIDEO_INPUT_PORT, b"a frame no device reads")
     time.sleep(0.3)
 
     stop_began = time.monotonic()
