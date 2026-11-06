@@ -63,7 +63,7 @@ mod tests {
     #[crate::processor(
         execution = manual,
         config = crate::core::runtime::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
-        output("video"),
+        output("video", family = Image),
     )]
     pub struct AddLocalSourceTakingOneSetting;
 

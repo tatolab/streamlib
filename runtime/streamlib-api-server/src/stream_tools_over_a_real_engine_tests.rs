@@ -39,7 +39,7 @@ use crate::mcp::tests::{first_text_block_json, tool_call_result};
 use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 /// A native source with one output port, `video`, and nothing to do.
-#[streamlib::sdk::processor(execution = manual, output("video"))]
+#[streamlib::sdk::processor(execution = manual, output("video", family = Image))]
 pub struct StreamToolsTestSource;
 
 impl ManualProcessor for StreamToolsTestSource::Processor {

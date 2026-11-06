@@ -25,10 +25,10 @@ pub(crate) mod rig_only_capability_skip;
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
     execution = manual,
-    input("in1", delivery_profile = "newest"),
-    input("in2", delivery_profile = "newest"),
-    output("out1"),
-    output("out2"),
+    input("in1", delivery_profile = "newest", family = Records),
+    input("in2", delivery_profile = "newest", family = Records),
+    output("out1", family = Records),
+    output("out2", family = Records),
 )]
 pub(crate) struct MockProcessor;
 
@@ -56,8 +56,8 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 /// Mock processor with only output ports.
 #[crate::processor(
     execution = manual,
-    output("out1"),
-    output("out2"),
+    output("out1", family = Records),
+    output("out2", family = Records),
 )]
 pub(crate) struct MockOutputOnlyProcessor;
 
@@ -85,8 +85,8 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 /// Mock processor with only input ports.
 #[crate::processor(
     execution = manual,
-    input("in1", delivery_profile = "newest"),
-    input("in2", delivery_profile = "newest"),
+    input("in1", delivery_profile = "newest", family = Records),
+    input("in2", delivery_profile = "newest", family = Records),
 )]
 pub(crate) struct MockInputOnlyProcessor;
 
@@ -115,7 +115,7 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
 /// ports every other input mock declares.
 #[crate::processor(
     execution = manual,
-    input("in1", delivery_profile = "ordered"),
+    input("in1", delivery_profile = "ordered", family = Records),
 )]
 pub(crate) struct MockOrderedInputOnlyProcessor;
 
@@ -145,8 +145,8 @@ impl crate::core::ManualProcessor for MockOrderedInputOnlyProcessor::Processor {
 /// notifications its listener receives.
 #[crate::processor(
     execution = reactive,
-    input("in1", delivery_profile = "newest"),
-    input("in2", delivery_profile = "newest"),
+    input("in1", delivery_profile = "newest", family = Records),
+    input("in2", delivery_profile = "newest", family = Records),
 )]
 pub(crate) struct MockReactiveInputOnlyProcessor;
 
@@ -172,7 +172,8 @@ impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processo
             dtype = "f32",
             window_size = 512,
             hop = 512
-        )
+        ),
+        family = Channels,
     ),
 )]
 pub(crate) struct MockWindowedAudioConsumerProcessor;
@@ -189,7 +190,7 @@ impl crate::core::ReactiveProcessor for MockWindowedAudioConsumerProcessor::Proc
 /// Mock consumer whose input port declares a borrow quota past the default.
 #[crate::processor(
     execution = reactive,
-    input("frames", delivery_profile = "ordered", borrow_quota = 5),
+    input("frames", delivery_profile = "ordered", borrow_quota = 5, family = Image),
 )]
 pub(crate) struct MockBorrowingConsumerProcessor;
 
@@ -207,7 +208,7 @@ impl crate::core::ReactiveProcessor for MockBorrowingConsumerProcessor::Processo
 /// rather than a default.
 #[crate::processor(
     execution = reactive,
-    input("audio", delivery_profile = "ordered", audio_window = match_device),
+    input("audio", delivery_profile = "ordered", audio_window = match_device, family = Channels),
 )]
 pub(crate) struct MockDeviceMatchedAudioConsumerProcessor;
 
@@ -224,7 +225,7 @@ impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor:
 /// registers under its cast `outone`.
 #[crate::processor(
     execution = manual,
-    output("outOne"),
+    output("outOne", family = Records),
 )]
 pub(crate) struct MockProcessorWithACamelCaseOutputPort;
 
@@ -251,7 +252,7 @@ pub struct MockSourceTakingOneSettingConfig {
 #[crate::processor(
     execution = manual,
     config = crate::core::test_support::MockSourceTakingOneSettingConfig,
-    output("video"),
+    output("video", family = Image),
 )]
 pub(crate) struct MockSourceTakingOneSetting;
 
@@ -268,7 +269,7 @@ impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
 /// stream may not ask the user for an access nobody has answered.
 #[crate::processor(
     execution = manual,
-    output("out1"),
+    output("out1", family = Records),
 )]
 pub(crate) struct MockSourceRefusingAnAccessNobodyAskedFor;
 

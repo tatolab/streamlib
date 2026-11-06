@@ -19,7 +19,7 @@ const GROUPS_WRITTEN_TOGETHER: u64 = 2;
 
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 20),
-    output("paired_groups"),
+    output("paired_groups", family = Records),
 )]
 pub struct PairedGroupWriterTestNode {
     next_message_number: u64,

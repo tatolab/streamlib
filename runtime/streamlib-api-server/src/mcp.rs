@@ -1984,7 +1984,7 @@ pub(crate) mod tests {
     #[streamlib::sdk::processor(
         execution = manual,
         config = crate::mcp::tests::AddNodeTestSourceTakingOneSettingConfig,
-        output("video"),
+        output("video", family = Image),
     )]
     pub struct AddNodeTestSourceTakingOneSetting;
 

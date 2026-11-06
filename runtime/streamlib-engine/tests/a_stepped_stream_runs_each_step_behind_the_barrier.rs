@@ -35,7 +35,10 @@ const MIDDLE_NODE_MACHINE_TIME_PER_MESSAGE: Duration = Duration::from_millis(5);
 /// Each message the sink took: its tick number and its stamp.
 static TICKS_THE_SINK_TOOK: Mutex<Vec<(u64, i64)>> = Mutex::new(Vec::new());
 
-#[streamlib::sdk::processor(execution = continuous(interval_ms = 50), output("ticks"))]
+#[streamlib::sdk::processor(
+    execution = continuous(interval_ms = 50),
+    output("ticks", family = Records),
+)]
 pub struct SteppedTickSource {
     next_tick: u64,
 }
@@ -50,8 +53,8 @@ impl streamlib_engine::ContinuousProcessor for SteppedTickSource::Processor {
 
 #[streamlib::sdk::processor(
     execution = reactive,
-    input("ticks", delivery_profile = "ordered"),
-    output("relayed"),
+    input("ticks", delivery_profile = "ordered", family = Records),
+    output("relayed", family = Records),
 )]
 pub struct SlowSteppedRelay;
 
@@ -67,7 +70,10 @@ impl streamlib_engine::ReactiveProcessor for SlowSteppedRelay::Processor {
     }
 }
 
-#[streamlib::sdk::processor(execution = reactive, input("relayed", delivery_profile = "ordered"))]
+#[streamlib::sdk::processor(
+    execution = reactive,
+    input("relayed", delivery_profile = "ordered", family = Records),
+)]
 pub struct SteppedTickSink;
 
 impl streamlib_engine::ReactiveProcessor for SteppedTickSink::Processor {
@@ -88,7 +94,7 @@ static TICK_BATCHES_THE_SLOW_SINK_TOOK: Mutex<Vec<Vec<u64>>> = Mutex::new(Vec::n
 
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 150),
-    input("ticks", delivery_profile = "ordered"),
+    input("ticks", delivery_profile = "ordered", family = Records),
 )]
 pub struct EveryThirdStepTickSink;
 
@@ -106,7 +112,7 @@ impl streamlib_engine::ContinuousProcessor for EveryThirdStepTickSink::Processor
     }
 }
 
-#[streamlib::sdk::processor(execution = manual, output("frames"))]
+#[streamlib::sdk::processor(execution = manual, output("frames", family = Image))]
 pub struct SelfPacedSource;
 
 impl streamlib_engine::ManualProcessor for SelfPacedSource::Processor {
@@ -115,7 +121,11 @@ impl streamlib_engine::ManualProcessor for SelfPacedSource::Processor {
     }
 }
 
-#[streamlib::sdk::processor(execution = manual, paced_by_real_time, output("frames"))]
+#[streamlib::sdk::processor(
+    execution = manual,
+    paced_by_real_time,
+    output("frames", family = Image),
+)]
 pub struct RealTimePacedManualSource;
 
 impl streamlib_engine::ManualProcessor for RealTimePacedManualSource::Processor {
@@ -130,7 +140,7 @@ const REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL: Duration = Duration::from_mill
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 50),
     paced_by_real_time,
-    output("ticks"),
+    output("ticks", family = Records),
 )]
 pub struct SlowRealTimePacedTickSource;
 
@@ -145,7 +155,10 @@ impl streamlib_engine::ContinuousProcessor for SlowRealTimePacedTickSource::Proc
 /// How many ticks of the node paced by real time its sink took.
 static TICKS_THE_REAL_TIME_SINK_TOOK: AtomicU64 = AtomicU64::new(0);
 
-#[streamlib::sdk::processor(execution = reactive, input("ticks", delivery_profile = "ordered"))]
+#[streamlib::sdk::processor(
+    execution = reactive,
+    input("ticks", delivery_profile = "ordered", family = Records),
+)]
 pub struct RealTimePacedTickSink;
 
 impl streamlib_engine::ReactiveProcessor for RealTimePacedTickSink::Processor {
