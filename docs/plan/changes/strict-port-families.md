@@ -61,8 +61,8 @@ No new ADR.
   class attribute, `Input(family, …)` or `Output(family, …)`. The attribute's name is the port's
   name, and there is no `name=` override. The family is one of `Image`, `Array`, `Channels`,
   `Packets` or `Records`, imported from `tatolab.stream`. Inputs take `delivery=` ("newest" or
-  "ordered", required), `borrow_quota=` (from `zero-copy-data-plane`), `requires=` and
-  `description=`. Outputs take `names=`, the family's own keys below, `catalog=` and
+  "ordered", required), `borrow_quota=` (from `zero-copy-data-plane`), `requires=`, `formats=`
+  (Image) and `description=`. Outputs take `names=`, the family's own keys below, `catalog=` and
   `description=`. [strict-port-families]
 - **ADDED (same section, DECIDED):** Names are strings. An output states them as a literal tuple
   (`names=("rpm", "torque")`) or reads them from its node's config
@@ -77,12 +77,12 @@ No new ADR.
   on each live config update of its node, and an update that drops a name a wired link
   requires is refused naming the link, so a link that passed `connect` stays valid.
   *(Assumed; correct it if a live update should instead unwire the link.)* [strict-port-families]
-- **[NEEDS DECISION] (same entry): what an Image input states about formats.** An output
-  declares `formats=`, but nothing above stops an `rgba16f` output reaching an input that only
-  reads `rgba8` (the compositor's landing copy needs `rgba8_unorm`), so the frame fails after
-  the link is made. Options: (a) an Image input may state `formats=` too, and `connect` refuses
-  unless the two sets overlap, naming both; (b) formats stay output-only and the reader refuses
-  per frame, counted as a drop. Recommended: (a), the same check `requires=` already makes.
+- **ADDED (same entry, DECIDED):** An Image input may state `formats=`, the pixel formats it
+  reads, and `connect` refuses a link unless the output's and the input's sets overlap, naming
+  both ports and both sets, so an `rgba16f` output never reaches an `rgba8`-only input. An input
+  that states none reads any format. Owner, 2026-11-06.
+  Rejected: formats on outputs only, refused per frame as a drop — the link fails silently
+  after it is made (owner, 2026-11-06). [strict-port-families]
 - **[NEEDS DECISION] (same entry): do a Records output's names promise every key in every
   write?** Options: (a) yes, `write` refuses a dict missing a declared name, naming it, so
   `requires=` means the key is always there; (b) no, declared names say which keys may appear,
