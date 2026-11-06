@@ -180,13 +180,30 @@ The order is: the families, then variables, then the gateway and track nodes.
   stream's monotonic clock. Reproducible in stepped mode; read-time in real-time mode.
 - **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
   `SampleAndHold`), which reads the last evaluation's state.
-- **Literal pins.** An unlinked input takes `config[<parameter>]`, else its default; a config
-  change is live through `update_config`. See [NEEDS DECISION 3].
+- **Literal pins.** An unlinked input takes the value set on its pin, else its default
+  (§Inputs and config). See [NEEDS DECISION 3].
 - **A control value on a wire.** An island edge carrying one value is Channels with an
   irregular control rate: one sample per message, rate unset. See [NEEDS DECISION 4].
 - **The step ledger** leaves links inside an island off its balance; edge links count as today.
 - **Loss.** A function-call link cannot drop; edge links take loss slots on the hosting
   helper's board, so no loss is silent.
+
+### Inputs and config
+
+- **The rule.** A value that may change while the stream runs is an input. A value whose change
+  means tearing something down and rebuilding it (a device, a resolution, a file to load, a
+  codec, a model) is config. A tint's colour is an input; a camera's resolution is config.
+- **Every input of every kind has a pin value.** An unlinked input takes the value set on its
+  pin, else its declared default; with neither it must be linked, refused by name at `connect`.
+  The graph records pin values per node beside its config, `graph` shows them, and an edit to
+  one is live and costs nothing. Function and shader inputs take their default from the
+  parameter's; a `@node.process` input declares one on its port
+  (`Input(Channels, default=…)`).
+- **Config is a hint, not a wall.** The editor shows a config field in the node's panel, and
+  "expose as pin" on one node turns that field into an input for that node. A linked config
+  field on a function or shader node replaces the config value for that evaluation; on a
+  process node each new value arrives as a live config update, validated against the schema as
+  any update is, so a costly field stays costly.
 
 ### The state board
 
@@ -341,6 +358,8 @@ the device.
   place the engine calls module code, and only in a helper.
 - **`docs/decisions/helper-process-placement-only.md`**: the clauses this change retires are
   struck in place.
+- **The port descriptor** gains an input's default (`strict-port-families`' `Input`), and the
+  graph spec gains per-node pin values beside config.
 - **The variables entry** (`ARCHITECTURE.md:1833-1844`): a variable carries only the five
   families, and the order is the families, then variables, then the gateway and track nodes.
   Done in this PR, from the owner's ruling of 2026-11-06.
@@ -375,14 +394,18 @@ Each carries a recommendation that is built if nobody overrules it.
 - **[NEEDS DECISION 5] A crash in an inline function node.** Breadcrumb and promotion on crash, or
   always isolate? *Recommendation:* the breadcrumb; it bounds the damage to one restart of the
   reader without a pool.
-- **[NEEDS DECISION 6] The explicit decorators.** Bare `@node` is retired (owner, 2026-11-06):
-  every node names its kind, so a reader or an agent never infers it. `@node.class` cannot be
-  spelled, `class` being a Python keyword. *Recommendation:* `@node.shader`, `@node.function`
+- **DECIDED 6 — The explicit decorators (owner, 2026-11-06).** Bare `@node` is retired: every
+  node names its kind, so a reader or an agent never infers it. `@node.shader`, `@node.function`
   (stateful when it takes `State`) and `@node.process` (a class that may do anything, in its
-  own process). The alternative is `@node.stateless` for functions and `@node.stateful` for a
-  function with state or a class.
+  own process). Rejected: `@node.stateless` / `@node.stateful`, since what decides a process is
+  side effects, not state; and `@node.class`, which Python cannot spell.
+- **DECIDED 7 — Inputs and config (owner, 2026-11-06).** A value that changes freely is an input
+  with a pin value; config is for what needs a rebuild, and any config field may be exposed as
+  a pin (§Inputs and config).
 
 Assumed unless overruled:
+- A function's single output is named `result`; plain parameters are pins by default; a node's
+  palette category defaults to its module's name, overridden by `category=`.
 - `tatolab-ops` is installed in every stream's environment with the runtime, so every helper can
   load it.
 - The shader template is the `ImageInput` shape above.
@@ -426,7 +449,8 @@ Assumed unless overruled:
       `@node.function` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
       `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
    2. The island pass on live edits, with cycle refusal.
-   3. Literal pins and the full `tatolab-ops` set.
+   3. Pin values on every kind's inputs, expose-as-pin for config fields, and the full
+      `tatolab-ops` set.
    4. Stateful function nodes on the state board.
    5. Fan-out of a stateful function node in the per-stream function-node helper.
    6. Rust `#[function_node]` in `tatolab-module-sdk`, proven by a fixture module.
