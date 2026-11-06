@@ -108,16 +108,16 @@ No new ADR.
   `#[repr(C)]` body and layout test, replacing `Bytes` for every family but Packets and Records.
   An Image frame's body starts with today's `GpuPoolSlotFrame` body (40 bytes); the
   `VideoFrame` msgpack record and `pooled_gpu_frame=` go. [strict-port-families]
-- **[NEEDS DECISION] (same entry): where an Image frame's metadata lives.** `VideoFrame` carries
-  `width`, `height`, `fps`, `color_info` (the H.273 four-tuple), `content_light`,
-  `mastering_display` and `texture_layout` (`video_frame.py:205-213`), which the 20 bytes left
-  in the body cannot hold. Options: (a) the body adds `width: u32`, `height: u32`,
-  `format: u32` and the colour four-tuple as four `u8` codes (56 bytes in all), and `fps`,
-  `content_light` and `mastering_display` move to the port's catalog entry, as stream-level
-  facts; (b) the body holds the slot reference alone and the per-frame metadata stays as a
-  small encoded record in the payload. Recommended: (a). Every Image read stays a fixed layout
-  with no decode, and static HDR metadata is per stream. Per-frame dynamic HDR (HDR10+) would
-  need (b) or a later body kind.
+- **ADDED (same entry, DECIDED):** An Image frame's body is the slot reference (40 bytes),
+  then `width: u32`, `height: u32`, `format: u32` and the H.273 colour four-tuple (primaries,
+  transfer, matrix, range) as four `u8` codes, 56 bytes in all. `fps`, `content_light` and
+  `mastering_display`, which `VideoFrame` carries today (`video_frame.py:205-213`), move to
+  the port's catalog entry as stream-level facts, updated through `set_catalog_entry`. Every
+  Image read is a fixed layout with no decode. Per-frame dynamic HDR (HDR10+, Dolby Vision)
+  is a later descriptor kind, whose metadata rides the sample's payload bytes, which an Image
+  sample leaves empty; today's kind is unchanged by it. Owner, 2026-11-06.
+  Rejected: per-frame metadata as an encoded record in the payload — every Image read decodes
+  (owner, 2026-11-06).
 - **ADDED (§Processor model, DECIDED):** `connect` compares the families by equality, then
   names, then codec, and refuses on the first mismatch with an error naming both endpoints,
   both families, and what to place between them (the conversion nodes below). The live graph's
