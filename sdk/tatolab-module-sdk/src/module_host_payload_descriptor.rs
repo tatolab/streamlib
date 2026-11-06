@@ -94,6 +94,11 @@ pub enum ModuleHostPayloadDescriptorRefusal {
     CodecNameDoesNotFit { codec: String },
     /// A Channels block of a sample type this SDK does not know.
     UnknownChannelsBlockSampleType { sample_type: u32 },
+    /// A Channels block whose payload is not the length its descriptor states.
+    ChannelsBlockPayloadLength {
+        expected_byte_len: Option<usize>,
+        byte_len: usize,
+    },
 }
 
 impl std::fmt::Display for ModuleHostPayloadDescriptorRefusal {
@@ -118,6 +123,21 @@ impl std::fmt::Display for ModuleHostPayloadDescriptorRefusal {
                     "the Channels block's sample type {sample_type} is neither f32 (0) nor f64 (1)"
                 )
             }
+            ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength {
+                expected_byte_len,
+                byte_len,
+            } => match expected_byte_len {
+                Some(expected_byte_len) => write!(
+                    formatter,
+                    "the Channels block's payload is {byte_len} bytes, and its descriptor states \
+                     {expected_byte_len}"
+                ),
+                None => write!(
+                    formatter,
+                    "the Channels block's descriptor states a payload past this machine's memory, \
+                     and it carries {byte_len} bytes"
+                ),
+            },
         }
     }
 }
@@ -295,6 +315,65 @@ impl ModuleHostChannelsBlock {
             .checked_mul(self.samples_per_channel as usize)?
             .checked_mul(self.sample_type.sample_byte_len())
     }
+
+    /// The planar f32 payload of `interleaved_samples`, frames of
+    /// `channel_count` samples each, as a block of this layout carries it.
+    pub fn planar_f32_payload_of_interleaved_samples(
+        interleaved_samples: &[f32],
+        channel_count: u32,
+    ) -> Vec<u8> {
+        let channel_count = channel_count.max(1) as usize;
+        let samples_per_channel = interleaved_samples.len() / channel_count;
+        let mut planar_payload = Vec::with_capacity(samples_per_channel * channel_count * 4);
+        for channel in 0..channel_count {
+            for frame in 0..samples_per_channel {
+                planar_payload.extend_from_slice(
+                    &interleaved_samples[frame * channel_count + channel].to_le_bytes(),
+                );
+            }
+        }
+        planar_payload
+    }
+
+    /// This block's samples, interleaved frame by frame and widened or
+    /// narrowed to f32, read from its planar `payload`; refused when the
+    /// payload is not the length the descriptor states.
+    pub fn interleaved_f32_samples_of_the_planar_payload(
+        &self,
+        payload: &[u8],
+    ) -> Result<Vec<f32>, ModuleHostPayloadDescriptorRefusal> {
+        let expected_byte_len = self.planar_payload_byte_len();
+        if expected_byte_len != Some(payload.len()) {
+            return Err(
+                ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength {
+                    expected_byte_len,
+                    byte_len: payload.len(),
+                },
+            );
+        }
+        let channel_count = self.channel_count as usize;
+        let samples_per_channel = self.samples_per_channel as usize;
+        let sample_byte_len = self.sample_type.sample_byte_len();
+        let sample_at = |channel: usize, frame: usize| -> f32 {
+            let offset = (channel * samples_per_channel + frame) * sample_byte_len;
+            let bytes = &payload[offset..offset + sample_byte_len];
+            match self.sample_type {
+                ModuleHostChannelsBlockSampleType::F32 => {
+                    f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                }
+                ModuleHostChannelsBlockSampleType::F64 => f64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ]) as f32,
+            }
+        };
+        let mut interleaved_samples = Vec::with_capacity(channel_count * samples_per_channel);
+        for frame in 0..samples_per_channel {
+            for channel in 0..channel_count {
+                interleaved_samples.push(sample_at(channel, frame));
+            }
+        }
+        Ok(interleaved_samples)
+    }
 }
 
 /// The descriptor of a Records message, whose payload is one msgpack map.
@@ -416,6 +495,58 @@ mod tests {
         assert_eq!(
             ModuleHostChannelsBlock::of_the_payload_descriptor(&descriptor).unwrap_err(),
             ModuleHostPayloadDescriptorRefusal::UnknownChannelsBlockSampleType { sample_type: 9 }
+        );
+    }
+
+    #[test]
+    fn interleaved_samples_round_trip_through_a_planar_payload() {
+        let interleaved_samples = [0.0f32, 1.0, 0.25, -1.0, 0.5, 0.75];
+        let planar_payload = ModuleHostChannelsBlock::planar_f32_payload_of_interleaved_samples(
+            &interleaved_samples,
+            2,
+        );
+        let first_channel: Vec<f32> = planar_payload[..12]
+            .chunks(4)
+            .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            .collect();
+        assert_eq!(first_channel, [0.0, 0.25, 0.5]);
+        let block = ModuleHostChannelsBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            channel_count: 2,
+            samples_per_channel: 3,
+            sample_type: ModuleHostChannelsBlockSampleType::F32,
+        };
+        assert_eq!(
+            block
+                .interleaved_f32_samples_of_the_planar_payload(&planar_payload)
+                .unwrap(),
+            interleaved_samples
+        );
+        assert!(matches!(
+            block.interleaved_f32_samples_of_the_planar_payload(&planar_payload[..8]),
+            Err(ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength { .. })
+        ));
+    }
+
+    #[test]
+    fn an_f64_block_reads_as_f32_samples() {
+        let planar_payload: Vec<u8> = [0.5f64, -0.25]
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        let block = ModuleHostChannelsBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            channel_count: 1,
+            samples_per_channel: 2,
+            sample_type: ModuleHostChannelsBlockSampleType::F64,
+        };
+        assert_eq!(
+            block
+                .interleaved_f32_samples_of_the_planar_payload(&planar_payload)
+                .unwrap(),
+            [0.5, -0.25]
         );
     }
 

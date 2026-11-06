@@ -6,9 +6,9 @@
 //! its device thread, and a thread that publishes each block on the node's
 //! `audio` port through the module host table. Python never runs per block.
 
-mod audio_block_message;
 mod captured_audio_block_hand_off_ring;
 mod captured_audio_block_publishing;
+mod channels_block_of_a_captured_block;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

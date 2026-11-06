@@ -17,14 +17,19 @@ import pytest
 from helper_process_link_wiring import wire_one_link
 from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource, MicrophoneSourceConfig
 from tatolab.runtime import _engine
-from tatolab.stream import RuntimeContextFullAccess, log
-from tatolab.stream.audio_block import AudioBlock
+from tatolab.stream import Channels, ChannelsBlock, Input, RuntimeContextFullAccess, log
 
 #: Long enough for the first block on any arm, which opens a device or starts
 #: the null backend's clock first.
 FIRST_BLOCKS_DEADLINE_SECONDS = 5.0
 
 BLOCKS_READ_PER_TEST = 5
+
+
+class MicrophoneBlockReader:
+    """The reader's `audio` input, read through its attribute as Channels blocks."""
+
+    audio = Input(Channels, delivery="ordered")
 
 
 class MicrophoneWiredToAReader:
@@ -55,11 +60,11 @@ class MicrophoneWiredToAReader:
             )
         )
 
-    def read_blocks(self, block_count: int) -> "list[AudioBlock]":
-        blocks: "list[AudioBlock]" = []
+    def read_blocks(self, block_count: int) -> "list[ChannelsBlock]":
+        blocks: "list[ChannelsBlock]" = []
         deadline = time.monotonic() + FIRST_BLOCKS_DEADLINE_SECONDS
         while len(blocks) < block_count:
-            block = self.reader.inputs.read(AUDIO_OUTPUT_PORT, into=AudioBlock)
+            block = self.reader.inputs.read(MicrophoneBlockReader.audio)
             if block is not None:
                 blocks.append(block)
                 continue
@@ -102,16 +107,14 @@ def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_o
         f"{capture.sample_rate} Hz × {capture.channels} ch" in record
         for record in microphone_wired_to_a_reader.log_records
     )
-    bytes_per_sample = {"f32": 4, "i16": 2}[capture.sample_format]
     for block in blocks:
         assert block.sample_rate == capture.sample_rate
-        assert block.channels == capture.channels
-        assert block.dtype == capture.sample_format
-        assert block.sample_count > 0
-        assert len(block.interleaved_sample_bytes) == (
-            block.sample_count * block.channels * bytes_per_sample
-        )
-    stamps = [block.first_sample_timestamp_ns for block in blocks]
+        assert block.channel_count == capture.channels
+        assert block.dtype == "f32"
+        assert block.samples_per_channel > 0
+    for earlier, later in zip(blocks, blocks[1:]):
+        assert later.start_sample == earlier.start_sample + earlier.samples_per_channel
+    stamps = [block.timestamp_ns for block in blocks]
     assert stamps == sorted(stamps) and len(set(stamps)) == len(stamps)
     assert capture.published_block_count >= BLOCKS_READ_PER_TEST
 

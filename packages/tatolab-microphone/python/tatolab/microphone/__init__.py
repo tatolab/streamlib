@@ -17,8 +17,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextFullAccess, log, node
-from tatolab.stream.catalog import BinaryEntry
+from tatolab.stream import Channels, Output, RuntimeContextFullAccess, log, node
 
 from . import _native
 
@@ -56,8 +55,9 @@ class MicrophoneSource:
     The engine's backend chain is probed in this node's helper process with no
     configuration dial; where no audio backend exists at all the blocks are
     silence, so a pipeline authored on a workstation runs unchanged in a headless
-    container. Blocks arrive on `audio` as messages `AudioBlock` casts, each
-    stamped with the device's instant of its first sample.
+    container. Blocks arrive on `audio` as f32 Channels blocks at the device's
+    rate and channel count, an i16 device widened to f32, each stamped with the
+    device's instant of its first sample.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID;
     naming one that is not attached is refused with the UIDs that are. Only a
@@ -71,9 +71,9 @@ class MicrophoneSource:
         self._device_id = config.device_id
         self._capture: "_native.MicrophoneCapture | None" = None
 
-    @node.output(catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"))
-    def audio(self) -> None:
-        """Timestamped blocks of interleaved capture samples."""
+    audio = Output(
+        Channels, dtype="f32", description="Timestamped planar blocks of capture samples"
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `audio` to the native half and open the capture stream, so a
