@@ -8,7 +8,7 @@ read.
 > `tatolab-stream` is the library you write streams with. It doesn't run them: the Tatolab
 > runtime on your machine does, and it comes with the app.
 >
-> - **macOS** (Apple silicon, macOS 15 or later):
+> - **macOS** (Apple silicon, macOS 26 or later):
 >   `brew install --cask tatolab/tap/tatolab`, then `open -a Tatolab`
 > - **Linux** (x86_64 with a Vulkan GPU):
 >   `curl -fsSL https://get.tatolab.com/install.sh | sh`

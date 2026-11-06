@@ -724,7 +724,7 @@ model-input tensor kernel, and the stream clock every node reads as `ctx.time`.
 **Platforms.** Two floors, the same API on both:
 
 - **Linux x86_64** with a Vulkan GPU and driver; NVIDIA is what the project tests on.
-- **Apple Silicon, macOS 15 or newer**, on the Vulkan driver the runtime carries; CI runs a
+- **Apple Silicon, macOS 26 or newer**, on the Vulkan driver the runtime carries; CI runs a
   scaffolded stream there. Ray-tracing kernels, `VirtualCameraSink` and the fd-shaped raw handles
   refuse by name on macOS.
 

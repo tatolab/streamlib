@@ -244,6 +244,7 @@ pub fn run(
         workspace_root,
         build_profile,
         machine_directories,
+        macos_deployment_target.as_deref(),
         &runtime_unit_engine_build_nonce,
     )?;
     built_binaries.push(BuiltRuntimeUnitBinary {
@@ -335,6 +336,7 @@ fn build_runtime_unit_binaries(
     workspace_root: &Path,
     build_profile: RuntimeUnitBuildProfile,
     machine_directories: RuntimeUnitMachineDirectories,
+    macos_deployment_target: Option<&str>,
     runtime_unit_engine_build_nonce: &str,
 ) -> Result<Vec<BuiltRuntimeUnitBinary>> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -350,6 +352,9 @@ fn build_runtime_unit_binaries(
             runtime_unit_engine_build_nonce,
         )
         .stderr(std::process::Stdio::inherit());
+    if let Some(macos_deployment_target) = macos_deployment_target {
+        cargo_build.env("MACOSX_DEPLOYMENT_TARGET", macos_deployment_target);
+    }
 
     let cargo_build_package_flags = cargo_build_selection.join(" ");
     let cargo_build_output = cargo_build
@@ -1041,11 +1046,11 @@ mod tests {
     #[test]
     fn the_macos_deployment_target_is_read_from_the_maturin_target_table() {
         let maturin_pyproject = "[tool.maturin]\npython-source = \"python\"\n\n\
-             [tool.maturin.target.aarch64-apple-darwin]\nmacos-deployment-target = \"15.0\"\n";
+             [tool.maturin.target.aarch64-apple-darwin]\nmacos-deployment-target = \"26.0\"\n";
 
         assert_eq!(
             macos_deployment_target_from_maturin_pyproject(maturin_pyproject).unwrap(),
-            "15.0"
+            "26.0"
         );
         assert!(macos_deployment_target_from_maturin_pyproject("[tool.maturin]\n").is_err());
     }
@@ -1060,7 +1065,10 @@ mod tests {
         )
         .unwrap();
 
-        macos_deployment_target_from_maturin_pyproject(&maturin_pyproject).unwrap();
+        assert_eq!(
+            macos_deployment_target_from_maturin_pyproject(&maturin_pyproject).unwrap(),
+            "26.0"
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

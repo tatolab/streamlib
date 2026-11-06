@@ -7,7 +7,7 @@
 into realtime streams that browsers, other streams and AI agents can read. It isn't installed
 with pip. Install the app:
 
-- **macOS** (Apple silicon, macOS 15 or later):
+- **macOS** (Apple silicon, macOS 26 or later):
   `brew install --cask tatolab/tap/tatolab`, then `open -a Tatolab`
 - **Linux** (x86_64 with a Vulkan GPU):
   `curl -fsSL https://get.tatolab.com/install.sh | sh`
