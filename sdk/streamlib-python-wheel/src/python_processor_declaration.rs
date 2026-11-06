@@ -306,7 +306,8 @@ class AudioConsumer:
                 dtype = "f32",
                 window_size = 512,
                 hop = 160
-            )
+            ),
+            family = Channels,
         ),
     )]
     struct RustDeclaredAudioConsumer;
@@ -326,7 +327,8 @@ class AudioConsumer:
         execution = manual,
         output(
             "encoded_video",
-            catalog = VideoEntry { codec: "avc1.64001f", coded_width: 1280, coded_height: 720 }
+            catalog = VideoEntry { codec: "avc1.64001f", coded_width: 1280, coded_height: 720 },
+            family = Packets,
         ),
     )]
     struct RustDeclaredEncodedVideoSource;

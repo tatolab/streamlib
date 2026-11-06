@@ -28,7 +28,7 @@ use crate::mcp::tests::{
 
 /// A native node with nothing to do, added to each stream so each graph has a
 /// node of its own to tell it apart; its one output gives a prompt a port.
-#[streamlib::sdk::processor(execution = manual, output("video"))]
+#[streamlib::sdk::processor(execution = manual, output("video", family = Image))]
 pub struct TwoStreamsTestIdleNode;
 
 impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
@@ -40,7 +40,11 @@ impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
 /// A native node with nothing to do whose one output declares a catalog entry.
 #[streamlib::sdk::processor(
     execution = manual,
-    output("blocks", catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }),
+    output(
+        "blocks",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" },
+        family = Records
+    ),
 )]
 pub struct TwoStreamsTestCataloguedNode;
 

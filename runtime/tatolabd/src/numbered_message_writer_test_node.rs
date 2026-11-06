@@ -23,9 +23,10 @@ pub const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
     execution = continuous(interval_ms = 10),
     output(
         "numbers",
-        catalog = BinaryEntry { mode: Stream, mime: "text/plain" }
+        catalog = BinaryEntry { mode: Stream, mime: "text/plain" },
+        family = Records,
     ),
-    output("more_numbers"),
+    output("more_numbers", family = Records),
 )]
 pub struct NumberedMessageWriterTestNode {
     next_message_number: u64,

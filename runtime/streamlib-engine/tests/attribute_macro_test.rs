@@ -18,8 +18,8 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 // descriptor, and the class-path accessor — it never auto-registers.
 #[streamlib::sdk::processor(
     execution = manual,
-    input("video_in", delivery_profile = "newest"),
-    output("video_out"),
+    input("video_in", delivery_profile = "newest", family = Image),
+    output("video_out", family = Image),
 )]
 pub struct TestProcessor;
 
@@ -146,7 +146,7 @@ impl Default for ConfiguredProbeProcessorConfig {
 #[streamlib::sdk::processor(
     execution = manual,
     config = crate::ConfiguredProbeProcessorConfig,
-    output("video_out"),
+    output("video_out", family = Image),
 )]
 pub struct ConfiguredProbeProcessor;
 
@@ -258,8 +258,8 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 // shape on top of the target-independent halves.
 #[streamlib::sdk::processor(
     execution = manual,
-    input("video_in", delivery_profile = "newest"),
-    output("video_out"),
+    input("video_in", delivery_profile = "newest", family = Image),
+    output("video_out", family = Image),
 )]
 pub struct CfgGatedFieldProcessor {
     #[cfg(any())]
@@ -343,9 +343,10 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
             dtype = "f32",
             window_size = 512,
             hop = 160
-        )
+        ),
+        family = Channels,
     ),
-    output("windows"),
+    output("windows", family = Records),
 )]
 pub struct WindowedAudioConsumer;
 
@@ -392,7 +393,8 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
     input(
         "audio",
         delivery_profile = "ordered",
-        audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960)
+        audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960),
+        family = Channels,
     ),
 )]
 pub struct SourceFollowingAudioConsumer;
