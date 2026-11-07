@@ -721,6 +721,34 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
 
 #[test]
 #[serial]
+fn a_load_listing_a_referrer_before_the_node_it_names_loads() {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let graph = serde_json::json!({
+        "stream": "referrer-listed-first",
+        "nodes": [
+            {
+                "name": "camera-track",
+                "type": track_import_path.as_str(),
+                "config": {"gateway": {"node": "cloudflare"}}
+            },
+            {"name": "cloudflare", "type": gateway.as_str()}
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(&runner, project_directory.path(), graph)
+        .expect("a referrer listed before the node it names loads");
+    assert_eq!(
+        the_graph_document_of(&stream)["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
+    );
+}
+
+#[test]
+#[serial]
 fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
     let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
     let graph = serde_json::json!({

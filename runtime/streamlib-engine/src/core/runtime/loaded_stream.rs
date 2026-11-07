@@ -1388,7 +1388,7 @@ impl LoadedStreamInThisRuntime {
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
-            let added = self.add_processor_reporting_its_name(
+            let added = self.add_processor_of_a_validated_graph_load(
                 ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
                     .with_display_name(node.name.clone()),
             )?;
