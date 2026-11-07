@@ -1,21 +1,25 @@
 name: CI
 
 # What a pull request must prove before it merges: the code is formatted and
-# lint-clean, it builds, its test suites pass, and a stream still runs end to
-# end on the runtime. It builds nothing that ships; release.yml builds, checks
-# and publishes the distributables.
+# lint-clean and its unit tests pass. The merge queue and `main` also prove the
+# Apple path builds and a stream still runs end to end on the runtime. It builds
+# nothing that ships; release.yml builds, checks and publishes the distributables.
 #
 #   Lint                       formatting, clippy, the source gates, licences,
 #                              Python types
 #   Unit Test (Linux)          every Rust test suite, the hardware tests on a
-#                              software GPU (the lavapipe the runtime carries)
+#                              software GPU (the lavapipe the runtime carries);
+#                              skipped on a pull request that changes no path the
+#                              workspace's Rust build reads; the loom model,
+#                              doctests and test-root suites run off pull requests
 #   Integration test (Linux)   real streams on a real `tatolabd`: builds the
 #                              runtime binaries those tests drive (a test fixture,
-#                              never shipped), then the stream package, wheel,
-#                              extension and end-to-end stream tests
-#   Build (macOS)              the Apple path compiles and is lint-clean; its test
-#                              suites run on `main`
-#   Integration test (macOS)   the same end-to-end tests on macOS; `main` only
+#                              never shipped), then the stream package, wheel and
+#                              end-to-end stream tests; merge queue and `main`
+#   Build (macOS)              the Apple path compiles, is lint-clean and its test
+#                              suites pass; merge queue and `main`
+#   Integration test (macOS)   the same end-to-end tests on macOS; merge queue
+#                              and `main`
 #
 # A change that touches only prose or code CI never builds runs nothing. Caches
 # are saved by `main` alone and restored by pull requests. A failed job cancels
@@ -118,6 +122,7 @@ jobs:
         with:
           shared-key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
@@ -176,6 +181,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
 
+  # Whether a pull request touches anything the workspace's Rust tests build
+  # from. Consumer packages, the stream suite, the Python SDK and Python files
+  # are not; every other path is, and every non-pull-request event is.
+  changes-affecting-the-workspace-rust-build:
+    name: Changes affecting the workspace Rust build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      workspace_rust_build_affected: ${{ steps.classify.outputs.workspace_rust_build_affected }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: classify
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          paths_affecting_the_workspace_rust_build="$(
+            git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD \
+              | grep -Ev '^packages/[^/]+/' \
+              | grep -Ev '^(tests/stream-on-runtime|sdk/tatolab-stream)/' \
+              | grep -Ev '\.pyi?$' || true
+          )"
+          git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD | grep '^packages/test-fixtures/' \
+            && paths_affecting_the_workspace_rust_build="packages/test-fixtures"
+          if [ -n "$paths_affecting_the_workspace_rust_build" ]; then
+            echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "workspace_rust_build_affected=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # One test build: every test target of the packages CI tests,
   # `hardware-tests` included, compiled once and run on the Linux runtime
   # unit's bundled lavapipe rather than a GPU. `.config/nextest.toml` holds what
@@ -184,6 +226,8 @@ jobs:
   # fails the job.
   test-linux:
     name: Unit Test (Linux)
+    needs: changes-affecting-the-workspace-rust-build
+    if: needs.changes-affecting-the-workspace-rust-build.outputs.workspace_rust_build_affected == 'true'
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
@@ -231,6 +275,7 @@ jobs:
         with:
           shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Restore the compile-fail tests' build
         if: github.event_name != 'pull_request'
@@ -316,20 +361,20 @@ jobs:
       # Its own target dir: `--cfg loom` rebuilds every dependency, and the
       # workspace build must not see that cfg.
       - name: GPU pool claim table loom model
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         env:
           RUSTFLAGS: --cfg loom
           CARGO_TARGET_DIR: target/loom
         run: cargo test --locked --release -p streamlib-ipc-types --test gpu_pool_claim_table_loom_model
 
       - name: Engine and media built-ins doctests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         run: >-
           cargo test --locked --doc -p streamlib-engine -p streamlib-media-builtins
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
 
       - name: Tests under a test machine root
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         env:
           MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_SELECTION: >-
             -p streamlib-runtime-client-contract -p streamlib-api-server -p tatolabd -p tatolab-cli
@@ -354,14 +399,19 @@ jobs:
 
       - name: Every hardware-test skip names what this machine lacks from the closed list
         if: ${{ !cancelled() }}
-        run: >-
-          python3 scripts/ci/check_hardware_test_skip_lines.py
-          --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX"
-          --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS"
-          --expected-device llvmpipe
-          target/nextest/ci/junit.xml
-          "$RUNNER_TEMP/junit-without-a-test-root.xml"
-          target/nextest/ci-machine-directories-under-a-test-root/junit.xml
+        run: |
+          junit_reports=(target/nextest/ci/junit.xml)
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            junit_reports+=(
+              "$RUNNER_TEMP/junit-without-a-test-root.xml"
+              target/nextest/ci-machine-directories-under-a-test-root/junit.xml
+            )
+          fi
+          python3 scripts/ci/check_hardware_test_skip_lines.py \
+            --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX" \
+            --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS" \
+            --expected-device llvmpipe \
+            "${junit_reports[@]}"
 
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
@@ -375,9 +425,11 @@ jobs:
   # interpreter borrows `tatolab.runtime` from — and every suite that runs on
   # it: the wheel's own, the integration suite (one `tatolabd` per test, each
   # fixture stream loaded with `tatolab run` and driven over its local API, on
-  # the lavapipe the unit carries), and the first-party extension's.
+  # the lavapipe the unit carries) and a scaffolded stream; `main` and the
+  # merge queue only.
   integration-test-linux:
     name: Integration test (Linux)
+    if: github.event_name != 'pull_request'
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
@@ -410,8 +462,7 @@ jobs:
 
       # The engine's build script compiles GLSL with glslc, the Linux engine
       # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build the vendored shaderc; clang, glslangValidator, spirv-opt
-      # and libuuid build rive-runtime for tatolab-rive. `timeout-minutes` is the backstop the
+      # build the vendored shaderc. `timeout-minutes` is the backstop the
       # composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12
@@ -427,10 +478,6 @@ jobs:
             cmake
             ninja-build
             python3-dev
-            clang
-            glslang-tools
-            spirv-tools
-            uuid-dev
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -438,18 +485,9 @@ jobs:
           shared-key: linux-runtime
           workspaces: |
             . -> target
-            packages/streamlib-webrtc -> target
-            packages/tatolab-camera -> target
-            packages/tatolab-browser -> target
-            packages/tatolab-microphone -> target
-            packages/tatolab-speaker -> target
-            packages/tatolab-opus -> target
             packages/streamlib-h264 -> target
-            packages/streamlib-h265 -> target
-            packages/tatolab-rive -> target
-            packages/tatolab-virtualcamera -> target
-            packages/tatolab-moq -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -559,215 +597,12 @@ jobs:
         working-directory: tests/stream-on-runtime
         run: .venv/bin/pytest -v -m "not rig_only_capability"
 
-      # The engine's suite runs before the extension's steps, so a consumer
-      # the engine has moved past cannot hide the engine's own result.
-      # A stream's venv exactly as a third party's holds the extension:
-      # `tatolab-stream` and the extension, and no engine. Its tests wire the
-      # test pattern to the publisher and the publisher to the H.264 and Opus
-      # nodes, so the venv holds `tatolab-h264`, built here once and reused by
-      # the H.264 steps below, `tatolab-opus` and `tatolab-testpattern`.
-      - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
-        working-directory: packages/streamlib-webrtc
-        run: |
-          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
-          (cd ../streamlib-h264 && uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist")
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-
-      # The repo-root `cargo fmt --all` and pyright do not reach a non-member.
-      # Before the venv is on PATH, so pyo3 resolves the system interpreter
-      # whose headers the apt step installed.
-      - name: "Extension: formatting, crate tests, clippy and types"
-        working-directory: packages/streamlib-webrtc
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uvx pyright@1.1.411
-
-      # Carries the portability gate over the built `.so`, and on macOS the
-      # clock-parity test. The tests that import `tatolab.runtime` borrow it
-      # from the lend, as a processor interpreter does.
-      - name: "Extension: stubs and tests, GPU-free"
-        working-directory: packages/streamlib-webrtc
-        run: |
-          .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
-          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
-            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
-
-      # The camera is a standalone wheel like the extension above; its
-      # capture needs a camera, so CI holds its pure logic, lints and stub.
-      - name: "Camera: formatting, crate tests, clippy, stub and types"
-        working-directory: packages/tatolab-camera
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-          .venv/bin/python -m mypy.stubtest tatolab.camera._native
-          uvx pyright@1.1.411
-
-      # The browser host links CEF, which CI does not download: `cef/dox`
-      # compiles the bindings unlinked, so CI holds its pure logic, lints and
-      # types; its rendering runs in the rig.
-      - name: "Browser: formatting, crate tests, clippy and types"
-        working-directory: packages/tatolab-browser
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --workspace --features cef/dox
-          cargo clippy --locked --workspace --all-targets --features cef/dox -- -D warnings
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "numpy>=2.1" "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          uvx pyright@1.1.411
-
-      # rive-runtime draws on the GPU, which the rig runs; CI holds the
-      # data mapping, lints, stub and types over a full build of the bridge.
-      - name: "Extension: tatolab-rive formatting, crate tests, clippy, stub and types"
-        working-directory: packages/tatolab-rive
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-          .venv/bin/python -m mypy.stubtest tatolab.rive._native
-          uvx pyright@1.1.411
-
-      # The crate's tests carry the send-to-receive round trip through a
-      # `moq-relay` started in the test process on loopback; no GPU, no rig.
-      - name: "Extension: tatolab-moq formatting, crate tests, clippy, stub, types and tests"
-        working-directory: packages/tatolab-moq
-        run: |
-          cargo fmt --all --check
-          cargo test --locked
-          cargo clippy --locked --all-targets -- -D warnings
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-          .venv/bin/python -m mypy.stubtest tatolab.moq._native
-          uvx pyright@1.1.411
-          .venv/bin/python -m pytest tests/ -v
-
-      # Pure Python; its pixel tests ran in the integration suite above, whose
-      # venv installs it.
-      - name: "Compositor: GPU-free tests and types"
-        working-directory: packages/tatolab-compositor
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
-          .venv/bin/python -m pytest tests -v
-          uvx pyright@1.1.411
-
-      # Pure Python; its pixel tests ran in the integration suite above, whose
-      # venv installs it.
-      - name: "Test pattern: GPU-free tests and types"
-        working-directory: packages/tatolab-testpattern
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest "$RUNNER_TEMP"/tatolab-stream-dist/*.whl .
-          .venv/bin/python -m pytest tests -v
-          uvx pyright@1.1.411
-
-      # Its camera tests ran in the integration suite above, whose venv
-      # installs it; here its door choice, its kernel ABI, lints and stub.
-      - name: "Virtual camera: formatting, crate clippy, stub, GPU-free tests and types"
-        working-directory: packages/tatolab-virtualcamera
-        run: |
-          cargo fmt --all --check
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-          .venv/bin/python -m mypy.stubtest tatolab.virtualcamera._native
-          .venv/bin/python -m pytest tests -v
-          uvx pyright@1.1.411
-
-      - name: "Extension: build tatolab-microphone into a venv holding tatolab-stream"
-        working-directory: packages/tatolab-microphone
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-
-      - name: "Extension: tatolab-microphone formatting, crate tests, clippy and types"
-        working-directory: packages/tatolab-microphone
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uvx pyright@1.1.411
-
-      # The runner has no audio device, so the node captures the null
-      # backend's silence through the same exported interface a device uses.
-      - name: "Extension: tatolab-microphone stubs and tests"
-        working-directory: packages/tatolab-microphone
-        run: |
-          .venv/bin/python -m mypy.stubtest tatolab.microphone._native
-          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
-            .venv/bin/python -m pytest tests/ -v
-
-      - name: "Extension: build tatolab-speaker into a venv holding tatolab-stream"
-        working-directory: packages/tatolab-speaker
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-
-      - name: "Extension: tatolab-speaker formatting, crate tests, clippy and types"
-        working-directory: packages/tatolab-speaker
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uvx pyright@1.1.411
-
-      # The runner has no audio device, so the node plays into the null
-      # backend through the same exported interface a device uses.
-      - name: "Extension: tatolab-speaker stubs and tests"
-        working-directory: packages/tatolab-speaker
-        run: |
-          .venv/bin/python -m mypy.stubtest tatolab.speaker._native
-          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
-            .venv/bin/python -m pytest tests/ -v
-
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-opus"
-      - name: "Extension: build streamlib-h264 into a venv holding tatolab-stream"
-        working-directory: packages/streamlib-h264
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$RUNNER_TEMP"/tatolab-h264-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
-
-      - name: "Extension: streamlib-h264 formatting, crate tests, clippy and types"
-        working-directory: packages/streamlib-h264
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uvx pyright@1.1.411
-
-      - name: "Extension: streamlib-h264 stubs and tests, GPU-free"
-        working-directory: packages/streamlib-h264
-        run: |
-          .venv/bin/python -m mypy.stubtest tatolab.h264._native
-          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
-            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
-
       # A scaffolded stream compiles and type-checks with no runtime installed,
       # in what a user's `uv sync` gives it: `tatolab-stream`, the H.264 and
       # test-pattern modules and numpy.
       - name: Scaffolded stream compiles and type-checks (Python 3.12)
         run: |
+          (cd packages/streamlib-h264 && uvx maturin@1.9.6 build --out "$RUNNER_TEMP/tatolab-h264-dist")
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
@@ -789,30 +624,6 @@ jobs:
           EOF
           uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
-      # The H.265 module shares the H.264 module's encoder body; the same holds.
-      - name: "Extension: build streamlib-h265 into a venv holding tatolab-stream"
-        working-directory: packages/streamlib-h265
-        run: |
-          uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
-          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
-
-      - name: "Extension: streamlib-h265 formatting, crate tests, clippy and types"
-        working-directory: packages/streamlib-h265
-        run: |
-          cargo fmt --all --check
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          uvx pyright@1.1.411
-
-      - name: "Extension: streamlib-h265 stubs and tests, GPU-free"
-        working-directory: packages/streamlib-h265
-        run: |
-          .venv/bin/python -m mypy.stubtest tatolab.h265._native
-          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
-            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
-
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
       - name: Cancel the rest of the run
@@ -828,6 +639,7 @@ jobs:
   # paravirtual Metal device through MoltenVK.
   build-macos:
     name: Build (macOS)
+    if: github.event_name != 'pull_request'
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -851,6 +663,7 @@ jobs:
           # SDK a cached artifact was linked against.
           shared-key: macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -875,22 +688,6 @@ jobs:
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
-
-      - name: cargo check (streamlib-adapter-skia, all targets)
-        run: cargo check --locked -p streamlib-adapter-skia --all-targets
-
-      # The camera module's AVFoundation half builds only here; its capture
-      # needs a camera and an access grant no runner has, so CI holds its pure
-      # logic, lints and stub.
-      - name: "Camera: crate tests, clippy and stub"
-        working-directory: packages/tatolab-camera
-        run: |
-          cargo test --locked --lib
-          cargo clippy --locked --lib --all-targets -- -D warnings
-          python -m venv .venv
-          .venv/bin/python -m pip install --quiet mypy 'maturin>=1.9,<2.0' ../../sdk/tatolab-stream
-          VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop
-          .venv/bin/python -m mypy.stubtest tatolab.camera._native
 
       - name: Cache the local relay build
         if: github.event_name != 'pull_request'
@@ -1091,6 +888,7 @@ jobs:
             packages/tatolab-speaker -> target
             packages/tatolab-opus -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Cache the local relay build
         if: steps.restore.outputs.cache-hit != 'true'
