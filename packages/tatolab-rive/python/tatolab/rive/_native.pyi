@@ -9,7 +9,7 @@ __all__ = ["RiveSceneRendering"]
 
 @final
 class RiveSceneRendering:
-    """A `.riv` scene publishing `VideoFrame`s on a lent output port from a thread this wheel owns."""
+    """A `.riv` scene publishing Image frames on a lent output port from a thread this wheel owns."""
 
     def __new__(
         cls,

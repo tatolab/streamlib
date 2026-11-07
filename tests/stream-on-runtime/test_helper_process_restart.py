@@ -34,7 +34,14 @@ CRASHING_PROCESSORS_SOURCE = '''\
 import json
 import os
 
-from tatolab.stream import RuntimeContextFullAccess, RuntimeContextLimitedAccess, log, node
+from tatolab.stream import (
+    Output,
+    Records,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    log,
+    node,
+)
 
 
 @node(execution="continuous", interval_ms=10)
@@ -44,8 +51,7 @@ class ExitsSoonAfterEveryStart:
     def __init__(self) -> None:
         self.callbacks = 0
 
-    @node.output()
-    def nothing_to_downstream(self) -> None: ...
+    nothing_to_downstream = Output(Records)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info("MARKER:EXITING_PROBE_STARTED " + json.dumps({"pid": os.getpid()}))
@@ -60,8 +66,7 @@ class ExitsSoonAfterEveryStart:
 class KeepsRunning:
     """Does nothing, for as long as the stream runs."""
 
-    @node.output()
-    def nothing_to_downstream(self) -> None: ...
+    nothing_to_downstream = Output(Records)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         pass

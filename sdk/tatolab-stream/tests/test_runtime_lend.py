@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 import tatolab.stream
-from tatolab.stream import VideoFrame, log
+from tatolab.stream import ColorInfo, ImageFrame, log
 from tatolab.stream._runtime_lend import (
     RUNTIME_ENGINE_MODULE_NAME,
     RUNTIME_PACKAGE_NAME,
@@ -147,12 +147,13 @@ def test_a_log_function_raises_naming_itself_where_nothing_is_lent(
 def test_a_frame_builds_where_nothing_is_lent_and_refuses_its_pixels_by_name() -> None:
     """No typed read can be in progress without a runtime, so a test builds a
     frame the way a read outside one would: unclaimed."""
-    frame = VideoFrame(
+    frame = ImageFrame(
         surface_id="camera#7",
         width=20,
         height=12,
+        format="rgba8_unorm",
+        colour=ColorInfo(primaries="bt709", range="full"),
         timestamp_ns=123_456,
-        color_info={"primaries": "bt709", "range": "full"},
     )
     assert frame.surface_id == "camera#7"
     with pytest.raises(RuntimeError, match="was not built by a typed read"):
@@ -249,10 +250,11 @@ def test_a_frame_built_where_the_runtime_fails_to_import_raises_rather_than_buil
     with pytest.raises(
         ImportError, match=RuntimeThatFailsToImport.RUNTIME_LOAD_FAILURE
     ):
-        VideoFrame(
+        ImageFrame(
             surface_id="camera#7",
             width=20,
             height=12,
+            format="rgba8_unorm",
+            colour=ColorInfo(primaries="bt709", range="full"),
             timestamp_ns=123_456,
-            color_info={"primaries": "bt709", "range": "full"},
         )

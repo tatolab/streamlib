@@ -277,20 +277,15 @@ pub(crate) struct PythonLinkOutputDataWriter {
 impl PythonLinkOutputDataWriter {
     /// Publish one message to every downstream link on `port`: by name a copy
     /// of `payload`, any contiguous buffer; through an `Output` attribute the
-    /// port family's type. A msgpack record whose
-    /// `surface_id` names a pooled GPU frame this node acquired or read, or any
-    /// payload passing that frame's id as `pooled_gpu_frame`, carries the
-    /// frame's descriptor for its readers to claim it by.
+    /// port family's type.
     #[pyo3(signature = (
         port,
         payload,
         timestamp_ns = None,
         starts_group = true,
         *,
-        pooled_gpu_frame = None,
         start_sample = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn write(
         &self,
         python: Python<'_>,
@@ -298,16 +293,9 @@ impl PythonLinkOutputDataWriter {
         payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
         starts_group: bool,
-        pooled_gpu_frame: Option<&str>,
         start_sample: Option<u64>,
     ) -> PyResult<()> {
         if !port.is_instance_of::<PyString>() {
-            if pooled_gpu_frame.is_some() {
-                return Err(PyTypeError::new_err(
-                    "pooled_gpu_frame= names the frame a write by name carries; a write through \
-                     an Output attribute builds its own descriptor from the payload",
-                ));
-            }
             return self.write_through_an_output_port_attribute(
                 python,
                 port,
@@ -325,31 +313,13 @@ impl PythonLinkOutputDataWriter {
                  start_sample=…, sample_rate=…)"
             )));
         }
-        let gpu_limited_access = self.gpu_limited_access_context.get();
         self.link_data_access.get().write_described_by(
             python,
             &port_name,
             payload,
             timestamp_ns,
             starts_group,
-            |payload_bytes| match pooled_gpu_frame {
-                Some(published_frame_id) => gpu_limited_access
-                    .descriptor_of_the_pooled_gpu_frame_named(published_frame_id)
-                    .map(DataChannelPayloadDescriptor::gpu_pool_slot_frame)
-                    .ok_or_else(|| {
-                        PyValueError::new_err(format!(
-                            "pooled_gpu_frame {published_frame_id:?} names no pooled GPU frame \
-                             this node acquired or read: a message carries the descriptor of a \
-                             frame from a pool a claim table covers, as its acquire or its \
-                             read handed it"
-                        ))
-                    }),
-                None => Ok(descriptor_of_the_pooled_frame_a_record_names(
-                    gpu_limited_access,
-                    payload_bytes,
-                )
-                .unwrap_or_else(DataChannelPayloadDescriptor::bytes)),
-            },
+            |_payload_bytes| Ok(DataChannelPayloadDescriptor::bytes()),
         )
     }
 
@@ -450,78 +420,13 @@ fn catalog_entry_round_trip_to_parent<'py>(
         .call1((op,))
 }
 
-/// The descriptor of the pooled frame a msgpack record's `surface_id` names,
-/// when this node read or acquired that frame: how a `VideoFrame` written
-/// back, or one naming a `NodeOutputTextureRing` slot, carries its frame.
-fn descriptor_of_the_pooled_frame_a_record_names(
-    gpu_limited_access: &PythonGpuContextLimitedAccess,
-    payload_bytes: &[u8],
-) -> Option<DataChannelPayloadDescriptor> {
-    if !gpu_limited_access.knows_any_pooled_gpu_frame() {
-        return None;
-    }
-    let surface_id = surface_id_a_msgpack_record_names(payload_bytes)?;
-    gpu_limited_access
-        .descriptor_of_the_pooled_gpu_frame_named(surface_id)
-        .map(DataChannelPayloadDescriptor::gpu_pool_slot_frame)
-}
-
-/// The `surface_id` string at the top level of a msgpack map, read in place.
-fn surface_id_a_msgpack_record_names(payload_bytes: &[u8]) -> Option<&str> {
-    let mut unread = payload_bytes;
-    let rmpv::ValueRef::Map(entries) = rmpv::decode::read_value_ref(&mut unread).ok()? else {
-        return None;
-    };
-    entries
-        .into_iter()
-        .find_map(|(key, value)| match (key, value) {
-            (rmpv::ValueRef::String(key), rmpv::ValueRef::String(value))
-                if key.as_str() == Some("surface_id") =>
-            {
-                value.into_str()
-            }
-            _ => None,
-        })
-}
-
-#[cfg(test)]
-mod surface_id_a_msgpack_record_names_tests {
-    use super::surface_id_a_msgpack_record_names;
-
-    fn packed(record: &rmpv::Value) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        rmpv::encode::write_value(&mut bytes, record).unwrap();
-        bytes
-    }
-
-    #[test]
-    fn a_video_frame_record_names_its_surface_id() {
-        let record = packed(&rmpv::Value::Map(vec![
-            ("width".into(), 1920.into()),
-            ("surface_id".into(), "slot-3#7".into()),
-        ]));
-
-        assert_eq!(surface_id_a_msgpack_record_names(&record), Some("slot-3#7"));
-    }
-
-    #[test]
-    fn a_record_without_a_surface_id_and_raw_bytes_name_none() {
-        let record = packed(&rmpv::Value::Map(vec![("width".into(), 1920.into())]));
-
-        assert_eq!(surface_id_a_msgpack_record_names(&record), None);
-        assert_eq!(surface_id_a_msgpack_record_names(b"hello"), None);
-        assert_eq!(surface_id_a_msgpack_record_names(&[]), None);
-    }
-}
-
 /// The typed cast's claim, over a real link and a real surface-share service.
 ///
 /// What is proven here is the seam, not a type: a message crosses a wired link,
 /// the read builds a frame class **the wheel does not ship** through its
 /// `from_bytes`, and that class pins its surface for exactly as long as it
-/// lives. If this only worked for
-/// `VideoFrame` the pattern would be a private handshake, so the target here is
-/// deliberately somebody else's.
+/// lives. The target is a class nothing in the SDK ships, so the claim is the
+/// seam's and no type's private handshake.
 #[cfg(all(test, target_os = "linux"))]
 mod typed_read_claim_tests;
 

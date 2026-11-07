@@ -23,7 +23,7 @@ import dataclasses
 import json
 
 from hang_media_frame_reading import split_hang_legacy_container_media_frame
-from tatolab.stream import Image, Input, log, node
+from tatolab.stream import Image, Input, Packets, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -54,8 +54,7 @@ class EncodedFrameProbe:
         self.frames_admitted = 0
         self.entered_the_stream = False
 
-    @node.input(delivery_profile="ordered")
-    def encoded_video_from_upstream(self) -> None: ...
+    encoded_video_from_upstream = Input(Packets, delivery="ordered")
 
     def process(self, ctx) -> None:
         if self.frames_admitted >= ENCODED_FRAMES_REPORTED:
@@ -98,8 +97,7 @@ class EncodedFrameTimestampProbe:
     whose stamp a decoded frame downstream may carry.
     """
 
-    @node.input(delivery_profile="ordered")
-    def encoded_video_from_upstream(self) -> None: ...
+    encoded_video_from_upstream = Input(Packets, delivery="ordered")
 
     def process(self, ctx) -> None:
         payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)

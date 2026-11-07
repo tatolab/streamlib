@@ -37,7 +37,7 @@ from tatolab.runtime._processor_interpreter_bootstrap import (
     ParentProcessLogSink,
     load_processor_class,
 )
-from tatolab.stream import NodeLinkDataAccess, msgpack
+from tatolab.stream import NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -58,8 +58,8 @@ def payload_bytes_read_from(destination: NodeLinkDataAccess, input_port: str) ->
 
 
 def frame_index_payload(frame_index: int) -> bytes:
-    """The msgpack record the pass-through probes read and forward."""
-    return msgpack.pack({"frame_index": frame_index})
+    """The JSON record the pass-through probes read and forward."""
+    return json.dumps({"frame_index": frame_index}).encode()
 
 
 class StandInParent:
@@ -308,7 +308,7 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     def every_frame_index_read(destination: NodeLinkDataAccess) -> list:
         read = []
         while (payload := destination.read_from_input_port("frames_from_upstream")) is not None:
-            read.append(msgpack.unpack(payload)["frame_index"])
+            read.append(json.loads(bytes(payload))["frame_index"])
         return read
 
     assert every_frame_index_read(shallow_destination) == [6, 7, 8, 9]
@@ -1164,7 +1164,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
             else:
                 time.sleep(0.01)
         assert forwarded is not None
-        assert msgpack.unpack(forwarded) == {"frame_index": 3, "tag": "untagged"}, (
+        assert json.loads(bytes(forwarded)) == {"frame_index": 3, "tag": "untagged"}, (
             "a notify on a listener above descriptor 1024 must wake the helper"
         )
 
@@ -1466,7 +1466,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         if downstream.any_input_port_has_data():
             forwarded = downstream.read_from_input_port("frames_from_upstream")
     assert forwarded is not None
-    assert msgpack.unpack(forwarded) == {"frame_index": 7, "tag": "untagged"}, (
+    assert json.loads(bytes(forwarded)) == {"frame_index": 7, "tag": "untagged"}, (
         "a message must cross the input wired after setup and come back over the "
         "output wired after setup"
     )

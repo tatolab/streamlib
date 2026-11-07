@@ -125,18 +125,17 @@ def test_a_records_pair_declares_its_keys_and_the_keys_an_input_requires():
     }
 
 
-def test_family_ports_and_decorator_ports_declare_side_by_side_and_inherit():
+def test_a_subclass_inherits_the_ports_its_base_declares():
     class BaseFilter:
         video_in = Input(Image, delivery="newest")
 
     @node
-    class LegacyMix(BaseFilter):
-        @node.output()
-        def legacy_out(self) -> None: ...
+    class Repackager(BaseFilter):
+        packets_out = Output(Packets)
 
-    assert [port["name"] for port in LegacyMix.__tatolab_node_input_ports__] == ["video_in"]
-    (legacy_output,) = LegacyMix.__tatolab_node_output_ports__
-    assert "family" not in legacy_output
+    assert [port["name"] for port in Repackager.__tatolab_node_input_ports__] == ["video_in"]
+    (declared_output,) = Repackager.__tatolab_node_output_ports__
+    assert declared_output["family"] == {"family": "packets"}
 
 
 def test_a_mistyped_key_is_refused_at_import():

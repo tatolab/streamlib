@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 import tatolab.stream
-from tatolab.stream import node
+from tatolab.stream import Image, Input, Output, Packets, node
 from tatolab.stream.catalog import (
     AudioEntry,
     BinaryEntry,
@@ -59,26 +59,25 @@ def test_each_entry_names_its_section():
 def test_an_output_port_stamps_its_catalog_entry_as_section_and_fields():
     @node(execution="manual")
     class FrameSource:
-        @node.output(
-            "frames",
-            description="Frames as msgpack records",
-            catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"),
+        frames = Output(
+            Packets,
+            description="Frames as length-prefixed records",
+            catalog=BinaryEntry(mode="snapshot", mime="application/octet-stream"),
         )
-        def frames_to_downstream(self) -> None: ...
 
-        @node.output()
-        def levels(self) -> None: ...
+        levels = Output(Packets)
 
     assert FrameSource.__tatolab_node_output_ports__ == [
         {
             "name": "frames",
-            "description": "Frames as msgpack records",
+            "description": "Frames as length-prefixed records",
+            "family": {"family": "packets"},
             "catalog_entry": {
                 "section": "binary",
-                "entry": {"mode": "snapshot", "mime": "application/msgpack"},
+                "entry": {"mode": "snapshot", "mime": "application/octet-stream"},
             },
         },
-        {"name": "levels", "description": ""},
+        {"name": "levels", "description": "", "family": {"family": "packets"}},
     ]
 
 
@@ -87,13 +86,15 @@ def test_a_catalog_that_is_not_an_entry_is_refused_naming_the_port():
 
         @node(execution="manual")
         class FrameSource:
-            @node.output("frames", catalog={"section": "binary", "entry": {"mode": "snapshot"}})  # type: ignore[arg-type]
-            def frames_to_downstream(self) -> None: ...
+            frames = Output(
+                Packets,
+                catalog={"section": "binary", "entry": {"mode": "snapshot"}},  # type: ignore[arg-type]
+            )
 
 
 def test_an_input_port_takes_no_catalog_entry():
     with pytest.raises(TypeError, match="catalog"):
-        node.input("video_in", delivery_profile="newest", catalog=VideoEntry(codec="avc1.64001f"))  # type: ignore[call-arg]
+        Input(Image, delivery="newest", catalog=VideoEntry(codec="avc1.64001f"))  # type: ignore[call-arg]
 
 
 def test_the_catalog_module_is_exported_with_its_five_entries():

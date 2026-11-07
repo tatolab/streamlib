@@ -10,18 +10,16 @@ process can import.
 
 import dataclasses
 
-from tatolab.stream import RuntimeContextLimitedAccess, node
+from tatolab.stream import Input, Output, Packets, RuntimeContextLimitedAccess, node
 
 
 @node
 class FrameInverter:
     """Inverts each frame it reads."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Packets, delivery="newest")
 
-    @node.output()
-    def video_to_downstream(self) -> None: ...
+    video_to_downstream = Output(Packets)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_upstream")
@@ -33,8 +31,7 @@ class FrameInverter:
 class BrightnessReader:
     """Reads each frame it receives and writes nothing."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Packets, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.inputs.read("video_from_upstream")
@@ -47,11 +44,9 @@ class FrameFilters:
     class FrameDarkener:
         """Darkens each frame it reads."""
 
-        @node.input(delivery_profile="newest")
-        def video_from_upstream(self) -> None: ...
+        video_from_upstream = Input(Packets, delivery="newest")
 
-        @node.output()
-        def video_to_downstream(self) -> None: ...
+        video_to_downstream = Output(Packets)
 
         def process(self, ctx: RuntimeContextLimitedAccess) -> None:
             frame = ctx.inputs.read("video_from_upstream")
@@ -73,8 +68,7 @@ class RigMonitor:
     def __init__(self, config: RigMonitorConfig) -> None:
         self._config = config
 
-    @node.input(delivery_profile="newest")
-    def video(self) -> None: ...
+    video = Input(Packets, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.inputs.read("video")

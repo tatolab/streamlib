@@ -241,10 +241,11 @@ drifts around the frame and turns what it covers into dots:
 ```python
 from tatolab.stream import (
     GlslPixelEffect,
+    Image,
+    Input,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
-    msgpack,
     node,
 )
 
@@ -289,11 +290,8 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest")
+    video_to_downstream = Output(Image)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.halftone_lens_pixel_effect = GlslPixelEffect.compile(
@@ -304,13 +302,13 @@ class HalftoneLensEffect:
         self.first_frame_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None:
             return
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
-        halftone_frame_record = self.halftone_lens_pixel_effect.apply_to_frame(
+        halftone_frame = self.halftone_lens_pixel_effect.apply_to_frame(
             ctx.gpu_limited_access,
             frame,
             dials={
@@ -318,7 +316,9 @@ class HalftoneLensEffect:
                 "frame_size": (frame.width, frame.height),
             },
         )
-        ctx.outputs.write("video_to_downstream", msgpack.pack(halftone_frame_record))
+        ctx.outputs.write(
+            self.video_to_downstream, halftone_frame, timestamp_ns=frame.timestamp_ns
+        )
 ```
 
 Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
@@ -327,9 +327,10 @@ process, so it never slows the picture — it is the node you replace with your 
 
 What a node declares:
 
-- **Ports**, with `@node.input` and `@node.output` on marker methods. The return annotation is for
-  you and your type checker; the runtime never compares types. Every input names its
-  [delivery profile](#how-it-works), `newest` or `ordered`.
+- **Ports**, as `Input` and `Output` class attributes, each of one family: `Image`, `Array`,
+  `Channels`, `Packets` or `Records`. The attribute name is the port name, and a read through it
+  returns the family's type. Every input names its [delivery](#how-it-works), `newest` or
+  `ordered`.
 - **When it runs**, with `@node(execution=…)`: `reactive` (the default once it has an input),
   `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
   to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
@@ -614,7 +615,7 @@ or a node you write.
 <br>
 
 ```python
-frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+frame = ctx.inputs.read(self.video_from_upstream)
 if frame is not None:
     pixels = torch.from_dlpack(frame)   # H×W×4 uint8, on the device the frame already lives on
 ```
@@ -654,24 +655,24 @@ newest frame want opposite things. Each input says which it is, and saying so is
 is no default to inherit by accident:
 
 ```python
-@node.input(delivery_profile="newest")     # drains to the most recent bag, older ones passed over
-@node.input(delivery_profile="ordered")    # bags in publication order, may fall behind
+video = Input(Image, delivery="newest")       # drains to the most recent bag, older ones passed over
+events = Input(Records, delivery="ordered")   # bags in publication order, may fall behind
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under
 sustained pressure, no link ever blocks a producer, and a dropped bag is counted on its link in
 `graph`. One output can feed a `newest` and an `ordered` reader at once.
 
-What crosses a link is a message whose payload is bytes, which the runtime never encodes or
-decodes. No schema registry, no negotiation, no versions, no code-generation step, and the
-runtime never compares one node's types against another's. The built-ins carry msgpack maps, and
-`tatolab.stream.msgpack` packs and unpacks them. Strictness is a dial you turn at your own read:
-`ctx.inputs.read(port)` hands you the bytes, and `read(port, into=T)` hands them to
-`T.from_bytes` — `into=msgpack_typed_dict_cast(T)` types a `TypedDict` for free, while a
-dataclass or pydantic model taking `MsgpackCast` raises on a payload that doesn't fit.
+What crosses a link is a message of one family. `connect` refuses a link whose output family,
+names or codec the input does not accept, naming both ends. Past that there is no schema
+registry, no negotiation, no versions and no code-generation step. An Image, Array or Channels
+read is a fixed layout the runtime describes; a Packets read is the unit's bytes; a Records write
+takes a plain `dict` and a read returns one. By name, `ctx.inputs.read(port_name)` hands you the
+raw bytes, and `read(port_name, into=T)` hands them to `T.from_bytes`.
 
-**It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer while
-running, not when you wire the graph.
+**It costs you** checking inside a record. A Records port checks only that its declared names are
+present, so a value of the wrong type surfaces at the consumer while running, not when you wire
+the graph.
 
 </details>
 

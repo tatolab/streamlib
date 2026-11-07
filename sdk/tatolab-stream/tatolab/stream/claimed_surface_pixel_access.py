@@ -8,8 +8,7 @@ producer: compose `ClaimedSurfacePixelAccess` and `torch.from_dlpack(frame)`
 works straight off the read, with no resolve and no lock in the caller's hands.
 The bare view is read-only by declaration; `writable()` is the GPU write door
 and `cpu()` the CPU one. The claim rides the same public offer any constructing
-class may take, and `VideoFrame` is built from this piece like any other cast
-type.
+class may take.
 
 A write through the bare view is out of contract. DLPack's read-only flag
 exists only in the versioned exchange and consumers may ignore it, so the lock
@@ -215,8 +214,8 @@ class PixelAccessToOneClaimedSurface:
         never one a mutable composer re-pointed the field at since.
 
         It is present whether or not a claim was taken: a refused claim, and an
-        object no typed read constructed (`VideoFrame.from_bytes` on a payload
-        in hand, or one built by hand), both leave the frame riding pool depth.
+        object no typed read constructed (one built from a payload in hand, or
+        by hand), both leave the frame riding pool depth.
         Naming a surface the producer has since recycled is refused loudly
         wherever the id is used, never answered with another frame.
         """
@@ -347,8 +346,8 @@ class ClaimedSurfacePixelAccess:
     `pixel_access_to_the_surface_declared_in` — the bare doors below refuse a
     type holding several rather than guess which surface was meant.
 
-    A type composes `MsgpackCast` beside this to be a `read(port, into=T)`
-    target over a msgpack payload. `@dataclass(frozen=True, init=False)` is the
+    A type with a `from_bytes` beside this is a `read(port, into=T)` target.
+    `@dataclass(frozen=True, init=False)` is the
     spelling to write: this class's constructor drops a key the type does not
     declare, so a producer adding one never breaks the read. A
     `@dataclass(frozen=True)` whose `__init__` the decorator generates claims
@@ -415,8 +414,7 @@ class ClaimedSurfacePixelAccess:
 
         This is what `@dataclass(frozen=True, init=False)` inherits. A type that
         writes its own constructor — to validate, or to cast nested metadata —
-        calls this with the values it settled on, which is how `VideoFrame` is
-        built.
+        calls this with the values it settled on.
         """
         _build_the_fields_the_cast_type_declared(self, message_entries)
         # The message entry is the fallback for a composer that declared no

@@ -9,10 +9,11 @@ module it was declared in, and importing a pytest module would re-run the
 suite inside the child.
 """
 
+import json
 import time
 from typing import TypedDict
 
-from tatolab.stream import msgpack, node
+from tatolab.stream import Input, Output, Packets, node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -23,22 +24,22 @@ class PassThroughProbeConfig(TypedDict, total=False):
 
 @node
 class PassThroughProbe:
-    """Copies every msgpack record from its input to its output, tagged."""
+    """Copies every JSON record from its input to its output, tagged."""
 
     def __init__(self, config: PassThroughProbeConfig) -> None:
         self.tag = config.get("tag", "untagged")
 
-    @node.input(delivery_profile="newest")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Packets, delivery="newest")
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None:
         payload = ctx.inputs.read("frames_from_upstream")
         if payload is not None:
-            record = msgpack.unpack(payload)
-            ctx.outputs.write("frames_to_downstream", msgpack.pack({**record, "tag": self.tag}))
+            record = json.loads(bytes(payload))
+            ctx.outputs.write(
+                "frames_to_downstream", json.dumps({**record, "tag": self.tag}).encode()
+            )
 
 
 class OuterProbe:
@@ -46,16 +47,14 @@ class OuterProbe:
 
     @node(execution="manual")
     class InnerProbe:
-        @node.output()
-        def frames_to_downstream(self) -> None: ...
+        frames_to_downstream = Output(Packets)
 
 
 @node(execution="manual")
 class ImportsADmaBufOffLinuxProbe:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
         ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
@@ -65,8 +64,7 @@ class ImportsADmaBufOffLinuxProbe:
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
         raise RuntimeError("this processor cannot set itself up")
@@ -76,11 +74,9 @@ class RefusesSetupProbe:
 class SlowPassThroughProbe:
     """Copies every message's payload to its output, slower than a burst arrives."""
 
-    @node.input(delivery_profile="newest")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Packets, delivery="newest")
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None:
         payload = ctx.inputs.read("frames_from_upstream")
@@ -100,8 +96,7 @@ class InterruptedInProcessProbe:
     """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
     shutdown ladder delivers one to a callback that outran its budget."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def __init__(self) -> None:
         self.already_took_the_interrupt = False
@@ -125,8 +120,7 @@ class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-interrupted")
@@ -140,8 +134,7 @@ class InterruptedInSetupProbe:
 class RaisesInSetupProbe:
     """A `setup()` that raises on its own, which keeps the no-teardown rule."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-raised")
@@ -164,8 +157,7 @@ class ContinuousPacingProbe:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None:
         WHEN_THE_PACING_PROBE_PROCESSED_NS.append(time.monotonic_ns())
@@ -179,8 +171,7 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
 class RefusesReconfigurationProbe:
     """Defines `configure` and refuses every configuration handed to it."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
         self.gain = config.get("gain", 1)
@@ -193,8 +184,7 @@ class RefusesReconfigurationProbe:
 class TakesReconfigurationProbe:
     """Defines `configure` and takes whatever it is handed."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
         self.gain = config.get("gain", 1)
@@ -208,8 +198,7 @@ class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
     `teardown`, so the structure's release is owed while teardown answers."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
         self.structure = ctx.gpu_full_access.build_triangles_blas(

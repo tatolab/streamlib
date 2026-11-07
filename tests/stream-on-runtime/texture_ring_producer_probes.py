@@ -18,13 +18,17 @@ import os
 import traceback
 
 from tatolab.stream import (
+    ColorInfo,
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
-    VideoFrame,
+    Output,
     clock,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack, unpack
 
 FRAME_WIDTH = 64
 FRAME_HEIGHT = 32
@@ -85,8 +89,7 @@ class TextureRingPublishingVideoSourceConfig:
 class TextureRingPublishingVideoSource:
     """Publishes frames from its own output ring, one slot per frame."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Image)
 
     def __init__(self, config: TextureRingPublishingVideoSourceConfig) -> None:
         self._output_texture_ring = NodeOutputTextureRing(
@@ -122,16 +125,8 @@ class TextureRingPublishingVideoSource:
             slot_for_this_frame.unlock()
 
         ctx.outputs.write(
-            "frames_to_downstream",
-            pack(
-                {
-                    "surface_id": slot_for_this_frame.surface_id,
-                    "width": FRAME_WIDTH,
-                    "height": FRAME_HEIGHT,
-                    "timestamp_ns": clock.monotonic_now_ns(),
-                    "frame_index": frame_index,
-                }
-            ),
+            self.frames_to_downstream,
+            ImageFrameToWrite.of_texture(slot_for_this_frame, ColorInfo()),
         )
         self._surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
 
@@ -146,15 +141,17 @@ class TextureRingPublishingVideoSource:
 class PublishedFramePixelReadingSink:
     """Resolves each published surface id and reports the pixels behind it."""
 
-    @node.input(delivery_profile="ordered")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Image, delivery="ordered")
+
+    def __init__(self) -> None:
+        self._frames_read = 0
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
-        if payload is None:
+        frame = ctx.inputs.read(self.frames_from_upstream)
+        if frame is None:
             return
-        frame = VideoFrame.from_bytes(payload)
-        frame_index = unpack(payload)["frame_index"]
+        frame_index = self._frames_read
+        self._frames_read += 1
 
         def read_the_frames_pixels() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -176,14 +173,13 @@ class PublishedFrameIdRecordingSink:
     """Records each published surface id without resolving it — the link an
     output port needs, for a scenario that reads only the producer's report."""
 
-    @node.input(delivery_profile="ordered")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Image, delivery="ordered")
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
-        if payload is None:
+        frame = ctx.inputs.read(self.frames_from_upstream)
+        if frame is None:
             return
-        surface_id = unpack(payload)["surface_id"]
+        surface_id = frame.surface_id
         _report("PublishedFrameIdRecordingSink", lambda: {"surface_id": surface_id})
 
 
@@ -200,23 +196,22 @@ class ClaimedFrameHoldingSink:
     """Claims the first frame with a typed read and holds it, re-reading its
     pixels as every later frame arrives."""
 
-    @node.input(delivery_profile="ordered")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
-        self._held_frame: "VideoFrame | None" = None
+        self._held_frame: "ImageFrame | None" = None
         self._later_frames_seen = 0
 
     def process(self, ctx) -> None:
         if self._held_frame is None:
-            self._held_frame = ctx.inputs.read("frames_from_upstream", into=VideoFrame)
+            self._held_frame = ctx.inputs.read(self.frames_from_upstream)
             return
-        payload = ctx.inputs.read("frames_from_upstream")
-        if payload is None:
+        later_frame = ctx.inputs.read(self.frames_from_upstream)
+        if later_frame is None:
             return
         self._later_frames_seen += 1
         held_frame = self._held_frame
-        later_surface_id = unpack(payload)["surface_id"]
+        later_surface_id = later_frame.surface_id
 
         def reread_the_held_frame() -> dict:
             return {
@@ -234,19 +229,18 @@ class UnclaimedFrameHoldingSink:
     """Keeps only the first frame's id — no claim — and tries it again as every
     later frame arrives: the negative control for the claimed sink."""
 
-    @node.input(delivery_profile="ordered")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self._first_surface_id: "str | None" = None
         self._later_frames_seen = 0
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
-        if payload is None:
+        frame = ctx.inputs.read(self.frames_from_upstream)
+        if frame is None:
             return
         if self._first_surface_id is None:
-            self._first_surface_id = unpack(payload)["surface_id"]
+            self._first_surface_id = frame.surface_id
             return
         self._later_frames_seen += 1
         first_surface_id = self._first_surface_id

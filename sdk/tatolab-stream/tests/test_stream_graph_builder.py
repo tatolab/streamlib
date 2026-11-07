@@ -24,9 +24,12 @@ import pytest
 import tatolab.stream
 from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter, RigMonitor
 from tatolab.stream import (
+    Input,
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
+    Output,
+    Packets,
     StreamBuilder,
     compile_stream_to_graph,
     node,
@@ -378,11 +381,9 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
 def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -> None:
     @node
     class FunctionLocalFilter:
-        @node.input(delivery_profile="newest")
-        def video_from_upstream(self) -> None: ...
+        video_from_upstream = Input(Packets, delivery="newest")
 
-        @node.output()
-        def video_to_downstream(self) -> None: ...
+        video_to_downstream = Output(Packets)
 
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(FunctionLocalFilter)

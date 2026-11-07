@@ -109,8 +109,8 @@ impl Default for RelayTrackSourceConfig {
                   `track` carries each object's payload bytes as the relay delivered them, the \
                   first object of each group starting a group, and its catalog entry is the \
                   track's own from the broadcast's catalog. What a payload means is the \
-                  publisher's: a `VideoFrame` track names surfaces on the machine that wrote it, \
-                  which mean nothing here.\n\n\
+                  publisher's: an Image port's frames live in surfaces on the machine that \
+                  wrote them, so its track carries no pixels here.\n\n\
                   Groups reach `track` in sequence order, whatever order the relay delivers \
                   them in. A missing group is waited for until newer content on the track runs \
                   `max_age` milliseconds past it, measured in the track's own timestamps and \

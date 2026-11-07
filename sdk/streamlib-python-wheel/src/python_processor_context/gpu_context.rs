@@ -202,16 +202,6 @@ impl PythonGpuContextLimitedAccess {
         None
     }
 
-    /// Whether this node read or acquired any pooled GPU frame a write could
-    /// name.
-    pub(crate) fn knows_any_pooled_gpu_frame(&self) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            return exchange_client.knows_any_pooled_gpu_frame();
-        }
-        false
-    }
-
     /// The descriptor a write naming the pooled GPU frame `published_frame_id`
     /// carries, as this helper last read or acquired the frame.
     pub(crate) fn descriptor_of_the_pooled_gpu_frame_named(

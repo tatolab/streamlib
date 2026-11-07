@@ -12,8 +12,9 @@ a helper-process one opened directly on them, so nothing here starts a runtime
 or touches a device.
 """
 
+import json
 import os
-from collections.abc import Iterator
+from collections.abc import Buffer, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,10 +22,8 @@ import pytest
 
 from tatolab.runtime import _engine
 from tatolab.stream import (
-    MsgpackCast,
     NodeLinkDataAccess,
     RuntimeContextFullAccess,
-    msgpack,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -40,10 +39,14 @@ AUDIO_STAMP_NS = 1_700_020_000
 
 
 @dataclass
-class TrackDescription(MsgpackCast):
+class TrackDescription:
     """A record a fan-in read can cast into."""
 
     codec: str
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> "TrackDescription":
+        return cls(**json.loads(bytes(payload)))
 
 
 class TwoLinksIntoOnePort:
@@ -133,8 +136,8 @@ def test_a_message_arrives_as_its_payload_bytes_with_its_link_and_its_producers_
 def test_into_casts_the_payload_on_both_fan_in_reads(
     two_links_into_one_port: TwoLinksIntoOnePort,
 ):
-    two_links_into_one_port.deliver("video", msgpack.pack({"codec": "h264"}), VIDEO_STAMP_NS)
-    two_links_into_one_port.deliver("video", msgpack.pack({"codec": "h265"}), VIDEO_STAMP_NS)
+    two_links_into_one_port.deliver("video", json.dumps({"codec": "h264"}).encode(), VIDEO_STAMP_NS)
+    two_links_into_one_port.deliver("video", json.dumps({"codec": "h265"}).encode(), VIDEO_STAMP_NS)
     inputs = two_links_into_one_port.context.inputs
     video_link = two_links_into_one_port.channel_named["video"]
 

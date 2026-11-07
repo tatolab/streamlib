@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from tatolab.stream import ClaimedSurfacePixelAccess, VideoFrame
+from tatolab.stream import ClaimedSurfacePixelAccess, ColorInfo, ImageFrame
 from tatolab.stream import claimed_surface_pixel_access as composable_module
 
 FRAME_BAG = {
@@ -284,7 +284,7 @@ def warnings_logged(monkeypatch: pytest.MonkeyPatch) -> "list[str]":
 
 def test_a_user_authored_cast_type_claims_the_field_it_declares(offered):
     """The no-privilege claim, made concrete: a type `tatolab.stream` never heard of
-    gets exactly what `VideoFrame` gets."""
+    gets exactly what `ImageFrame` gets."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
     frame = DepthFrame(**FRAME_BAG)
@@ -471,9 +471,9 @@ def test_the_generated_constructor_spelling_refuses_an_undeclared_bag_key(offere
 
     assert DepthFrame(**FRAME_BAG, a_key_a_future_producer_adds="ignored")
 
-    # Splatted rather than written as keywords, because that is what
-    # `MsgpackCast.from_bytes` does with whatever the wire carried, which no
-    # type checker gets to see.
+    # Splatted rather than written as keywords, because that is what a
+    # `from_bytes` does with whatever the wire carried, which no type checker
+    # gets to see.
     overlay_bag_from_a_newer_producer: "dict[str, Any]" = {
         "surface_id": "surface-7",
         "a_key_a_future_producer_adds": "ignored",
@@ -965,14 +965,21 @@ def test_declaring_no_surface_field_at_all_is_refused():
 # ---- the frame `tatolab.stream` ships is one of these ---------------------
 
 
-def test_the_shipped_video_frame_is_built_from_this_piece(offered):
+def test_the_shipped_image_frame_is_built_from_this_piece(offered):
     """The proof of no privilege: the frame `tatolab.stream` ships takes its claim and
     exports its pixels through exactly the code a user-authored cast type
-    composes. A `VideoFrame` that stopped being one of these would be a private
+    composes. An `ImageFrame` that stopped being one of these would be a private
     path back."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
-    frame = VideoFrame(surface_id="surface-7", width=1280, height=720, timestamp_ns=1)
+    frame = ImageFrame(
+        surface_id="surface-7",
+        width=1280,
+        height=720,
+        format="rgba8_unorm",
+        colour=ColorInfo(),
+        timestamp_ns=1,
+    )
 
     assert isinstance(frame, ClaimedSurfacePixelAccess)
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]

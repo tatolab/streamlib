@@ -4,7 +4,7 @@
 """A stream that plays a known signal and captures it back off the same sink.
 
 The engine carries the audio in both directions: a Python node publishes
-`AudioBlock` bags, the `tatolab-speaker` module's `SpeakerSink` plays them into
+Channels blocks, the `tatolab-speaker` module's `SpeakerSink` plays them into
 the sink named by `STREAMLIB_AUDIO_SINK`, and the `tatolab-microphone` module's
 `MicrophoneSource` captures from the device named
 by `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` — by default that sink's PipeWire

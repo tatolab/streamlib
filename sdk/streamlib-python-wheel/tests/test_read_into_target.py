@@ -16,22 +16,21 @@ dropped.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
-from collections.abc import Iterator
+from collections.abc import Buffer, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Self, TypedDict, assert_type
+from typing import Any, Self, TypedDict, assert_type
 
 import pydantic
 import pytest
 
 from tatolab.runtime import _engine
 from tatolab.stream import (
-    MsgpackCast,
     NodeLinkDataAccess,
     PortPayloadBorrow,
     gpu_limited_access_of_the_typed_read_in_progress,
-    msgpack,
-    msgpack_typed_dict_cast,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -43,22 +42,38 @@ OUTPUT_PORT = "detections_to_downstream"
 INPUT_PORT = "detections_from_upstream"
 
 
+def json_payload(record: "Mapping[str, Any]") -> bytes:
+    """`record` as the JSON bytes the targets below read."""
+    return json.dumps(record).encode()
+
+
+class JsonRecordCast:
+    """A target built from a JSON object's keys, the cast a test author writes."""
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> Self:
+        return cls(**json.loads(bytes(payload)))
+
+
 class DetectionTypedDict(TypedDict):
-    """The free-cast target: the unpacked map, typed and unvalidated."""
+    """A TypedDict, which has no `from_bytes`."""
 
     label: str
     score: float
 
 
 @dataclass
-class DetectionDataclass(MsgpackCast):
+class DetectionDataclass(JsonRecordCast):
     """The constructing target: construction is the validation."""
 
     label: str
     score: float
 
+    def to_bytes(self) -> bytes:
+        return json_payload(dataclasses.asdict(self))
 
-class DetectionModel(MsgpackCast, pydantic.BaseModel):
+
+class DetectionModel(JsonRecordCast, pydantic.BaseModel):
     """The validating target: pydantic checks the field types a dataclass
     would take on trust."""
 
@@ -81,7 +96,7 @@ class PayloadBytesTheCastWasHanded:
 
 @dataclass
 class DetectionDataclassWithoutACast:
-    """A dataclass that never took `MsgpackCast`, so it has no `from_bytes`."""
+    """A dataclass with no `from_bytes`."""
 
     label: str
     score: float
@@ -152,8 +167,8 @@ def test_a_read_without_into_yields_the_payload_bytes_unchanged(
     wired_link: WiredLinkUnderTest,
 ):
     """No target named, so nothing is cast: the read hands back a borrow of
-    the bytes the writer wrote — msgpack or not, the runtime never looks inside."""
-    for payload in (msgpack.pack({"label": "cat", "score": 0.9}), b"\xc1 not msgpack"):
+    the bytes the writer wrote — whatever they encode, the runtime never looks inside."""
+    for payload in (json_payload({"label": "cat", "score": 0.9}), b"\xc1 not json"):
         wired_link.deliver(payload)
 
         read = wired_link.destination.read_from_input_port(INPUT_PORT)
@@ -203,31 +218,6 @@ def test_the_target_is_handed_the_payload_bytes_exactly(
     assert read.offered is None
 
 
-def test_a_typed_dict_target_casts_for_free(wired_link: WiredLinkUnderTest):
-    """The unpacked map comes back as a plain dict — nothing constructed."""
-    wired_link.deliver(msgpack.pack({"label": "cat", "score": 0.9}))
-
-    detection = wired_link.destination.read_from_input_port(
-        INPUT_PORT, into=msgpack_typed_dict_cast(DetectionTypedDict)
-    )
-
-    assert detection == {"label": "cat", "score": 0.9}
-    assert type(detection) is dict
-
-
-def test_a_typed_dict_target_validates_nothing(wired_link: WiredLinkUnderTest):
-    """What "for free" costs: a map missing a declared key and carrying one
-    nobody declared reads without complaint. An author who wants the check
-    names a dataclass or a model instead."""
-    wired_link.deliver(msgpack.pack({"label": "cat", "unexpected": True}))
-
-    detection = wired_link.destination.read_from_input_port(
-        INPUT_PORT, into=msgpack_typed_dict_cast(DetectionTypedDict)
-    )
-
-    assert detection == {"label": "cat", "unexpected": True}
-
-
 def test_a_dataclass_target_is_constructed_from_the_payload(
     wired_link: WiredLinkUnderTest,
 ):
@@ -246,7 +236,7 @@ def test_a_dataclass_target_raises_at_the_read_on_a_mismatch(
     """The whole point of the dial: the producer published something else and
     nothing in the engine noticed, so the consumer's own read is where that
     surfaces."""
-    wired_link.deliver(msgpack.pack({"label": "cat", "confidence": 0.9}))
+    wired_link.deliver(json_payload({"label": "cat", "confidence": 0.9}))
 
     with pytest.raises(TypeError, match="confidence"):
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
@@ -255,7 +245,7 @@ def test_a_dataclass_target_raises_at_the_read_on_a_mismatch(
 def test_a_pydantic_model_target_is_constructed_from_the_payload(
     wired_link: WiredLinkUnderTest,
 ):
-    wired_link.deliver(msgpack.pack({"label": "cat", "score": 0.9}))
+    wired_link.deliver(json_payload({"label": "cat", "score": 0.9}))
 
     detection = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=DetectionModel
@@ -270,7 +260,7 @@ def test_a_pydantic_model_target_raises_at_the_read_on_a_bad_field(
     """A model checks the field types a dataclass takes on trust, and its own
     `ValidationError` is what reaches the author — naming the field and what
     it got, which no wrapper of ours could."""
-    wired_link.deliver(msgpack.pack({"label": "cat", "score": "very"}))
+    wired_link.deliver(json_payload({"label": "cat", "score": "very"}))
 
     with pytest.raises(pydantic.ValidationError, match="score"):
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionModel)
@@ -283,10 +273,10 @@ def test_a_pydantic_model_target_raises_at_the_read_on_a_bad_field(
 def test_a_target_without_from_bytes_is_refused_by_port_name(
     wired_link: WiredLinkUnderTest, target_without_from_bytes: object
 ):
-    """A class that never took `MsgpackCast`, a bare TypedDict and a string
-    cannot build anything from bytes; the refusal names the port and says
-    what to name instead."""
-    wired_link.deliver(msgpack.pack({"label": "cat", "score": 0.9}))
+    """A class with no `from_bytes`, a bare TypedDict and a string cannot
+    build anything from bytes; the refusal names the port and says what to
+    name instead."""
+    wired_link.deliver(json_payload({"label": "cat", "score": 0.9}))
 
     with pytest.raises(TypeError, match=f'"{INPUT_PORT}"') as refusal:
         wired_link.destination.read_from_input_port(
@@ -294,7 +284,6 @@ def test_a_target_without_from_bytes_is_refused_by_port_name(
             into=target_without_from_bytes,  # type: ignore[call-overload]
         )
     assert "from_bytes" in str(refusal.value)
-    assert "MsgpackCast" in str(refusal.value)
 
 
 # =============================================================================
@@ -377,11 +366,11 @@ def test_a_producer_publishing_one_type_reaches_a_consumer_reading_another(
     consumer that reads type Y is not an error anywhere in the engine: the
     payload is delivered, and the disagreement is the consumer's to discover."""
     audio_chunk: UnrelatedAudioChunk = {"samples": [1, 2, 3], "sample_rate_hz": 48_000}
-    wired_link.deliver(msgpack.pack(audio_chunk))
+    wired_link.deliver(json_payload(audio_chunk))
 
     read = wired_link.destination.read_from_input_port(INPUT_PORT)
     assert read is not None
-    assert bytes(read) == msgpack.pack(audio_chunk)
+    assert bytes(read) == json_payload(audio_chunk)
 
 
 def test_the_mismatch_surfaces_only_at_a_read_that_asked_for_strictness(
@@ -390,7 +379,7 @@ def test_the_mismatch_surfaces_only_at_a_read_that_asked_for_strictness(
     """The same delivered payload two ways: named a target, the read raises;
     named nothing, the read hands back the bytes. Delivery is identical either
     way — the only difference is what the consumer asked for."""
-    audio_chunk = msgpack.pack({"samples": [1, 2, 3], "sample_rate_hz": 48_000})
+    audio_chunk = json_payload({"samples": [1, 2, 3], "sample_rate_hz": 48_000})
 
     wired_link.deliver(audio_chunk)
     with pytest.raises(TypeError):
@@ -407,7 +396,7 @@ def test_a_read_that_raises_consumes_its_message(wired_link: WiredLinkUnderTest)
     casts, so a raise is not a peek an author can retry — the message is
     spent. The alternative (leaving it queued) would silently re-raise on
     every later read of that port."""
-    wired_link.deliver(msgpack.pack({"samples": [1, 2, 3], "sample_rate_hz": 48_000}))
+    wired_link.deliver(json_payload({"samples": [1, 2, 3], "sample_rate_hz": 48_000}))
 
     with pytest.raises(TypeError):
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
@@ -418,7 +407,7 @@ def test_a_read_that_raises_consumes_its_message(wired_link: WiredLinkUnderTest)
 def test_the_link_keeps_delivering_after_a_read_raises(wired_link: WiredLinkUnderTest):
     """A failed strict read is a consumer-side exception, not a link fault:
     both ends stay healthy and the very next message crosses normally."""
-    wired_link.deliver(msgpack.pack({"samples": [1, 2, 3], "sample_rate_hz": 48_000}))
+    wired_link.deliver(json_payload({"samples": [1, 2, 3], "sample_rate_hz": 48_000}))
     with pytest.raises(TypeError):
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
 
@@ -445,7 +434,3 @@ def test_the_named_target_is_what_a_type_checker_sees(wired_link: WiredLinkUnder
     )
     assert_type(detection, DetectionDataclass | None)
 
-    entries = wired_link.destination.read_from_input_port(
-        INPUT_PORT, into=msgpack_typed_dict_cast(DetectionTypedDict)
-    )
-    assert_type(entries, DetectionTypedDict | None)

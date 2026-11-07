@@ -10,14 +10,17 @@ suite's (`sdk/tatolab-stream/tests/test_claimed_surface_pixel_access.py`).
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
+from collections.abc import Buffer
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from tatolab.runtime import _engine
-from tatolab.stream import ClaimedSurfacePixelAccess, MsgpackCast, msgpack
+from tatolab.stream import ClaimedSurfacePixelAccess
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -44,15 +47,21 @@ def claim_taken_on(
 
 
 @dataclass(frozen=True, init=False)
-class DepthFrame(ClaimedSurfacePixelAccess, MsgpackCast):
-    """A user-authored cast type: declare the fields, inherit the constructor
-    and `from_bytes`, get the protocol."""
+class DepthFrame(ClaimedSurfacePixelAccess):
+    """A user-authored cast type: declare the fields and a `from_bytes`, inherit
+    the constructor, get the protocol."""
 
     surface_id: str
     width_in_pixels: int
     height_in_pixels: int
     units_per_metre: float = 1.0
     tags: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> "DepthFrame":
+        record = json.loads(bytes(payload))
+        declared_field_names = {declared.name for declared in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in record.items() if key in declared_field_names})
 
 
 # ---- the spelling itself, over a real link ---------------------------------
@@ -92,7 +101,7 @@ def test_a_composing_type_read_over_a_link_arrives_built_from_the_message():
     )
     source.write_to_output_port(
         OUTPUT_PORT,
-        msgpack.pack({**FRAME_RECORD, "a_key_a_future_producer_adds": "ignored"}),
+        json.dumps({**FRAME_RECORD, "a_key_a_future_producer_adds": "ignored"}).encode(),
     )
 
     frame = ctx.inputs.read(INPUT_PORT, into=DepthFrame)

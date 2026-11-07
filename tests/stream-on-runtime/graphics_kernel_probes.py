@@ -22,14 +22,17 @@ from collections.abc import Sequence
 
 import numpy
 from tatolab.stream import (
+    ColorInfo,
     GpuContextFullAccess,
+    Image,
+    ImageFrameToWrite,
+    Input,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64
@@ -458,8 +461,7 @@ class RenderedTextureFrameProducer:
     and sends that frame downstream on every tick — no link promises delivery,
     and a bag written before the reader's interpreter subscribed is lost."""
 
-    @node.output()
-    def video_to_downstream(self) -> None: ...
+    video_to_downstream = Output(Image)
 
     def __init__(self) -> None:
         self.color_target = None
@@ -493,15 +495,9 @@ class RenderedTextureFrameProducer:
         if self.color_target is None:
             return
         ctx.outputs.write(
-            "video_to_downstream",
-            pack(
-                {
-                    "surface_id": self.color_target.surface_id,
-                    "width": SURFACE_WIDTH,
-                    "height": SURFACE_HEIGHT,
-                    "timestamp_ns": ctx.time,
-                }
-            ),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(self.color_target, ColorInfo()),
+            timestamp_ns=ctx.time,
         )
 
 
@@ -510,8 +506,7 @@ class RenderedFrameCpuReader:
     """Reads the first frame it is handed through `cpu()`, in a processor
     interpreter of its own, and reports what each half holds."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -519,7 +514,7 @@ class RenderedFrameCpuReader:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None:
             return
         self.reported = True

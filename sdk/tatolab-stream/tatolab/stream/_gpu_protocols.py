@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 from ._runtime_lend import runtime_backed_protocol
 
 if TYPE_CHECKING:
-    from .video_frame import ColorInfo
+    from .color_info import ColorInfo
 
 _EscalateResult = TypeVar("_EscalateResult")
 

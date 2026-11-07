@@ -140,17 +140,16 @@ built-in publishes on means you skipped it.
   `_built_in_nodes.py` differs from the runtime's built-ins, and pyright gates the callers. All
   run in CI. A new pyclass a node is handed is not done until its Protocol exists; one only the
   bootstrap uses needs its `_engine.pyi` entry.
-- **A message's payload is bytes; typing is load-bearing on the read side and absent inside
-  the record on the write side.** `write(port_name, payload, timestamp_ns=None,
-  starts_group=True)` copies any contiguous buffer and refuses anything else, under pyright
-  and at runtime; `loan(port_name, payload_byte_len)` fills a sample in place.
-  `read(port_name)` narrows to `PortPayloadBorrow | None`, a borrow of the sample with no
-  copy, and `read(port_name, into=T)` to `T | None` through `T.from_bytes`, catching a wrong
-  attribute. The dict handed to
-  `tatolab.stream.msgpack.pack` is checked by nothing — a typo'd key, a `str` where the wire
-  wants an `int`, and a missing required key all reach the runtime silently — unless a
-  `MsgpackCast` dataclass's `to_bytes` builds it. Spell a record against the wire contract
-  in `docs/plan/ARCHITECTURE.md`, never from memory.
+- **A port is an `Input` or `Output` attribute of one family, and the attribute types the
+  read.** `read(self.video)` narrows to the family's type (`ImageFrame`, `ChannelsBlock`, a
+  `dict` for Records) and `write(self.video_out, …)` takes it. By name, `write(port_name,
+  payload, timestamp_ns=None, starts_group=True)` copies any contiguous buffer and refuses
+  anything else, under pyright and at runtime; `loan(port_name, payload_byte_len)` fills a
+  sample in place; `read(port_name)` narrows to `PortPayloadBorrow | None`, a borrow with no
+  copy, and `read(port_name, into=T)` to `T | None` through `T.from_bytes`. A Records write
+  checks only that every declared name is present — a `str` where the wire wants an `int`
+  reaches the runtime silently. Spell a record against the wire contract in
+  `docs/plan/ARCHITECTURE.md`, never from memory.
 
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +

@@ -190,6 +190,9 @@ No new ADR.
 - REMOVED: sdk/tatolab-stream/tatolab/stream/msgpack.py
 - REMOVED: sdk/tatolab-stream/tatolab/stream/video_frame.py
 - REMOVED: sdk/tatolab-stream/tatolab/stream/audio_block.py
+- REMOVED: msgpack_typed_dict_cast
+- REMOVED: surface_id_a_msgpack_record_names
+- REMOVED: knows_any_pooled_gpu_frame
 
 ## Proof
 

@@ -16,8 +16,7 @@ import sys
 import traceback
 import uuid
 
-from tatolab.stream import clock, log, node
-from tatolab.stream.msgpack import pack, unpack
+from tatolab.stream import Input, Output, Records, clock, log, node
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -99,8 +98,7 @@ class TensorStorageBufferPublishingSource:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
 
-    @node.output()
-    def tensors_to_downstream(self) -> None: ...
+    tensors_to_downstream = Output(Records)
 
     def __init__(self, config: TensorStorageBufferPublishingSourceConfig) -> None:
         self._config = config
@@ -178,14 +176,12 @@ class TensorStorageBufferPublishingSource:
             )
 
         ctx.outputs.write(
-            "tensors_to_downstream",
-            pack(
-                {
-                    "surface_id": surface_id,
-                    "frame_index": frame_index,
-                    "timestamp_ns": clock.monotonic_now_ns(),
-                }
-            ),
+            self.tensors_to_downstream,
+            {
+                "surface_id": surface_id,
+                "frame_index": frame_index,
+                "timestamp_ns": clock.monotonic_now_ns(),
+            },
         )
         self._surface_ids_published_so_far.append(surface_id)
         if len(self._surface_ids_published_so_far) == self._config.frames_to_publish:
@@ -245,18 +241,17 @@ class PublishedTensorReadingSink:
     """Resolves each published tensor id and compares its values to the ones
     its producer wrote for that frame."""
 
-    @node.input(delivery_profile="ordered")
-    def tensors_from_upstream(self) -> None: ...
+    tensors_from_upstream = Input(Records, delivery="ordered")
 
     def __init__(self, config: PublishedTensorReadingSinkConfig) -> None:
         self._config = config
         self._previous_surface_id: "str | None" = None
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("tensors_from_upstream")
+        payload = ctx.inputs.read(self.tensors_from_upstream)
         if payload is None:
             return
-        message = unpack(payload)
+        message = payload
         resolved_surface_id = message["surface_id"]
         resolved_frame_index = message["frame_index"]
         if self._config.resolve_the_previous_frames_id:
@@ -288,8 +283,7 @@ class HeldTensorRereadingSink:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
 
-    @node.input(delivery_profile="ordered")
-    def tensors_from_upstream(self) -> None: ...
+    tensors_from_upstream = Input(Records, delivery="ordered")
 
     def __init__(self) -> None:
         self._held_tensor_surface = None
@@ -307,10 +301,10 @@ class HeldTensorRereadingSink:
     def process(self, ctx) -> None:
         import torch
 
-        payload = ctx.inputs.read("tensors_from_upstream")
+        payload = ctx.inputs.read(self.tensors_from_upstream)
         if payload is None:
             return
-        message = unpack(payload)
+        message = payload
         if self._held_tensor_surface is None:
             # The claim holds the slot from the read to the resolve, then
             # drops, so the rereads rest on the resolved handle alone.

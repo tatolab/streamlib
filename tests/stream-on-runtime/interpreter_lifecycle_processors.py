@@ -13,7 +13,7 @@ import signal
 import subprocess
 import time
 
-from tatolab.stream import log, node
+from tatolab.stream import Output, Records, log, node
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
@@ -28,8 +28,7 @@ def report(marker_name: str, payload: "dict[str, object] | None" = None) -> None
 class AsleepInItsCallbackProbe:
     """Parks in `process()` far past the ladder's one-second callback budget."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -49,8 +48,7 @@ TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD
 class AsleepInItsCallbackRecordingItsTeardownProbe:
     """Parks in `process()`, and records its `teardown()` in a file."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -70,8 +68,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
     seconds each; stopped at once, about one.
     """
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         report("SLOW_TO_TEAR_DOWN_ASLEEP", {"pid": os.getpid()})
@@ -96,8 +93,7 @@ class WorkerKeepingTeardownGoingProbe:
     def __init__(self) -> None:
         self.worker_pid = None
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         if self.worker_pid is None:
@@ -128,8 +124,7 @@ class StartsAProcessThatOutlivesItProbe:
     def __init__(self) -> None:
         self.survivor_pid = None
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         if self.survivor_pid is None:
@@ -152,5 +147,4 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
 class ThirtySecondImportProbe:
     """Its module takes thirty seconds to import in the helper that hosts it."""
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
