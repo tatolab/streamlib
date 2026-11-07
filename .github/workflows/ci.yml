@@ -627,7 +627,7 @@ jobs:
           cargo test --locked --workspace --features cef/dox
           cargo clippy --locked --workspace --all-targets --features cef/dox -- -D warnings
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "numpy>=2.1" "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           uvx pyright@1.1.411
 
       # rive-runtime draws on the GPU, which the rig runs; CI holds the
