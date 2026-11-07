@@ -80,6 +80,10 @@ from ._port_family_declaration import PortFamily as PortFamily
 from ._port_family_declaration import PortNamesFromConfig as PortNamesFromConfig
 from ._port_family_declaration import Records as Records
 from ._port_family_declaration import from_config as from_config
+from ._graph_interface_nodes import GraphInput as GraphInput
+from ._graph_interface_nodes import GraphInputConfig as GraphInputConfig
+from ._graph_interface_nodes import GraphOutput as GraphOutput
+from ._graph_interface_nodes import GraphOutputConfig as GraphOutputConfig
 from ._graph_variable_nodes import GetVariable as GetVariable
 from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
 from ._graph_variable_nodes import SetVariable as SetVariable
@@ -156,6 +160,10 @@ __all__ = [
     "Exposure",
     "GetVariable",
     "GetVariableConfig",
+    "GraphInput",
+    "GraphInputConfig",
+    "GraphOutput",
+    "GraphOutputConfig",
     "GlslPixelEffect",
     "GlslPixelEffectDialType",
     "GpuContextFullAccess",

@@ -21,6 +21,7 @@ pub use streamlib_processor_schema::{
     NodeTypeANodeReferenceNames, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
     PortFamilyDeclarationDirection, PortFamilyLinkEndpoint, ProcessorClassImportPath,
     ProcessorClassShortName, ProcessorScheduling, TextEntry, VideoEntry,
+    output_port_codec_resolved_against_config, output_port_family_resolved_against_config,
     output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
     refusal_of_required_names, refuse_audio_window_beside_a_skipping_delivery_profile,
 };

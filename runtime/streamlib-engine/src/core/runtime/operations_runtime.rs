@@ -550,6 +550,9 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+        if let Err(refusal) = self.refuse_removing_a_node_a_drawn_link_names(&processor_id) {
+            return Box::pin(std::future::ready(Err(refusal)));
+        }
         self.in_this_streams_log_route(remove_processor_impl(
             self.live_graph_change(),
             processor_id,
@@ -591,6 +594,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+        self.refuse_removing_a_node_a_drawn_link_names(processor_id)?;
         self.block_on_the_engines_tokio_runtime(remove_processor_impl(
             self.live_graph_change(),
             processor_id.clone(),
@@ -1010,7 +1014,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
     };
     use crate::core::graph::{
         InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-        refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+        refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::pubsub::LoadedStreamIdentity;
@@ -1252,13 +1256,13 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
         assert!(refusal.contains("channel_names"), "{refusal}");
 
         compiler.scope(|graph, _tx| {
-            refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["rpm"] }),
             )
             .expect("an update keeping rpm is taken");
-            let refusal = refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            let refusal = refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["torque"] }),

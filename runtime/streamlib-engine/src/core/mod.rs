@@ -29,6 +29,7 @@ pub mod descriptors;
 pub mod error;
 pub mod execution;
 pub mod graph;
+pub mod graph_interface_resolution;
 pub mod graph_snapshot;
 pub mod graph_variable_resolution;
 pub mod hang_legacy_container_media_frame;

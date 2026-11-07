@@ -3,6 +3,8 @@
 
 //! Query builder types for graph operations.
 
+use std::collections::HashSet;
+
 use crate::core::graph::{Link, ProcessorNode, ProcessorUniqueId};
 use crate::core::processors::NodeTypesOneStreamResolves;
 
@@ -41,6 +43,7 @@ pub struct TraversalSourceMut<'a> {
     pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::traversal) node_types_this_stream_resolves:
         &'a NodeTypesOneStreamResolves,
+    pub(in crate::core::graph::traversal) node_names_the_graph_only_nodes_hold: &'a HashSet<String>,
 }
 
 impl<'a> TraversalSourceMut<'a> {
@@ -48,10 +51,12 @@ impl<'a> TraversalSourceMut<'a> {
     pub(in crate::core::graph) fn new(
         graph: &'a mut DiGraph<ProcessorNode, Link>,
         node_types_this_stream_resolves: &'a NodeTypesOneStreamResolves,
+        node_names_the_graph_only_nodes_hold: &'a HashSet<String>,
     ) -> Self {
         Self {
             graph,
             node_types_this_stream_resolves,
+            node_names_the_graph_only_nodes_hold,
         }
     }
 

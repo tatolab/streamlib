@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -33,8 +33,8 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, StepProgressOfOneNodeComponent,
     cast_exposed_name_to_url_safe,
 };
+use crate::core::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::graph_variable_resolution::GraphVariablesAsDrawn;
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::media_clock::MediaClock;
@@ -110,9 +110,9 @@ pub struct LoadedStreamInThisRuntime {
     pub(crate) processor_interpreter_launch_record:
         Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
-    /// The variable nodes, and what they resolved to, of the graph this stream
-    /// loaded, so `graph` renders them as drawn.
-    graph_variables_as_drawn: Mutex<GraphVariablesAsDrawn>,
+    /// The variable and interface nodes, and what they resolved to, of the
+    /// graph this stream loaded, so `graph` renders them as drawn.
+    graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
     /// How long this stream's teardown has before its watchdog abandons it.
     teardown_watchdog_budget: Duration,
     /// Held for the whole of a start or a stop, so a stop that lands while
@@ -299,7 +299,7 @@ impl LoadedStreamInThisRuntime {
                 ),
             ),
             node_types_this_stream_resolves,
-            graph_variables_as_drawn: Mutex::new(GraphVariablesAsDrawn::default()),
+            graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -672,7 +672,10 @@ impl LoadedStreamInThisRuntime {
             if let Err(removal_failure) = &processor_removal_outcome {
                 tracing::error!("[stop] Removing the processors failed: {removal_failure}");
             }
-            *self.graph_variables_as_drawn.lock() = GraphVariablesAsDrawn::default();
+            *self.graph_only_nodes_as_drawn.lock() = GraphOnlyNodesAsDrawn::default();
+            self.compiler.scope(|this_streams_graph, _tx| {
+                this_streams_graph.set_node_names_the_graph_only_nodes_hold(HashSet::new())
+            });
 
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");
@@ -983,6 +986,26 @@ impl LoadedStreamInThisRuntime {
         <Self as RuntimeOperations>::disconnect(self, link_id)
     }
 
+    /// Refuse removing `processor_id` while a drawn link to a variable or
+    /// interface node names it.
+    pub(crate) fn refuse_removing_a_node_a_drawn_link_names(
+        &self,
+        processor_id: &ProcessorUniqueId,
+    ) -> Result<()> {
+        let Some(node_name) = self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(processor_id)
+                .first()
+                .map(|node| node.display_name.clone())
+        }) else {
+            return Ok(());
+        };
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .refuse_removing_a_node_a_drawn_link_names(&node_name)
+    }
+
     /// Update a processor's configuration, applied at the next commit.
     pub fn update_processor_config<C: Serialize>(
         &self,
@@ -993,7 +1016,7 @@ impl LoadedStreamInThisRuntime {
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
         self.compiler.scope(|graph, tx| -> Result<()> {
-            crate::core::graph::refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            crate::core::graph::refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 processor_id,
                 &config_json,
@@ -1004,6 +1027,20 @@ impl LoadedStreamInThisRuntime {
                 processor_id,
                 &config_json,
             )?;
+            if let Some(node) = graph.traversal().v(processor_id).first() {
+                self.graph_only_nodes_as_drawn
+                    .lock()
+                    .interface_as_drawn
+                    .refuse_a_config_update_that_breaks_a_declared_port(
+                        &self.node_types_this_stream_resolves,
+                        &crate::core::graph_snapshot::GraphSnapshotNode {
+                            name: node.display_name.clone(),
+                            processor_type: node.processor_type.clone(),
+                            config: node.config.clone().unwrap_or_default(),
+                        },
+                        &config_json,
+                    )?;
+            }
             tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
                 config_to_apply: config_json,
@@ -1033,7 +1070,7 @@ impl LoadedStreamInThisRuntime {
             .compiler
             .scope(|graph, _tx| graph.to_graph_response(machine_name));
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
-        self.graph_variables_as_drawn
+        self.graph_only_nodes_as_drawn
             .lock()
             .render_into(&mut graph_response);
         serde_json::to_value(graph_response)
@@ -1331,7 +1368,7 @@ impl LoadedStreamInThisRuntime {
         graph
             .clock
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
-        let resolution = graph.with_graph_variables_resolved()?;
+        let resolution = graph.with_graph_only_nodes_resolved()?;
         let graph = &resolution.graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
@@ -1341,8 +1378,13 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         resolution.validate(&self.node_types_this_stream_resolves)?;
-        self.compiler
-            .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
+        let node_names_the_graph_only_nodes_hold =
+            resolution.graph_only_nodes_as_drawn.node_names_cast();
+        self.compiler.scope(|this_streams_graph, _tx| {
+            this_streams_graph.set_stream_clock_spec(graph.clock);
+            this_streams_graph
+                .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold);
+        });
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1367,6 +1409,7 @@ impl LoadedStreamInThisRuntime {
             )
             .map_err(|refusal| {
                 match resolution
+                    .graph_only_nodes_as_drawn
                     .variables_as_drawn
                     .links_resolved_from_a_variable
                     .iter()
@@ -1386,7 +1429,7 @@ impl LoadedStreamInThisRuntime {
                 }
             })?;
         }
-        *self.graph_variables_as_drawn.lock() = resolution.variables_as_drawn;
+        *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
 
         for exposed in &graph.exposed {
             self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;
