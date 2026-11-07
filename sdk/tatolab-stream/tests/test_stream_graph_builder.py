@@ -543,7 +543,7 @@ def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
     message = str(refusal.value)
     assert message.startswith(
         f"config must be JSON: `config['enabled']` is of type `{type_as_written}`, and a "
-        f"graph carries only dict, list, tuple, str, int, float, bool and None"
+        f"graph carries only dict, list, tuple, str, int, float, bool, None and "
     )
     assert (
         "convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`" in message
@@ -1266,3 +1266,102 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_node_declaration"),
                 (1, "_stream_clock_spec"),
             }, module_name
+
+
+def test_a_node_reference_in_config_compiles_to_the_node_object_it_names() -> None:
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(
+        BrightnessReader, config={"source": inverter, "nested": [{"also": inverter}]}
+    )
+
+    assert stream_builder._compiled_graph()["nodes"][1]["config"] == {
+        "source": {"node": "frameinverter"},
+        "nested": [{"also": {"node": "frameinverter"}}],
+    }
+
+
+def test_a_node_reference_to_a_node_the_stream_does_not_hold_is_refused_at_add() -> None:
+    elsewhere = StreamBuilder("elsewhere").add(FrameInverter, name="gateway")
+    stream_builder = StreamBuilder("rig")
+    stream_builder.add(FrameInverter)
+
+    with pytest.raises(ValueError, match="node `gateway` is not in stream `rig`"):
+        stream_builder.add(BrightnessReader, config={"source": elsewhere})
+
+
+def test_a_variable_set_from_a_port_and_read_twice_compiles_to_its_drawn_nodes_and_links() -> None:
+    from tatolab.stream import GetVariable, SetVariable
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    setter = stream_builder.add(SetVariable, config={"variable": "inverted"})
+    stream_builder.connect(inverter.output("video_to_downstream"), setter.input("value"))
+    for reader_name in ("front", "back"):
+        getter = stream_builder.add(GetVariable, config={"variable": "inverted"})
+        reader = stream_builder.add(BrightnessReader, name=reader_name)
+        stream_builder.connect(getter.output("value"), reader.input("video_from_upstream"))
+
+    graph = stream_builder._compiled_graph()
+    assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
+        ("frameinverter", FrameInverter.__module__ + ":FrameInverter"),
+        ("setvariable", "tatolab.stream:SetVariable"),
+        ("getvariable", "tatolab.stream:GetVariable"),
+        ("front", BrightnessReader.__module__ + ":BrightnessReader"),
+        ("getvariable-2", "tatolab.stream:GetVariable"),
+        ("back", BrightnessReader.__module__ + ":BrightnessReader"),
+    ]
+    assert graph["links"] == [
+        {
+            "source": {"node": "frameinverter", "port": "video_to_downstream"},
+            "target": {"node": "setvariable", "port": "value"},
+        },
+        {
+            "source": {"node": "getvariable", "port": "value"},
+            "target": {"node": "front", "port": "video_from_upstream"},
+        },
+        {
+            "source": {"node": "getvariable-2", "port": "value"},
+            "target": {"node": "back", "port": "video_from_upstream"},
+        },
+    ]
+
+
+def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_one() -> None:
+    from tatolab.stream import GetVariable, SetVariable
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(
+        SetVariable, config={"variable": "connection", "node_reference": inverter}
+    )
+    getter = stream_builder.add(GetVariable, config={"variable": "connection"})
+    stream_builder.add(BrightnessReader, config={"source": getter})
+
+    nodes = stream_builder._compiled_graph()["nodes"]
+    assert nodes[1]["config"] == {
+        "variable": "connection",
+        "node_reference": {"node": "frameinverter"},
+    }
+    assert nodes[3]["config"] == {"source": {"node": "getvariable"}}
+
+
+def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_too_deep() -> None:
+    from tatolab.stream._stream_graph_builder import (
+        _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF,
+    )
+
+    def config_whose_deepest_container_holds(leaf: object) -> dict[str, object]:
+        config: dict[str, object] = {"leaf": leaf}
+        for _ in range(_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF - 1):
+            config = {"down": config}
+        return config
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(BrightnessReader, config=config_whose_deepest_container_holds("a str"))
+
+    with pytest.raises(ValueError, match="config nests too deep"):
+        stream_builder.add(
+            BrightnessReader, config=config_whose_deepest_container_holds(inverter)
+        )

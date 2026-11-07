@@ -38,6 +38,7 @@ __all__ = [
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
+    "NodeReferenceToNodeType",
     "StreamBuilder",
     "compile_stream_to_graph",
     "is_stream_function",
@@ -248,6 +249,10 @@ class NodeReference:
         return NodeInputPortReference(self.name, port_name)
 
 
+type NodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
+"""A config field holding a reference to a node of `NodeClassTheReferenceNames`, checked at load."""
+
+
 @dataclass(frozen=True)
 class _RecordedNode:
     name: str
@@ -307,6 +312,12 @@ class StreamBuilder:
         if not isinstance(node_class, type):
             raise TypeError(_not_a_node_refusal(node_class))
         node_type = _node_type_of(node_class)
+        node_names_the_config_references: list[str] = []
+        config_as_json_object = _config_as_json_object(
+            config, node_names_the_config_references
+        )
+        for referenced_node_name in node_names_the_config_references:
+            self._refuse_a_node_this_stream_does_not_hold(referenced_node_name)
         node_name = (
             self._name_a_defaulted_node_takes(node_class)
             if name is None
@@ -315,7 +326,7 @@ class StreamBuilder:
         recorded_node = _RecordedNode(
             name=node_name,
             node_type=node_type,
-            config=_config_as_json_object(config),
+            config=config_as_json_object,
             typed_name=name,
             class_short_name=node_class.__name__,
         )
@@ -536,7 +547,9 @@ def _suggested_module_name(qualname: str) -> str:
     return "".join(snake_characters) or "nodes"
 
 
-def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:
+def _config_as_json_object(
+    config: Mapping[str, Any] | None, node_names_the_config_references: list[str]
+) -> dict[str, Any]:
     if config is None:
         return {}
     if not isinstance(config, Mapping):
@@ -544,13 +557,16 @@ def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:
             f"config must be a mapping of str keys to JSON values — the object a node's "
             f"config is; got {config!r}, of type `{_type_name_as_written(config)}`"
         )
-    return _json_object(config, "config", {id(config): "config"})
+    return _json_object(
+        config, "config", {id(config): "config"}, node_names_the_config_references
+    )
 
 
 def _json_object(
     mapping: Mapping[Any, Any],
     key_path: str,
     key_paths_of_enclosing_containers_by_id: dict[int, str],
+    node_names_the_config_references: list[str],
 ) -> dict[str, Any]:
     json_object: dict[str, Any] = {}
     for key, value in mapping.items():
@@ -568,7 +584,10 @@ def _json_object(
                 f"keep one of them, or rename the other"
             )
         json_object[plain_key] = _json_value(
-            value, f"{key_path}[{plain_key!r}]", key_paths_of_enclosing_containers_by_id
+            value,
+            f"{key_path}[{plain_key!r}]",
+            key_paths_of_enclosing_containers_by_id,
+            node_names_the_config_references,
         )
     return json_object
 
@@ -577,9 +596,14 @@ def _json_value(
     value: object,
     key_path: str,
     key_paths_of_enclosing_containers_by_id: dict[int, str],
+    node_names_the_config_references: list[str],
 ) -> Any:
     if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, NodeReference):
+        _refuse_a_container_nested_too_deep(key_path, key_paths_of_enclosing_containers_by_id)
+        node_names_the_config_references.append(value.name)
+        return {"node": value.name}
     if isinstance(value, str):
         return str.__str__(value)
     if isinstance(value, int):
@@ -589,7 +613,8 @@ def _json_value(
     if not isinstance(value, (Mapping, list, tuple)):
         raise TypeError(
             f"config must be JSON: `{key_path}` is of type `{_type_name_as_written(value)}`, "
-            f"and a graph carries only dict, list, tuple, str, int, float, bool and None — "
+            f"and a graph carries only dict, list, tuple, str, int, float, bool, None and "
+            f"the `NodeReference` `add` returned — "
             f"convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`, or a "
             f"collection with `list(...)`"
         )
@@ -600,6 +625,32 @@ def _json_value(
             f"it — a value holding itself has no JSON form. Break the cycle: put the "
             f"data `{key_path}` should carry there, not the container holding it"
         )
+    _refuse_a_container_nested_too_deep(key_path, key_paths_of_enclosing_containers_by_id)
+    key_paths_of_enclosing_containers_by_id[id(value)] = key_path
+    if isinstance(value, Mapping):
+        json_container: Any = _json_object(
+            value,
+            key_path,
+            key_paths_of_enclosing_containers_by_id,
+            node_names_the_config_references,
+        )
+    else:
+        json_container = [
+            _json_value(
+                item,
+                f"{key_path}[{index}]",
+                key_paths_of_enclosing_containers_by_id,
+                node_names_the_config_references,
+            )
+            for index, item in enumerate(value)
+        ]
+    del key_paths_of_enclosing_containers_by_id[id(value)]
+    return json_container
+
+
+def _refuse_a_container_nested_too_deep(
+    key_path: str, key_paths_of_enclosing_containers_by_id: dict[int, str]
+) -> None:
     containers_enclosing_this_one_counting_config = len(
         key_paths_of_enclosing_containers_by_id
     )
@@ -617,20 +668,6 @@ def _json_value(
             f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
             f"the deeper part as a `str`"
         )
-    key_paths_of_enclosing_containers_by_id[id(value)] = key_path
-    if isinstance(value, Mapping):
-        json_container: Any = _json_object(
-            value, key_path, key_paths_of_enclosing_containers_by_id
-        )
-    else:
-        json_container = [
-            _json_value(
-                item, f"{key_path}[{index}]", key_paths_of_enclosing_containers_by_id
-            )
-            for index, item in enumerate(value)
-        ]
-    del key_paths_of_enclosing_containers_by_id[id(value)]
-    return json_container
 
 
 def _json_integer(value: int, key_path: str) -> int:

@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from tatolab.stream._node_config_schema import (
+    with_each_node_reference_field_as_a_node_reference,
+)
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
 __all__ = ["apply_configuration", "construct_processor_instance"]
@@ -36,7 +39,11 @@ def construct_processor_instance(
     if config_class is None:
         _refuse_a_configuration_with_nowhere_to_go(processor_class, configuration)
         return processor_class()
-    return processor_class(config=config_class(**configuration))
+    return processor_class(
+        config=config_class(
+            **with_each_node_reference_field_as_a_node_reference(config_class, configuration)
+        )
+    )
 
 
 def apply_configuration(processor_instance: Any, configuration: Optional[Any]) -> None:
@@ -58,7 +65,11 @@ def apply_configuration(processor_instance: Any, configuration: Optional[Any]) -
         _refuse_a_configuration_with_nowhere_to_go(processor_class, configuration)
         reconfigure(None)
         return
-    reconfigure(config_class(**configuration))
+    reconfigure(
+        config_class(
+            **with_each_node_reference_field_as_a_node_reference(config_class, configuration)
+        )
+    )
 
 
 def _refuse_a_configuration_with_nowhere_to_go(
