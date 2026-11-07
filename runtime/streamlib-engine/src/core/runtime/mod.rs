@@ -18,6 +18,7 @@ mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
+mod output_port_viewer;
 mod processor_interpreter_launch_record;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
@@ -80,6 +81,10 @@ pub(crate) use open_descriptor_soft_limit::{
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use output_port_viewer::{
+    OUTPUT_PORT_VIEWER_RING_DEPTH, OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
+    OutputPortViewerReader,
+};
 pub use project_stream_action_queue::{
     FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
     StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,

@@ -56,22 +56,22 @@ use streamlib::sdk::graph::{
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, ProjectStreamsListing,
-    RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind, StreamActionState,
-    StreamActionStep, StreamListing, StreamListingState, StreamLocation,
+    CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
+    ProjectStreamsListing, RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind,
+    StreamActionState, StreamActionStep, StreamListing, StreamListingState, StreamLocation,
     WhatTheLastCompileOfTheProjectGave,
 };
 use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AddRelayToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
-    ConfigureRelayToolResult, CreateProjectToolResult, DescribeStreamActionToolResult,
-    DescribeStreamActionToolResultStream, ExposePortLevel, ExposePortToolResult,
-    ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListRelaysToolResult,
-    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LogsToolResult,
-    RemoveProjectToolResult, RemoveRelayToolResult, RenameStreamToolResult, RunProjectToolResult,
-    SetStreamClockScaleToolResult, StartStreamToolResult, StopStreamToolResult,
-    StreamActionKindOnTheWire, StreamActionStateOnTheWire, StreamActionStepOnTheWire,
-    StreamLocationOnTheWire,
+    CloseViewerToolResult, ConfigureRelayToolResult, CreateProjectToolResult,
+    DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ExposePortLevel,
+    ExposePortToolResult, ListProjectStreamsToolResult, ListProjectStreamsToolResultStream,
+    ListRelaysToolResult, ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
+    LogsToolResult, OpenViewerToolResult, RemoveProjectToolResult, RemoveRelayToolResult,
+    RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
+    StartStreamToolResult, StopStreamToolResult, StreamActionKindOnTheWire,
+    StreamActionStateOnTheWire, StreamActionStepOnTheWire, StreamLocationOnTheWire,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -130,6 +130,13 @@ pub(crate) enum LocalApiMcpConnection {
     McpStdio,
 }
 
+/// The viewers one `/mcp/stdio` connection opened, by id, each holding its
+/// port's channel open until it is closed or the connection ends.
+#[derive(Default)]
+pub(crate) struct ViewersOneLocalApiConnectionHoldsOpen {
+    viewers_by_id: parking_lot::Mutex<std::collections::BTreeMap<String, OutputPortViewerHeldOpen>>,
+}
+
 /// The runtime's MCP server handler: its tools, resources and prompts over the
 /// streams the runtime loads, for one connection.
 #[derive(Clone)]
@@ -138,6 +145,7 @@ pub(crate) struct LocalApiMcpServerHandler {
     relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
     local_api_stopping_token: CancellationToken,
     mcp_connection: LocalApiMcpConnection,
+    viewers_this_connection_holds_open: Arc<ViewersOneLocalApiConnectionHoldsOpen>,
     tool_router: Arc<ToolRouter<Self>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
@@ -156,6 +164,7 @@ impl LocalApiMcpServerHandler {
             relay_instances,
             local_api_stopping_token,
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
+            viewers_this_connection_holds_open: Arc::default(),
             tool_router: Arc::new(Self::tool_router()),
             prompt_router: Arc::new(Self::prompt_router()),
         }
@@ -165,6 +174,7 @@ impl LocalApiMcpServerHandler {
     pub(crate) fn for_one_mcp_stdio_connection(&self) -> Self {
         Self {
             mcp_connection: LocalApiMcpConnection::McpStdio,
+            viewers_this_connection_holds_open: Arc::default(),
             ..self.clone()
         }
     }
@@ -456,6 +466,26 @@ struct ExposePortToolArguments {
         description = "`internal` for the stream's own nodes alone, `private` for any reader on this machine, `public` for readers off it as well."
     )]
     level: OutputPortExposureLevelToolArgument,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct OpenViewerToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = "The node's name, as `graph` lists it.")]
+    node: String,
+    #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
+    port: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct CloseViewerToolArguments {
+    #[schemars(description = "The viewer, by the id `open_viewer` answered.")]
+    viewer: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -936,6 +966,72 @@ impl LocalApiMcpServerHandler {
                     .collect(),
             },
         )
+    }
+
+    #[tool(
+        description = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running."
+    )]
+    async fn open_viewer(
+        &self,
+        Parameters(OpenViewerToolArguments { stream, node, port }): Parameters<
+            OpenViewerToolArguments,
+        >,
+    ) -> ToolCallAnswer {
+        if matches!(
+            self.mcp_connection,
+            LocalApiMcpConnection::OneShotStreamableHttpRequest
+        ) {
+            return Err(
+                "open_viewer failed: a viewer stays open for the connection that opened it, and \
+                 a `POST /mcp` request ends with its answer; open it over `/mcp/stdio`"
+                    .to_string(),
+            );
+        }
+        let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
+        let viewer_held_open = stream_operations
+            .open_a_viewer_of_an_output_port(node, port)
+            .await
+            .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
+        let hand_off = viewer_held_open.hand_off().clone();
+        let viewer = format!("{}/{}/{}", hand_off.stream, hand_off.node, hand_off.port);
+        self.viewers_this_connection_holds_open
+            .viewers_by_id
+            .lock()
+            .insert(viewer.clone(), viewer_held_open);
+        serialized_tool_result(
+            "open_viewer",
+            &OpenViewerToolResult {
+                viewer,
+                stream: hand_off.stream,
+                node: hand_off.node,
+                port: hand_off.port,
+                iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),
+                channel: hand_off.channel_service_name,
+            },
+        )
+    }
+
+    #[tool(
+        description = "Close a viewer this connection opened, letting go of its port's channel."
+    )]
+    async fn close_viewer(
+        &self,
+        Parameters(CloseViewerToolArguments { viewer }): Parameters<CloseViewerToolArguments>,
+    ) -> ToolCallAnswer {
+        let closed = self
+            .viewers_this_connection_holds_open
+            .viewers_by_id
+            .lock()
+            .remove(&viewer);
+        let Some(closed) = closed else {
+            return Err(format!(
+                "close_viewer failed: this connection holds no viewer `{viewer}` open"
+            ));
+        };
+        tokio::task::spawn_blocking(move || drop(closed))
+            .await
+            .map_err(|join_failure| format!("close_viewer failed: {join_failure}"))?;
+        serialized_tool_result("close_viewer", &CloseViewerToolResult { viewer })
     }
 
     #[tool(
@@ -1477,6 +1573,8 @@ pub(crate) mod tests {
         "rename_stream",
         "list_streams",
         "expose_port",
+        "open_viewer",
+        "close_viewer",
         "set_stream_clock_scale",
         "add_relay",
         "configure_relay",
@@ -1496,6 +1594,7 @@ pub(crate) mod tests {
         "start_stream",
         "rename_stream",
         "expose_port",
+        "open_viewer",
         "set_stream_clock_scale",
     ];
 

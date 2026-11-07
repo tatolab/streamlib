@@ -5,7 +5,8 @@
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
 //! `stop_stream`, `start_stream`, `remove_project`, `rename_stream` and
-//! `expose_port` act by stream id on an engine recording its streams in a temporary state
+//! `expose_port` act by stream id, `open_viewer` holds a viewer open only
+//! for the `/mcp/stdio` connection that opened it, on an engine recording its streams in a temporary state
 //! directory.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
@@ -803,6 +804,48 @@ async fn expose_port_changes_a_loaded_port_live_and_records_a_stopped_streams_ru
         refusal.contains("nowhere") && refusal.contains("source"),
         "{refusal}"
     );
+}
+
+/// `open_viewer` is refused over `POST /mcp`, whose connection ends with its
+/// answer, and over `/mcp/stdio` names a node that is not running; the
+/// connection closes only a viewer it opened.
+#[tokio::test(flavor = "multi_thread")]
+async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let the_ports_viewer = json!({ "stream": live, "node": "source", "port": "video" });
+
+    let over_post = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "open_viewer",
+            the_ports_viewer.clone(),
+        )
+        .await,
+    )
+    .expect_err("a `POST /mcp` request holds no viewer open");
+    assert!(over_post.contains("/mcp/stdio"), "{over_post}");
+
+    let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
+    let client = rmcp_client_over_the_upgraded_stream(&served).await;
+    let not_running =
+        tool_answer(&tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer).await)
+            .expect_err("a node that is not running has nothing to view");
+    assert!(
+        not_running.contains("source") && not_running.contains("not running"),
+        "{not_running}"
+    );
+    let unknown = tool_answer(
+        &tool_call_over_the_connection(
+            &client,
+            "close_viewer",
+            json!({ "viewer": format!("{live}/source/video") }),
+        )
+        .await,
+    )
+    .expect_err("the connection opened no viewer");
+    assert!(unknown.contains("no viewer"), "{unknown}");
 }
 
 /// `set_stream_clock_scale` reaches the named stream's clock, refusing a stream

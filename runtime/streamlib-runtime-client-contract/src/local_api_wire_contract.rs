@@ -383,6 +383,31 @@ pub struct ExposePortToolResult {
     pub not_recorded_because: Option<String>,
 }
 
+/// The `open_viewer` tool's result: what a viewer subscribes to, from its own process, to read
+/// the latest message an output port's node wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenViewerToolResult {
+    /// The viewer's id, which `close_viewer` takes: `<stream>/<node>/<port>`.
+    pub viewer: String,
+    /// The stream's id.
+    pub stream: String,
+    /// The node's name.
+    pub node: String,
+    /// The output port's cast name.
+    pub port: String,
+    /// The root of the iceoryx2 domain the port's channel lives in.
+    pub iceoryx2_domain_root: String,
+    /// The port's channel: the iceoryx2 service whose reserved subscriber slot the viewer takes.
+    pub channel: String,
+}
+
+/// The `close_viewer` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloseViewerToolResult {
+    /// The viewer closed.
+    pub viewer: String,
+}
+
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetStreamClockScaleToolResult {

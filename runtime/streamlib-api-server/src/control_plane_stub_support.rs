@@ -23,6 +23,22 @@ macro_rules! the_exposed_port_subscription_is_unreachable {
                 $surface
             ))
         }
+
+        fn open_a_viewer_of_an_output_port(
+            &self,
+            node_name: String,
+            port_name: String,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::OutputPortViewerHeldOpen>,
+        > {
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::Link(format!(
+                    "the stub stream runs no node `{node_name}`, so port `{port_name}` has \
+                     nothing to view"
+                )))
+            })
+        }
     };
 }
 pub(crate) use the_exposed_port_subscription_is_unreachable;

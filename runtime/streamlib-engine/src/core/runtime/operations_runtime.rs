@@ -638,6 +638,17 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         })
     }
 
+    fn open_a_viewer_of_an_output_port(
+        &self,
+        node_name: String,
+        port_name: String,
+    ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>> {
+        self.in_this_streams_log_route(async move {
+            self.open_a_viewer_of_an_output_port_holding_its_channel(&node_name, &port_name)
+                .await
+        })
+    }
+
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         self.add_processor_reporting_its_name(spec)
             .map(|added| added.processor_id)

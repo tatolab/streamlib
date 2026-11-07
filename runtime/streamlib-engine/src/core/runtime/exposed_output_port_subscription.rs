@@ -20,7 +20,8 @@ use super::reserved_slot_forwarder::{
 };
 use super::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::compiler::compiler_ops::{
-    SourceSideHeldOpenForTheRuntimesPublisher, open_the_source_side_for_the_runtimes_publisher,
+    SourceSideHeldOpenForAReaderOnTheReservedSlot,
+    open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
@@ -261,8 +262,11 @@ fn subscribe_holding_the_source_side_open(
                     ))
                 })?;
             let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
-            let source_side =
-                open_the_source_side_for_the_runtimes_publisher(graph, &source, &iceoryx2_node)?;
+            let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
+                graph,
+                &source,
+                &iceoryx2_node,
+            )?;
             Ok((node_display_name, port_cast, level_now, source_side))
         })?;
     let forwarder = start_reserved_slot_forwarder(
@@ -302,7 +306,7 @@ pub enum ExposedOutputPortSourceWiring {
 pub struct ExposedOutputPortSubscription {
     // Dropped first: the reader stops before the channel it reads is released.
     forwarder: ReservedSlotForwarder<MessageReadFromInputPort>,
-    source_side: SourceSideHeldOpenForTheRuntimesPublisher,
+    source_side: SourceSideHeldOpenForAReaderOnTheReservedSlot,
     level_now: LevelOfAnExposedOutputPortNow,
     stream_id: String,
     node_name: String,
