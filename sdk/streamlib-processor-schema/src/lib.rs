@@ -48,6 +48,7 @@ pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     IMAGE_TEXTURE_FORMAT_WIRE_NAMES, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
     PortFamilyDeclarationDirection, PortFamilyLinkEndpoint,
+    output_port_codec_resolved_against_config, output_port_family_resolved_against_config,
     output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
     refusal_of_required_names,
 };

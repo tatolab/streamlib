@@ -543,7 +543,7 @@ def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
     message = str(refusal.value)
     assert message.startswith(
         f"config must be JSON: `config['enabled']` is of type `{type_as_written}`, and a "
-        f"graph carries only dict, list, tuple, str, int, float, bool, None and "
+        f"graph carries only dict, list, tuple, str, int, float, bool, None, a "
     )
     assert (
         "convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`" in message
@@ -1265,6 +1265,7 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_built_in_node"),
                 (1, "_node_declaration"),
                 (1, "_stream_clock_spec"),
+                (1, "_port_family_declaration"),
             }, module_name
 
 
@@ -1365,3 +1366,31 @@ def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_
         stream_builder.add(
             BrightnessReader, config=config_whose_deepest_container_holds(inverter)
         )
+
+
+def test_interface_nodes_compile_with_their_family_written_by_its_wire_name() -> None:
+    from tatolab.stream import GraphInput, GraphOutput, Image
+
+    stream_builder = StreamBuilder("rig")
+    entering = stream_builder.add(GraphInput, config={"port": "camera", "family": Image})
+    inverter = stream_builder.add(FrameInverter)
+    leaving = stream_builder.add(GraphOutput, config={"port": "inverted", "family": Image})
+    stream_builder.connect(entering.output("value"), inverter.input("video_from_upstream"))
+    stream_builder.connect(inverter.output("video_to_downstream"), leaving.input("value"))
+
+    graph = stream_builder._compiled_graph()
+    assert [(node["name"], node["type"], node["config"]) for node in graph["nodes"]] == [
+        ("graphinput", "tatolab.stream:GraphInput", {"port": "camera", "family": "image"}),
+        ("frameinverter", FrameInverter.__module__ + ":FrameInverter", {}),
+        ("graphoutput", "tatolab.stream:GraphOutput", {"port": "inverted", "family": "image"}),
+    ]
+    assert graph["links"] == [
+        {
+            "source": {"node": "graphinput", "port": "value"},
+            "target": {"node": "frameinverter", "port": "video_from_upstream"},
+        },
+        {
+            "source": {"node": "frameinverter", "port": "video_to_downstream"},
+            "target": {"node": "graphoutput", "port": "value"},
+        },
+    ]

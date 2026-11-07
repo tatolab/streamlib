@@ -111,7 +111,7 @@ class PortNamesFromConfig:
 
 
 def from_config(config_key: str) -> PortNamesFromConfig:
-    """Read an output's names, or a Channels output's rate, from `config_key` of its node's config."""
+    """Read an output's names, family or codec, or a Channels output's rate, from `config_key` of its node's config."""
     return PortNamesFromConfig(config_key)
 
 
@@ -188,10 +188,19 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     `requires=` names the output's names this input needs (Array, Channels,
     Records), `requires_codec=` the codecs it decodes (Packets), `formats=` the
     pixel formats it reads (Image), and `window=` the audio window it wants
-    (Channels). `connect` refuses a link whose output does not meet them.
+    (Channels). `also_takes=` names the families the input takes a link from
+    besides its own. `connect` refuses a link whose output does not meet them.
     """
 
-    __slots__ = ("delivery", "borrow_quota", "requires", "requires_codec", "formats", "window")
+    __slots__ = (
+        "delivery",
+        "borrow_quota",
+        "requires",
+        "requires_codec",
+        "formats",
+        "window",
+        "also_takes",
+    )
 
     def __init__(
         self,
@@ -203,9 +212,16 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         requires_codec: "tuple[str, ...]" = (),
         formats: "tuple[str, ...]" = (),
         window: "Optional[AudioWindowContract]" = None,
+        also_takes: "tuple[PortFamily[Any], ...]" = (),
         description: str = "",
     ) -> None:
         super().__init__(_refuse_a_port_family_that_is_not_one(family, "Input"), description)
+        if isinstance(also_takes, PortFamily) or not isinstance(also_takes, (tuple, list)):
+            raise TypeError(f"`also_takes=` takes a tuple of port families, got {also_takes!r}")
+        self.also_takes: "tuple[PortFamily[Any], ...]" = tuple(
+            _refuse_a_port_family_that_is_not_one(each, "Input(also_takes=…)")
+            for each in also_takes
+        )
         if delivery not in _DELIVERY_PROFILES:
             raise ValueError(
                 f"Input({family!r}) must declare `delivery=`, one of "
@@ -246,6 +262,10 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
             family_declaration["requires_codec"] = list(self.requires_codec)
         if self.formats:
             family_declaration["formats"] = list(self.formats)
+        if self.also_takes:
+            family_declaration["also_takes_families"] = [
+                each._wire_name for each in self.also_takes
+            ]
         marker: "dict[str, Any]" = {
             "name": self.port_name,
             "description": self.description,
@@ -271,30 +291,48 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
     strings or `from_config("key")`. `codec=` is a Packets output's codec,
     `rate=` and `dtype=` a Channels output's sample rate and type, `formats=`
     an Image output's pixel formats and `residency=` where an Array output's
-    tensors live. `catalog=` is the port's catalog entry.
+    tensors live. `catalog=` is the port's catalog entry. `family_from=
+    from_config("key")` reads the family from the node's config when
+    `connect` resolves it, the positional family standing while the key is
+    unset; `codec=from_config("key")` reads a codec the same way.
     """
 
-    __slots__ = ("names", "codec", "rate", "dtype", "formats", "residency", "catalog")
+    __slots__ = (
+        "names",
+        "codec",
+        "rate",
+        "dtype",
+        "formats",
+        "residency",
+        "catalog",
+        "family_from",
+    )
 
     def __init__(
         self,
         family: "PortFamily[_PortFamilyReadType]",
         *,
         names: "Union[tuple[str, ...], PortNamesFromConfig, None]" = None,
-        codec: Optional[str] = None,
+        codec: "Union[str, PortNamesFromConfig, None]" = None,
         rate: "Union[int, PortNamesFromConfig, None]" = None,
         dtype: Optional[str] = None,
         formats: "tuple[str, ...]" = (),
         residency: Optional[str] = None,
         catalog: "Optional[CatalogEntry]" = None,
+        family_from: "Optional[PortNamesFromConfig]" = None,
         description: str = "",
     ) -> None:
         super().__init__(_refuse_a_port_family_that_is_not_one(family, "Output"), description)
+        if family_from is not None and not isinstance(family_from, PortNamesFromConfig):
+            raise TypeError(f"`family_from=` takes from_config(...), got {family_from!r}")
+        self.family_from = family_from
         if names is not None and not isinstance(names, PortNamesFromConfig):
             names = _tuple_of_strings(names, "names")
         self.names = names
-        if codec is not None and (not isinstance(codec, str) or not codec):
-            raise TypeError(f"`codec=` takes a non-empty str, got {codec!r}")
+        if codec is not None and not isinstance(codec, PortNamesFromConfig) and (
+            not isinstance(codec, str) or not codec
+        ):
+            raise TypeError(f"`codec=` takes a non-empty str or from_config(...), got {codec!r}")
         self.codec = codec
         if rate is not None and not isinstance(rate, PortNamesFromConfig) and (
             isinstance(rate, bool) or not isinstance(rate, int) or rate <= 0
@@ -323,7 +361,9 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
             "output",
             {
                 "names": self.names is not None and self.family not in _FAMILIES_WITH_NAMES,
-                "codec": self.codec is not None and self.family is not Packets,
+                "codec": self.codec is not None
+                and self.family is not Packets
+                and self.family_from is None,
                 "rate": self.rate is not None and self.family is not Channels,
                 "dtype": self.dtype is not None and self.family is not Channels,
                 "formats": bool(self.formats) and self.family is not Image,
@@ -335,8 +375,12 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
             family_declaration["names"] = self.names._as_declaration()
         elif self.names is not None:
             family_declaration["names"] = {"stated": list(self.names)}
-        if self.codec is not None:
+        if isinstance(self.codec, PortNamesFromConfig):
+            family_declaration["codec_from_config_key"] = self.codec.config_key
+        elif self.codec is not None:
             family_declaration["codec"] = self.codec
+        if self.family_from is not None:
+            family_declaration["family_from_config_key"] = self.family_from.config_key
         if isinstance(self.rate, PortNamesFromConfig):
             family_declaration["rate"] = self.rate._as_declaration()
         elif self.rate is not None:

@@ -42,6 +42,17 @@ impl PortFamily {
         }
     }
 
+    /// The name a graph, a config and the wire spell this family by.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            PortFamily::Image => "image",
+            PortFamily::Array => "array",
+            PortFamily::Channels => "channels",
+            PortFamily::Packets => "packets",
+            PortFamily::Records => "records",
+        }
+    }
+
     /// Whether a port of this family states names: channel names, attribute
     /// names or record keys.
     pub fn has_names(self) -> bool {
@@ -122,6 +133,17 @@ pub struct PortFamilyDeclaration {
     pub formats: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub residency: Option<ArrayOutputPortResidency>,
+    /// The families an input takes a link from besides [`Self::family`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_takes_families: Vec<PortFamily>,
+    /// The config key an output reads its family from when `connect` resolves
+    /// it; [`Self::family`] while the key is unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_from_config_key: Option<String>,
+    /// The config key an output reads its codec from when `connect` resolves
+    /// it; [`Self::codec`] while the key is unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec_from_config_key: Option<String>,
 }
 
 /// Which end of a link a port declaration sits at.
@@ -144,7 +166,21 @@ impl PortFamilyDeclaration {
             dtype: None,
             formats: Vec::new(),
             residency: None,
+            also_takes_families: Vec::new(),
+            family_from_config_key: None,
+            codec_from_config_key: None,
         }
+    }
+
+    /// Every family this input takes a link from.
+    pub fn families_an_input_takes(&self) -> Vec<PortFamily> {
+        let mut families = vec![self.family];
+        for family in &self.also_takes_families {
+            if !families.contains(family) {
+                families.push(*family);
+            }
+        }
+        families
     }
 
     /// The first key this declaration states that its family or its
@@ -155,7 +191,10 @@ impl PortFamilyDeclaration {
         direction: PortFamilyDeclarationDirection,
     ) -> Option<String> {
         let family = self.family;
-        let stated_keys: [(&str, bool, bool); 9] = [
+        let is_an_output = direction == PortFamilyDeclarationDirection::Output;
+        let output_family_may_be_packets =
+            family == PortFamily::Packets || self.family_from_config_key.is_some();
+        let stated_keys: [(&str, bool, bool); 12] = [
             (
                 "names",
                 self.names.is_some(),
@@ -198,6 +237,21 @@ impl PortFamilyDeclaration {
                 "residency",
                 self.residency.is_some(),
                 direction == PortFamilyDeclarationDirection::Output && family == PortFamily::Array,
+            ),
+            (
+                "also_takes_families",
+                !self.also_takes_families.is_empty(),
+                direction == PortFamilyDeclarationDirection::Input,
+            ),
+            (
+                "family_from_config_key",
+                self.family_from_config_key.is_some(),
+                is_an_output,
+            ),
+            (
+                "codec_from_config_key",
+                self.codec_from_config_key.is_some(),
+                is_an_output && output_family_may_be_packets,
             ),
             ("family", false, true),
         ];
@@ -289,6 +343,52 @@ pub fn output_port_names_resolved_against_config(
     }
 }
 
+/// The family an output's declaration resolves to against its node's config,
+/// or why it cannot be resolved.
+pub fn output_port_family_resolved_against_config(
+    declaration: &PortFamilyDeclaration,
+    node_config: Option<&serde_json::Value>,
+) -> Result<PortFamily, String> {
+    let Some(config_key) = declaration.family_from_config_key.as_deref() else {
+        return Ok(declaration.family);
+    };
+    match node_config.and_then(|config| config.get(config_key)) {
+        None | Some(serde_json::Value::Null) => Ok(declaration.family),
+        Some(serde_json::Value::String(wire_name)) => PortFamily::ALL
+            .into_iter()
+            .find(|family| family.declaration_name().eq_ignore_ascii_case(wire_name))
+            .ok_or_else(|| {
+                format!(
+                    "config key {config_key:?} names family {wire_name:?}, and a family is one \
+                     of {}",
+                    PortFamily::ALL.map(|family| family.wire_name()).join(", ")
+                )
+            }),
+        Some(other) => Err(format!(
+            "config key {config_key:?} names the output's family as a string, and holds {other}"
+        )),
+    }
+}
+
+/// The codec an output's declaration resolves to against its node's config,
+/// or why it cannot be resolved; `None` when it states none.
+pub fn output_port_codec_resolved_against_config(
+    declaration: &PortFamilyDeclaration,
+    node_config: Option<&serde_json::Value>,
+) -> Result<Option<String>, String> {
+    let Some(config_key) = declaration.codec_from_config_key.as_deref() else {
+        return Ok(declaration.codec.clone());
+    };
+    match node_config.and_then(|config| config.get(config_key)) {
+        None | Some(serde_json::Value::Null) => Ok(declaration.codec.clone()),
+        Some(serde_json::Value::String(codec)) if !codec.is_empty() => Ok(Some(codec.clone())),
+        Some(other) => Err(format!(
+            "config key {config_key:?} names the output's codec as a non-empty string, and \
+             holds {other}"
+        )),
+    }
+}
+
 /// The node a person places between `from` and `to` to convert one family to
 /// the other.
 fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str {
@@ -311,9 +411,10 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str
 /// Why `connect` refuses a link from `output` to `input`, or `None` when it
 /// takes it.
 ///
-/// Families compare by equality, then the input's `requires=` against the
-/// output's resolved names, then `requires_codec=` against its codec, then
-/// the two `formats=` sets, which must overlap. A port with no family — a
+/// The output's family, resolved against its node's config, must be one the
+/// input takes; then the input's `requires=` is checked against the output's
+/// resolved names, `requires_codec=` against its resolved codec, and the two
+/// `formats=` sets, which must overlap. A port with no family — a
 /// decorator port, read as unchecked Records — takes any link.
 pub fn refusal_of_a_link_between_port_families(
     output: PortFamilyLinkEndpoint<'_>,
@@ -325,16 +426,41 @@ pub fn refusal_of_a_link_between_port_families(
     else {
         return None;
     };
-    let output_family = output_declaration.family;
-    let input_family = input_declaration.family;
-    if output_family != input_family {
+    let output_family =
+        match output_port_family_resolved_against_config(output_declaration, output_node_config) {
+            Ok(family) => family,
+            Err(unresolved) => {
+                return Some(format!(
+                    "cannot link {output} to {input}: {output}'s family cannot be resolved: \
+                     {unresolved}"
+                ));
+            }
+        };
+    let input_families = input_declaration.families_an_input_takes();
+    if !input_families.contains(&output_family) {
+        let input_family = input_declaration.family;
+        let input_families_named = input_families
+            .iter()
+            .map(|family| family.declaration_name())
+            .collect::<Vec<_>>()
+            .join(" or ");
         return Some(format!(
-            "cannot link {output} ({output_family}) to {input} ({input_family}): a link joins \
-             two ports of one family; {}",
+            "cannot link {output} ({output_family}) to {input} ({input_families_named}): a link \
+             joins two ports of one family; {}",
             conversion_between_families(output_family, input_family)
         ));
     }
-    if !input_declaration.requires.is_empty() {
+    let output_codec =
+        match output_port_codec_resolved_against_config(output_declaration, output_node_config) {
+            Ok(codec) => codec,
+            Err(unresolved) => {
+                return Some(format!(
+                    "cannot link {output} to {input}: {output}'s codec cannot be resolved: \
+                     {unresolved}"
+                ));
+            }
+        };
+    if output_family.has_names() && !input_declaration.requires.is_empty() {
         let resolved_names = output_port_names_resolved_against_config(
             output_declaration.names.as_ref(),
             output_node_config,
@@ -362,9 +488,8 @@ pub fn refusal_of_a_link_between_port_families(
             return Some(refusal);
         }
     }
-    if !input_declaration.requires_codec.is_empty() {
-        let codec_matches = output_declaration
-            .codec
+    if output_family == PortFamily::Packets && !input_declaration.requires_codec.is_empty() {
+        let codec_matches = output_codec
             .as_ref()
             .is_some_and(|codec| input_declaration.requires_codec.contains(codec));
         if !codec_matches {
@@ -372,8 +497,7 @@ pub fn refusal_of_a_link_between_port_families(
                 "cannot link {output} to {input}: {input} requires a codec in {:?}, and {output} \
                  states {}",
                 input_declaration.requires_codec,
-                output_declaration
-                    .codec
+                output_codec
                     .as_deref()
                     .map_or_else(|| "no codec".to_owned(), |codec| format!("{codec:?}"))
             ));
@@ -669,6 +793,140 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PortFamilyDeclaration>(wire).unwrap(),
             declaration
+        );
+    }
+
+    fn an_output_whose_family_and_codec_come_from_config() -> PortFamilyDeclaration {
+        PortFamilyDeclaration {
+            family_from_config_key: Some("family".into()),
+            codec_from_config_key: Some("codec".into()),
+            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+        }
+    }
+
+    #[test]
+    fn an_output_family_and_codec_from_config_resolve_against_the_output_nodes_config() {
+        let output = an_output_whose_family_and_codec_come_from_config();
+        let h264_input = PortFamilyDeclaration {
+            requires_codec: vec!["h264".into()],
+            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+        };
+        let records_input = PortFamilyDeclaration::of_family(PortFamily::Records);
+        let source = endpoint("receive", "content", Some(&output));
+
+        let h264_config = serde_json::json!({"family": "packets", "codec": "h264"});
+        assert_eq!(
+            refusal_of_a_link_between_port_families(
+                source,
+                Some(&h264_config),
+                endpoint("decoder", "encoded_video", Some(&h264_input)),
+            ),
+            None
+        );
+
+        let records_config = serde_json::json!({"family": "records"});
+        assert_eq!(
+            refusal_of_a_link_between_port_families(
+                source,
+                Some(&records_config),
+                endpoint("sink", "records", Some(&records_input)),
+            ),
+            None
+        );
+        let refusal = refusal_of_a_link_between_port_families(
+            source,
+            Some(&records_config),
+            endpoint("decoder", "encoded_video", Some(&h264_input)),
+        )
+        .expect("a Records output into a Packets input is refused");
+        assert!(
+            refusal.contains("receive.content (Records)") && refusal.contains("(Packets)"),
+            "got {refusal}"
+        );
+
+        let opus_config = serde_json::json!({"family": "packets", "codec": "opus"});
+        let refusal = refusal_of_a_link_between_port_families(
+            source,
+            Some(&opus_config),
+            endpoint("decoder", "encoded_video", Some(&h264_input)),
+        )
+        .expect("a codec outside the required set is refused");
+        assert!(refusal.contains("\"opus\""), "got {refusal}");
+
+        let unknown_family = serde_json::json!({"family": "video"});
+        let refusal = refusal_of_a_link_between_port_families(
+            source,
+            Some(&unknown_family),
+            endpoint("sink", "records", Some(&records_input)),
+        )
+        .expect("a family no port has is refused");
+        assert!(
+            refusal.contains("\"video\"") && refusal.contains("records"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_input_taking_several_families_takes_each_and_refuses_another_naming_the_conversion() {
+        let input = PortFamilyDeclaration {
+            also_takes_families: vec![PortFamily::Records],
+            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+        };
+        let destination = endpoint("send", "content", Some(&input));
+        for family in [PortFamily::Packets, PortFamily::Records] {
+            let output = PortFamilyDeclaration::of_family(family);
+            assert_eq!(
+                refusal_of_a_link_between_port_families(
+                    endpoint("source", "out", Some(&output)),
+                    None,
+                    destination,
+                ),
+                None,
+                "{family} is taken"
+            );
+        }
+        let image = PortFamilyDeclaration::of_family(PortFamily::Image);
+        let refusal = refusal_of_a_link_between_port_families(
+            endpoint("camera", "video", Some(&image)),
+            None,
+            destination,
+        )
+        .expect("an Image link is refused");
+        assert!(
+            refusal.contains("(Packets or Records)") && refusal.contains("H264Encoder"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn the_keys_resolved_from_config_are_taken_only_in_the_direction_that_has_them() {
+        assert_eq!(
+            an_output_whose_family_and_codec_come_from_config()
+                .refusal_of_its_keys("content", PortFamilyDeclarationDirection::Output),
+            None
+        );
+        assert!(
+            an_output_whose_family_and_codec_come_from_config()
+                .refusal_of_its_keys("content", PortFamilyDeclarationDirection::Input)
+                .is_some_and(|refusal| refusal.contains("family_from_config_key"))
+        );
+        let input_taking_records = PortFamilyDeclaration {
+            also_takes_families: vec![PortFamily::Records],
+            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+        };
+        assert!(
+            input_taking_records
+                .refusal_of_its_keys("content", PortFamilyDeclarationDirection::Output)
+                .is_some_and(|refusal| refusal.contains("also_takes_families"))
+        );
+        let records_output_with_a_codec_key = PortFamilyDeclaration {
+            codec_from_config_key: Some("codec".into()),
+            ..PortFamilyDeclaration::of_family(PortFamily::Records)
+        };
+        assert!(
+            records_output_with_a_codec_key
+                .refusal_of_its_keys("content", PortFamilyDeclarationDirection::Output)
+                .is_some_and(|refusal| refusal.contains("codec_from_config_key"))
         );
     }
 }

@@ -24,9 +24,11 @@ use crate::core::graph::{
     node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
     refuse_a_reference_to_a_node_of_the_wrong_type,
 };
+use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph_variable_resolution::{
-    GraphSnapshotWithVariablesResolved, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
+    GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
 };
+use crate::core::json_schema::GraphResponse;
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
@@ -201,14 +203,35 @@ impl GraphSnapshot {
     /// takes, and every exposure an output port a node has, named once, at a
     /// level beyond internal.
     ///
-    /// Its variables are resolved first: the graph the runtime would run is
-    /// checked, and each setter's value with it.
+    /// Its variables and interface nodes are resolved first: the graph the
+    /// runtime would run is checked, and each setter's value and each
+    /// interface port with it.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
-        self.with_graph_variables_resolved()?.validate(node_types)
+        self.with_graph_only_nodes_resolved()?.validate(node_types)
     }
 
-    /// [`Self::validate`] of a graph whose variables are already resolved.
-    pub fn validate_a_graph_holding_no_variable_node(
+    /// Resolve the nodes that run nothing out of this graph: its variables,
+    /// then its interface nodes.
+    pub fn with_graph_only_nodes_resolved(
+        &self,
+    ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
+        let variables = self.with_graph_variables_resolved()?;
+        let interface = variables
+            .graph_the_runtime_runs
+            .with_graph_interface_resolved()?;
+        Ok(GraphSnapshotWithGraphOnlyNodesResolved {
+            graph_the_runtime_runs: interface.graph_the_runtime_runs,
+            graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {
+                variables_as_drawn: variables.variables_as_drawn,
+                interface_as_drawn: interface.interface_as_drawn,
+            },
+            values_the_set_variables_hold: variables.values_the_set_variables_hold,
+        })
+    }
+
+    /// [`Self::validate`] of a graph whose variables and interface nodes are
+    /// already resolved.
+    pub fn validate_a_graph_holding_no_graph_only_node(
         &self,
         node_types: &NodeTypesOneStreamResolves,
     ) -> Result<()> {
@@ -329,13 +352,45 @@ impl GraphSnapshot {
     }
 }
 
-impl GraphSnapshotWithVariablesResolved {
-    /// Check the graph the runtime runs, and that each `SetVariable` holds a
-    /// node of that graph, or an output port one of its nodes has, whether or
-    /// not a get reads it.
+/// What the nodes that run nothing were drawn as: variables and interface
+/// nodes, so `graph` renders them back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GraphOnlyNodesAsDrawn {
+    pub variables_as_drawn: GraphVariablesAsDrawn,
+    pub interface_as_drawn: GraphInterfaceAsDrawn,
+}
+
+impl GraphOnlyNodesAsDrawn {
+    /// Render the graph-only nodes into `graph_response`, a render of the graph
+    /// the runtime runs: the interface first, which was resolved out of the
+    /// graph its variables resolved to, then the variables.
+    pub fn render_into(&self, graph_response: &mut GraphResponse) {
+        self.interface_as_drawn.render_into(graph_response);
+        self.variables_as_drawn.render_into(graph_response);
+    }
+}
+
+/// A graph with its variables and interface nodes resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSnapshotWithGraphOnlyNodesResolved {
+    /// The graph the runtime runs: no variable or interface node.
+    pub graph_the_runtime_runs: GraphSnapshot,
+    pub graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn,
+    /// Every `SetVariable` and its value, by the setter's name.
+    pub values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds>,
+}
+
+impl GraphSnapshotWithGraphOnlyNodesResolved {
+    /// Check the graph the runtime runs, that each `SetVariable` holds a node
+    /// of that graph, or an output port one of its nodes has, whether or not
+    /// a get reads it, and that each interface port is linked to ports of its
+    /// family.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
         let graph = &self.graph_the_runtime_runs;
-        graph.validate_a_graph_holding_no_variable_node(node_types)?;
+        graph.validate_a_graph_holding_no_graph_only_node(node_types)?;
+        self.graph_only_nodes_as_drawn
+            .interface_as_drawn
+            .validate(graph, node_types)?;
         let node_named = |node_name: &str| -> Result<Option<&GraphSnapshotNode>> {
             let cast = cast_exposed_name_to_url_safe(node_name)?;
             Ok(graph.nodes.iter().find(|node| {
@@ -1438,5 +1493,98 @@ mod tests {
         assert_eq!(config["largest"], serde_json::json!(u64::MAX));
         assert_eq!(config["smallest"], serde_json::json!(i64::MIN));
         assert_eq!(config["digits"], "18446744073709551616");
+    }
+
+    const IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:ImageSource";
+    const PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:PacketsSink";
+
+    fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamResolves {
+        use crate::core::descriptors::{PortDescriptor, PortFamily, PortFamilyDeclaration};
+        let node_types = NodeTypesOneStreamResolves::new();
+        for (short_name, import_path, port) in [
+            (
+                "ImageSource",
+                IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS,
+                PortDescriptor::new("video", "", false)
+                    .with_family(PortFamilyDeclaration::of_family(PortFamily::Image)),
+            ),
+            (
+                "PacketsSink",
+                PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS,
+                PortDescriptor::new("encoded", "", false)
+                    .with_family(PortFamilyDeclaration::of_family(PortFamily::Packets)),
+            ),
+        ] {
+            let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
+                ProcessorClassImportPath::new(import_path).unwrap(),
+                "graph snapshot interface test",
+            );
+            let descriptor = if import_path == IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS {
+                descriptor.with_output(port)
+            } else {
+                descriptor.with_input(port)
+            };
+            node_types
+                .register_a_type_described_in_this_streams_processor_interpreter(
+                    descriptor,
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                )
+                .expect("the type is described into the stream");
+        }
+        node_types
+    }
+
+    fn a_graph_offering_the_source_and_feeding_the_sink(
+        output_family: &str,
+        input_family: &str,
+    ) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
+                {"name": "video", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "video", "family": output_family}},
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": input_family}},
+                {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "video"},
+                 "target": {"node": "video", "port": "value"}},
+                {"source": {"node": "encoded", "port": "value"},
+                 "target": {"node": "sink", "port": "encoded"}},
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn interface_ports_of_the_family_their_linked_ports_carry_validate() {
+        a_graph_offering_the_source_and_feeding_the_sink("image", "packets")
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .expect("an Image Output and a Packets Input validate");
+    }
+
+    #[test]
+    fn an_interface_port_of_another_family_than_its_linked_port_is_refused_naming_both() {
+        let node_types = node_types_with_an_image_source_and_a_packets_sink();
+        let output_refusal = a_graph_offering_the_source_and_feeding_the_sink("array", "packets")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            output_refusal.contains("`GraphOutput` node `video` declares `video` as Array")
+                && output_refusal.contains("`source/video` writes Image"),
+            "{output_refusal}"
+        );
+        let input_refusal = a_graph_offering_the_source_and_feeding_the_sink("image", "records")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            input_refusal.contains("`GraphInput` node `encoded` declares `encoded` as Records")
+                && input_refusal.contains("`sink/encoded` reads Packets"),
+            "{input_refusal}"
+        );
     }
 }

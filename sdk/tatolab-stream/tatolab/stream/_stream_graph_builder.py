@@ -32,6 +32,7 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe,
 )
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
+from ._port_family_declaration import PortFamily
 
 __all__ = [
     "Exposure",
@@ -604,6 +605,8 @@ def _json_value(
         _refuse_a_container_nested_too_deep(key_path, key_paths_of_enclosing_containers_by_id)
         node_names_the_config_references.append(value.name)
         return {"node": value.name}
+    if isinstance(value, PortFamily):
+        return value.declaration_name.lower()
     if isinstance(value, str):
         return str.__str__(value)
     if isinstance(value, int):
@@ -613,8 +616,8 @@ def _json_value(
     if not isinstance(value, (Mapping, list, tuple)):
         raise TypeError(
             f"config must be JSON: `{key_path}` is of type `{_type_name_as_written(value)}`, "
-            f"and a graph carries only dict, list, tuple, str, int, float, bool, None and "
-            f"the `NodeReference` `add` returned — "
+            f"and a graph carries only dict, list, tuple, str, int, float, bool, None, a "
+            f"port family and the `NodeReference` `add` returned — "
             f"convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`, or a "
             f"collection with `list(...)`"
         )

@@ -194,3 +194,35 @@ def test_names_given_as_a_bare_string_are_refused():
 def test_an_image_format_that_is_no_engine_texture_name_is_refused():
     with pytest.raises(ValueError, match="rgba8_unorm"):
         Output(Image, formats=("rgba8",))
+
+
+def test_an_input_taking_several_families_declares_the_others_it_takes():
+    @node
+    class TrackSend:
+        content = Input(Packets, delivery="ordered", also_takes=(Records,))
+
+    (declared_input,) = TrackSend.__tatolab_node_input_ports__
+    assert declared_input["family"] == {
+        "family": "packets",
+        "also_takes_families": ["records"],
+    }
+
+
+def test_an_output_reads_its_family_and_codec_from_config():
+    @node(execution="manual")
+    class TrackReceive:
+        content = Output(Packets, family_from=from_config("family"), codec=from_config("codec"))
+
+    (declared_output,) = TrackReceive.__tatolab_node_output_ports__
+    assert declared_output["family"] == {
+        "family": "packets",
+        "family_from_config_key": "family",
+        "codec_from_config_key": "codec",
+    }
+
+
+def test_also_takes_naming_something_that_is_not_a_family_is_refused():
+    with pytest.raises(TypeError, match="also_takes"):
+        Input(Packets, delivery="ordered", also_takes=Records)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError, match="family"):
+        Input(Packets, delivery="ordered", also_takes=("records",))  # pyright: ignore[reportArgumentType]

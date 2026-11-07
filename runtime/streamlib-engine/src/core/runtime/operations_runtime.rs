@@ -1010,7 +1010,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
     };
     use crate::core::graph::{
         InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-        refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+        refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::pubsub::LoadedStreamIdentity;
@@ -1252,13 +1252,13 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
         assert!(refusal.contains("channel_names"), "{refusal}");
 
         compiler.scope(|graph, _tx| {
-            refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["rpm"] }),
             )
             .expect("an update keeping rpm is taken");
-            let refusal = refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            let refusal = refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["torque"] }),

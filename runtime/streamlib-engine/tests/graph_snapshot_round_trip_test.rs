@@ -989,3 +989,76 @@ fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
     assert_eq!(into_the_back_display[0]["source"]["node"], "get-camera-2");
     assert!(!into_the_back_display[0]["id"].as_str().unwrap().is_empty());
 }
+
+#[test]
+#[serial]
+fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refused() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("InterfaceCamera", &[], &[("video", PortFamily::Image)]);
+    let display =
+        register_a_family_type("InterfaceDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let graph_offering = |output_family: &str| {
+        serde_json::json!({
+            "stream": "interface",
+            "nodes": [
+                {"name": "camera", "type": camera.as_str()},
+                {"name": "camera-out", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "camera", "family": output_family}},
+                {"name": "overlay-in", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "overlay", "family": "image"}},
+                {"name": "display", "type": display.as_str()}
+            ],
+            "links": [
+                {"source": {"node": "camera", "port": "video"},
+                 "target": {"node": "camera-out", "port": "value"}},
+                {"source": {"node": "overlay-in", "port": "value"},
+                 "target": {"node": "display", "port": "video_in"}}
+            ]
+        })
+    };
+    let graph = graph_offering("image");
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph.clone())
+        .expect("a stream declaring an Output and an Input loads");
+    let rendered = the_graph_document_of(&first);
+    let camera_out = rendered["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "camera-out")
+        .expect("the GraphOutput renders");
+    assert_eq!(
+        camera_out["components"]["graph_interface"],
+        serde_json::json!({"direction": "output", "port": "camera", "family": "image"})
+    );
+    assert_eq!(
+        the_spec_in(rendered.clone()),
+        the_spec_in(graph),
+        "graph renders the interface as drawn"
+    );
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("a rendered graph holding interface nodes loads back");
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&second)),
+        the_spec_in(rendered)
+    );
+
+    let refusal_runner = Runner::new().unwrap();
+    let refusal = the_refusal_of(
+        load(
+            &refusal_runner,
+            tempfile::tempdir().expect("a project directory").path(),
+            graph_offering("packets"),
+        ),
+        "an Output declared as another family than its port writes is refused",
+    )
+    .to_string();
+    assert!(
+        refusal.contains("`GraphOutput` node `camera-out` declares `camera` as Packets")
+            && refusal.contains("writes Image"),
+        "{refusal}"
+    );
+}

@@ -35,7 +35,7 @@ pub use output_port_exposure::{
     output_port_exposure_allows_the_reader,
 };
 pub(crate) use port_family_link_checks::{
-    refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     refuse_a_link_between_ports_whose_families_do_not_match,
 };
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
