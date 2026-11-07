@@ -31,7 +31,6 @@ from tatolab.stream import (
     Input,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -231,18 +230,17 @@ class LaggedConsumerHoldsItsFrameProbe:
     the last share would let the producer recycle the slot underneath a live
     array.
 
-    The read is `into=VideoFrame` and that is load-bearing, not style: a claim
-    is offered for the duration of a typed read and taken by the type being
-    constructed. Reading the payload untyped and calling `VideoFrame.from_bytes` on
-    it afterwards takes no claim at all, so the held frame would ride pool
-    depth like any other — and this probe would assert a lease it never took.
+    The read goes through the `Image` port attribute and that is load-bearing,
+    not style: the claim is taken as the read builds its `ImageFrame`. A read
+    by name returns the payload bytes and takes no claim at all, so the held
+    frame would ride pool depth like any other — and this probe would assert a
+    lease it never took.
 
     Mental-revert: without the checkout lease the producer rehands the held
     slot within a ring cycle and `held_frame_unchanged` reads False.
     """
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     # Comfortably past the pool's pre-allocated depth, so the producer has
     # cycled its ring several times over while the first frame is still held.
@@ -258,7 +256,7 @@ class LaggedConsumerHoldsItsFrameProbe:
         self.reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None or self.reported:
             return
         try:
@@ -268,7 +266,7 @@ class LaggedConsumerHoldsItsFrameProbe:
             self.view_of_the_delivered_frame = None
             _report(lambda: {"failure": traceback.format_exc()})
 
-    def _observe(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> None:
+    def _observe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> None:
         import torch
 
         if self.view_of_the_delivered_frame is None:

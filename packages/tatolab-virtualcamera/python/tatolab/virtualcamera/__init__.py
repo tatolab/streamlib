@@ -28,8 +28,10 @@ from typing import Annotated, Literal, NoReturn, get_args
 from tatolab.stream import (
     GpuSurfaceHandle,
     RuntimeContextFullAccess,
+    Image,
+    ImageFrame,
+    Input,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
@@ -168,11 +170,11 @@ class VirtualCameraSink:
         self._frames_dropped_under_refusal = 0
         self._frames_that_failed_to_write = 0
 
-    @node.input(
-        delivery_profile="newest",
+    video = Input(
+        Image,
+        delivery="newest",
         description="Video frames to present as the camera's picture",
     )
-    def video(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self._camera_name = camera_name_for(
@@ -233,7 +235,7 @@ class VirtualCameraSink:
         raise RuntimeError(refusal)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(VIDEO_INPUT_PORT_NAME, into=VideoFrame)
+        frame = ctx.inputs.read(self.video)
         if frame is None:
             return
         if self._latched_refusal is not None:
@@ -339,7 +341,7 @@ class VirtualCameraSink:
         return device
 
     def _present_one_frame(
-        self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
     ) -> None:
         if yuyv_picture_byte_count_or_none(frame.width, frame.height) is None:
             raise _LatchedRefusal(
@@ -391,7 +393,7 @@ class VirtualCameraSink:
         self,
         ctx: RuntimeContextLimitedAccess,
         pipewire_camera: PipeWireCameraPresentation,
-        frame: VideoFrame,
+        frame: ImageFrame,
     ) -> None:
         if yuyv_picture_byte_count_or_none(frame.width, frame.height) is None:
             raise _LatchedRefusal(
@@ -434,7 +436,7 @@ class VirtualCameraSink:
         self,
         ctx: RuntimeContextLimitedAccess,
         device: V4l2LoopbackOutputDevice,
-        frame: VideoFrame,
+        frame: ImageFrame,
     ) -> StreamingOutputFormat:
         streaming = self._streaming
         if streaming is not None and streaming.matches(frame.width, frame.height):
@@ -459,8 +461,7 @@ class VirtualCameraSink:
             streaming = device.negotiate_format_and_start_streaming(
                 frame.width,
                 frame.height,
-                frame.fps,
-                yuyv_picture_color_of(frame.color_info),
+                yuyv_picture_color_of(frame.colour),
                 self._camera_name,
             )
             self._yuyv_pixel_buffer = ctx.gpu_limited_access.acquire_pixel_buffer(
@@ -478,7 +479,7 @@ class VirtualCameraSink:
         ctx: RuntimeContextLimitedAccess,
         streaming: StreamingOutputFormat,
         device_buffer_address: int,
-        frame: VideoFrame,
+        frame: ImageFrame,
     ) -> None:
         yuyv_pixel_buffer = self._yuyv_pixel_buffer
         if yuyv_pixel_buffer is None:
@@ -502,7 +503,7 @@ class VirtualCameraSink:
         finally:
             yuyv_pixel_buffer.unlock()
 
-    def _count_a_written_frame(self, frame: VideoFrame) -> None:
+    def _count_a_written_frame(self, frame: ImageFrame) -> None:
         self._frames_written += 1
         if self._frames_written == 1:
             log.info(

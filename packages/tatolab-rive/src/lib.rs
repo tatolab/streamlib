@@ -10,9 +10,9 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("tatolab-rive draws on the consumer RHI's external-renderer device, Linux only");
 
+pub mod rive_image_frame;
 pub mod rive_scene_bridge;
 pub mod rive_source_frame_loop;
-pub mod video_frame_record;
 pub mod view_model_data_message;
 
 use pyo3::exceptions::PyRuntimeError;
@@ -21,7 +21,7 @@ use tatolab_module_sdk::ModuleHost;
 
 use crate::rive_source_frame_loop::{RiveSourceRendering, RiveSourceSettings};
 
-/// A `.riv` scene publishing `VideoFrame`s on a lent output port from a thread
+/// A `.riv` scene publishing Image frames on a lent output port from a thread
 /// this wheel owns.
 #[pyclass(name = "RiveSceneRendering")]
 struct PythonRiveSceneRendering {

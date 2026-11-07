@@ -75,12 +75,16 @@ class V4l2PixFormatColorFields:
 
 
 def yuyv_picture_color_of(frame_color_info: "ColorInfo | None") -> ColorInfo:
-    """The frame's colour with every absent axis given the engine's YCbCr default: BT.709, SMPTE 170M matrix, limited range."""
+    """The frame's colour with every absent axis given the engine's YCbCr default: BT.709, SMPTE 170M matrix, limited range.
+
+    An RGB frame's identity matrix names no YCbCr encoding, so it takes the default matrix too.
+    """
     color_info = frame_color_info or ColorInfo()
+    frame_ycbcr_matrix = None if color_info.matrix == "identity" else color_info.matrix
     return ColorInfo(
         primaries=color_info.primaries or "bt709",
         transfer=color_info.transfer or "bt709",
-        matrix=color_info.matrix or "smpte170m",
+        matrix=frame_ycbcr_matrix or "smpte170m",
         range=color_info.range or "limited",
     )
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import AudioWindowContract, RuntimeContextFullAccess, log, node
+from tatolab.stream import AudioWindowContract, Channels, Input, RuntimeContextFullAccess, log, node
 
 from . import _native
 
@@ -65,20 +65,20 @@ class SpeakerSinkConfig:
     scheduling="realtime",
     paced_by_real_time=True,
     description=(
-        "Plays timestamped blocks of interleaved samples on the machine's audio backend "
+        "Plays timestamped Channels blocks on the machine's audio backend "
         "(discarding where no backend exists)."
     ),
 )
 class SpeakerSink:
-    """Plays timestamped blocks of interleaved samples on the machine's audio backend
+    """Plays timestamped Channels blocks on the machine's audio backend
     (discarding where no backend exists).
 
     The engine's backend chain is probed in this node's helper process with no
     configuration dial; where no audio backend exists at all the samples are
     discarded, so a pipeline authored on a workstation runs unchanged in a
-    headless container. `audio` takes messages in the `AudioBlock` shape at any
-    rate, channel count and dtype: the engine converts every block to 48 kHz
-    stereo `f32`, and the backend plays that on whatever the device opened at.
+    headless container. `audio` takes Channels blocks at any rate, channel
+    count and sample type: the engine converts every block to 48 kHz stereo
+    `f32`, and the backend plays that on whatever the device opened at.
     The device is never left waiting on the graph — a period the graph had no
     samples for is silence, and the count of it is reported.
 
@@ -91,17 +91,17 @@ class SpeakerSink:
         self._device_id = config.device_id
         self._playback: "_native.SpeakerPlayback | None" = None
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=SPEAKER_SAMPLE_RATE,
             channels=SPEAKER_CHANNELS,
             dtype=SPEAKER_SAMPLE_FORMAT,
             window_size=SPEAKER_WINDOW_SIZE,
         ),
+        description="Timestamped blocks of samples to play",
     )
-    def audio(self) -> None:
-        """Timestamped blocks of interleaved samples to play."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend `audio` to the native half and open the playback stream, so a

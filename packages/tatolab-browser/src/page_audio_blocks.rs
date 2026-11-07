@@ -1,8 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A page's audio as the house audio block: CEF's planar float packets,
-//! interleaved and stamped on one unbroken timeline per stream.
+//! A page's audio as Channels blocks: CEF's float packets, planar f32, placed
+//! on one unbroken timeline per stream.
+
+use tatolab_module_sdk::{ModuleHostChannelsBlock, ModuleHostChannelsBlockSampleType};
 
 /// One audio stream the page opened, from its first packet's arrival on.
 #[derive(Debug)]
@@ -11,6 +13,15 @@ pub struct PageAudioStreamTimeline {
     channels: u32,
     first_sample_timestamp_ns: Option<i64>,
     samples_published: u64,
+}
+
+/// Where one packet sits on its stream's timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageAudioPacketPlacement {
+    /// The stream-wide index of the packet's first sample.
+    pub start_sample: u64,
+    /// The monotonic instant of the packet's first sample.
+    pub first_sample_monotonic_ns: i64,
 }
 
 impl PageAudioStreamTimeline {
@@ -27,47 +38,39 @@ impl PageAudioStreamTimeline {
         self.channels
     }
 
-    /// The monotonic instant of the next packet's first sample: the stream's
-    /// first packet is stamped `arrived_at_ns`, and every later one where the
-    /// samples before it end, so blocks tile the timeline without gaps.
-    pub fn stamp_the_next_packet(&mut self, sample_count: u32, arrived_at_ns: i64) -> i64 {
+    /// Place the next packet: the stream's first packet is stamped
+    /// `arrived_at_ns`, and every later one where the samples before it end,
+    /// so blocks tile the timeline without gaps.
+    pub fn place_the_next_packet(
+        &mut self,
+        sample_count: u32,
+        arrived_at_ns: i64,
+    ) -> PageAudioPacketPlacement {
         let stream_started_at_ns = *self.first_sample_timestamp_ns.get_or_insert(arrived_at_ns);
-        let offset_ns =
-            self.samples_published as u128 * 1_000_000_000 / u128::from(self.sample_rate);
+        let start_sample = self.samples_published;
+        let offset_ns = start_sample as u128 * 1_000_000_000 / u128::from(self.sample_rate);
         self.samples_published += u64::from(sample_count);
-        stream_started_at_ns.saturating_add(i64::try_from(offset_ns).unwrap_or(i64::MAX))
+        PageAudioPacketPlacement {
+            start_sample,
+            first_sample_monotonic_ns: stream_started_at_ns
+                .saturating_add(i64::try_from(offset_ns).unwrap_or(i64::MAX)),
+        }
     }
 
-    /// The audio-block message one packet is published as
-    /// (`docs/plan/ARCHITECTURE.md` §Media I/O): `samples` as little-endian
-    /// interleaved `f32`, then the stream's rate, channel count, the
-    /// per-channel sample count, `dtype` and the first sample's instant.
-    pub fn audio_block_message_payload(
+    /// The Channels block a packet of `sample_count` frames placed at
+    /// `start_sample` is published as, in planar f32.
+    pub fn channels_block_of_a_packet(
         &self,
-        interleaved_samples: &[f32],
+        start_sample: u64,
         sample_count: u32,
-        first_sample_timestamp_ns: i64,
-    ) -> Vec<u8> {
-        let write_failure = "writing msgpack into a Vec cannot fail";
-        let mut payload = Vec::with_capacity(interleaved_samples.len() * 4 + 128);
-        rmp::encode::write_map_len(&mut payload, 6).expect(write_failure);
-        rmp::encode::write_str(&mut payload, "samples").expect(write_failure);
-        rmp::encode::write_bin_len(&mut payload, (interleaved_samples.len() * 4) as u32)
-            .expect(write_failure);
-        for sample in interleaved_samples {
-            payload.extend_from_slice(&sample.to_le_bytes());
+    ) -> ModuleHostChannelsBlock {
+        ModuleHostChannelsBlock {
+            start_sample,
+            sample_rate: self.sample_rate,
+            channel_count: self.channels,
+            samples_per_channel: sample_count,
+            sample_type: ModuleHostChannelsBlockSampleType::F32,
         }
-        rmp::encode::write_str(&mut payload, "sample_rate").expect(write_failure);
-        rmp::encode::write_uint(&mut payload, u64::from(self.sample_rate)).expect(write_failure);
-        rmp::encode::write_str(&mut payload, "channels").expect(write_failure);
-        rmp::encode::write_uint(&mut payload, u64::from(self.channels)).expect(write_failure);
-        rmp::encode::write_str(&mut payload, "sample_count").expect(write_failure);
-        rmp::encode::write_uint(&mut payload, u64::from(sample_count)).expect(write_failure);
-        rmp::encode::write_str(&mut payload, "dtype").expect(write_failure);
-        rmp::encode::write_str(&mut payload, "f32").expect(write_failure);
-        rmp::encode::write_str(&mut payload, "first_sample_timestamp_ns").expect(write_failure);
-        rmp::encode::write_sint(&mut payload, first_sample_timestamp_ns).expect(write_failure);
-        payload
     }
 }
 
@@ -78,38 +81,40 @@ mod tests {
     #[test]
     fn packets_tile_the_timeline_from_the_first_arrival_whatever_later_ones_arrive_at() {
         let mut timeline = PageAudioStreamTimeline::new(48_000, 2);
-        assert_eq!(timeline.stamp_the_next_packet(480, 1_000), 1_000);
+        let placements: Vec<(u64, i64)> = [(480, 1_000), (480, 99_999_999), (240, 5), (1, 5)]
+            .into_iter()
+            .map(|(sample_count, arrived_at_ns)| {
+                let placement = timeline.place_the_next_packet(sample_count, arrived_at_ns);
+                (placement.start_sample, placement.first_sample_monotonic_ns)
+            })
+            .collect();
         assert_eq!(
-            timeline.stamp_the_next_packet(480, 99_999_999),
-            1_000 + 10_000_000
+            placements,
+            [
+                (0, 1_000),
+                (480, 1_000 + 10_000_000),
+                (960, 1_000 + 20_000_000),
+                (1_200, 1_000 + 25_000_000),
+            ]
         );
-        assert_eq!(timeline.stamp_the_next_packet(240, 5), 1_000 + 20_000_000);
-        assert_eq!(timeline.stamp_the_next_packet(1, 5), 1_000 + 25_000_000);
     }
 
     #[test]
-    fn a_block_carries_the_wire_maps_keys_with_samples_as_binary() {
+    fn a_packet_is_a_planar_f32_block_of_the_streams_rate_and_channels() {
         let timeline = PageAudioStreamTimeline::new(48_000, 2);
-        let payload = timeline.audio_block_message_payload(&[0.25, -0.5], 1, 77);
-        let decoded = rmpv::decode::read_value(&mut payload.as_slice()).unwrap();
-        let entries = decoded.as_map().expect("a named map");
-        let entry = |key: &str| {
-            entries
-                .iter()
-                .find(|(entry_key, _)| entry_key.as_str() == Some(key))
-                .map(|(_, value)| value.clone())
-                .unwrap_or_else(|| panic!("no {key:?}"))
-        };
-        assert_eq!(entries.len(), 6);
-        let samples: Vec<u8> = [0.25f32, -0.5]
-            .iter()
-            .flat_map(|s| s.to_le_bytes())
-            .collect();
-        assert_eq!(entry("samples"), rmpv::Value::Binary(samples));
-        assert_eq!(entry("sample_rate").as_u64(), Some(48_000));
-        assert_eq!(entry("channels").as_u64(), Some(2));
-        assert_eq!(entry("sample_count").as_u64(), Some(1));
-        assert_eq!(entry("dtype").as_str(), Some("f32"));
-        assert_eq!(entry("first_sample_timestamp_ns").as_i64(), Some(77));
+        let block = timeline.channels_block_of_a_packet(960, 1);
+        assert_eq!(
+            block,
+            ModuleHostChannelsBlock {
+                start_sample: 960,
+                sample_rate: 48_000,
+                channel_count: 2,
+                samples_per_channel: 1,
+                sample_type: ModuleHostChannelsBlockSampleType::F32,
+            }
+        );
+        let planar_payload =
+            ModuleHostChannelsBlock::planar_f32_payload_of_interleaved_samples(&[0.25, -0.5], 2);
+        assert_eq!(block.planar_payload_byte_len(), Some(planar_payload.len()));
     }
 }

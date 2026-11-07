@@ -18,13 +18,13 @@ uv add tatolab-opus
 from tatolab.opus import OpusDecoder, OpusEncoder
 ```
 
-`OpusEncoder` takes audio on `audio`, which declares a 20 ms window at 48 kHz in `f32` and
-follows the source's channel count (one to eight), and writes one media frame per Opus packet
-on `encoded_audio` — hang's legacy container, a QUIC varint timestamp in microseconds and then
+`OpusEncoder` takes Channels blocks on `audio`, which declares a 20 ms window at 48 kHz in `f32` and
+follows the source's channel count (one to eight), and writes one Packets message per Opus packet
+on `encoded_audio`, codec `opus`, in hang's legacy container, a QUIC varint timestamp in microseconds and then
 the packet. The port's catalog entry carries the channel count and the `OpusHead`. Its config
 is optional: `bitrate_bps`, and `application` (`audio`, `voip` or `lowdelay`).
 
-`OpusDecoder` takes those media frames on `encoded_audio` and writes `AudioBlock` messages on
-`audio`, at 48 kHz in the stream's own channel count.
+`OpusDecoder` takes those Packets on `encoded_audio`, which requires codec `opus`, and writes
+planar `f32` Channels blocks on `audio`, at 48 kHz in the stream's own channel count.
 
 Each node runs in its own processor interpreter, and libopus runs in that process.

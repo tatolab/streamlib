@@ -25,6 +25,9 @@ pub struct CapturedAudioBlockAwaitingPublish {
     pub sample_count: u32,
     /// Monotonic timestamp of the block's first sample as the device timed it.
     pub first_sample_timestamp_ns: i64,
+    /// The stream-wide index of the block's first sample, counted over every
+    /// block the device captured, dropped ones included.
+    pub start_sample: u64,
 }
 
 /// What the device callback and the publishing thread share under one lock,
@@ -32,6 +35,7 @@ pub struct CapturedAudioBlockAwaitingPublish {
 #[derive(Debug, Default)]
 struct CapturedAudioBlocksAwaitingPublish {
     blocks: VecDeque<CapturedAudioBlockAwaitingPublish>,
+    samples_handed_off: u64,
     hand_off_has_ended: bool,
 }
 
@@ -79,13 +83,27 @@ impl CapturedAudioBlockHandOffRing {
     /// Never waits on the publisher: at capacity the oldest block is dropped
     /// and counted, because a device callback that waited on a stalled
     /// consumer would stall the device itself.
-    pub fn hand_off_from_device_callback(&self, block: CapturedAudioBlockAwaitingPublish) {
+    pub fn hand_off_from_device_callback(
+        &self,
+        interleaved_sample_bytes: Vec<u8>,
+        sample_count: u32,
+        first_sample_timestamp_ns: i64,
+    ) {
         let mut awaiting = self.lock_blocks_awaiting_publish();
         while awaiting.blocks.len() >= self.block_capacity {
             awaiting.blocks.pop_front();
             self.dropped_block_count.fetch_add(1, Ordering::Relaxed);
         }
-        awaiting.blocks.push_back(block);
+        let start_sample = awaiting.samples_handed_off;
+        awaiting.samples_handed_off += u64::from(sample_count);
+        awaiting
+            .blocks
+            .push_back(CapturedAudioBlockAwaitingPublish {
+                interleaved_sample_bytes,
+                sample_count,
+                first_sample_timestamp_ns,
+                start_sample,
+            });
         drop(awaiting);
         self.a_block_arrived_or_the_hand_off_ended.notify_one();
     }
@@ -153,12 +171,17 @@ mod tests {
     const A_WAIT_LONG_ENOUGH_TO_BE_WOKEN_FROM: Duration = Duration::from_secs(5);
     const A_WAIT_SHORT_ENOUGH_TO_TIME_OUT_IN: Duration = Duration::from_millis(50);
 
-    fn block_stamped(first_sample_timestamp_ns: i64) -> CapturedAudioBlockAwaitingPublish {
-        CapturedAudioBlockAwaitingPublish {
-            interleaved_sample_bytes: vec![0u8; 8],
-            sample_count: 2,
+    const SAMPLES_IN_ONE_TEST_BLOCK: u32 = 2;
+
+    fn hand_off_a_block_stamped(
+        ring: &CapturedAudioBlockHandOffRing,
+        first_sample_timestamp_ns: i64,
+    ) {
+        ring.hand_off_from_device_callback(
+            vec![0u8; 8],
+            SAMPLES_IN_ONE_TEST_BLOCK,
             first_sample_timestamp_ns,
-        }
+        );
     }
 
     fn timestamps_drained_from(ring: &CapturedAudioBlockHandOffRing) -> Vec<i64> {
@@ -175,7 +198,7 @@ mod tests {
     fn blocks_are_published_in_the_order_the_device_captured_them() {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(8);
         for stamp in [10, 20, 30] {
-            ring.hand_off_from_device_callback(block_stamped(stamp));
+            hand_off_a_block_stamped(&ring, stamp);
         }
         assert_eq!(timestamps_drained_from(&ring), vec![10, 20, 30]);
         assert_eq!(ring.dropped_block_count(), 0);
@@ -187,7 +210,7 @@ mod tests {
     fn a_full_ring_drops_its_oldest_block_and_counts_it() {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(2);
         for stamp in [10, 20, 30, 40] {
-            ring.hand_off_from_device_callback(block_stamped(stamp));
+            hand_off_a_block_stamped(&ring, stamp);
         }
         assert_eq!(ring.dropped_block_count(), 2);
         assert_eq!(timestamps_drained_from(&ring), vec![30, 40]);
@@ -200,7 +223,7 @@ mod tests {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(4);
         let handing_off_began = Instant::now();
         for stamp in 0..10_000 {
-            ring.hand_off_from_device_callback(block_stamped(stamp));
+            hand_off_a_block_stamped(&ring, stamp);
         }
         assert!(
             handing_off_began.elapsed() < A_WAIT_SHORT_ENOUGH_TO_TIME_OUT_IN,
@@ -253,17 +276,33 @@ mod tests {
     /// interpolated and no sample is invented, so the gap is arithmetic a
     /// consumer can do rather than a silence it cannot see.
     #[test]
+    fn a_dropped_block_still_advances_the_start_sample_of_the_next() {
+        let ring = CapturedAudioBlockHandOffRing::with_capacity(1);
+
+        hand_off_a_block_stamped(&ring, 0);
+        hand_off_a_block_stamped(&ring, 1);
+        let NextCapturedAudioBlockToPublish::Block(survivor) =
+            ring.wait_for_next_block_to_publish(Duration::ZERO)
+        else {
+            panic!("the newest block survives the drop");
+        };
+
+        assert_eq!(ring.dropped_block_count(), 1);
+        assert_eq!(survivor.start_sample, u64::from(SAMPLES_IN_ONE_TEST_BLOCK));
+    }
+
+    #[test]
     fn the_gap_a_drop_leaves_is_visible_in_the_timestamps_around_it() {
         const ONE_BLOCK_NS: i64 = 10_000_000;
         let ring = CapturedAudioBlockHandOffRing::with_capacity(2);
 
-        ring.hand_off_from_device_callback(block_stamped(0));
+        hand_off_a_block_stamped(&ring, 0);
         let published_before_the_stall = timestamps_drained_from(&ring);
 
         // The publisher stalls; the device keeps capturing regardless, which
         // is the whole situation the ring is for.
         for block_index in 1..=3 {
-            ring.hand_off_from_device_callback(block_stamped(block_index * ONE_BLOCK_NS));
+            hand_off_a_block_stamped(&ring, block_index * ONE_BLOCK_NS);
         }
         let published_after_the_stall = timestamps_drained_from(&ring);
 
@@ -287,7 +326,7 @@ mod tests {
     #[test]
     fn blocks_already_handed_off_survive_the_end_of_the_hand_off() {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(4);
-        ring.hand_off_from_device_callback(block_stamped(10));
+        hand_off_a_block_stamped(&ring, 10);
         ring.end_hand_off();
 
         assert!(matches!(

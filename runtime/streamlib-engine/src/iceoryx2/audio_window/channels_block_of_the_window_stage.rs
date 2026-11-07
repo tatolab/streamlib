@@ -228,9 +228,10 @@ mod tests {
             ChannelsBlockSampleType::F32,
             0,
         );
-        let planar: Vec<f32> = payload
-            .chunks_exact(4)
-            .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
+        let (scalars, _) = payload.as_chunks::<4>();
+        let planar: Vec<f32> = scalars
+            .iter()
+            .map(|scalar| f32::from_le_bytes(*scalar))
             .collect();
         assert_eq!(planar, [1.0, 2.0, 10.0, 20.0]);
     }

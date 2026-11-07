@@ -29,7 +29,7 @@ from tatolab.stream._node_declaration import (
 )
 
 
-def test_the_node_declares_every_layer_input_back_to_front_and_one_video_output():
+def test_the_node_declares_every_layer_input_back_to_front_and_one_video_output_all_image():
     input_ports = getattr(AlphaOverCompositor, NODE_DECLARATION_INPUT_PORTS_STAMP)
     output_ports = getattr(AlphaOverCompositor, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
 
@@ -38,6 +38,8 @@ def test_the_node_declares_every_layer_input_back_to_front_and_one_video_output(
     ]
     assert {port["delivery_profile"] for port in input_ports} == {"newest"}
     assert [port["name"] for port in output_ports] == ["video"]
+    assert all(port["family"] == {"family": "image"} for port in input_ports)
+    assert output_ports[0]["family"] == {"family": "image", "formats": ["rgba8_unorm"]}
     assert getattr(AlphaOverCompositor, NODE_DECLARATION_EXECUTION_STAMP)["mode"] == "reactive"
 
 

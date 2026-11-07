@@ -59,6 +59,14 @@ impl WhepPlayerOutputPort {
         }
     }
 
+    /// The codec every Packets unit the port writes names.
+    pub(crate) fn packets_unit_codec_name(self) -> &'static str {
+        match self {
+            Self::EncodedVideo => "h264",
+            Self::EncodedAudio => "opus",
+        }
+    }
+
     fn index(self) -> usize {
         match self {
             Self::EncodedVideo => 0,

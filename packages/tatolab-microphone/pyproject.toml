@@ -21,7 +21,7 @@ classifiers = [
 ]
 # The stream package and nothing of the engine: the node runs in a processor
 # interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
-dependencies = ["tatolab-stream>=0.47.0"]
+dependencies = ["tatolab-stream>=0.68.32"]
 
 # The node catalog lists this in every stream whose environment installs this
 # distribution, before a graph names it.

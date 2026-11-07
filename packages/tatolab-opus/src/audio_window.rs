@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! One audio block as the codec state reads it: the fields of a
-//! `tatolab.stream.AudioBlock`, borrowed from the message that carried it.
+//! One audio window as the codec state reads it: interleaved samples and the
+//! fields of the Channels block that carried them.
 
 use crate::opus_codec_refusal::{OpusCodecRefusal, Result};
 

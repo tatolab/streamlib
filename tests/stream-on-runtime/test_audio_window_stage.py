@@ -129,7 +129,7 @@ def assert_every_window_matches_the_contract(readings):
         assert reading["sample_rate"] == CONTRACT_SAMPLE_RATE
         assert reading["channels"] == 1
         assert reading["dtype"] == "f32"
-        assert reading["shape"] == [CONTRACT_WINDOW_SIZE, 1]
+        assert reading["shape"] == [1, CONTRACT_WINDOW_SIZE]
 
 
 def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
@@ -208,8 +208,8 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
         assert reading["sample_rate"] == STEREO_SOURCE_SAMPLE_RATE
         assert reading["dtype"] == "f32"
         assert reading["shape"] == [
-            SOURCE_FOLLOWING_WINDOW_SIZE,
             STEREO_SOURCE_CHANNELS,
+            SOURCE_FOLLOWING_WINDOW_SIZE,
         ]
 
     assert_windows_are_contiguous_once_the_run_has_settled(following)
@@ -221,21 +221,23 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
             "a declared count is still converted to by the fixed rule, off the "
             f"same stereo source: {reading}"
         )
-        assert reading["shape"] == [SOURCE_FOLLOWING_WINDOW_SIZE, 1]
+        assert reading["shape"] == [1, SOURCE_FOLLOWING_WINDOW_SIZE]
     assert_windows_are_contiguous_once_the_run_has_settled(declared_mono)
 
 
 GAPPED_AUDIO_PROCESSORS_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
+import numpy
 from tatolab.stream import (
-    AudioBlock,
     AudioWindowContract,
+    Channels,
+    Input,
+    Output,
     RuntimeContextLimitedAccess,
     monotonic_now_ns,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 SAMPLE_RATE = 16_000
 FRAMES_PER_BLOCK = 300
@@ -251,39 +253,30 @@ class GappedMonoSource:
         self.blocks = 0
         self.anchor_ns = monotonic_now_ns()
 
-    @node.output()
-    def audio(self) -> None: ...
+    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.outputs.write(
-            "audio",
-            pack(
-                {
-                    "samples": bytes(4 * FRAMES_PER_BLOCK),
-                    "sample_rate": SAMPLE_RATE,
-                    "channels": 1,
-                    "sample_count": FRAMES_PER_BLOCK,
-                    "dtype": "f32",
-                    "first_sample_timestamp_ns": self.anchor_ns
-                    + self.blocks * GAP_BETWEEN_BLOCKS_NS,
-                }
-            ),
+            self.audio,
+            numpy.zeros((1, FRAMES_PER_BLOCK), dtype=numpy.float32),
+            timestamp_ns=self.anchor_ns + self.blocks * GAP_BETWEEN_BLOCKS_NS,
+            start_sample=self.blocks * SAMPLE_RATE * GAP_BETWEEN_BLOCKS_NS // 1_000_000_000,
         )
         self.blocks += 1
 
 
 @node
 class WindowedMonoConsumer:
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
         ),
     )
-    def audio(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read("audio", into=AudioBlock)
+        ctx.inputs.read(self.audio)
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\

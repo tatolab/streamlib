@@ -14,11 +14,11 @@ use tatolab_module_sdk::{
     ModuleHostLogLevel, ModuleHostOutputPort,
 };
 
-use crate::audio_block_message::audio_block_message_payload;
 use crate::captured_audio_block_hand_off_ring::{
     CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
     NextCapturedAudioBlockToPublish,
 };
+use crate::channels_block_of_a_captured_block::channels_block_of_a_captured_block;
 
 /// The target this module's records carry in the node's log.
 pub(crate) const MICROPHONE_LOG_TARGET: &str = "tatolab.microphone";
@@ -101,20 +101,23 @@ impl CapturedAudioBlockPublishing {
         let first_sample_stream_timestamp_ns = self
             .module_host
             .stream_time_ns_of_a_machine_instant(captured.first_sample_timestamp_ns);
-        let written = audio_block_message_payload(
+        let captured_channels_block = channels_block_of_a_captured_block(
             &captured.interleaved_sample_bytes,
             captured.sample_count,
-            first_sample_stream_timestamp_ns,
+            captured.start_sample,
             self.stream_format,
-        )
-        .map_err(|encode_failure| encode_failure.to_string())
-        .and_then(|payload| {
-            // The device stamped the block; a write stamped "now" would name
-            // the instant of publication, not of capture.
-            self.audio_output_port
-                .write(&payload, Some(first_sample_stream_timestamp_ns), true)
-                .map_err(|write_failure| write_failure.to_string())
-        });
+        );
+        // The device stamped the block; a write stamped "now" would name the
+        // instant of publication, not of capture.
+        let written = self
+            .audio_output_port
+            .write_described(
+                &captured_channels_block.planar_payload,
+                Some(first_sample_stream_timestamp_ns),
+                true,
+                &captured_channels_block.block.payload_descriptor(),
+            )
+            .map_err(|write_failure| write_failure.to_string());
         match written {
             Ok(()) => {
                 *consecutive_failed_writes = 0;

@@ -2,7 +2,7 @@
 name = "tatolab-compositor-camera-with-two-overlays"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.68.7", "tatolab-camera", "tatolab-compositor", "tatolab-h264", "tatolab-testpattern"]
+dependencies = ["tatolab-stream>=0.68.32", "tatolab-camera", "tatolab-compositor", "tatolab-h264", "tatolab-testpattern"]
 
 # The wheels as a third party's stream would take them, built from this checkout
 # rather than an index: ordinary non-editable dependencies.

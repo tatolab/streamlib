@@ -13,9 +13,9 @@ Three families live here, and they need different hardware.
 
 The lagged holders need a camera: only a real capture pool recycles a slot
 underneath a held frame. Each holds one delivered frame while the camera runs
-ahead of it, then reads that frame's pixels again — the frame read *as a
-`VideoFrame`* must come back unchanged, and the same probe reading the message
-as plain bytes must be refused loudly, because the camera recycled the slot and
+ahead of it, then reads that frame's pixels again — the `ImageFrame` still held
+must come back unchanged, and the same probe dropping the `ImageFrame` as soon
+as it is read must be refused loudly, because the camera recycled the slot and
 the published frame id retired with it. A scene that never moves would
 make the typed half vacuous, so scene motion is measured separately.
 
@@ -45,12 +45,11 @@ import numpy
 from tatolab.stream import (
     Image,
     Input,
+    ImageFrame,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
-from tatolab.stream.msgpack import unpack
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
@@ -112,22 +111,23 @@ def _report(probe_body) -> None:
 
 
 class _LaggedHolderProbe:
-    """Hold the first frame, let the camera run ahead, read it again.
+    """Read the first frame, let the camera run ahead, read its pixels again.
 
-    Subclasses differ in one line — how the message is read — which is the whole
-    variable under test.
+    Subclasses differ in one line — whether the first `ImageFrame` is held or
+    dropped — which is the whole variable under test.
     """
 
-    # `newest`, not `ordered`: an unclaimed message's id is only good for
+    HOLDS_THE_FIRST_FRAME: bool
+
+    # `newest`, not `ordered`: a queued message's id is only good for
     # pool-depth frames after publish, so a probe that lets messages queue reads
     # ids the camera has already recycled — refused loudly, but that refusal on
     # *arrival* is not what these probes measure. Reading the newest message
-    # keeps arrivals current; the held frame still gets lapped.
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    # keeps arrivals current; the first frame still gets lapped.
+    video_from_upstream = Input(Image, delivery="newest")
 
     def __init__(self) -> None:
-        self.held_frame: object | None = None
+        self.held_frame: "ImageFrame | None" = None
         self.held_surface_id: "str | None" = None
         self.claim_taken: "bool | None" = None
         self.pixels_as_delivered: "numpy.ndarray | None" = None
@@ -136,9 +136,6 @@ class _LaggedHolderProbe:
         self.the_source_produced_a_different_picture = False
         self.arrivals_already_recycled_before_the_probe_read_them = 0
         self.reported = False
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        raise NotImplementedError
 
     def _sample_pixels(self, ctx: RuntimeContextLimitedAccess, surface_id: str):
         """A copy of the surface's pixels, taken through a handle that is closed
@@ -160,18 +157,19 @@ class _LaggedHolderProbe:
             _report(lambda: {"failure": traceback.format_exc()})
 
     def _observe(self, ctx: RuntimeContextLimitedAccess) -> None:
-        read = self._read(ctx)
+        read = ctx.inputs.read(self.video_from_upstream)
         if read is None:
             return
 
-        arrived_surface_id = self._read_current_surface_id(read)
+        arrived_surface_id = read.surface_id
 
-        if self.held_frame is None:
-            self.held_frame = read
+        if self.held_surface_id is None:
             self.held_surface_id = arrived_surface_id
             self.claim_taken = _the_claim_the_read_took(read) is not None
             self.pixels_as_delivered = self._sample_pixels(ctx, arrived_surface_id)
             self.pixels_of_the_previous_arrival = self.pixels_as_delivered
+            if self.HOLDS_THE_FIRST_FRAME:
+                self.held_frame = read
             return
 
         # Does the source actually produce different pictures? Measured on
@@ -200,9 +198,9 @@ class _LaggedHolderProbe:
             return
 
         # The held frame, read again after the producer has lapped its pool.
-        # An unclaimed frame's slot was recycled, so its published id retired
+        # A dropped frame's slot was recycled, so its published id retired
         # and the resolve is *refused* — that refusal is the result,
-        # not a probe failure. A claimed frame's slot never recycled, so its
+        # not a probe failure. A held frame's slot never recycled, so its
         # id is still current and the pixels must be the delivered ones.
         held_surface_id = self.held_surface_id
         pixels_as_delivered = self.pixels_as_delivered
@@ -252,32 +250,25 @@ class _LaggedHolderProbe:
         self.held_frame = None
         _report(lambda: observation)
 
-    @staticmethod
-    def _read_current_surface_id(read) -> str:
-        if isinstance(read, VideoFrame):
-            return read.surface_id
-        return unpack(read)["surface_id"]
+
+@node
+class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
+    """The first `ImageFrame` is held, and holding the object is the only thing
+    keeping the camera off that slot — no handle, no view, no context
+    manager."""
+
+    HOLDS_THE_FIRST_FRAME = True
 
 
 @node
-class TypedCastHoldsItsFrameProbe(_LaggedHolderProbe):
-    """The frame is read as a `VideoFrame`, so the cast claims it. Holding the
-    object is the only thing keeping the camera off that slot — no handle, no
-    view, no context manager."""
+class ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
+    """The control. Same probe, same lag, the first `ImageFrame` dropped once
+    its pixels are sampled — so its claim is released and the camera is free
+    to recycle the slot. The late re-read must be refused as recycled; a lookup
+    that *succeeds* here hands back another frame's pixels under the dropped
+    frame's id."""
 
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
-
-
-@node
-class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
-    """The control. Same probe, same lag, message read as plain bytes — so
-    nothing is claimed and the camera is free to recycle the slot. The late
-    re-read must be refused as recycled; a lookup that *succeeds* here hands
-    back another frame's pixels under the held frame's id."""
-
-    def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream")
+    HOLDS_THE_FIRST_FRAME = False
 
 
 class _BareProtocolProbe:

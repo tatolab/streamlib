@@ -39,6 +39,10 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "0026-every-key-with-a-relay-track-source-reading-with-a-max-age-and-every-media-module.json",
         "23cca9c1db2f6809e0a9e3cb494f338dcdbe7512604754363bca16e8de64e6d5",
     ),
+    (
+        "0027-every-key-with-every-port-family-converter-and-every-media-module.json",
+        "7d68f6381d4e3e5c910aff90d722cc6a5962dbf0a47d353510599709931d0aa5",
+    ),
 ];
 
 fn golden_graph_paths() -> Vec<PathBuf> {

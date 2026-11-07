@@ -13,6 +13,7 @@ compile_error!("tatolab-camera captures through V4L2 on Linux and AVFoundation o
 #[cfg(target_os = "macos")]
 pub mod avfoundation_camera_capture;
 pub mod camera_frame_publication;
+pub mod camera_image_frame;
 pub mod capture_timestamp;
 pub mod captured_frame_colour_description;
 #[cfg(target_os = "macos")]
@@ -20,7 +21,6 @@ pub mod core_video_colour_description;
 #[cfg(target_os = "linux")]
 pub mod v4l2_camera_capture;
 pub mod v4l2_colour_description;
-pub mod video_frame_record;
 
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
@@ -31,7 +31,7 @@ use crate::avfoundation_camera_capture::AvFoundationZeroCopyCameraCapture;
 #[cfg(target_os = "linux")]
 use crate::v4l2_camera_capture::V4l2ZeroCopyCameraCapture;
 
-/// A camera publishing `VideoFrame`s on a lent output port from a thread this
+/// A camera publishing Image frames on a lent output port from a thread this
 /// wheel owns.
 #[cfg(target_os = "linux")]
 #[pyclass(name = "V4l2ZeroCopyCameraCapture")]
@@ -144,7 +144,7 @@ impl PythonV4l2ZeroCopyCameraCapture {
     }
 }
 
-/// A camera publishing `VideoFrame`s on a lent output port from AVFoundation's
+/// A camera publishing Image frames on a lent output port from AVFoundation's
 /// own queues.
 #[cfg(target_os = "macos")]
 #[pyclass(name = "AvFoundationZeroCopyCameraCapture")]

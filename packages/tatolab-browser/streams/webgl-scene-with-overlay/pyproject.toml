@@ -2,7 +2,7 @@
 name = "tatolab-browser-webgl-scene-with-overlay"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.68.8", "tatolab-browser", "tatolab-compositor", "tatolab-h264"]
+dependencies = ["tatolab-stream>=0.68.32", "tatolab-browser", "tatolab-compositor", "tatolab-h264"]
 
 # The wheels as a third party's stream would take them, built from this checkout
 # rather than an index: ordinary non-editable dependencies.

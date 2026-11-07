@@ -3,7 +3,7 @@
 
 //! The frame thread: rive-runtime draws each frame straight into a texture
 //! from the node's output pool, imported onto a device the consumer RHI
-//! created, and a `VideoFrame` naming it is published. No frame is copied.
+//! created, and an Image frame in its slot is published. No frame is copied.
 
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
@@ -26,8 +26,8 @@ use tatolab_module_sdk::{
     ModuleHostOutputPort,
 };
 
+use crate::rive_image_frame::image_frame_payload_descriptor_of_a_rendered_frame;
 use crate::rive_scene_bridge::RiveSceneOnExternalRendererDevice;
-use crate::video_frame_record::PublishedVideoFrame;
 use crate::view_model_data_message::ViewModelDataMessageApplier;
 
 /// The variable a processor interpreter is handed the surface-share socket in.
@@ -388,18 +388,16 @@ impl RiveSourceFrameLoop {
         };
         let released =
             release_check_out_on_surface_share(&self.surface_share_connection, &surface_id);
-        let published_layout = drawn?;
+        drawn?;
         released?;
-        let record = PublishedVideoFrame {
-            surface_id: &surface_id,
-            width: self.settings.width,
-            height: self.settings.height,
-            timestamp_ns: frame_stream_time_ns,
-            frames_per_second: self.settings.frame_rate,
-            texture_layout: published_layout,
-        };
+        let image_frame = image_frame_payload_descriptor_of_a_rendered_frame(
+            &output_texture,
+            RENDERED_FRAME_TEXTURE_FORMAT,
+            self.settings.width,
+            self.settings.height,
+        )?;
         self.video_output_port
-            .write(&record.to_msgpack(), Some(record.timestamp_ns), true)
+            .write_described(&[], Some(frame_stream_time_ns), true, &image_frame)
             .map_err(|refusal| refusal.to_string())?;
         drop(output_texture);
         Ok(())
@@ -410,7 +408,7 @@ impl RiveSourceFrameLoop {
         surface_id: &str,
         checked_out: streamlib_surface_client::CheckedOutTexture,
         elapsed_seconds: f32,
-    ) -> Result<i32, String> {
+    ) -> Result<(), String> {
         let pool_slot = pool_slot_of_a_published_frame_id(surface_id).to_owned();
         if !self.render_targets_by_pool_slot.contains_key(&pool_slot) {
             let render_target = self
@@ -438,8 +436,7 @@ impl RiveSourceFrameLoop {
             &self.surface_share_connection,
             surface_id,
             published_layout.0,
-        )?;
-        Ok(published_layout.0)
+        )
     }
 }
 

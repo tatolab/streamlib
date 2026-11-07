@@ -16,18 +16,20 @@ rather than one the machine happens to have.
 
 import json
 import math
-import struct
 from typing import Optional
 
+import numpy
 from tatolab.stream import (
-    AudioBlock,
     AudioWindowContract,
+    Channels,
+    ChannelsBlock,
+    Input,
+    Output,
     RuntimeContextLimitedAccess,
     log,
     monotonic_now_ns,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 CONTIGUOUS_RESULT_MARKER = "MARKER:WINDOWS_SEEN "
 ROLLING_RESULT_MARKER = "MARKER:ROLLING_WINDOWS_SEEN "
@@ -52,14 +54,15 @@ WINDOW_SIZE = 960
 PUBLISHING_LEAD_NS = 100_000_000
 
 
-def _reading(block) -> dict:
+def _reading(block: ChannelsBlock) -> dict:
     return {
         "sample_rate": block.sample_rate,
-        "channels": block.channels,
-        "sample_count": block.sample_count,
+        "channels": block.channel_count,
+        "sample_count": block.samples_per_channel,
         "dtype": block.dtype,
-        "first_sample_timestamp_ns": block.first_sample_timestamp_ns,
-        "shape": list(block.samples.shape),
+        "start_sample": block.start_sample,
+        "first_sample_timestamp_ns": block.timestamp_ns,
+        "shape": list(numpy.from_dlpack(block).shape),
     }
 
 
@@ -70,9 +73,10 @@ class ExactWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=16_000,
             channels=1,
             dtype="f32",
@@ -80,12 +84,11 @@ class ExactWindowProbe:
             hop=512,
         ),
     )
-    def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
         # Drained past the report so the probe measures the stage rather than
         # its own backlog draining away as counted drops.
-        block = ctx.inputs.read("audio_from_upstream", into=AudioBlock)
+        block = ctx.inputs.read(self.audio_from_upstream)
         if block is None or len(self.readings) >= WINDOWS_REPORTED:
             return
         self.readings.append(_reading(block))
@@ -100,9 +103,10 @@ class RollingWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=16_000,
             channels=1,
             dtype="f32",
@@ -110,10 +114,9 @@ class RollingWindowProbe:
             hop=160,
         ),
     )
-    def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read("audio_from_upstream", into=AudioBlock)
+        block = ctx.inputs.read(self.audio_from_upstream)
         if block is None or len(self.readings) >= WINDOWS_REPORTED:
             return
         self.readings.append(_reading(block))
@@ -131,8 +134,7 @@ class StereoToneSource:
     read as the stage's failure rather than this fixture's.
     """
 
-    @node.output()
-    def audio(self) -> None: ...
+    audio = Output(Channels, rate=SOURCE_SAMPLE_RATE, dtype="f32")
 
     def __init__(self) -> None:
         self._frames_published = 0
@@ -152,28 +154,16 @@ class StereoToneSource:
             return
 
         at = self._frames_published
-        scalars = []
-        for offset in range(SOURCE_FRAMES_PER_BLOCK):
-            instant = (at + offset) / SOURCE_SAMPLE_RATE
-            scalars.extend([math.sin(math.tau * 440.0 * instant)] * SOURCE_CHANNELS)
-
+        instants = (at + numpy.arange(SOURCE_FRAMES_PER_BLOCK)) / SOURCE_SAMPLE_RATE
+        tone = numpy.sin(math.tau * 440.0 * instants).astype(numpy.float32)
         ctx.outputs.write(
-            "audio",
-            pack(
-                {
-                    "samples": struct.pack(f"<{len(scalars)}f", *scalars),
-                    "sample_rate": SOURCE_SAMPLE_RATE,
-                    "channels": SOURCE_CHANNELS,
-                    "sample_count": SOURCE_FRAMES_PER_BLOCK,
-                    "dtype": "f32",
-                    # Derived from the samples before it rather than read fresh,
-                    # so the stamps describe one gapless stream even though the
-                    # publishing runs ahead of real time.
-                    "first_sample_timestamp_ns": (
-                        anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
-                    ),
-                }
-            ),
+            self.audio,
+            numpy.ascontiguousarray(numpy.stack([tone] * SOURCE_CHANNELS)),
+            # Derived from the samples before it rather than read fresh, so the
+            # stamps describe one gapless stream even though the publishing
+            # runs ahead of real time.
+            timestamp_ns=anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE,
+            start_sample=at,
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
@@ -185,18 +175,18 @@ class SourceFollowingWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=SOURCE_SAMPLE_RATE,
             dtype="f32",
             window_size=WINDOW_SIZE,
         ),
     )
-    def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read("audio_from_upstream", into=AudioBlock)
+        block = ctx.inputs.read(self.audio_from_upstream)
         if block is None or len(self.readings) >= WINDOWS_REPORTED:
             return
         self.readings.append(_reading(block))
@@ -212,19 +202,19 @@ class DeclaredMonoWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=SOURCE_SAMPLE_RATE,
             dtype="f32",
             window_size=WINDOW_SIZE,
             channels=1,
         ),
     )
-    def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        block = ctx.inputs.read("audio_from_upstream", into=AudioBlock)
+        block = ctx.inputs.read(self.audio_from_upstream)
         if block is None or len(self.readings) >= WINDOWS_REPORTED:
             return
         self.readings.append(_reading(block))

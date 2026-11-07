@@ -26,12 +26,12 @@ use crate::camera_frame_publication::{
     CONVERTED_FRAME_TEXTURE_USAGE, CameraCaptureRefusal, CaptureLoopReportingWindow,
     FRAMES_BETWEEN_REPORTS,
 };
+use crate::camera_image_frame::image_frame_payload_descriptor_of_a_converted_frame;
 use crate::capture_timestamp::{monotonic_now_ns, resolve_capture_timestamp};
 use crate::captured_frame_colour_description::{
     CapturedFrameColourDescription, matrix_name_or_the_players_fallback,
 };
 use crate::v4l2_colour_description::V4l2CaptureFormatColourFields;
-use crate::video_frame_record::PublishedVideoFrame;
 
 /// How many driver buffers rotate: one being filled, one being converted, and
 /// slack for the driver.
@@ -140,8 +140,8 @@ struct ZeroCopyCaptureLoop {
     stop_requested: Arc<AtomicBool>,
 }
 
-/// The camera streaming from its own thread, each frame published as a
-/// `VideoFrame` on the lent output port.
+/// The camera streaming from its own thread, each frame published as an
+/// Image frame on the lent output port.
 pub struct V4l2ZeroCopyCameraCapture {
     format: NegotiatedCaptureFormat,
     stop_requested: Arc<AtomicBool>,
@@ -409,17 +409,14 @@ impl ZeroCopyCaptureLoop {
         let timestamp_ns = self
             .module_host
             .stream_time_ns_of_a_machine_instant(capture_instant_ns);
-        let record = PublishedVideoFrame {
-            surface_id: converted_frame_texture.surface_id(),
-            width: self.format.width,
-            height: self.format.height,
-            timestamp_ns,
-            nominal_frames_per_second: self.format.nominal_frames_per_second,
-            colour: self.format.colour,
-        }
-        .to_msgpack();
+        let image_frame = image_frame_payload_descriptor_of_a_converted_frame(
+            &converted_frame_texture,
+            self.format.width,
+            self.format.height,
+            &self.format.colour,
+        )?;
         self.video_output_port
-            .write(&record, Some(timestamp_ns), true)
+            .write_described(&[], Some(timestamp_ns), true, &image_frame)
             .map_err(|refusal| refusal.to_string())
     }
 }

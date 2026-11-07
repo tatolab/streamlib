@@ -9,11 +9,11 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3`,
   this wheel's Rust. A thread there creates a Vulkan device on the runtime's
   GPU through the consumer RHI's external-renderer device, builds
   rive-runtime's Vulkan renderer on it, and per frame draws the artboard into a
-  texture from the node's output pool and publishes a `VideoFrame` naming it.
+  texture from the node's output pool and publishes an Image frame in its slot.
   No frame is copied, and Python never runs at frame cadence.
 - Config: `riv_path`, `artboard` and `state_machine` (the file's defaults when
   absent), `width`, `height` and `frame_rate` (1920, 1080 and 60).
-- `data` takes msgpack maps from view-model property path to value, applied to
+- `data` takes Records, maps from view-model property path to value, applied to
   the artboard's default view-model instance. A path the instance lacks is
   logged once and skipped.
 

@@ -1,16 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The Image frame and Packets unit a payload descriptor carries, read and
-//! written in the engine's wire layout: an Image frame's body is its GPU pool
-//! slot in bytes 0..40, then width, height and texture format as
-//! little-endian `u32`s and its four H.273 code points; a Packets unit's is
-//! its codec name, UTF-8 and zero-padded to 32 bytes.
+//! The Image frame, Channels block, Packets unit and Records message a
+//! payload descriptor carries, read and written in the engine's wire layout:
+//! an Image frame's body is its GPU pool slot in bytes 0..40, then width,
+//! height and texture format as little-endian `u32`s and its four H.273 code
+//! points; a Channels block's is its start sample as a little-endian `u64`,
+//! then sample rate, channel count, samples per channel and sample type as
+//! little-endian `u32`s; a Packets unit's is its codec name, UTF-8 and
+//! zero-padded to 32 bytes; a Records message's is all zero.
 
 use crate::module_host_table_abi::{
-    MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES,
+    MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES, MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK,
     MODULE_HOST_TABLE_PAYLOAD_KIND_GPU_POOL_SLOT_FRAME, MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME,
-    MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT, ModuleHostTablePayloadDescriptor,
+    MODULE_HOST_TABLE_PAYLOAD_KIND_PACKETS_UNIT, MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE,
+    ModuleHostTablePayloadDescriptor,
 };
 
 const IMAGE_FRAME_GPU_POOL_SLOT_FRAME_BYTES: usize = 40;
@@ -19,6 +23,11 @@ const IMAGE_FRAME_HEIGHT_OFFSET: usize = 44;
 const IMAGE_FRAME_TEXTURE_FORMAT_OFFSET: usize = 48;
 const IMAGE_FRAME_COLOUR_OFFSET: usize = 52;
 const PACKETS_UNIT_CODEC_BYTES: usize = 32;
+const CHANNELS_BLOCK_START_SAMPLE_OFFSET: usize = 0;
+const CHANNELS_BLOCK_SAMPLE_RATE_OFFSET: usize = 8;
+const CHANNELS_BLOCK_CHANNEL_COUNT_OFFSET: usize = 12;
+const CHANNELS_BLOCK_SAMPLES_PER_CHANNEL_OFFSET: usize = 16;
+const CHANNELS_BLOCK_SAMPLE_TYPE_OFFSET: usize = 20;
 
 /// The H.273 code point that states nothing about an axis.
 pub const MODULE_HOST_H273_UNSPECIFIED: u8 = 2;
@@ -44,6 +53,38 @@ pub struct ModuleHostImageFrame {
     pub colour: ModuleHostImageFrameH273Colour,
 }
 
+/// The sample type of a Channels block, by its wire value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ModuleHostChannelsBlockSampleType {
+    F32 = 0,
+    F64 = 1,
+}
+
+impl ModuleHostChannelsBlockSampleType {
+    /// Bytes one sample of this type takes.
+    pub fn sample_byte_len(self) -> usize {
+        match self {
+            Self::F32 => 4,
+            Self::F64 => 8,
+        }
+    }
+}
+
+/// What a Channels block descriptor states. Its payload is planar:
+/// `channel_count` runs of `samples_per_channel` little-endian samples,
+/// channel by channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleHostChannelsBlock {
+    /// The index, counted from the stream's first sample, of the block's first sample.
+    pub start_sample: u64,
+    /// Samples per second, per channel.
+    pub sample_rate: u32,
+    pub channel_count: u32,
+    pub samples_per_channel: u32,
+    pub sample_type: ModuleHostChannelsBlockSampleType,
+}
+
 /// Why a payload descriptor is not the kind a reader takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleHostPayloadDescriptorRefusal {
@@ -51,6 +92,13 @@ pub enum ModuleHostPayloadDescriptorRefusal {
     AnotherKind { expected_kind: u32, kind: u32 },
     /// A codec name longer than 32 bytes, or holding a NUL.
     CodecNameDoesNotFit { codec: String },
+    /// A Channels block of a sample type this SDK does not know.
+    UnknownChannelsBlockSampleType { sample_type: u32 },
+    /// A Channels block whose payload is not the length its descriptor states.
+    ChannelsBlockPayloadLength {
+        expected_byte_len: Option<usize>,
+        byte_len: usize,
+    },
 }
 
 impl std::fmt::Display for ModuleHostPayloadDescriptorRefusal {
@@ -69,6 +117,27 @@ impl std::fmt::Display for ModuleHostPayloadDescriptorRefusal {
                 "codec {codec:?} is longer than the {PACKETS_UNIT_CODEC_BYTES} bytes a Packets \
                  unit names its codec in, or holds a NUL"
             ),
+            ModuleHostPayloadDescriptorRefusal::UnknownChannelsBlockSampleType { sample_type } => {
+                write!(
+                    formatter,
+                    "the Channels block's sample type {sample_type} is neither f32 (0) nor f64 (1)"
+                )
+            }
+            ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength {
+                expected_byte_len,
+                byte_len,
+            } => match expected_byte_len {
+                Some(expected_byte_len) => write!(
+                    formatter,
+                    "the Channels block's payload is {byte_len} bytes, and its descriptor states \
+                     {expected_byte_len}"
+                ),
+                None => write!(
+                    formatter,
+                    "the Channels block's descriptor states a payload past this machine's memory, \
+                     and it carries {byte_len} bytes"
+                ),
+            },
         }
     }
 }
@@ -97,7 +166,38 @@ fn u32_at(body: &[u8; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES], offset: 
     ])
 }
 
+/// The texture formats an Image frame names, each as its wire name and the
+/// engine's `TextureFormat` `repr(u32)` value the descriptor carries.
+const IMAGE_FRAME_TEXTURE_FORMATS: &[(&str, u32)] = &[
+    ("rgba8_unorm", 0),
+    ("rgba8_unorm_srgb", 1),
+    ("bgra8_unorm", 2),
+    ("bgra8_unorm_srgb", 3),
+    ("rgba16_float", 4),
+    ("rgba32_float", 5),
+    ("nv12", 6),
+];
+
 impl ModuleHostImageFrame {
+    /// The `texture_format` value of the format `wire_name` spells, as an
+    /// output pool texture request names it; `None` for a name the engine has
+    /// no format for.
+    pub fn texture_format_of_the_wire_name(wire_name: &str) -> Option<u32> {
+        IMAGE_FRAME_TEXTURE_FORMATS
+            .iter()
+            .find(|(name, _)| *name == wire_name)
+            .map(|&(_, texture_format)| texture_format)
+    }
+
+    /// The wire name of the format `texture_format` names, the inverse of
+    /// [`Self::texture_format_of_the_wire_name`].
+    pub fn wire_name_of_the_texture_format(texture_format: u32) -> Option<&'static str> {
+        IMAGE_FRAME_TEXTURE_FORMATS
+            .iter()
+            .find(|(_, value)| *value == texture_format)
+            .map(|&(name, _)| name)
+    }
+
     /// The Image frame `payload_descriptor` states, refusing another kind.
     pub fn of_the_payload_descriptor(
         payload_descriptor: &ModuleHostTablePayloadDescriptor,
@@ -150,6 +250,137 @@ impl ModuleHostImageFrame {
             kind: MODULE_HOST_TABLE_PAYLOAD_KIND_IMAGE_FRAME,
             body,
         })
+    }
+}
+
+impl ModuleHostChannelsBlock {
+    /// The Channels block `payload_descriptor` states, refusing another kind.
+    pub fn of_the_payload_descriptor(
+        payload_descriptor: &ModuleHostTablePayloadDescriptor,
+    ) -> Result<Self, ModuleHostPayloadDescriptorRefusal> {
+        refuse_unless_the_kind_is(
+            payload_descriptor,
+            MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK,
+        )?;
+        let body = &payload_descriptor.body;
+        let mut start_sample = [0u8; 8];
+        start_sample.copy_from_slice(
+            &body[CHANNELS_BLOCK_START_SAMPLE_OFFSET..CHANNELS_BLOCK_SAMPLE_RATE_OFFSET],
+        );
+        let sample_type = match u32_at(body, CHANNELS_BLOCK_SAMPLE_TYPE_OFFSET) {
+            0 => ModuleHostChannelsBlockSampleType::F32,
+            1 => ModuleHostChannelsBlockSampleType::F64,
+            sample_type => {
+                return Err(
+                    ModuleHostPayloadDescriptorRefusal::UnknownChannelsBlockSampleType {
+                        sample_type,
+                    },
+                );
+            }
+        };
+        Ok(Self {
+            start_sample: u64::from_le_bytes(start_sample),
+            sample_rate: u32_at(body, CHANNELS_BLOCK_SAMPLE_RATE_OFFSET),
+            channel_count: u32_at(body, CHANNELS_BLOCK_CHANNEL_COUNT_OFFSET),
+            samples_per_channel: u32_at(body, CHANNELS_BLOCK_SAMPLES_PER_CHANNEL_OFFSET),
+            sample_type,
+        })
+    }
+
+    /// The descriptor of this block.
+    pub fn payload_descriptor(&self) -> ModuleHostTablePayloadDescriptor {
+        let mut body = [0u8; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES];
+        body[CHANNELS_BLOCK_START_SAMPLE_OFFSET..CHANNELS_BLOCK_SAMPLE_RATE_OFFSET]
+            .copy_from_slice(&self.start_sample.to_le_bytes());
+        for (offset, value) in [
+            (CHANNELS_BLOCK_SAMPLE_RATE_OFFSET, self.sample_rate),
+            (CHANNELS_BLOCK_CHANNEL_COUNT_OFFSET, self.channel_count),
+            (
+                CHANNELS_BLOCK_SAMPLES_PER_CHANNEL_OFFSET,
+                self.samples_per_channel,
+            ),
+            (CHANNELS_BLOCK_SAMPLE_TYPE_OFFSET, self.sample_type as u32),
+        ] {
+            body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        ModuleHostTablePayloadDescriptor {
+            kind: MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK,
+            body,
+        }
+    }
+
+    /// The bytes this block's planar payload takes, or `None` past `usize`.
+    pub fn planar_payload_byte_len(&self) -> Option<usize> {
+        (self.channel_count as usize)
+            .checked_mul(self.samples_per_channel as usize)?
+            .checked_mul(self.sample_type.sample_byte_len())
+    }
+
+    /// The planar f32 payload of `interleaved_samples`, frames of
+    /// `channel_count` samples each, as a block of this layout carries it.
+    pub fn planar_f32_payload_of_interleaved_samples(
+        interleaved_samples: &[f32],
+        channel_count: u32,
+    ) -> Vec<u8> {
+        let channel_count = channel_count.max(1) as usize;
+        let samples_per_channel = interleaved_samples.len() / channel_count;
+        let mut planar_payload = Vec::with_capacity(samples_per_channel * channel_count * 4);
+        for channel in 0..channel_count {
+            for frame in 0..samples_per_channel {
+                planar_payload.extend_from_slice(
+                    &interleaved_samples[frame * channel_count + channel].to_le_bytes(),
+                );
+            }
+        }
+        planar_payload
+    }
+
+    /// This block's samples, interleaved frame by frame and widened or
+    /// narrowed to f32, read from its planar `payload`; refused when the
+    /// payload is not the length the descriptor states.
+    pub fn interleaved_f32_samples_of_the_planar_payload(
+        &self,
+        payload: &[u8],
+    ) -> Result<Vec<f32>, ModuleHostPayloadDescriptorRefusal> {
+        let expected_byte_len = self.planar_payload_byte_len();
+        if expected_byte_len != Some(payload.len()) {
+            return Err(
+                ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength {
+                    expected_byte_len,
+                    byte_len: payload.len(),
+                },
+            );
+        }
+        let channel_count = self.channel_count as usize;
+        let samples_per_channel = self.samples_per_channel as usize;
+        let sample_byte_len = self.sample_type.sample_byte_len();
+        let sample_at = |channel: usize, frame: usize| -> f32 {
+            let offset = (channel * samples_per_channel + frame) * sample_byte_len;
+            let bytes = &payload[offset..offset + sample_byte_len];
+            match self.sample_type {
+                ModuleHostChannelsBlockSampleType::F32 => {
+                    f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                }
+                ModuleHostChannelsBlockSampleType::F64 => f64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ]) as f32,
+            }
+        };
+        let mut interleaved_samples = Vec::with_capacity(channel_count * samples_per_channel);
+        for frame in 0..samples_per_channel {
+            for channel in 0..channel_count {
+                interleaved_samples.push(sample_at(channel, frame));
+            }
+        }
+        Ok(interleaved_samples)
+    }
+}
+
+/// The descriptor of a Records message, whose payload is one msgpack map.
+pub fn records_message_payload_descriptor() -> ModuleHostTablePayloadDescriptor {
+    ModuleHostTablePayloadDescriptor {
+        kind: MODULE_HOST_TABLE_PAYLOAD_KIND_RECORDS_MESSAGE,
+        body: [0u8; MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES],
     }
 }
 
@@ -220,6 +451,120 @@ mod tests {
         assert_eq!(
             ModuleHostImageFrame::of_the_payload_descriptor(&written).unwrap(),
             frame
+        );
+    }
+
+    #[test]
+    fn a_channels_block_reads_back_with_every_field_at_its_offset() {
+        let block = ModuleHostChannelsBlock {
+            start_sample: 0x0102_0304_0506_0708,
+            sample_rate: 48_000,
+            channel_count: 2,
+            samples_per_channel: 960,
+            sample_type: ModuleHostChannelsBlockSampleType::F64,
+        };
+        let descriptor = block.payload_descriptor();
+        assert_eq!(
+            descriptor.kind,
+            MODULE_HOST_TABLE_PAYLOAD_KIND_CHANNELS_BLOCK
+        );
+        assert_eq!(
+            &descriptor.body[..8],
+            &0x0102_0304_0506_0708u64.to_le_bytes()
+        );
+        assert_eq!(&descriptor.body[20..24], &1u32.to_le_bytes());
+        assert_eq!(&descriptor.body[24..], &[0u8; 36]);
+        assert_eq!(
+            ModuleHostChannelsBlock::of_the_payload_descriptor(&descriptor).unwrap(),
+            block
+        );
+        assert_eq!(block.planar_payload_byte_len(), Some(2 * 960 * 8));
+    }
+
+    #[test]
+    fn a_channels_block_of_an_unknown_sample_type_is_refused_by_its_value() {
+        let mut descriptor = ModuleHostChannelsBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            channel_count: 1,
+            samples_per_channel: 1,
+            sample_type: ModuleHostChannelsBlockSampleType::F32,
+        }
+        .payload_descriptor();
+        descriptor.body[20] = 9;
+        assert_eq!(
+            ModuleHostChannelsBlock::of_the_payload_descriptor(&descriptor).unwrap_err(),
+            ModuleHostPayloadDescriptorRefusal::UnknownChannelsBlockSampleType { sample_type: 9 }
+        );
+    }
+
+    #[test]
+    fn interleaved_samples_round_trip_through_a_planar_payload() {
+        let interleaved_samples = [0.0f32, 1.0, 0.25, -1.0, 0.5, 0.75];
+        let planar_payload = ModuleHostChannelsBlock::planar_f32_payload_of_interleaved_samples(
+            &interleaved_samples,
+            2,
+        );
+        let first_channel: Vec<f32> = planar_payload[..12]
+            .chunks(4)
+            .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            .collect();
+        assert_eq!(first_channel, [0.0, 0.25, 0.5]);
+        let block = ModuleHostChannelsBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            channel_count: 2,
+            samples_per_channel: 3,
+            sample_type: ModuleHostChannelsBlockSampleType::F32,
+        };
+        assert_eq!(
+            block
+                .interleaved_f32_samples_of_the_planar_payload(&planar_payload)
+                .unwrap(),
+            interleaved_samples
+        );
+        assert!(matches!(
+            block.interleaved_f32_samples_of_the_planar_payload(&planar_payload[..8]),
+            Err(ModuleHostPayloadDescriptorRefusal::ChannelsBlockPayloadLength { .. })
+        ));
+    }
+
+    #[test]
+    fn an_f64_block_reads_as_f32_samples() {
+        let planar_payload: Vec<u8> = [0.5f64, -0.25]
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        let block = ModuleHostChannelsBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            channel_count: 1,
+            samples_per_channel: 2,
+            sample_type: ModuleHostChannelsBlockSampleType::F64,
+        };
+        assert_eq!(
+            block
+                .interleaved_f32_samples_of_the_planar_payload(&planar_payload)
+                .unwrap(),
+            [0.5, -0.25]
+        );
+    }
+
+    #[test]
+    fn a_texture_format_reads_back_through_its_wire_name() {
+        for &(wire_name, texture_format) in IMAGE_FRAME_TEXTURE_FORMATS {
+            assert_eq!(
+                ModuleHostImageFrame::texture_format_of_the_wire_name(wire_name),
+                Some(texture_format)
+            );
+            assert_eq!(
+                ModuleHostImageFrame::wire_name_of_the_texture_format(texture_format),
+                Some(wire_name)
+            );
+        }
+        assert_eq!(
+            ModuleHostImageFrame::texture_format_of_the_wire_name("r8"),
+            None
         );
     }
 

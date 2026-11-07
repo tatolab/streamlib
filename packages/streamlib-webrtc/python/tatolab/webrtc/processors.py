@@ -22,8 +22,11 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal, NamedTuple
 
 from tatolab.stream import (
+    Input,
     LinkInputDataReader,
     Message,
+    Output,
+    Packets,
     PortPayloadBorrow,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -226,9 +229,12 @@ class WhipPublisher:
         self._media_frames_published = 0
         self._media_frames_discarded_awaiting_a_group_start = 0
 
-    @node.input(delivery_profile="ordered")
-    def tracks(self) -> None:
-        """H.264 or Opus media frames; each inbound link becomes one track."""
+    tracks = Input(
+        Packets,
+        delivery="ordered",
+        requires_codec=("h264", "opus"),
+        description="H.264 or Opus media frames; each inbound link becomes one track",
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Links are wired before setup() runs, so the track count is knowable
@@ -411,13 +417,10 @@ class WhepPlayer:
         self._bearer_token = _optional_bearer_token(config.bearer_token)
         self._reading_thread: "_native.WhepPlayerThread | None" = None
 
-    @node.output()
-    def encoded_video(self) -> None:
-        """H.264 access units, as media frames."""
-
-    @node.output()
-    def encoded_audio(self) -> None:
-        """Opus packets, as media frames."""
+    encoded_video = Output(
+        Packets, codec="h264", description="H.264 access units, as media frames"
+    )
+    encoded_audio = Output(Packets, codec="opus", description="Opus packets, as media frames")
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both outputs to a reading thread of this wheel's Rust.

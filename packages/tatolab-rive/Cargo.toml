@@ -18,12 +18,11 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
 # The module host table the frame thread acquires output textures, reads
 # `data` and publishes through, with no Python attached.
-tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.10.0", features = ["pyo3"] }
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0", features = ["pyo3"] }
 # The external-renderer device rive-runtime draws on, and the surface-share
 # checkout each output texture crosses to it by.
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.32" }
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.32" }
-rmp = "0.8.15"
 rmpv = "1.3.1"
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a

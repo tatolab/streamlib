@@ -50,12 +50,13 @@ from tatolab.virtualcamera.virtual_camera_naming import (
 )
 
 
-def test_the_only_port_is_one_newest_input_and_the_node_is_reactive():
+def test_the_only_port_is_one_newest_image_input_and_the_node_is_reactive():
     input_ports = getattr(VirtualCameraSink, NODE_DECLARATION_INPUT_PORTS_STAMP)
 
     assert [(port["name"], port["delivery_profile"]) for port in input_ports] == [
         ("video", "newest")
     ]
+    assert input_ports[0]["family"] == {"family": "image"}
     assert getattr(VirtualCameraSink, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == []
     assert (
         getattr(VirtualCameraSink, NODE_DECLARATION_EXECUTION_STAMP)["mode"]
@@ -270,7 +271,6 @@ def test_a_new_camera_asks_for_the_next_free_device_and_four_buffers():
         (abi.V4l2Capability, 104),
         (abi.V4l2PixFormat, 48),
         (abi.V4l2Format, 208),
-        (abi.V4l2StreamParm, 204),
         (abi.V4l2RequestBuffers, 20),
         (abi.V4l2Buffer, 88),
         (abi.V4l2LoopbackConfig, 72),
@@ -308,7 +308,6 @@ def test_every_request_number_is_the_one_the_headers_define():
         "DQBUF": abi.VIDIOC_DQBUF,
         "STREAMON": abi.VIDIOC_STREAMON,
         "STREAMOFF": abi.VIDIOC_STREAMOFF,
-        "S_PARM": abi.VIDIOC_S_PARM,
         "CTL_VERSION": abi.V4L2LOOPBACK_CTL_VERSION,
         "CTL_ADD": abi.V4L2LOOPBACK_CTL_ADD,
         "CTL_REMOVE": abi.V4L2LOOPBACK_CTL_REMOVE,
@@ -322,7 +321,6 @@ def test_every_request_number_is_the_one_the_headers_define():
         "DQBUF": 0xC0585611,
         "STREAMON": 0x40045612,
         "STREAMOFF": 0x40045613,
-        "S_PARM": 0xC0CC5616,
         "CTL_VERSION": 0x80047E00,
         "CTL_ADD": 0x40487E01,
         "CTL_REMOVE": 0x40047E02,
@@ -351,6 +349,12 @@ def test_an_absent_colour_axis_takes_the_engines_ycbcr_default():
     )
     assert yuyv_picture_color_of(
         ColorInfo(primaries="bt709", transfer="srgb", range="full")
+    ) == ColorInfo("bt709", "srgb", "smpte170m", "full")
+
+
+def test_an_rgb_frames_identity_matrix_takes_the_engines_ycbcr_matrix():
+    assert yuyv_picture_color_of(
+        ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
     ) == ColorInfo("bt709", "srgb", "smpte170m", "full")
 
 

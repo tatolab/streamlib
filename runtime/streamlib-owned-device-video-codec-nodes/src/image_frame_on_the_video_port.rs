@@ -5,8 +5,8 @@
 //! descriptor, with the pooled frame it names lent and claimed, and written
 //! by a decoder in the slot of the output-pool texture it converted into.
 
+use streamlib_consumer_rhi::H273ColorVui;
 use streamlib_consumer_rhi::h273_color_vui::{matrix, primaries, transfer};
-use streamlib_consumer_rhi::{H273ColorVui, TextureFormat};
 use tatolab_module_sdk::{
     MODULE_HOST_H273_UNSPECIFIED, ModuleHostImageFrame, ModuleHostImageFrameH273Colour,
     ModuleHostReadMessage, ModuleHostSurface, ModuleHostTablePayloadDescriptor,
@@ -97,15 +97,16 @@ pub fn image_frame_payload_descriptor_of_a_decoded_picture(
     height: u32,
     color_vui: &H273ColorVui,
 ) -> Result<ModuleHostTablePayloadDescriptor, String> {
-    let texture_format = TextureFormat::from_wire_name(texture_format_wire_name)
-        .ok_or_else(|| format!("{texture_format_wire_name:?} names no texture format"))?;
+    let texture_format =
+        ModuleHostImageFrame::texture_format_of_the_wire_name(texture_format_wire_name)
+            .ok_or_else(|| format!("{texture_format_wire_name:?} names no texture format"))?;
     let gpu_pool_slot_frame = decoded_picture_texture
         .gpu_pool_slot_frame()
         .map_err(|refusal| refusal.to_string())?;
     ModuleHostImageFrame {
         width,
         height,
-        texture_format: texture_format as u32,
+        texture_format,
         colour: image_frame_colour_of_the_color_vui(color_vui),
     }
     .payload_descriptor_in_the_slot(&gpu_pool_slot_frame)
@@ -224,6 +225,24 @@ mod tests {
         let colour = image_frame_colour_of_the_color_vui(&H273ColorVui::default());
         assert_eq!(colour.range, MODULE_HOST_H273_UNSPECIFIED);
         assert_eq!(color_vui_of_the_image_frame_colour(colour).full_range, None);
+    }
+
+    #[test]
+    fn the_module_sdk_names_every_texture_format_as_the_engine_numbers_it() {
+        use streamlib_consumer_rhi::TextureFormat;
+        for repr_value in 0.. {
+            let Some(texture_format) = TextureFormat::from_repr_value(repr_value) else {
+                assert_eq!(
+                    ModuleHostImageFrame::wire_name_of_the_texture_format(repr_value),
+                    None
+                );
+                break;
+            };
+            assert_eq!(
+                ModuleHostImageFrame::texture_format_of_the_wire_name(texture_format.wire_name()),
+                Some(repr_value)
+            );
+        }
     }
 
     #[test]

@@ -8,11 +8,12 @@ and `process()` see in a real child, so nothing here needs a runtime or a
 device. `tatolab.runtime` is borrowed from the runtime unit's lend.
 """
 
+import dataclasses
 import math
 import os
-import struct
 from typing import Any
 
+import numpy
 import pytest
 from helper_process_link_wiring import wire_one_link
 from parent_catalog_entry_stand_in import ParentHoldingCatalogEntries
@@ -20,7 +21,15 @@ from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.runtime._processor_interpreter_bootstrap import describe_one_processor_class
-from tatolab.stream import AudioBlock, StreamBuilder, compile_stream_to_graph, log, stream
+from tatolab.stream import (
+    Channels,
+    ChannelsBlock,
+    Input,
+    StreamBuilder,
+    compile_stream_to_graph,
+    log,
+    stream,
+)
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -64,14 +73,24 @@ def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_
     }
 
 
-def test_the_decoders_output_states_a_msgpack_snapshot_entry():
-    [audio] = describe_one_processor_class("tatolab.opus:OpusDecoder")["output_ports"]
+def test_the_decoder_takes_opus_packets_and_publishes_f32_channels_at_opus_rate():
+    described = describe_one_processor_class("tatolab.opus:OpusDecoder")
+    [encoded_audio] = described["input_ports"]
+    [audio] = described["output_ports"]
 
+    assert encoded_audio["family"] == {"family": "packets", "requires_codec": ["opus"]}
     assert audio["name"] == "audio"
-    assert audio["catalog_entry"] == {
-        "section": "binary",
-        "entry": {"mode": "snapshot", "mime": "application/msgpack"},
+    assert audio["family"] == {
+        "family": "channels",
+        "rate": {"stated": OPUS_SAMPLE_RATE_HZ},
+        "dtype": "f32",
     }
+
+
+def test_the_encoder_publishes_opus_packets():
+    [encoded_audio] = describe_one_processor_class("tatolab.opus:OpusEncoder")["output_ports"]
+
+    assert encoded_audio["family"] == {"family": "packets", "codec": "opus"}
 
 
 @pytest.mark.parametrize(
@@ -97,20 +116,65 @@ def test_an_encoder_setting_the_class_does_not_take_is_refused():
         construct_processor_instance(OpusEncoder, {"channels": 2}, None)
 
 
-def a_stereo_tone_window(window_index: int) -> AudioBlock:
+@dataclasses.dataclass(frozen=True)
+class PlanarWindowToSend:
+    """One window of `[channel][sample]` f32 samples, its first sample's index and stamp."""
+
+    planar_samples: "numpy.ndarray[Any, Any]"
+    start_sample: int
+    timestamp_ns: int
+
+
+def planar_f32_samples(channels: "list[list[float]]") -> "numpy.ndarray[Any, Any]":
+    """A C-contiguous `[channel][sample]` float32 array of `channels`."""
+    return numpy.ascontiguousarray(channels, dtype=numpy.float32)
+
+
+def a_stereo_tone_window(window_index: int) -> PlanarWindowToSend:
     """20 ms of a tone per channel at Opus's rate, stamped on the window grid."""
-    scalars = []
-    for sample in range(SAMPLES_IN_ONE_WINDOW):
-        instant = (window_index * SAMPLES_IN_ONE_WINDOW + sample) / OPUS_SAMPLE_RATE_HZ
-        scalars.append(0.4 * math.sin(2 * math.pi * 220 * instant))
-        scalars.append(0.4 * math.sin(2 * math.pi * 440 * instant))
-    return AudioBlock(
-        samples=struct.pack(f"<{len(scalars)}f", *scalars),
-        sample_rate=OPUS_SAMPLE_RATE_HZ,
-        channels=2,
-        sample_count=SAMPLES_IN_ONE_WINDOW,
-        first_sample_timestamp_ns=window_index * NANOSECONDS_PER_WINDOW,
-        dtype="f32",
+    instants = [
+        (window_index * SAMPLES_IN_ONE_WINDOW + sample) / OPUS_SAMPLE_RATE_HZ
+        for sample in range(SAMPLES_IN_ONE_WINDOW)
+    ]
+    return PlanarWindowToSend(
+        planar_samples=planar_f32_samples(
+            [
+                [0.4 * math.sin(2 * math.pi * 220 * instant) for instant in instants],
+                [0.4 * math.sin(2 * math.pi * 440 * instant) for instant in instants],
+            ]
+        ),
+        start_sample=window_index * SAMPLES_IN_ONE_WINDOW,
+        timestamp_ns=window_index * NANOSECONDS_PER_WINDOW,
+    )
+
+
+class DecodedAudioReader:
+    """The sink's `audio` input, read through its attribute as Channels blocks."""
+
+    audio = Input(Channels, delivery="ordered")
+
+
+@dataclasses.dataclass(frozen=True)
+class DecodedBlock:
+    """What a decoded Channels block stated, copied out of its borrowed sample."""
+
+    channel_count: int
+    sample_rate: int
+    samples_per_channel: int
+    start_sample: int
+    timestamp_ns: int
+    last_channel_samples: "list[float]"
+
+
+def decoded_block_of(block: ChannelsBlock) -> DecodedBlock:
+    planar = numpy.from_dlpack(block)
+    return DecodedBlock(
+        channel_count=block.channel_count,
+        sample_rate=block.sample_rate,
+        samples_per_channel=block.samples_per_channel,
+        start_sample=block.start_sample,
+        timestamp_ns=block.timestamp_ns,
+        last_channel_samples=[float(scalar) for scalar in planar[-1]],
     )
 
 
@@ -155,6 +219,7 @@ class OpusRoundTripOnWiredLinks:
                 self.parent.escalate_request_to_parent,
             )
 
+        self.source_context = context(self.source, "source-under-test")
         self.encoder_context = context(encoder_links, "encoder-under-test")
         self.decoder_context = context(decoder_links, "decoder-under-test")
         self.sink_context = context(sink_links, "sink-under-test")
@@ -163,9 +228,13 @@ class OpusRoundTripOnWiredLinks:
         )
         self.decoder = construct_processor_instance(OpusDecoder, {}, decoder_links)
 
-    def send(self, window: AudioBlock) -> None:
-        self.source.write_to_output_port(
-            "audio", window.to_bytes(), window.first_sample_timestamp_ns, True
+    def send(self, window: PlanarWindowToSend) -> None:
+        self.source_context.outputs.write_channels_block(
+            "audio",
+            window.planar_samples,
+            start_sample=window.start_sample,
+            sample_rate=OPUS_SAMPLE_RATE_HZ,
+            timestamp_ns=window.timestamp_ns,
         )
         self.encoder.process(
             _engine.limited_access_view_of_runtime_context_for_helper_process(self.encoder_context)
@@ -174,10 +243,10 @@ class OpusRoundTripOnWiredLinks:
             _engine.limited_access_view_of_runtime_context_for_helper_process(self.decoder_context)
         )
 
-    def decoded_blocks(self) -> "list[AudioBlock]":
+    def decoded_blocks(self) -> "list[DecodedBlock]":
         blocks = []
-        while (block := self.sink_context.inputs.read("audio", into=AudioBlock)) is not None:
-            blocks.append(block)
+        while (block := self.sink_context.inputs.read(DecodedAudioReader.audio)) is not None:
+            blocks.append(decoded_block_of(block))
         return blocks
 
 
@@ -213,28 +282,26 @@ def test_a_tone_comes_back_as_audio_blocks_trimmed_and_stamped_from_the_entry_pa
     blocks = opus_round_trip.decoded_blocks()
 
     assert len(blocks) == windows
-    assert [block.channels for block in blocks] == [2] * windows
+    assert [block.channel_count for block in blocks] == [2] * windows
     assert {block.sample_rate for block in blocks} == {OPUS_SAMPLE_RATE_HZ}
-    assert blocks[0].sample_count == SAMPLES_IN_ONE_WINDOW - LIBOPUS_PRE_SKIP_SAMPLES
-    assert blocks[0].first_sample_timestamp_ns == 0
+    assert blocks[0].samples_per_channel == SAMPLES_IN_ONE_WINDOW - LIBOPUS_PRE_SKIP_SAMPLES
+    assert blocks[0].timestamp_ns == 0
     emitted = 0
     for block in blocks:
-        assert block.first_sample_timestamp_ns == emitted * 1_000_000_000 // OPUS_SAMPLE_RATE_HZ
-        emitted += block.sample_count
+        assert block.start_sample == emitted
+        assert block.timestamp_ns == emitted * 1_000_000_000 // OPUS_SAMPLE_RATE_HZ
+        emitted += block.samples_per_channel
     # After the priming, the reconstruction carries the tone rather than silence.
-    later = struct.unpack(f"<{blocks[-1].sample_count * 2}f", blocks[-1].interleaved_sample_bytes)
-    assert max(abs(scalar) for scalar in later) > 0.2
+    assert max(abs(scalar) for scalar in blocks[-1].last_channel_samples) > 0.2
 
 
 def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_then_discarded(
     opus_round_trip: OpusRoundTripOnWiredLinks,
 ):
-    nine_channels = AudioBlock(
-        samples=bytes(SAMPLES_IN_ONE_WINDOW * 9 * 4),
-        sample_rate=OPUS_SAMPLE_RATE_HZ,
-        channels=9,
-        sample_count=SAMPLES_IN_ONE_WINDOW,
-        first_sample_timestamp_ns=0,
+    nine_channels = PlanarWindowToSend(
+        planar_samples=planar_f32_samples([[0.0] * SAMPLES_IN_ONE_WINDOW] * 9),
+        start_sample=0,
+        timestamp_ns=0,
     )
 
     with pytest.raises(ValueError, match="9 channels resolve to no Opus stream layout"):
@@ -263,3 +330,24 @@ def test_a_message_on_the_decoders_link_that_is_no_media_frame_is_refused_by_nam
         decoder._decoder.decode_one_arriving_message(
             b"\x00\xfc\xff\xfe", 0, True, 0, {"section": "video", "entry": {"codec": "avc1"}}
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class DecodedBlockStandIn:
+    first_sample_timestamp_ns: int
+    sample_count: int = SAMPLES_IN_ONE_WINDOW
+
+
+def test_a_loss_advances_the_decoders_start_sample_by_the_samples_it_left_out():
+    decoder = OpusDecoder.__new__(OpusDecoder)
+    decoder._next_first_sample_timestamp_ns = 10 * NANOSECONDS_PER_WINDOW
+    contiguous_block = DecodedBlockStandIn(first_sample_timestamp_ns=10 * NANOSECONDS_PER_WINDOW)
+    block_after_three_lost_windows = DecodedBlockStandIn(
+        first_sample_timestamp_ns=13 * NANOSECONDS_PER_WINDOW
+    )
+
+    assert decoder._samples_skipped_before(contiguous_block) == 0  # type: ignore[arg-type]
+    assert (
+        decoder._samples_skipped_before(block_after_three_lost_windows)  # type: ignore[arg-type]
+        == 3 * SAMPLES_IN_ONE_WINDOW
+    )

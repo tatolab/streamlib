@@ -18,18 +18,24 @@ probe reading the event.
 from __future__ import annotations
 
 import dataclasses
-from typing import Annotated, Any
+from typing import Annotated
 
-from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, VideoFrame, log, msgpack, node
-from tatolab.stream.catalog import BinaryEntry
+import numpy
+from tatolab.stream import (
+    Channels,
+    ChannelsBlock,
+    Image,
+    ImageFrame,
+    Input,
+    Output,
+    Records,
+    RuntimeContextLimitedAccess,
+    log,
+    node,
+)
 from tatolab.stream.clock import monotonic_now_ns
 
 from ._duration_samples import DurationSamplesInOneReportingWindow
-
-VIDEO_INPUT_PORT = "video_from_browser"
-AUDIO_INPUT_PORT = "audio_from_browser"
-EVENTS_INPUT_PORT = "events_from_browser"
-DATA_OUTPUT_PORT = "data_to_browser"
 
 # A block whose first sample lands further than this from where the previous
 # block's samples end breaks the timeline.
@@ -80,51 +86,45 @@ class BrowserSourceOutputProbe:
             str, DurationSamplesInOneReportingWindow
         ] = {}
 
-    @node.input(delivery_profile="ordered", description="Frames from the browser under test")
-    def video_from_browser(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="ordered")
-    def audio_from_browser(self) -> None:
-        """Audio blocks from the browser under test."""
-
-    @node.input(delivery_profile="ordered")
-    def events_from_browser(self) -> None:
-        """Maps the page published."""
-
-    @node.output(catalog=BinaryEntry(mode="snapshot", mime="application/msgpack"))
-    def data_to_browser(self) -> None:
-        """`{"sent_ns": <monotonic now>}`, every `frames_between_data_messages` frames."""
+    video_from_browser = Input(
+        Image, delivery="ordered", description="Frames from the browser under test"
+    )
+    audio_from_browser = Input(
+        Channels, delivery="ordered", description="Audio from the browser under test"
+    )
+    events_from_browser = Input(Records, delivery="ordered", description="Maps the page published")
+    data_to_browser = Output(
+        Records,
+        description='`{"sent_ns": <monotonic now>}`, every `frames_between_data_messages` frames',
+    )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while (payload := ctx.inputs.read(AUDIO_INPUT_PORT, into=AudioBlock)) is not None:
-            self._measure_audio_block(payload)
-        while (payload := ctx.inputs.read(EVENTS_INPUT_PORT)) is not None:
-            self._measure_published_event(msgpack.unpack(payload))
-        while (frame := ctx.inputs.read(VIDEO_INPUT_PORT, into=VideoFrame)) is not None:
+        while (block := ctx.inputs.read(self.audio_from_browser)) is not None:
+            self._measure_audio_block(block)
+        while (event := ctx.inputs.read(self.events_from_browser)) is not None:
+            self._measure_published_event(event)
+        while (frame := ctx.inputs.read(self.video_from_browser)) is not None:
             self._measure_frame(ctx, frame)
 
-    def _measure_audio_block(self, block: AudioBlock) -> None:
+    def _measure_audio_block(self, block: ChannelsBlock) -> None:
         self._audio_blocks_read += 1
-        if block.interleaved_sample_bytes.count(0) == len(block.interleaved_sample_bytes):
+        if not numpy.from_dlpack(block).any():
             self._silent_audio_blocks += 1
         expected_ns = self._next_audio_sample_timestamp_ns
         if (
             expected_ns is not None
-            and abs(block.first_sample_timestamp_ns - expected_ns)
-            > AUDIO_TIMELINE_BREAK_TOLERANCE_NS
+            and abs(block.timestamp_ns - expected_ns) > AUDIO_TIMELINE_BREAK_TOLERANCE_NS
         ):
             self._audio_timeline_breaks += 1
         self._next_audio_sample_timestamp_ns = (
-            block.first_sample_timestamp_ns
-            + block.sample_count * 1_000_000_000 // block.sample_rate
+            block.timestamp_ns + block.samples_per_channel * 1_000_000_000 // block.sample_rate
         )
 
-    def _measure_published_event(self, event: Any) -> None:
+    def _measure_published_event(self, event: "dict[str, object]") -> None:
         self._events_read += 1
-        if not isinstance(event, dict):
-            return
-        if isinstance(event.get("data_painted"), int):
-            self._data_round_trip.add(monotonic_now_ns() - event["data_painted"])
+        data_painted_ns = event.get("data_painted")
+        if isinstance(data_painted_ns, int):
+            self._data_round_trip.add(monotonic_now_ns() - data_painted_ns)
         input_port_name = event.get("page_input_port_name")
         input_timestamp_ns = event.get("page_input_timestamp_ns")
         if isinstance(input_port_name, str) and isinstance(input_timestamp_ns, int):
@@ -132,7 +132,7 @@ class BrowserSourceOutputProbe:
                 input_port_name, DurationSamplesInOneReportingWindow()
             ).add(monotonic_now_ns() - input_timestamp_ns)
 
-    def _measure_frame(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> None:
+    def _measure_frame(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> None:
         read_ns = monotonic_now_ns()
         if self._previous_frame_timestamp_ns is not None:
             self._frame_interval.add(frame.timestamp_ns - self._previous_frame_timestamp_ns)
@@ -141,11 +141,11 @@ class BrowserSourceOutputProbe:
             self._window_first_frame_read_ns = read_ns
         self._frames_read += 1
         if self._frames_read % self._frames_between_data_messages == 0:
-            ctx.outputs.write(DATA_OUTPUT_PORT, msgpack.pack({"sent_ns": monotonic_now_ns()}))
+            ctx.outputs.write(self.data_to_browser, {"sent_ns": monotonic_now_ns()})
         if self._frames_read % self._frames_between_reports == 0:
             self._report(frame, read_ns)
 
-    def _report(self, frame: VideoFrame, read_ns: int) -> None:
+    def _report(self, frame: ImageFrame, read_ns: int) -> None:
         window_first_read_ns = self._window_first_frame_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
         frames_per_second = (self._frames_between_reports - 1) / window_seconds

@@ -8,9 +8,9 @@ from tatolab.microphone import MicrophoneSource
 microphone = stream_builder.add(MicrophoneSource, config={"device_id": None})
 ```
 
-`MicrophoneSource` publishes timestamped blocks of interleaved samples on
-`audio`, as messages `tatolab.stream.audio_block.AudioBlock` reads. Each block
-carries the device's instant of its first sample.
+`MicrophoneSource` publishes timestamped f32 Channels blocks on `audio`, at
+the device's rate and channel count. Each block carries the device's instant of
+its first sample.
 
 The node runs in its own helper process. Its native half opens the capture
 stream through the engine's audio device backend — PipeWire, else ALSA, on

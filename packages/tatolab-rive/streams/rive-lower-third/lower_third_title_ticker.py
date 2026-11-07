@@ -6,7 +6,7 @@
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextLimitedAccess, msgpack, node
+from tatolab.stream import Output, Records, RuntimeContextLimitedAccess, node
 
 
 @dataclasses.dataclass
@@ -28,9 +28,7 @@ class LowerThirdTitleTicker:
         self._entrance_trigger_paths = config.entrance_trigger_paths
         self._titles_sent = 0
 
-    @node.output()
-    def data(self) -> None:
-        """View-model data messages for a `RiveSource`."""
+    data = Output(Records, description="View-model data records for a `RiveSource`")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         self._titles_sent += 1
@@ -40,4 +38,4 @@ class LowerThirdTitleTicker:
         if self._titles_sent == 1:
             for entrance_trigger_path in self._entrance_trigger_paths:
                 view_model_values[entrance_trigger_path] = True
-        ctx.outputs.write("data", msgpack.pack(view_model_values))
+        ctx.outputs.write(self.data, view_model_values)

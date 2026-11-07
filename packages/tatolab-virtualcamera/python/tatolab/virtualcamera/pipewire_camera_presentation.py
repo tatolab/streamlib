@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from tatolab.stream import GpuSurfaceHandle, RuntimeContextLimitedAccess, VideoFrame
+from tatolab.stream import GpuSurfaceHandle, RuntimeContextLimitedAccess, ImageFrame
 
 from ._native import PipeWireCameraDoor
 from .v4l2_color_fields import yuyv_picture_color_of
@@ -35,7 +35,7 @@ class PipeWireCameraPresentation:
         return self._pipewire_camera_door.failure_that_ended_the_camera
 
     def offer_the_extent_of(
-        self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
     ) -> bool:
         """Offer the frame's extent where it differs from the one offered; `True` when it did."""
         extent = (frame.width, frame.height)
@@ -43,7 +43,7 @@ class PipeWireCameraPresentation:
             return False
         self._close_the_yuyv_pixel_buffer()
         self._offered_extent = None
-        self._pipewire_camera_door.offer_extent(frame.width, frame.height, frame.fps)
+        self._pipewire_camera_door.offer_extent(frame.width, frame.height)
         self._yuyv_pixel_buffer = ctx.gpu_limited_access.acquire_pixel_buffer(
             frame.width, frame.height, "yuyv"
         )
@@ -51,14 +51,14 @@ class PipeWireCameraPresentation:
         return True
 
     def present(
-        self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
     ) -> PipeWireCameraFramePresentation:
         """Convert the frame into the held YUYV pixel buffer and hand its rows to the camera."""
         yuyv_pixel_buffer = self._yuyv_pixel_buffer
         if yuyv_pixel_buffer is None:
             raise RuntimeError("no YUYV pixel buffer is held for the offered extent")
         ctx.gpu_limited_access.convert_surface_into(
-            frame.surface_id, yuyv_pixel_buffer, yuyv_picture_color_of(frame.color_info)
+            frame.surface_id, yuyv_pixel_buffer, yuyv_picture_color_of(frame.colour)
         )
         yuyv_pixel_buffer.lock(read_only=True)
         try:

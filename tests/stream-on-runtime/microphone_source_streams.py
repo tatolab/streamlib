@@ -6,7 +6,7 @@
 from tatolab.microphone import MicrophoneSource
 from tatolab.stream import ScaledStreamClock, StreamBuilder, stream
 
-from microphone_source_probes import AudioBlockProbe
+from microphone_source_probes import ChannelsBlockProbe
 
 UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 SLOW_MOTION_SCALE = 0.5
@@ -22,7 +22,7 @@ def microphone_into_an_audio_block_probe(stream_builder: StreamBuilder) -> None:
     """Added with no `config` at all — the spelling for a block that needs no
     configuration, and the one that reaches the backend's default device."""
     microphone = stream_builder.add(MicrophoneSource)
-    probe = stream_builder.add(AudioBlockProbe)
+    probe = stream_builder.add(ChannelsBlockProbe)
     stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
@@ -30,7 +30,7 @@ def microphone_into_an_audio_block_probe(stream_builder: StreamBuilder) -> None:
 def microphone_into_an_audio_block_probe_in_slow_motion(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(ScaledStreamClock(scale=SLOW_MOTION_SCALE))
     microphone = stream_builder.add(MicrophoneSource)
-    probe = stream_builder.add(AudioBlockProbe)
+    probe = stream_builder.add(ChannelsBlockProbe)
     stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 

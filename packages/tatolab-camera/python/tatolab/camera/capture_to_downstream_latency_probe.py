@@ -14,13 +14,10 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated
 
-from tatolab.stream import RuntimeContextLimitedAccess, VideoFrame, log, node
+from tatolab.stream import Image, ImageFrame, Input, RuntimeContextLimitedAccess, log, node
 from tatolab.stream.clock import monotonic_now_ns
 
 from ._duration_samples import DurationSamplesInOneReportingWindow
-
-VIDEO_INPUT_PORT = "video_from_upstream"
-
 
 @dataclasses.dataclass
 class CaptureToDownstreamLatencyProbeConfig:
@@ -43,13 +40,13 @@ class CaptureToDownstreamLatencyProbe:
         self._window_first_read_ns: "int | None" = None
         self._previous_capture_ns: "int | None" = None
 
-    @node.input(delivery_profile="ordered", description="Frames from the camera under test")
-    def video_from_upstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(
+        Image, delivery="ordered", description="Frames from the camera under test"
+    )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while (payload := ctx.inputs.read(VIDEO_INPUT_PORT)) is not None:
+        while (frame := ctx.inputs.read(self.video_from_upstream)) is not None:
             read_ns = monotonic_now_ns()
-            frame = VideoFrame.from_bytes(payload)
             self._capture_to_read.add(read_ns - frame.timestamp_ns)
             if self._previous_capture_ns is not None:
                 self._capture_interval.add(frame.timestamp_ns - self._previous_capture_ns)
@@ -60,7 +57,7 @@ class CaptureToDownstreamLatencyProbe:
             if self._frames_read % self._frames_between_reports == 0:
                 self._report(frame, read_ns)
 
-    def _report(self, frame: VideoFrame, read_ns: int) -> None:
+    def _report(self, frame: ImageFrame, read_ns: int) -> None:
         window_first_read_ns = self._window_first_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
         frames_per_second = (self._frames_between_reports - 1) / window_seconds

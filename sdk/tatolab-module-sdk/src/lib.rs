@@ -44,8 +44,9 @@ pub use module_host_audio_playback::{
     ModuleHostAudioPlaybackStreamRequest,
 };
 pub use module_host_payload_descriptor::{
-    MODULE_HOST_H273_UNSPECIFIED, ModuleHostImageFrame, ModuleHostImageFrameH273Colour,
-    ModuleHostPayloadDescriptorRefusal, codec_of_a_packets_unit, packets_unit_payload_descriptor,
+    MODULE_HOST_H273_UNSPECIFIED, ModuleHostChannelsBlock, ModuleHostChannelsBlockSampleType,
+    ModuleHostImageFrame, ModuleHostImageFrameH273Colour, ModuleHostPayloadDescriptorRefusal,
+    codec_of_a_packets_unit, packets_unit_payload_descriptor, records_message_payload_descriptor,
 };
 pub use module_host_shared_native_service::{
     ModuleHostSharedNativeServiceLease, ModuleHostSharedNativeServiceState,

@@ -8,8 +8,8 @@
 //! that fills each device buffer from it. Python never runs per block.
 
 mod audio_block_draining;
-mod audio_block_message;
 mod audio_samples_awaiting_playback_ring;
+mod channels_block_to_play;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

@@ -65,7 +65,7 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
 ):
     """The whole audio path, end to end: the module's node class → its native
     half capturing through the probed backend in its helper process → an
-    `AudioBlock` bag read as a numpy view by a Python processor in its own
+    Channels block read as a numpy view by a Python processor in its own
     processor interpreter.
 
     `stream_builder.add` with no `config` records `{}`, so this is also the
@@ -85,12 +85,12 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
         assert reading["channels"] >= 1
         assert reading["sample_count"] > 0
         assert reading["dtype"] == "f32"
-        assert reading["shape"] == [reading["sample_count"], reading["channels"]]
+        assert reading["shape"] == [reading["channels"], reading["sample_count"]]
         assert reading["numpy_type"] == "<f4", (
             "the wire is little-endian by contract, so the cast must not take "
             "the platform-native spelling"
         )
-        assert reading["samples_are_a_view_over_the_bag_bytes"], (
+        assert reading["samples_borrow_the_sample_with_no_copy"], (
             "reading a block must add no copy of its payload"
         )
         # Not an amplitude assertion — a real capture device may be recording

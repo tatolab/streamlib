@@ -15,14 +15,18 @@ import traceback
 from typing import Any, Callable, TypedDict
 
 from tatolab.stream import (
+    ColorInfo,
     ComputeKernel,
     GpuContextLimitedAccess,
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
-    msgpack,
     node,
 )
 
@@ -70,8 +74,7 @@ class SolidPremultipliedColourSourceConfig(TypedDict):
 class SolidPremultipliedColourSource:
     """Every frame is `premultiplied_rgba`, each channel 0-255, at `width`x`height`."""
 
-    @node.output()
-    def video(self) -> VideoFrame: ...
+    video = Output(Image, formats=("rgba8_unorm",))
 
     def __init__(self, config: SolidPremultipliedColourSourceConfig) -> None:
         self.width = config["width"]
@@ -97,18 +100,10 @@ class SolidPremultipliedColourSource:
             group_count=((self.width + 7) // 8, (self.height + 7) // 8, 1),
             push_constants=self.fill_push_constants,
         )
-        timestamp_ns = ctx.time
         ctx.outputs.write(
-            "video",
-            msgpack.pack(
-                {
-                    "surface_id": frame_texture.surface_id,
-                    "width": self.width,
-                    "height": self.height,
-                    "timestamp_ns": timestamp_ns,
-                }
-            ),
-            timestamp_ns=timestamp_ns,
+            self.video,
+            ImageFrameToWrite.of_texture(frame_texture, ColorInfo()),
+            timestamp_ns=ctx.time,
         )
 
 
@@ -116,8 +111,7 @@ class SolidPremultipliedColourSource:
 class NeverPublishingVideoSource:
     """Stands for a layer that is wired and has never sent a frame."""
 
-    @node.output()
-    def video(self) -> VideoFrame: ...
+    video = Output(Image)
 
 
 def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
@@ -136,22 +130,21 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
 class AlphaOverCompositeProbe:
     """Holds the newest composite and reports its pixels, or reports that none arrived."""
 
-    @node.input(delivery_profile="newest")
-    def composite_from_upstream(self) -> VideoFrame: ...
+    composite_from_upstream = Input(Image, delivery="newest")
 
     def __init__(self) -> None:
         self.reported = False
         self.started_at_ns: "int | None" = None
         self.first_composite_at_ns: "int | None" = None
         self.composites_received = 0
-        self.newest_composite: "VideoFrame | None" = None
+        self.newest_composite: "ImageFrame | None" = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
         if self.started_at_ns is None:
             self.started_at_ns = ctx.time
-        composite = ctx.inputs.read("composite_from_upstream", into=VideoFrame)
+        composite = ctx.inputs.read(self.composite_from_upstream)
         if composite is not None:
             self.composites_received += 1
             self.newest_composite = composite
