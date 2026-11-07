@@ -66,7 +66,8 @@ fn a_held_frame_pins_its_slot_and_a_cached_slot_does_not() {
     assert_eq!(share.outstanding_claims_on("pool-slot-held"), 0);
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         1,
         "the slot's import stays cached for its next frame"
@@ -124,7 +125,8 @@ fn a_retired_slot_leaves_the_cache_on_the_next_reply() {
     ));
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         1
     );
@@ -137,14 +139,16 @@ fn a_retired_slot_leaves_the_cache_on_the_next_reply() {
 
     assert!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .import_held_for("pool-slot-retired")
             .is_none(),
         "the retired slot must leave the cache on the connection's next reply"
     );
     assert!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .import_held_for("pool-slot-kept")
             .is_some()
     );
@@ -168,9 +172,8 @@ fn replacing_the_connection_empties_the_cache() {
     ));
 
     let replaced_connection = exchange_client
-        .surface_share_mach_connection
-        .lock()
-        .take()
+        .surface_share_connection
+        .take_the_open_connection()
         .expect("the first checkout opened a connection");
     drop(check_out_pixel_surface(
         &exchange_client,
@@ -179,14 +182,16 @@ fn replacing_the_connection_empties_the_cache() {
 
     assert!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .import_held_for("pool-slot-before")
             .is_none(),
         "a slot imported over the replaced connection must leave the cache"
     );
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         1
     );
@@ -298,7 +303,8 @@ fn the_service_going_away_releases_every_cached_slot() {
     let still_held_view = check_out_pixel_surface(&exchange_client, "pool-slot-orphaned#1");
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         1
     );
@@ -307,7 +313,8 @@ fn the_service_going_away_releases_every_cached_slot() {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while exchange_client
-        .pool_slot_imports_by_pool_slot
+        .surface_share_connection
+        .pool_slot_imports_by_pool_slot()
         .held_pool_slot_count()
         != 0
         && std::time::Instant::now() < deadline
@@ -316,7 +323,8 @@ fn the_service_going_away_releases_every_cached_slot() {
     }
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         0,
         "the per-slot cache must empty once the service is gone"

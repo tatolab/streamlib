@@ -197,6 +197,8 @@ trybuild = "1.0.121"
 objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+# The viewer's frame import, which the viewer test reads an Image frame through.
+streamlib-gpu-frame-import-client = { path = "../streamlib-gpu-frame-import-client", version = "0.68.34" }
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no
 # surface-adapter types.

@@ -27,7 +27,7 @@ use streamlib::sdk::iceoryx2::{
 
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::python_helper_process_pixel_exchange::HelperGpuPoolSlotFrameClaim;
+use crate::python_helper_process_pixel_exchange::GpuPoolSlotFrameClaimOfThisImporter;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 /// Where a surface lent to native code came from, which decides what giving
@@ -55,7 +55,7 @@ struct SurfaceLentToNativeCode {
     /// The claim that keeps a message's pooled frame from its producer's
     /// reuse while native code holds it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    claim_held_while_lent: Option<Arc<HelperGpuPoolSlotFrameClaim>>,
+    claim_held_while_lent: Option<Arc<GpuPoolSlotFrameClaimOfThisImporter>>,
 }
 
 /// One node's surfaces lent to native code, by the handle the table hands out,

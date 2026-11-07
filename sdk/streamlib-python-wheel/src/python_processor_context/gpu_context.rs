@@ -152,7 +152,7 @@ pub(crate) struct PooledGpuFrameClaimHeldByARead(
         dead_code,
         reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
     )]
-    Arc<crate::python_helper_process_pixel_exchange::HelperGpuPoolSlotFrameClaim>,
+    Arc<crate::python_helper_process_pixel_exchange::GpuPoolSlotFrameClaimOfThisImporter>,
 );
 
 #[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]

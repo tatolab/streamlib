@@ -124,7 +124,11 @@ fn a_pooled_frame_read_after_its_slot_set_crossed_makes_no_surface_share_request
 
     // Every later frame must make no request: a closed connection and a
     // removed socket fail any request this helper tries.
-    drop(exchange_client.surface_share_connection.lock().take());
+    drop(
+        exchange_client
+            .surface_share_connection
+            .take_the_open_connection(),
+    );
     std::fs::remove_file(&share.socket_path).expect("the socket is removed");
 
     for generation in 2..=4 {

@@ -538,27 +538,18 @@ mod tests {
         assert!(reader.read_the_latest_message().unwrap().is_none());
     }
 
-    /// A viewer imports the pool slot an Image message names from the
-    /// surface-sharing socket its hand-off names, as a helper process does,
-    /// and reads the very memory the engine wrote. Needs a Vulkan device that
+    /// A viewer holds the frame an Image message names through the
+    /// surface-sharing socket its hand-off names, claimed in its pool's claim
+    /// table until it drops, and reads the very memory the engine wrote. Needs a Vulkan device that
     /// exports OPAQUE_FD memory; skips where none comes up.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_viewer_imports_the_pool_slot_an_image_message_names_from_its_hand_off() {
-        use std::os::fd::{FromRawFd as _, OwnedFd};
-
-        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+        use streamlib_consumer_rhi::ConsumerVulkanDevice;
+        use streamlib_gpu_frame_import_client::GpuPoolFrameImporterOfAViewer;
         use streamlib_ipc_types::{
             DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
             GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
-        };
-        use streamlib_surface_client::{
-            CheckedOutPixelBufferMemory, CheckedOutSurface, GpuPoolClaimTableHandOver,
-            MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-            SURFACE_SHARE_GPU_POOL_FIELD, check_out_surface_on_surface_share,
-            connect_to_surface_share_socket, gpu_pool_uuid_wire_name,
-            published_frame_id_of_pool_slot, refusal_the_surface_share_service_answered,
-            release_check_out_on_surface_share, send_request_with_fds,
         };
 
         use crate::core::context::GpuPoolClaimTablesOfOnePool;
@@ -668,70 +659,31 @@ mod tests {
             ImageFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
         assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
 
-        let surface_share_connection =
-            connect_to_surface_share_socket(Path::new(&surface_share_address))
-                .expect("the viewer connects to the hand-off's surface-sharing socket");
-        let (hand_over_reply, claim_table_fds) = send_request_with_fds(
-            &surface_share_connection,
-            &serde_json::json!({
-                "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-                SURFACE_SHARE_GPU_POOL_FIELD: gpu_pool_uuid_wire_name(&frame.slot.pool),
-            }),
-            &[],
-            MAX_SCM_RIGHTS_FDS,
-        )
-        .expect("the service answers the pool's claim table");
-        // SAFETY: each fd arrived over SCM_RIGHTS and is owned by nothing else.
-        drop(
-            claim_table_fds
-                .into_iter()
-                .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
-                .collect::<Vec<_>>(),
+        let importer = GpuPoolFrameImporterOfAViewer::new(surface_share_address);
+        let held = importer
+            .hold_the_frame(frame.slot)
+            .expect("the viewer holds the frame the message names");
+        assert!(row_lease.row().is_claimed());
+        let pool_slot = held.pool_slot();
+        assert_eq!((pool_slot.width(), pool_slot.height()), (WIDTH, HEIGHT));
+        assert!(
+            pool_slot.dma_buf_plane_fds().is_none(),
+            "an OPAQUE_FD export crosses as OPAQUE_FD memory"
         );
-        assert_eq!(
-            refusal_the_surface_share_service_answered(&hand_over_reply),
-            None,
-            "{hand_over_reply}"
-        );
-        let hand_over = GpuPoolClaimTableHandOver::from_reply(&hand_over_reply).unwrap();
-        let (_, pool_slot_key) = hand_over
-            .pool_slot_key_by_row
-            .iter()
-            .find(|(row, _)| *row == frame.slot.slot)
-            .expect("the hand-over names the frame's row");
-        let published_frame_id =
-            published_frame_id_of_pool_slot(pool_slot_key, frame.slot.generation);
-        let CheckedOutSurface::PixelBuffer(checked_out) =
-            check_out_surface_on_surface_share(&surface_share_connection, &published_frame_id)
-                .expect("the viewer checks the frame out")
-        else {
-            panic!("a pixel_buffer registration checks out as a pixel buffer");
-        };
-        let CheckedOutPixelBufferMemory::OpaqueFd {
-            memory_fd,
-            vk_memory_type_index,
-            exporting_device_uuid,
-        } = checked_out.memory
-        else {
-            panic!("an OPAQUE_FD export checks out as OPAQUE_FD memory");
-        };
         let viewer_device = Arc::new(
-            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(exporting_device_uuid)
-                .expect("the viewer opens the exporting device"),
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+                pool_slot
+                    .opaque_fd_exporting_device_uuid()
+                    .expect("OPAQUE_FD memory names its exporting device"),
+            )
+            .expect("the viewer opens the exporting device"),
         );
-        let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
-            &viewer_device,
-            memory_fd,
-            BYTE_SIZE,
-            vk_memory_type_index,
-        )
-        .expect("the viewer imports the slot's memory");
-        // SAFETY: the import maps BYTE_SIZE bytes while `imported` lives.
-        let pixels =
-            unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), BYTE_SIZE as usize) };
+        let pixels = pool_slot
+            .bytes_for_a_cpu_read(&viewer_device)
+            .expect("the viewer reads the slot's memory");
+        assert_eq!(pixels.len(), BYTE_SIZE as usize);
         assert!(pixels.iter().all(|byte| *byte == STAMP));
-        drop(imported);
-        release_check_out_on_surface_share(&surface_share_connection, &published_frame_id)
-            .expect("the viewer lets the frame go");
+        drop(held);
+        assert!(!row_lease.row().is_claimed());
     }
 }
