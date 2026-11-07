@@ -173,7 +173,7 @@ fn a_track_written_by_a_send_reaches_a_receive_through_the_relay_in_group_order(
         MoqTrackReceiveAsked {
             receive_node: "receive".into(),
             gateway_node: "receiving-gateway".into(),
-            broadcast: "studio".into(),
+            broadcast: "studio.hang".into(),
             track: "telemetry".into(),
             max_age: Duration::from_secs(2),
         },

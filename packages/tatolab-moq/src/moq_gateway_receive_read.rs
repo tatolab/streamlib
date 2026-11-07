@@ -14,37 +14,19 @@ use streamlib_relay_track_reader::{
 };
 
 use crate::moq_catalog::the_catalog_entry_of_the_track_named;
-use crate::moq_gateway_relay_settings::BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ;
 use crate::moq_node_ipc::{
     MoqNodeSlicePublisher, MoqReceivedContentSampleKind,
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
 };
 
-/// What a receive node asked its gateway to read.
+/// What a receive node asked its gateway to read, each name exactly as its
+/// publisher wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MoqTrackReceiveRequest {
     pub receive_node: String,
     pub broadcast: String,
     pub track: String,
     pub max_age: Duration,
-}
-
-impl MoqTrackReceiveRequest {
-    /// The broadcast's path at the relay: its name with hang's catalog suffix,
-    /// unless the name already carries it.
-    pub fn broadcast_path(&self) -> String {
-        if self
-            .broadcast
-            .ends_with(BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ)
-        {
-            self.broadcast.clone()
-        } else {
-            format!(
-                "{}{BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ}",
-                self.broadcast
-            )
-        }
-    }
 }
 
 /// The shared-memory end a read hands the receive node what it reads through.
@@ -97,11 +79,8 @@ pub async fn read_a_track_for_a_receive_node(
     request: MoqTrackReceiveRequest,
     mut content: MoqReceiveNodeContentSentByTheGateway,
 ) -> String {
-    let broadcast_path = request.broadcast_path();
-    let broadcast = match announced_broadcasts
-        .routed_broadcast(broadcast_path.as_str())
-        .await
-    {
+    let broadcast_path = request.broadcast.as_str();
+    let broadcast = match announced_broadcasts.routed_broadcast(broadcast_path).await {
         Ok(broadcast) => broadcast,
         Err(refusal) => return format!("the broadcast `{broadcast_path}` was refused: {refusal}"),
     };
@@ -211,25 +190,5 @@ async fn the_next_object_of(
     match group_being_read {
         Some(group) => group.read_frame().await,
         None => std::future::pending().await,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn a_request_for(broadcast: &str) -> MoqTrackReceiveRequest {
-        MoqTrackReceiveRequest {
-            receive_node: "receive".into(),
-            broadcast: broadcast.into(),
-            track: "video".into(),
-            max_age: Duration::from_millis(100),
-        }
-    }
-
-    #[test]
-    fn a_broadcast_is_read_with_hangs_suffix_once() {
-        assert_eq!(a_request_for("studio").broadcast_path(), "studio.hang");
-        assert_eq!(a_request_for("studio.hang").broadcast_path(), "studio.hang");
     }
 }

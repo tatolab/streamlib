@@ -9,7 +9,7 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 publish = false
 
-# `_native` is the module `tatolab.moq.processors` imports. It crosses the
+# `_native` is the module `tatolab.moq` imports. It crosses the
 # CPython ABI and, for the gateway's settings and the receive node's writes, the
 # module host table.
 [lib]
