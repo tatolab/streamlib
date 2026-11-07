@@ -37,7 +37,7 @@ PLAYED_BLOCKS_DEADLINE_SECONDS = 5.0
 BLOCKS_WRITTEN_PER_TEST = 5
 
 
-def silent_planar_f32_samples(channel_count: int, samples_per_channel: int) -> memoryview:
+def silent_planar_f32_samples(channel_count: int, samples_per_channel: int) -> "memoryview[float]":
     """A C-contiguous `[channel][sample]` float32 buffer of silence."""
     return memoryview(array.array("f", bytes(channel_count * samples_per_channel * 4))).cast(
         "B"
