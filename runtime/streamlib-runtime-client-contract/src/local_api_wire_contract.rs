@@ -399,6 +399,9 @@ pub struct OpenViewerToolResult {
     pub iceoryx2_domain_root: String,
     /// The port's channel: the iceoryx2 service whose reserved subscriber slot the viewer takes.
     pub channel: String,
+    /// Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
+    /// Linux, the surface-sharing Mach service's name on macOS.
+    pub surface_share_address: String,
 }
 
 /// The `close_viewer` tool's result.

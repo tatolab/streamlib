@@ -99,10 +99,13 @@ pub trait RuntimeOperations: Send + Sync {
     /// its own process. No node is added and the graph is not changed; the
     /// channel stays open until what this answers drops. Refused while the
     /// node does not run, and when its helper process cannot open the port.
+    /// On macOS, process `process_id_of_the_viewer` is admitted to the
+    /// surface-sharing service while the viewer stays open.
     fn open_a_viewer_of_an_output_port(
         &self,
         node_name: String,
         port_name: String,
+        process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
     // =========================================================================

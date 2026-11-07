@@ -642,10 +642,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         &self,
         node_name: String,
         port_name: String,
+        process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>> {
         self.in_this_streams_log_route(async move {
-            self.open_a_viewer_of_an_output_port_holding_its_channel(&node_name, &port_name)
-                .await
+            self.open_a_viewer_of_an_output_port_holding_its_channel(
+                &node_name,
+                &port_name,
+                process_id_of_the_viewer,
+            )
+            .await
         })
     }
 
