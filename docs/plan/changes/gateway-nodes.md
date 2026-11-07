@@ -107,15 +107,13 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   `track`, `max_age`, plus the family settings the strict-port-families change gave
   `RelayTrackSource` (`family`, and `codec` for Packets). Re-based stamps, losses counted in
   `lost_since_last_read`, `paced_by_real_time`.
-- **A reference edge in the graph.** A node's config value may be another node's reference.
-  The graph records it as `{"node": "<name>"}` in that config. The load checks that the named node
-  exists and is the expected type, and `graph` renders it beside the links. It carries no data and
-  is not a link: the step barrier, delivery profiles and link counters never see it (decision 1).
 - **`GraphInput` and `GraphOutput`** — the interface nodes (decision 4), each naming one port of
   one family; a stream's top-level Outputs are what Tato Studio displays, and a subgraph's are
   the ports the adding graph wires. They replace `expose` in the SDK and `exposed` in the graph.
-- **Variables** (decision 6) — `SetVariable` and `GetVariable` from `lightweight-node-kinds`, whose
-  node-reference case resolves to this change's reference edge.
+- **Variables and the reference edge** (decisions 1 and 6) are defined once, in
+  `lightweight-node-kinds` §Graph variables and reference edges, and built by its variables
+  ticket. This change uses them: a track names its gateway and a send node its track by
+  reference, and a stream holds a track as a graph variable.
 - **Runtime viewers.** The local API serves a viewer's read of any port of any node on the
   machine, by family (§Control plane). How the viewer reads the port is the OPEN this change
   settles in its preview ticket; see decision 5.
@@ -219,9 +217,10 @@ imports them, so a preview is zero-copy and never touches a relay. Settled in th
 
 ## Tickets (as few tracer bullets as the change needs)
 
-1. **`tatolab-moq` with the gateway, track, send and receive nodes**, the reference edge, the
-   interface nodes, and the gateway's `settings` input, proven by a rig stream that sends to and receives from a fixture
-   `moq-relay`. `RelayTrackSource` and the relay adapters leave the runtime.
+1. **`tatolab-moq` with the gateway, track, send and receive nodes**, the interface nodes, and
+   the gateway's `settings` input, proven by a rig stream that sends to and receives from a
+   fixture `moq-relay`. `RelayTrackSource` and the relay adapters leave the runtime. Waits on
+   `lightweight-node-kinds`' variables ticket, which waits on `strict-port-families` in full.
 2. **The automatic path is ripped out:** the publisher, exposure, `expose`, `expose_port`,
    `tatolab expose`, the local relay, the relay verbs and their records, and the preview page. The rigs and the stream-on-runtime suite
    move onto ticket 1's nodes. The scaffold loses its encoder.

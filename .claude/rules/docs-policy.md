@@ -49,9 +49,7 @@ paths:
   `narrowed`, `settled`, `superseded` and `retired by` are not tag words. An OPEN carries no
   SHIPPED token. A lesson inside a tag moves to `docs/learnings/` or is deleted.
 - **Rejection records that already have a form keep it:** the glossary's `_Avoid_` lists and
-  "Retired by" paragraphs, `docs/plan/changes/README.md`'s retired-without-shipping list, and the
-  placement-ban records that `.claude/rules/placement.md` and `check-no-in-process-placement`
-  pin, including that gate's exempt lines.
+  "Retired by" paragraphs and `docs/plan/changes/README.md`'s retired-without-shipping list.
 - **Never create a summary doc of what the code already shows.** If it's derivable from the tree,
   read the tree.
 - Edit markdown with Opus; show the evidence that drove the change in the PR / commit body.

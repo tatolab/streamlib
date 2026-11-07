@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes; unbuilt: the five port families, subgraphs, Input and Output nodes, variables, reference edges; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes, lightweight-node-kinds; unbuilt: the five port families, subgraphs, Input and Output nodes, variables, reference edges; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -1836,7 +1836,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   setter's source, or a node reference — a gateway node a track names, a track node a send node
   names — which it resolves to a reference edge (§Networking). A connection is held as a
   reference to its gateway node, which keeps the live session; it is never a record on a link.
-  Owner, 2026-11-06. [lightweight-node-kinds; gateway-nodes]
+  A variable that holds a port's output carries only the five families (a node reference is
+  not a family value); a decorator port has none, so variables are built
+  once the families have fully replaced the decorators, and the gateway and track nodes after
+  them. Owner, 2026-11-06. [lightweight-node-kinds, which defines variables and the reference
+  edge; gateway-nodes]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
 - **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether
@@ -1901,7 +1905,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2704, #2713; stream-identity-and-persistence — SHIPPED #2960,
   #2965]
 
-## Graphics (RHI / GPU) — SHIPPED
+## Graphics (RHI / GPU) — IN-FLIGHT (→ slang-shader-compiler)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
