@@ -5,8 +5,7 @@
 //! declarations and receive requests its nodes send it, writes each declared
 //! track's content to the broadcast and reads each requested track back.
 
-use std::collections::HashMap;
-use std::thread::JoinHandle;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use iceoryx2::port::listener::Listener;
@@ -24,12 +23,14 @@ use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqNodeSliceSubscriber, MoqTrackContentSampleKind,
     MoqTrackContentSentToTheGatewayHeader,
 };
+use crate::moq_node_thread::{MoqNodeThread, MoqNodeThreadStopSignal};
 
 /// How long a track or a receive request lives on after its node last sent it.
 pub const A_DECLARATION_EXPIRES_AFTER: Duration = Duration::from_secs(5);
 
-/// The longest the gateway sleeps between passes when nothing wakes it.
-const THE_GATEWAY_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(5);
+/// The longest the gateway waits between passes when nothing wakes it: how
+/// soon it sees new settings, a stop, and a declaration that expired.
+const THE_GATEWAY_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(20);
 
 /// How long after a read ends a fresh one starts for the same request.
 const A_READ_THAT_ENDED_STARTS_AGAIN_AFTER: Duration = Duration::from_secs(1);
@@ -43,8 +44,7 @@ pub type MoqGatewaySettingsSource = Box<dyn FnMut() -> Option<MoqGatewayRelaySet
 
 /// The gateway's running thread.
 pub struct MoqGatewayThread {
-    stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: MoqNodeThread,
 }
 
 impl MoqGatewayThread {
@@ -64,42 +64,15 @@ impl MoqGatewayThread {
                 what: format!("no async runtime builds for the gateway: {refusal}"),
             })?;
         let gateway = MoqGatewayPasses::open(ipc, gateway_node, settings_source, async_runtime)?;
-        let stop_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_requested_on_the_thread = std::sync::Arc::clone(&stop_requested);
-        let thread = std::thread::Builder::new()
-            .name("moq-gateway".into())
-            .spawn(move || gateway.run_until(&stop_requested_on_the_thread))
-            .map_err(|refusal| MoqModuleError::Relay {
-                what: format!("the gateway thread did not start: {refusal}"),
-            })?;
-        Ok(Self {
-            stop_requested,
-            thread: Some(thread),
-        })
+        let thread = MoqNodeThread::spawn("moq-gateway", move |stop_signal| {
+            gateway.run_until(stop_signal)
+        })?;
+        Ok(Self { thread })
     }
 
     /// Stop the thread and wait up to `timeout` for it; whether it ended.
     pub fn stop_and_join(&mut self, timeout: Duration) -> bool {
-        self.stop_requested
-            .store(true, std::sync::atomic::Ordering::Release);
-        let Some(thread) = self.thread.take() else {
-            return true;
-        };
-        let deadline = Instant::now() + timeout;
-        while !thread.is_finished() {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let _ = thread.join();
-        true
-    }
-}
-
-impl Drop for MoqGatewayThread {
-    fn drop(&mut self) {
-        self.stop_and_join(Duration::from_secs(2));
+        self.thread.stop_and_join(timeout)
     }
 }
 
@@ -112,6 +85,7 @@ struct DeclaredTrack {
     content: MoqNodeSliceSubscriber<MoqTrackContentSentToTheGatewayHeader>,
     next_sequence_number: Option<u64>,
     writer: Option<MoqGatewayTrackWriter>,
+    writer_refused_on_this_session: bool,
 }
 
 impl DeclaredTrack {
@@ -130,11 +104,25 @@ struct RequestedReceive {
     next_read_may_start_at: Instant,
 }
 
-impl Drop for RequestedReceive {
-    fn drop(&mut self) {
-        if let Some(reading) = self.reading.take() {
+impl RequestedReceive {
+    /// Whether a read still holds the receive node's content service, ended or
+    /// aborted reads included until their task is gone.
+    fn a_read_is_running(&self) -> bool {
+        self.reading
+            .as_ref()
+            .is_some_and(|reading| !reading.is_finished())
+    }
+
+    fn abort_the_read(&self) {
+        if let Some(reading) = &self.reading {
             reading.abort();
         }
+    }
+}
+
+impl Drop for RequestedReceive {
+    fn drop(&mut self) {
+        self.abort_the_read();
     }
 }
 
@@ -149,7 +137,9 @@ struct MoqGatewayPasses {
     session: Option<MoqGatewayRelaySession>,
     session_dialed_at: Instant,
     tracks: HashMap<String, DeclaredTrack>,
+    declarations_refused_for_a_track_name_held: HashSet<(String, String)>,
     receives: HashMap<String, RequestedReceive>,
+    the_catalog_may_have_changed: bool,
 }
 
 impl MoqGatewayPasses {
@@ -172,12 +162,14 @@ impl MoqGatewayPasses {
             session: None,
             session_dialed_at: Instant::now(),
             tracks: HashMap::new(),
+            declarations_refused_for_a_track_name_held: HashSet::new(),
             receives: HashMap::new(),
+            the_catalog_may_have_changed: false,
         })
     }
 
-    fn run_until(mut self, stop_requested: &std::sync::atomic::AtomicBool) {
-        while !stop_requested.load(std::sync::atomic::Ordering::Acquire) {
+    fn run_until(mut self, stop_signal: &MoqNodeThreadStopSignal) {
+        while !stop_signal.is_requested() {
             let now = Instant::now();
             self.take_the_newest_settings_and_redial_when_due(now);
             self.take_every_control_message(now);
@@ -223,13 +215,14 @@ impl MoqGatewayPasses {
 
     fn dial_afresh(&mut self, now: Instant) {
         for receive in self.receives.values_mut() {
-            if let Some(reading) = receive.reading.take() {
-                reading.abort();
-            }
+            receive.abort_the_read();
+            receive.next_read_may_start_at = now;
         }
         for track in self.tracks.values_mut() {
             track.writer = None;
+            track.writer_refused_on_this_session = false;
         }
+        self.the_catalog_may_have_changed = true;
         self.session = None;
         self.session_dialed_at = now;
         let Some(settings) = &self.settings else {
@@ -279,9 +272,32 @@ impl MoqGatewayPasses {
                 if let Some(declared) = self.tracks.get_mut(&track_node)
                     && declared.track == track
                 {
-                    declared.catalog_entry_declared = catalog_entry;
+                    if declared.catalog_entry_declared != catalog_entry {
+                        declared.catalog_entry_declared = catalog_entry;
+                        self.the_catalog_may_have_changed = true;
+                    }
                     declared.last_declared_at = now;
                     return;
+                }
+                if let Some((holder, _)) = self
+                    .tracks
+                    .iter()
+                    .find(|(holder, declared)| **holder != track_node && declared.track == track)
+                {
+                    if self
+                        .declarations_refused_for_a_track_name_held
+                        .insert((track_node.clone(), track.clone()))
+                    {
+                        tracing::warn!(
+                            "MoqGateway `{}`: track node `{track_node}` declares `{track}`, \
+                             which track node `{holder}` holds; it is refused",
+                            self.gateway_node
+                        );
+                    }
+                    return;
+                }
+                if self.tracks.remove(&track_node).is_some() {
+                    self.the_catalog_may_have_changed = true;
                 }
                 let content = match self.ipc.track_content_subscriber(&track_node) {
                     Ok(content) => content,
@@ -306,8 +322,10 @@ impl MoqGatewayPasses {
                         content,
                         next_sequence_number: None,
                         writer: None,
+                        writer_refused_on_this_session: false,
                     },
                 );
+                self.the_catalog_may_have_changed = true;
             }
             MoqGatewayControlMessage::TrackReceiveRequested {
                 receive_node,
@@ -327,12 +345,19 @@ impl MoqGatewayPasses {
                     requested.last_requested_at = now;
                     return;
                 }
+                let read_still_holding_the_content_service = self
+                    .receives
+                    .remove(&receive_node)
+                    .and_then(|mut replaced| {
+                        replaced.abort_the_read();
+                        replaced.reading.take()
+                    });
                 self.receives.insert(
                     receive_node,
                     RequestedReceive {
                         request,
                         last_requested_at: now,
-                        reading: None,
+                        reading: read_still_holding_the_content_service,
                         next_read_may_start_at: now,
                     },
                 );
@@ -344,11 +369,15 @@ impl MoqGatewayPasses {
         let session = self.session.as_ref();
         for (track_node, declared) in &mut self.tracks {
             if declared.writer.is_none()
+                && !declared.writer_refused_on_this_session
                 && let Some(session) = session
             {
                 match session.broadcast.create_track(&declared.track) {
                     Ok(track) => declared.writer = Some(MoqGatewayTrackWriter::new(track)),
-                    Err(refusal) => tracing::warn!("MoqGateway: `{track_node}`: {refusal}"),
+                    Err(refusal) => {
+                        declared.writer_refused_on_this_session = true;
+                        tracing::warn!("MoqGateway: `{track_node}`: {refusal}");
+                    }
                 }
             }
             loop {
@@ -368,11 +397,15 @@ impl MoqGatewayPasses {
                     .is_some_and(|expected| header.sequence_number != expected);
                 declared.next_sequence_number = Some(header.sequence_number + 1);
                 if header.kind == MoqTrackContentSampleKind::UpstreamCatalogEntry as u32 {
-                    declared.catalog_entry_upstream = if sample.payload().is_empty() {
+                    let catalog_entry_upstream = if sample.payload().is_empty() {
                         None
                     } else {
                         serde_json::from_slice(sample.payload()).ok()
                     };
+                    if declared.catalog_entry_upstream != catalog_entry_upstream {
+                        declared.catalog_entry_upstream = catalog_entry_upstream;
+                        self.the_catalog_may_have_changed = true;
+                    }
                     continue;
                 }
                 let Some(writer) = &mut declared.writer else {
@@ -391,8 +424,13 @@ impl MoqGatewayPasses {
     }
 
     fn expire_what_was_not_heard_from_since(&mut self, now: Instant) {
+        let tracks_before = self.tracks.len();
         self.tracks
             .retain(|_, declared| now < declared.last_declared_at + A_DECLARATION_EXPIRES_AFTER);
+        if self.tracks.len() != tracks_before {
+            self.the_catalog_may_have_changed = true;
+            self.declarations_refused_for_a_track_name_held.clear();
+        }
         self.receives
             .retain(|_, requested| now < requested.last_requested_at + A_DECLARATION_EXPIRES_AFTER);
     }
@@ -401,12 +439,13 @@ impl MoqGatewayPasses {
         let Some(session) = &mut self.session else {
             return;
         };
-        let catalog = the_catalog_merged_from_the_entries_of(
-            self.tracks
-                .values()
-                .filter_map(|declared| Some((declared.track.as_str(), declared.catalog_entry()?))),
-        );
-        session.broadcast.publish_the_catalog(&catalog);
+        if std::mem::take(&mut self.the_catalog_may_have_changed) {
+            let catalog =
+                the_catalog_merged_from_the_entries_of(self.tracks.values().filter_map(
+                    |declared| Some((declared.track.as_str(), declared.catalog_entry()?)),
+                ));
+            session.broadcast.publish_the_catalog(&catalog);
+        }
         if let Some(every) = session.dialed.catalog_rewritten_whole_every {
             session
                 .broadcast
@@ -419,12 +458,7 @@ impl MoqGatewayPasses {
             return;
         };
         for (receive_node, requested) in &mut self.receives {
-            if requested
-                .reading
-                .as_ref()
-                .is_some_and(|reading| !reading.is_finished())
-                || now < requested.next_read_may_start_at
-            {
+            if requested.a_read_is_running() || now < requested.next_read_may_start_at {
                 continue;
             }
             requested.next_read_may_start_at = now + A_READ_THAT_ENDED_STARTS_AGAIN_AFTER;

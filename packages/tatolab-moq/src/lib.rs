@@ -10,6 +10,7 @@ pub mod moq_gateway_receive_read;
 pub mod moq_gateway_relay_session;
 pub mod moq_gateway_relay_settings;
 pub mod moq_node_ipc;
+pub mod moq_node_thread;
 mod moq_python_bindings;
 pub mod moq_track_receive;
 pub mod moq_track_send;

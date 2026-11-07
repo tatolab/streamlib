@@ -4,7 +4,6 @@
 //! A track node's declaration on its gateway, and a send node's writes to the
 //! track it names.
 
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use iceoryx2::port::notifier::Notifier;
@@ -16,6 +15,7 @@ use crate::moq_node_ipc::{
     MoqTrackContentSampleKind, MoqTrackContentSentToTheGatewayHeader, MoqTrackDescription,
     publish_slice,
 };
+use crate::moq_node_thread::MoqNodeThread;
 
 /// How often a running track node declares its track again.
 pub const A_TRACK_IS_DECLARED_AGAIN_EVERY: Duration = Duration::from_secs(1);
@@ -32,8 +32,7 @@ pub struct MoqTrackDeclared {
 
 /// The track node's running declaration thread.
 pub struct MoqTrackDeclarationThread {
-    stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: MoqNodeThread,
 }
 
 impl MoqTrackDeclarationThread {
@@ -54,51 +53,28 @@ impl MoqTrackDeclarationThread {
             catalog_entry: declared.catalog_entry.clone(),
         })
         .map_err(refused_serialization)?;
-        let stop_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_requested_on_the_thread = std::sync::Arc::clone(&stop_requested);
-        let thread = std::thread::Builder::new()
-            .name("moq-track-declaration".into())
-            .spawn(move || {
-                let _held_while_the_track_is_declared = (ipc, description);
-                let mut declared_at: Option<Instant> = None;
-                while !stop_requested_on_the_thread.load(std::sync::atomic::Ordering::Acquire) {
-                    let now = Instant::now();
-                    if declared_at.is_none_or(|at| now >= at + A_TRACK_IS_DECLARED_AGAIN_EVERY) {
-                        match publish_slice(&control, (), &declaration) {
-                            Ok(()) => {
-                                let _ = gateway_wake.notify();
-                            }
-                            Err(refusal) => {
-                                tracing::debug!("MoqTrack: the declaration was not sent: {refusal}")
-                            }
-                        }
-                        declared_at = Some(now);
+        let thread = MoqNodeThread::spawn("moq-track-declaration", move |stop_signal| {
+            let _held_while_the_track_is_declared = (ipc, description);
+            loop {
+                match publish_slice(&control, (), &declaration) {
+                    Ok(()) => {
+                        let _ = gateway_wake.notify();
                     }
-                    std::thread::sleep(Duration::from_millis(50));
+                    Err(refusal) => {
+                        tracing::debug!("MoqTrack: the declaration was not sent: {refusal}")
+                    }
                 }
-            })
-            .map_err(|refusal| MoqModuleError::Relay {
-                what: format!("the track declaration thread did not start: {refusal}"),
-            })?;
-        Ok(Self {
-            stop_requested,
-            thread: Some(thread),
-        })
+                if stop_signal.wait_for_a_stop_up_to(A_TRACK_IS_DECLARED_AGAIN_EVERY) {
+                    return;
+                }
+            }
+        })?;
+        Ok(Self { thread })
     }
 
     /// Stop declaring the track and wait for the thread.
     pub fn stop_and_join(&mut self) {
-        self.stop_requested
-            .store(true, std::sync::atomic::Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-impl Drop for MoqTrackDeclarationThread {
-    fn drop(&mut self) {
-        self.stop_and_join();
+        self.thread.stop_and_join(Duration::from_secs(2));
     }
 }
 
@@ -116,7 +92,7 @@ pub struct MoqTrackSendPublisher {
     content: MoqNodeSlicePublisher<MoqTrackContentSentToTheGatewayHeader>,
     gateway_wake: Option<Notifier<ipc_threadsafe::Service>>,
     sequence_number: u64,
-    upstream_catalog_entry_sent: Option<Option<serde_json::Value>>,
+    upstream_catalog_entry_sent: Option<(Option<serde_json::Value>, Instant)>,
 }
 
 impl MoqTrackSendPublisher {
@@ -150,12 +126,17 @@ impl MoqTrackSendPublisher {
     }
 
     /// Hand the gateway the entry of the port feeding the send, `{"section",
-    /// "entry"}`, when it changed since the last one handed over.
+    /// "entry"}`, when it changed since the last one handed over, and again
+    /// every second for a gateway that was not yet reading the track.
     pub fn send_the_upstream_catalog_entry_when_it_changed(
         &mut self,
         section_and_entry: Option<serde_json::Value>,
     ) -> Result<()> {
-        if self.upstream_catalog_entry_sent.as_ref() == Some(&section_and_entry) {
+        let now = Instant::now();
+        if let Some((sent, sent_at)) = &self.upstream_catalog_entry_sent
+            && *sent == section_and_entry
+            && now < *sent_at + A_TRACK_IS_DECLARED_AGAIN_EVERY
+        {
             return Ok(());
         }
         let payload = section_and_entry
@@ -169,7 +150,7 @@ impl MoqTrackSendPublisher {
             false,
             0,
         )?;
-        self.upstream_catalog_entry_sent = Some(section_and_entry);
+        self.upstream_catalog_entry_sent = Some((section_and_entry, now));
         Ok(())
     }
 

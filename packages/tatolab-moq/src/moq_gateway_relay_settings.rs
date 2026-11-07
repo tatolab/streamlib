@@ -147,9 +147,18 @@ impl MoqGatewayRelaySettings {
             )));
         }
         let broadcast = required_string(settings, BROADCAST_KEY)?;
-        if broadcast.is_empty() || broadcast.contains('/') {
+        if broadcast.is_empty()
+            || broadcast == "."
+            || broadcast == ".."
+            || !broadcast.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || matches!(character, '-' | '.' | '_' | '~')
+            })
+        {
             return Err(refused(format!(
-                "`broadcast` is `{broadcast}`; it is one non-empty name with no `/`"
+                "`broadcast` is `{broadcast}`; it is one name of lowercase `a-z 0-9 - . _ ~`, \
+                 as the gateway's config casts it"
             )));
         }
         let relay = match kind.as_str() {
@@ -475,13 +484,22 @@ mod tests {
     }
 
     #[test]
-    fn a_broadcast_naming_a_path_and_a_url_that_does_not_parse_are_refused() {
+    fn a_broadcast_naming_a_path_or_not_cast_and_a_url_that_does_not_parse_are_refused() {
         let refusal = settings(json!({
             "kind": "moq-relay", "relay_url": "http://127.0.0.1:4443", "broadcast": "a/b",
         }))
         .unwrap_err()
         .to_string();
         assert!(refusal.contains("`broadcast` is `a/b`"), "{refusal}");
+        let refusal = settings(json!({
+            "kind": "moq-relay", "relay_url": "http://127.0.0.1:4443", "broadcast": "Studio A",
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refusal.contains("as the gateway's config casts it"),
+            "{refusal}"
+        );
         let refusal = settings(json!({
             "kind": "moq-relay", "relay_url": "not a url ?jwt=secret", "broadcast": "desk",
         }))

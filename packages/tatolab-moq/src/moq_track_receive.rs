@@ -5,7 +5,6 @@
 //! writes what the gateway reads onto the node's `content` output, each object
 //! re-based onto the stream's clock.
 
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::error::{MoqModuleError, Result};
@@ -14,9 +13,14 @@ use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqReceivedContentSampleKind,
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
 };
+use crate::moq_node_thread::MoqNodeThread;
 
 /// How often a running receive node asks its gateway for its track again.
 pub const A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY: Duration = Duration::from_secs(1);
+
+/// The longest the receive waits for its gateway's wake before it checks for a
+/// stop and whether its request is due again.
+const THE_RECEIVE_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(50);
 
 /// The family a receive node's `content` output carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,8 +55,7 @@ pub struct MoqTrackReceiveAsked {
 
 /// The receive node's running thread.
 pub struct MoqTrackReceiveThread {
-    stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: MoqNodeThread,
 }
 
 impl MoqTrackReceiveThread {
@@ -75,81 +78,48 @@ impl MoqTrackReceiveThread {
         .map_err(|refusal| MoqModuleError::Refused {
             what: format!("the receive request does not serialize: {refusal}"),
         })?;
-        let stop_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_requested_on_the_thread = std::sync::Arc::clone(&stop_requested);
-        let thread = std::thread::Builder::new()
-            .name("moq-track-receive".into())
-            .spawn(move || {
-                let _ipc_held_while_the_thread_runs = ipc;
-                let mut writing = MoqReceivedContentWriting::default();
-                let mut request_last_sent_at: Option<Instant> = None;
-                while !stop_requested_on_the_thread.load(std::sync::atomic::Ordering::Acquire) {
-                    let now = Instant::now();
-                    if request_last_sent_at.is_none_or(|sent_at| {
-                        now >= sent_at + A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY
-                    }) {
-                        match publish_slice(&control, (), &request) {
-                            Ok(()) => {
-                                let _ = gateway_wake.notify();
-                            }
-                            Err(refusal) => {
-                                tracing::debug!(
-                                    "MoqTrackReceive: the request was not sent: {refusal}"
-                                )
-                            }
+        let thread = MoqNodeThread::spawn("moq-track-receive", move |stop_signal| {
+            let _ipc_held_while_the_thread_runs = ipc;
+            let mut writing = MoqReceivedContentWriting::default();
+            let mut request_last_sent_at: Option<Instant> = None;
+            while !stop_signal.is_requested() {
+                let now = Instant::now();
+                if request_last_sent_at
+                    .is_none_or(|sent_at| now >= sent_at + A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY)
+                {
+                    match publish_slice(&control, (), &request) {
+                        Ok(()) => {
+                            let _ = gateway_wake.notify();
                         }
-                        request_last_sent_at = Some(now);
-                    }
-                    loop {
-                        match content.receive() {
-                            Ok(Some(sample)) => writing.write_the_sample(
-                                *sample.user_header(),
-                                sample.payload(),
-                                output.as_mut(),
-                            ),
-                            Ok(None) => break,
-                            Err(refusal) => {
-                                tracing::debug!(
-                                    "MoqTrackReceive: content did not read: {refusal:?}"
-                                );
-                                break;
-                            }
+                        Err(refusal) => {
+                            tracing::debug!("MoqTrackReceive: the request was not sent: {refusal}")
                         }
                     }
-                    let _ = wake.timed_wait(|_| {}, Duration::from_millis(50));
+                    request_last_sent_at = Some(now);
                 }
-            })
-            .map_err(|refusal| MoqModuleError::Relay {
-                what: format!("the receive thread did not start: {refusal}"),
-            })?;
-        Ok(Self {
-            stop_requested,
-            thread: Some(thread),
-        })
+                loop {
+                    match content.receive() {
+                        Ok(Some(sample)) => writing.write_the_sample(
+                            *sample.user_header(),
+                            sample.payload(),
+                            output.as_mut(),
+                        ),
+                        Ok(None) => break,
+                        Err(refusal) => {
+                            tracing::debug!("MoqTrackReceive: content did not read: {refusal:?}");
+                            break;
+                        }
+                    }
+                }
+                let _ = wake.timed_wait(|_| {}, THE_RECEIVE_WAKES_AT_LEAST_EVERY);
+            }
+        })?;
+        Ok(Self { thread })
     }
 
     /// Stop the thread and wait up to `timeout` for it; whether it ended.
     pub fn stop_and_join(&mut self, timeout: Duration) -> bool {
-        self.stop_requested
-            .store(true, std::sync::atomic::Ordering::Release);
-        let Some(thread) = self.thread.take() else {
-            return true;
-        };
-        let deadline = Instant::now() + timeout;
-        while !thread.is_finished() {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let _ = thread.join();
-        true
-    }
-}
-
-impl Drop for MoqTrackReceiveThread {
-    fn drop(&mut self) {
-        self.stop_and_join(Duration::from_secs(2));
+        self.thread.stop_and_join(timeout)
     }
 }
 
