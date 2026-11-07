@@ -23,6 +23,7 @@ use crate::core::graph::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
     node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
     refuse_a_reference_to_a_node_of_the_wrong_type,
+    refuse_a_second_referrer_of_a_node_that_takes_one,
 };
 use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph_variable_resolution::{
@@ -284,6 +285,7 @@ impl GraphSnapshot {
             }
         }
 
+        let mut references_of_every_node = Vec::new();
         for node in &self.nodes {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
@@ -309,8 +311,10 @@ impl GraphSnapshot {
                     &reference,
                     &referenced_node.processor_type,
                 )?;
+                references_of_every_node.push(reference);
             }
         }
+        refuse_a_second_referrer_of_a_node_that_takes_one(&references_of_every_node)?;
 
         let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
         for exposed in &self.exposed {
@@ -1248,6 +1252,7 @@ mod tests {
 
     const GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Gateway";
     const TRACK_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Track";
+    const SEND_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_reference_tests:Send";
 
     /// A stream that described a gateway type and a track type whose config
     /// key `gateway` takes a reference to a gateway.
@@ -1270,6 +1275,21 @@ mod tests {
                             {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
                             {"type": "string"}
                         ]}
+                    }
+                })),
+            ),
+            (
+                "Send",
+                SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "track": {
+                            streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {
+                                "node_type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                                streamlib_processor_schema::NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
+                            }
+                        }
                     }
                 })),
             ),
@@ -1321,6 +1341,39 @@ mod tests {
         assert_eq!(
             reread.nodes[2].config["gateway"],
             serde_json::json!({"node": "cloudflare"})
+        );
+    }
+
+    #[test]
+    fn a_second_node_naming_a_node_under_a_key_taking_one_referrer_is_refused_naming_both() {
+        let graph_with_senders_naming = |second_send_track: &str| {
+            GraphSnapshot::from_graph_document(serde_json::json!({
+                "nodes": [
+                    {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                    {"name": "camera-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"gateway": {"node": "cloudflare"}}},
+                    {"name": "screen-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"gateway": {"node": "cloudflare"}}},
+                    {"name": "camera-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"track": {"node": "camera-track"}}},
+                    {"name": "second-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"track": {"node": second_send_track}}}
+                ]
+            }))
+            .unwrap()
+        };
+        let node_types = node_types_with_a_track_naming_its_gateway_by_reference();
+        graph_with_senders_naming("screen-track")
+            .validate(&node_types)
+            .expect("two senders on two tracks validate");
+        let refusal = graph_with_senders_naming("Camera Track")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("node `second-send`'s config key `track` names node `Camera Track`")
+                && refusal.contains("node `camera-send` already names under `track`"),
+            "{refusal}"
         );
     }
 

@@ -1586,7 +1586,7 @@ mod tests {
         });
 
         assert!(
-            msg.contains("f64") && msg.contains("f32") && msg.contains("i16"),
+            msg.contains("i16") && msg.contains("f32") && msg.contains("f64"),
             "the refusal must name the value and the legal ones; got {msg}"
         );
     }

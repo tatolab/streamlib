@@ -41,8 +41,9 @@ pub use exposed_name_cast::{
 };
 pub use node_reference_in_config::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, NODE_REFERENCE_SCHEMA_KEYWORD,
-    NodeReferenceInConfig, NodeReferenceToNodeType, NodeTypeANodeReferenceNames,
-    config_keys_holding_a_node_reference, node_name_a_config_value_references,
+    NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY, NodeReferenceInConfig,
+    NodeReferenceToNodeType, NodeTypeANodeReferenceNames, config_keys_holding_a_node_reference,
+    node_name_a_config_value_references,
 };
 pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,

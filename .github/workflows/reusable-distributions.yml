@@ -470,6 +470,18 @@ jobs:
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
+  build-tatolab-moq-distribution:
+    needs: build-tatolab-stream-distribution
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-moq
+      extension_distribution_name: tatolab-moq
+      extension_import_package_name: tatolab.moq
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+
   # The node side of a web page source: its wheel carries no browser, which is
   # the shared browser host the runtime unit ships.
   build-tatolab-browser-distribution:
@@ -582,6 +594,7 @@ jobs:
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
       - build-tatolab-opus-distribution
+      - build-tatolab-moq-distribution
       - build-tatolab-browser-distribution
       - build-tatolab-testpattern-distribution
       - build-tatolab-virtualcamera-distribution

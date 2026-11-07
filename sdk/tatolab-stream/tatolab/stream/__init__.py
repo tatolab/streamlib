@@ -19,6 +19,12 @@ runtime's own declarations, each with a `TypedDict` for its config.
 from . import catalog as catalog
 from . import clock as clock
 from . import log as log
+from ._exposed_name_cast import (
+    ExposedNameCastsToNothingError as ExposedNameCastsToNothingError,
+)
+from ._exposed_name_cast import (
+    cast_exposed_name_to_url_safe as cast_exposed_name_to_url_safe,
+)
 from ._built_in_nodes import ArrayToChannels as ArrayToChannels
 from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
 from ._built_in_nodes import ArrayToImage as ArrayToImage
@@ -96,6 +102,7 @@ from ._stream_graph_builder import (
 from ._stream_graph_builder import NodeReference as NodeReference
 from ._stream_graph_builder import (
     NodeReferenceToNodeType as NodeReferenceToNodeType,
+    SoleReferrerNodeReferenceToNodeType as SoleReferrerNodeReferenceToNodeType,
 )
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
@@ -197,6 +204,9 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "NodeReferenceToNodeType",
+    "ExposedNameCastsToNothingError",
+    "cast_exposed_name_to_url_safe",
+    "SoleReferrerNodeReferenceToNodeType",
     "OpaqueFdAllocationExport",
     "Output",
     "Packets",
