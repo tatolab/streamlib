@@ -45,7 +45,10 @@ tracing = "0.1.44"
 libc = "0.2"
 
 [dev-dependencies]
-moq-relay = { version = "=0.17.7", default-features = false, features = ["noq"] }
+moq-relay = { version = "=0.17.7", default-features = false, features = ["noq", "test-support"] }
+tempfile = "3"
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
 # third party would build one, with its own root, its own lockfile and its own

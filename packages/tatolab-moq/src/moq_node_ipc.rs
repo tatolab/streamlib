@@ -222,14 +222,15 @@ impl MoqNodeIpc {
     pub fn open_under_the_runtimes_domain_root(
         service_names: MoqStreamServiceNames,
     ) -> Result<Self> {
-        let domain_root = std::env::var_os(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE).ok_or_else(
-            || MoqModuleError::Ipc {
-                what: format!(
-                    "{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE} is not set, so this node runs \
+        let domain_root =
+            std::env::var_os(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE).ok_or_else(|| {
+                MoqModuleError::Ipc {
+                    what: format!(
+                        "{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE} is not set, so this node runs \
                      outside a runtime's helper process"
-                ),
-            },
-        )?;
+                    ),
+                }
+            })?;
         Self::open_under_the_domain_root(Path::new(&domain_root), service_names)
     }
 
@@ -281,7 +282,10 @@ impl MoqNodeIpc {
             })
     }
 
-    fn event_service(&self, name: &str) -> Result<EventServicePortFactory<ipc_threadsafe::Service>> {
+    fn event_service(
+        &self,
+        name: &str,
+    ) -> Result<EventServicePortFactory<ipc_threadsafe::Service>> {
         self.node
             .service_builder(&Self::service_name(name)?)
             .event()
@@ -367,18 +371,12 @@ impl MoqNodeIpc {
     }
 
     /// A publisher on `gateway`'s control service.
-    pub fn gateway_control_publisher(
-        &self,
-        gateway: &str,
-    ) -> Result<MoqNodeSlicePublisher<()>> {
+    pub fn gateway_control_publisher(&self, gateway: &str) -> Result<MoqNodeSlicePublisher<()>> {
         slice_publisher(&self.control_service(gateway)?, "gateway control")
     }
 
     /// `gateway`'s own subscriber on its control service.
-    pub fn gateway_control_subscriber(
-        &self,
-        gateway: &str,
-    ) -> Result<MoqNodeSliceSubscriber<()>> {
+    pub fn gateway_control_subscriber(&self, gateway: &str) -> Result<MoqNodeSliceSubscriber<()>> {
         slice_subscriber(
             &self.control_service(gateway)?,
             CONTROL_SUBSCRIBER_BUFFER_SAMPLES,
@@ -399,7 +397,11 @@ impl MoqNodeIpc {
         &self,
         track_node: &str,
     ) -> Result<MoqNodeSliceSubscriber<()>> {
-        slice_subscriber(&self.description_service(track_node)?, 1, "track description")
+        slice_subscriber(
+            &self.description_service(track_node)?,
+            1,
+            "track description",
+        )
     }
 
     /// A notifier that wakes the node listening on `wake_service`.
@@ -520,25 +522,52 @@ mod layout_regression_tests {
     fn the_header_a_send_node_writes_lays_out_as_its_readers_read_it() {
         assert_eq!(size_of::<MoqTrackContentSentToTheGatewayHeader>(), 32);
         assert_eq!(align_of::<MoqTrackContentSentToTheGatewayHeader>(), 8);
-        assert_eq!(offset_of!(MoqTrackContentSentToTheGatewayHeader, sequence_number), 0);
-        assert_eq!(offset_of!(MoqTrackContentSentToTheGatewayHeader, lost_since_last_read), 8);
-        assert_eq!(offset_of!(MoqTrackContentSentToTheGatewayHeader, timestamp_ns), 16);
+        assert_eq!(
+            offset_of!(MoqTrackContentSentToTheGatewayHeader, sequence_number),
+            0
+        );
+        assert_eq!(
+            offset_of!(MoqTrackContentSentToTheGatewayHeader, lost_since_last_read),
+            8
+        );
+        assert_eq!(
+            offset_of!(MoqTrackContentSentToTheGatewayHeader, timestamp_ns),
+            16
+        );
         assert_eq!(offset_of!(MoqTrackContentSentToTheGatewayHeader, kind), 24);
-        assert_eq!(offset_of!(MoqTrackContentSentToTheGatewayHeader, starts_group), 28);
+        assert_eq!(
+            offset_of!(MoqTrackContentSentToTheGatewayHeader, starts_group),
+            28
+        );
     }
 
     #[test]
     fn the_header_a_gateway_writes_lays_out_as_its_readers_read_it() {
         assert_eq!(size_of::<MoqTrackContentReceivedFromTheGatewayHeader>(), 32);
         assert_eq!(align_of::<MoqTrackContentReceivedFromTheGatewayHeader>(), 8);
-        assert_eq!(offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, sequence_number), 0);
-        assert_eq!(offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, groups_given_up), 8);
         assert_eq!(
-            offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, object_timestamp_ns),
+            offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, sequence_number),
+            0
+        );
+        assert_eq!(
+            offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, groups_given_up),
+            8
+        );
+        assert_eq!(
+            offset_of!(
+                MoqTrackContentReceivedFromTheGatewayHeader,
+                object_timestamp_ns
+            ),
             16
         );
-        assert_eq!(offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, kind), 24);
-        assert_eq!(offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, starts_group), 28);
+        assert_eq!(
+            offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, kind),
+            24
+        );
+        assert_eq!(
+            offset_of!(MoqTrackContentReceivedFromTheGatewayHeader, starts_group),
+            28
+        );
     }
 
     #[test]
@@ -570,6 +599,10 @@ mod layout_regression_tests {
             serde_json::from_slice::<MoqGatewayControlMessage>(&written).unwrap(),
             declared
         );
-        assert!(String::from_utf8(written).unwrap().contains("\"message\":\"track_declared\""));
+        assert!(
+            String::from_utf8(written)
+                .unwrap()
+                .contains("\"message\":\"track_declared\"")
+        );
     }
 }

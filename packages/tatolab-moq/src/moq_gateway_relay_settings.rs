@@ -164,7 +164,9 @@ impl MoqGatewayRelaySettings {
                 MoqGatewayRelay::Cloudflare { relay_url }
             }
             _ => {
-                let project_id = required_string(settings, PROJECT_ID_KEY)?.trim().to_string();
+                let project_id = required_string(settings, PROJECT_ID_KEY)?
+                    .trim()
+                    .to_string();
                 if project_id.is_empty() || project_id.contains('/') {
                     return Err(refused(format!(
                         "`project_id` `{project_id}` is not a moq.pro project id: one path \
@@ -261,7 +263,9 @@ fn optional_string(settings: &Map<String, Value>, key: &str) -> Result<Option<St
     match settings.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(other) => Err(refused(format!("`{key}` holds {other}, and it takes a string"))),
+        Some(other) => Err(refused(format!(
+            "`{key}` holds {other}, and it takes a string"
+        ))),
     }
 }
 
@@ -273,9 +277,8 @@ fn required_string(settings: &Map<String, Value>, key: &str) -> Result<String> {
 /// may ride it.
 fn relay_url_of(settings: &Map<String, Value>) -> Result<Url> {
     let relay_url = required_string(settings, RELAY_URL_KEY)?;
-    Url::parse(relay_url.trim()).map_err(|unparsed| {
-        refused(format!("`relay_url` is not a URL ({unparsed})"))
-    })
+    Url::parse(relay_url.trim())
+        .map_err(|unparsed| refused(format!("`relay_url` is not a URL ({unparsed})")))
 }
 
 fn refuse_a_cloudflare_url_carrying_no_token(relay_url: &Url) -> Result<()> {
@@ -352,7 +355,9 @@ impl MoqProProjectSigningKey {
     ) -> Result<String> {
         let pattern = |pattern: &str| {
             pattern.parse::<Pattern>().map_err(|_| {
-                refused(format!("`{pattern}` is not a broadcast pattern a token can grant"))
+                refused(format!(
+                    "`{pattern}` is not a broadcast pattern a token can grant"
+                ))
             })
         };
         let issued_at = SystemTime::now();
