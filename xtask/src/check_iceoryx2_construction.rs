@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans building an iceoryx2 node anywhere but the body of the engine's one
-//! node constructor in `iceoryx2/node.rs`, building a publish-subscribe service
-//! anywhere but that file, and reading iceoryx2's global configuration anywhere
-//! at all, that file included.
+//! Bans building an iceoryx2 node anywhere but the body of the one node
+//! constructor in `streamlib-ipc-types`'s engine-owned domain module, building a
+//! publish-subscribe service anywhere but that module and the engine's
+//! `iceoryx2/node.rs`, and reading iceoryx2's global configuration anywhere at
+//! all, those files included.
 //!
 //! A node built any other way reads iceoryx2's ambient configuration and lands
 //! in a different domain from every engine-owned node, where no data flows and
@@ -20,8 +21,11 @@ use std::path::{Path, PathBuf};
 /// The repo-relative roots holding Rust that can reach iceoryx2.
 const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters"];
 
-/// The one file holding the engine's node constructor.
-const ALLOWED_FILE: &str = "runtime/streamlib-engine/src/iceoryx2/node.rs";
+/// The one file holding the node constructor every engine-owned node is built by.
+const ALLOWED_FILE: &str = "runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs";
+
+/// The engine's channel wrapper, the other file that may build a publish-subscribe service.
+const ENGINE_CHANNEL_WRAPPER_FILE: &str = "runtime/streamlib-engine/src/iceoryx2/node.rs";
 
 /// The signature of the one function in [`ALLOWED_FILE`] whose body may build a node.
 const ALLOWED_CONSTRUCTOR_SIGNATURE: &str = "fn create_iceoryx2_node_in_domain(";
@@ -32,7 +36,8 @@ const NODE_BUILDER_CALL: &str = "NodeBuilder::new(";
 /// The call that reads iceoryx2's lookup-path configuration, allowed nowhere.
 const GLOBAL_CONFIG_CALL: &str = "Config::global_config(";
 
-/// The builder method that opens a publish-subscribe service, allowed only in [`ALLOWED_FILE`].
+/// The builder method that opens a publish-subscribe service, allowed only in
+/// [`ALLOWED_FILE`] and [`ENGINE_CHANNEL_WRAPPER_FILE`].
 ///
 /// Matched as a whole identifier rather than as `publish_subscribe::<`, because
 /// the identifier is the one token no spelling of the call can split: spacing
@@ -96,7 +101,8 @@ pub fn run(workspace_root: &Path) -> Result<()> {
                 }
                 RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper => {
                     format!(
-                        "a publish-subscribe service built outside {ALLOWED_FILE} lacks the \
+                        "a publish-subscribe service built outside {ALLOWED_FILE} and \
+                         {ENGINE_CHANNEL_WRAPPER_FILE} lacks the \
                          sequence-number user header every channel data service carries. Open \
                          the channel through `Iceoryx2Node::open_or_create_service` and take its \
                          ports from the returned service."
@@ -122,7 +128,8 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     tracing::info!(
         "check-iceoryx2-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
          node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)`, no publish-subscribe service \
-         built outside {ALLOWED_FILE} and no global configuration read",
+         built outside {ALLOWED_FILE} and {ENGINE_CHANNEL_WRAPPER_FILE} and no global \
+         configuration read",
         report.files_scanned,
     );
     Ok(())
@@ -155,6 +162,8 @@ pub fn scan(workspace_root: &Path) -> Result<CheckReport> {
 
 fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<Violation>) {
     let is_the_allowed_file = relative_path == Path::new(ALLOWED_FILE);
+    let may_build_a_publish_subscribe_service =
+        is_the_allowed_file || relative_path == Path::new(ENGINE_CHANNEL_WRAPPER_FILE);
     let allowed_constructor_body_lines = if is_the_allowed_file {
         line_indices_of_the_allowed_constructor_body(content)
     } else {
@@ -169,14 +178,16 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
             .is_some_and(|body_lines| body_lines.contains(&index));
         let builds_a_node_outside_the_allowed_constructor =
             !inside_the_allowed_constructor && line.contains(NODE_BUILDER_CALL);
-        let refused_construction =
-            if builds_a_node_outside_the_allowed_constructor || line.contains(GLOBAL_CONFIG_CALL) {
-                RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain
-            } else if !is_the_allowed_file && builds_a_publish_subscribe_service(line) {
-                RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
-            } else {
-                continue;
-            };
+        let refused_construction = if builds_a_node_outside_the_allowed_constructor
+            || line.contains(GLOBAL_CONFIG_CALL)
+        {
+            RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain
+        } else if !may_build_a_publish_subscribe_service && builds_a_publish_subscribe_service(line)
+        {
+            RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
+        } else {
+            continue;
+        };
         violations.push(Violation {
             path: relative_path.to_path_buf(),
             line_no: index + 1,
@@ -361,6 +372,20 @@ mod tests {
         ));
 
         assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn a_publish_subscribe_builder_in_the_engine_channel_wrapper_passes_but_a_node_builder_does_not()
+     {
+        let mut violations = Vec::new();
+        collect_violations(
+            Path::new(ENGINE_CHANNEL_WRAPPER_FILE),
+            "fn open() {\n    node.service_builder(&name).publish_subscribe::<[u8]>().open_or_create();\n    let node = NodeBuilder::new().create::<ipc::Service>();\n}\n",
+            &mut violations,
+        );
+
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].line_no, 3);
     }
 
     #[test]

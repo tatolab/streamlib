@@ -8,12 +8,12 @@ use std::path::Path;
 
 use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
-use iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError;
 
 use crate::engine_owned_iceoryx2_domain::{
-    ChannelDataServicePortFactory, ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
-    Iceoryx2DomainRefusal, channel_data_service_builder, create_iceoryx2_node_in_domain,
-    create_the_reserved_slot_subscriber_of, engine_owned_iceoryx2_prefix_for_this_user,
+    ChannelDataServiceOpenError, ChannelDataServicePortFactory, ChannelDataServiceSubscriber,
+    ChannelReservedSlotSubscribeError, Iceoryx2DomainRefusal, channel_data_service_builder,
+    create_iceoryx2_node_in_domain, create_the_reserved_slot_subscriber_of,
+    engine_owned_iceoryx2_prefix_for_this_user,
 };
 use crate::{
     BagsAGapInTheNumberingSaysWereLost, DataChannelPayloadDescriptor, DataChannelSampleUserHeader,
@@ -163,8 +163,8 @@ impl OutputPortViewerReader {
             match channel_data_service_builder(&iceoryx2_node, &service_name).open() {
                 Ok(channel_service) => channel_service,
                 Err(
-                    PublishSubscribeOpenError::DoesNotExist
-                    | PublishSubscribeOpenError::IsMarkedForDestruction,
+                    ChannelDataServiceOpenError::DoesNotExist
+                    | ChannelDataServiceOpenError::IsMarkedForDestruction,
                 ) => {
                     return Err(OutputPortViewerSubscribeRefusal::ChannelNotOpen(
                         channel_service_name.to_string(),

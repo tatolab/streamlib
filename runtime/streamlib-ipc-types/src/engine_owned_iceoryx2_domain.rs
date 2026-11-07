@@ -10,6 +10,7 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use iceoryx2::service::builder::publish_subscribe::Builder as PublishSubscribeServiceBuilder;
+pub use iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError as ChannelDataServiceOpenError;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
 use crate::{DataChannelPayloadCacheLine, DataChannelSampleUserHeader};
