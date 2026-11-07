@@ -32,7 +32,7 @@ default-filter = """
   | package(streamlib-relay-adapter-moqpro)
   | package(streamlib-relay-track-reader)
   | package(tatolab-module-sdk)
-  | (kind(lib) & (
+  | ((kind(lib) | kind(proc-macro)) & (
         package(streamlib-macros)
       | package(streamlib-processor-schema)
       | package(streamlib-ipc-types)

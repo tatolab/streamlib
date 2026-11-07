@@ -1581,7 +1581,7 @@ mod tests {
             input(
                 "audio",
                 delivery_profile = "ordered",
-                audio_window(sample_rate = 16_000, channels = 1, dtype = "f64", window_size = 512)
+                audio_window(sample_rate = 16_000, channels = 1, dtype = "i16", window_size = 512)
             ),
         });
 
