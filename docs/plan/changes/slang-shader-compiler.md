@@ -111,8 +111,10 @@ recorded here so the tickets need not re-derive them.
 - **A new project's first stream never breaks.** The scaffold's sample stream runs
   `packages/tatolab-testpattern`'s kernel and the scaffold's `HalftoneLensEffect`, so both move
   in the ticket that makes the constructors Slang-only: the testpattern kernel is rewritten in
-  Slang, and `HalftoneLensEffect` becomes a `@node.process` over a Slang compute kernel until
-  `@node.shader` exists.
+  Slang, and `HalftoneLensEffect` stays a process node over a Slang compute kernel until
+  `@node.shader` exists. It takes the process-node decorator the SDK has when this ticket lands;
+  `@node.process` reaches it with the rest of the engine tree in lightweight-node-kinds 1.1, so
+  neither change waits on the other.
 - The rest of consumers' GLSL (`examples/`) moves to Slang as consumer backlog.
 
 ## MODIFIED
