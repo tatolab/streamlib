@@ -1,21 +1,25 @@
 name: CI
 
 # What a pull request must prove before it merges: the code is formatted and
-# lint-clean, it builds and its unit tests pass. `main` and the merge queue also
-# prove a stream still runs end to end on the runtime. It builds nothing that ships; release.yml builds, checks
-# and publishes the distributables.
+# lint-clean and its unit tests pass. The merge queue and `main` also prove the
+# Apple path builds and a stream still runs end to end on the runtime. It builds
+# nothing that ships; release.yml builds, checks and publishes the distributables.
 #
 #   Lint                       formatting, clippy, the source gates, licences,
 #                              Python types
 #   Unit Test (Linux)          every Rust test suite, the hardware tests on a
-#                              software GPU (the lavapipe the runtime carries)
+#                              software GPU (the lavapipe the runtime carries);
+#                              skipped on a pull request that changes no path the
+#                              workspace's Rust build reads; the loom model,
+#                              doctests and test-root suites run off pull requests
 #   Integration test (Linux)   real streams on a real `tatolabd`: builds the
 #                              runtime binaries those tests drive (a test fixture,
 #                              never shipped), then the stream package, wheel and
-#                              end-to-end stream tests; `main` only
-#   Build (macOS)              the Apple path compiles and is lint-clean; its test
-#                              suites run on `main`
-#   Integration test (macOS)   the same end-to-end tests on macOS; `main` only
+#                              end-to-end stream tests; merge queue and `main`
+#   Build (macOS)              the Apple path compiles, is lint-clean and its test
+#                              suites pass; merge queue and `main`
+#   Integration test (macOS)   the same end-to-end tests on macOS; merge queue
+#                              and `main`
 #
 # A change that touches only prose or code CI never builds runs nothing. Caches
 # are saved by `main` alone and restored by pull requests. A failed job cancels
@@ -177,6 +181,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
 
+  # Whether a pull request touches anything the workspace's Rust tests build
+  # from. Consumer packages, the stream suite, the Python SDK and Python files
+  # are not; every other path is, and every non-pull-request event is.
+  changes-affecting-the-workspace-rust-build:
+    name: Changes affecting the workspace Rust build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      workspace_rust_build_affected: ${{ steps.classify.outputs.workspace_rust_build_affected }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: classify
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          paths_affecting_the_workspace_rust_build="$(
+            git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD \
+              | grep -Ev '^packages/[^/]+/' \
+              | grep -Ev '^(tests/stream-on-runtime|sdk/tatolab-stream)/' \
+              | grep -Ev '\.pyi?$' || true
+          )"
+          git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD | grep '^packages/test-fixtures/' \
+            && paths_affecting_the_workspace_rust_build="packages/test-fixtures"
+          if [ -n "$paths_affecting_the_workspace_rust_build" ]; then
+            echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "workspace_rust_build_affected=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # One test build: every test target of the packages CI tests,
   # `hardware-tests` included, compiled once and run on the Linux runtime
   # unit's bundled lavapipe rather than a GPU. `.config/nextest.toml` holds what
@@ -185,6 +226,8 @@ jobs:
   # fails the job.
   test-linux:
     name: Unit Test (Linux)
+    needs: changes-affecting-the-workspace-rust-build
+    if: needs.changes-affecting-the-workspace-rust-build.outputs.workspace_rust_build_affected == 'true'
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
@@ -318,20 +361,20 @@ jobs:
       # Its own target dir: `--cfg loom` rebuilds every dependency, and the
       # workspace build must not see that cfg.
       - name: GPU pool claim table loom model
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         env:
           RUSTFLAGS: --cfg loom
           CARGO_TARGET_DIR: target/loom
         run: cargo test --locked --release -p streamlib-ipc-types --test gpu_pool_claim_table_loom_model
 
       - name: Engine and media built-ins doctests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         run: >-
           cargo test --locked --doc -p streamlib-engine -p streamlib-media-builtins
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
 
       - name: Tests under a test machine root
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         env:
           MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_SELECTION: >-
             -p streamlib-runtime-client-contract -p streamlib-api-server -p tatolabd -p tatolab-cli
@@ -356,14 +399,19 @@ jobs:
 
       - name: Every hardware-test skip names what this machine lacks from the closed list
         if: ${{ !cancelled() }}
-        run: >-
-          python3 scripts/ci/check_hardware_test_skip_lines.py
-          --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX"
-          --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS"
-          --expected-device llvmpipe
-          target/nextest/ci/junit.xml
-          "$RUNNER_TEMP/junit-without-a-test-root.xml"
-          target/nextest/ci-machine-directories-under-a-test-root/junit.xml
+        run: |
+          junit_reports=(target/nextest/ci/junit.xml)
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            junit_reports+=(
+              "$RUNNER_TEMP/junit-without-a-test-root.xml"
+              target/nextest/ci-machine-directories-under-a-test-root/junit.xml
+            )
+          fi
+          python3 scripts/ci/check_hardware_test_skip_lines.py \
+            --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX" \
+            --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS" \
+            --expected-device llvmpipe \
+            "${junit_reports[@]}"
 
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
@@ -591,6 +639,7 @@ jobs:
   # paravirtual Metal device through MoltenVK.
   build-macos:
     name: Build (macOS)
+    if: github.event_name != 'pull_request'
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
