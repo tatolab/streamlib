@@ -496,7 +496,7 @@ struct OpenViewerToolArguments {
     #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
     port: String,
     #[schemars(
-        description = "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process while the viewer stays open; Linux admits whoever may open its socket."
+        description = "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket."
     )]
     #[serde(default)]
     viewer_process_id: Option<u32>,

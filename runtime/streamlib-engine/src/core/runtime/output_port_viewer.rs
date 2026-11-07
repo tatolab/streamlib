@@ -53,8 +53,61 @@ pub struct OutputPortViewerChannelHandOff {
     pub channel_service_name: String,
     /// Where the viewer imports an Image frame's surface, as a helper process
     /// does: the surface-sharing socket's path on Linux, the surface-sharing
-    /// Mach service's name on macOS.
-    pub surface_share_address: String,
+    /// Mach service's name on macOS. `None` on macOS when no viewer process
+    /// was admitted, which leaves the viewer nothing it may connect to.
+    pub surface_share_address: Option<String>,
+}
+
+/// What lets a viewer's process import an Image frame's surface while the
+/// viewer stays open.
+struct SurfaceShareAccessOfAViewer {
+    surface_share_address: Option<String>,
+    #[cfg(target_os = "macos")]
+    _admission_of_the_viewer_process:
+        Option<crate::apple::surface_share::SurfaceShareHelperProcessAdmission>,
+}
+
+impl SurfaceShareAccessOfAViewer {
+    /// The access process `process_id_of_the_viewer` gets: on Linux, the
+    /// socket its file permission already opens to this user; on macOS, the
+    /// Mach service once the process is admitted, refused unless it is a
+    /// running process of this user.
+    fn granted_to(
+        engine_resources: &super::runtime::EngineResourcesSharedByEveryStream,
+        process_id_of_the_viewer: Option<u32>,
+    ) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = process_id_of_the_viewer;
+            Ok(Self {
+                surface_share_address: Some(engine_resources.surface_share_address()),
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let Some(viewer_process_id) = process_id_of_the_viewer else {
+                return Ok(Self {
+                    surface_share_address: None,
+                    _admission_of_the_viewer_process: None,
+                });
+            };
+            let admission = crate::apple::surface_share::admit_a_viewer_process(
+                &engine_resources.surface_share_mach_service_rendezvous,
+                viewer_process_id,
+            )?;
+            Ok(Self {
+                surface_share_address: Some(engine_resources.surface_share_address()),
+                _admission_of_the_viewer_process: Some(admission),
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (engine_resources, process_id_of_the_viewer);
+            Ok(Self {
+                surface_share_address: None,
+            })
+        }
+    }
 }
 
 /// A viewer's read of one output port, held open by the runtime: the port's
@@ -62,9 +115,7 @@ pub struct OutputPortViewerChannelHandOff {
 pub struct OutputPortViewerHeldOpen {
     hand_off: OutputPortViewerChannelHandOff,
     source_side: SourceSideHeldOpenForAReaderOnTheReservedSlot,
-    #[cfg(target_os = "macos")]
-    _surface_share_admission_of_the_viewer_process:
-        Option<crate::apple::surface_share::SurfaceShareHelperProcessAdmission>,
+    _surface_share_access_of_the_viewer: SurfaceShareAccessOfAViewer,
 }
 
 impl std::fmt::Debug for OutputPortViewerHeldOpen {
@@ -96,26 +147,20 @@ impl LoadedStreamInThisRuntime {
     /// changed. Answers once the port's source has opened its end of the
     /// channel, and refused while the node does not run or when its helper
     /// process could not open the port. On macOS, process
-    /// `process_id_of_the_viewer` may connect to the surface-sharing service
-    /// while the viewer stays open.
+    /// `process_id_of_the_viewer` may open new connections to the
+    /// surface-sharing service while the viewer stays open, and is refused
+    /// unless it is a running process of this user.
     pub(crate) async fn open_a_viewer_of_an_output_port_holding_its_channel(
         &self,
         node_name: &str,
         port_name: &str,
         process_id_of_the_viewer: Option<u32>,
     ) -> Result<OutputPortViewerHeldOpen> {
-        let engine_resources = Arc::clone(self.engine_resources_shared_by_every_stream());
-        let surface_share_address = engine_resources.surface_share_address();
-        #[cfg(not(target_os = "macos"))]
-        let _ = process_id_of_the_viewer;
-        let iceoryx2_node = self
-            .engine_resources_shared_by_every_stream()
-            .iceoryx2_node
-            .clone();
-        let iceoryx2_domain_root = self
-            .engine_resources_shared_by_every_stream()
-            .runtime_directory
-            .iceoryx2_domain_root();
+        let engine_resources = self.engine_resources_shared_by_every_stream();
+        let surface_share_access_of_the_viewer =
+            SurfaceShareAccessOfAViewer::granted_to(engine_resources, process_id_of_the_viewer)?;
+        let iceoryx2_node = engine_resources.iceoryx2_node.clone();
+        let iceoryx2_domain_root = engine_resources.runtime_directory.iceoryx2_domain_root();
         let compiler = Arc::clone(&self.compiler);
         let stream_id = self.stream_id().to_string();
         let node_name = node_name.to_string();
@@ -145,17 +190,12 @@ impl LoadedStreamInThisRuntime {
                         port: port_cast,
                         iceoryx2_domain_root,
                         channel_service_name: source_side.channel_service_name.clone(),
-                        surface_share_address,
+                        surface_share_address: surface_share_access_of_the_viewer
+                            .surface_share_address
+                            .clone(),
                     },
                     source_side,
-                    #[cfg(target_os = "macos")]
-                    _surface_share_admission_of_the_viewer_process: process_id_of_the_viewer.map(
-                        |viewer_process_id| {
-                            engine_resources
-                                .surface_share_mach_service_rendezvous
-                                .admit_helper_process(viewer_process_id)
-                        },
-                    ),
+                    _surface_share_access_of_the_viewer: surface_share_access_of_the_viewer,
                 })
             }),
         )
@@ -582,8 +622,12 @@ mod tests {
 
         let viewer = camera.open_a_viewer("out1").unwrap();
         let hand_off = viewer.hand_off().clone();
+        let surface_share_address = hand_off
+            .surface_share_address
+            .clone()
+            .expect("Linux hands every viewer the surface-sharing socket");
         assert_eq!(
-            Path::new(&hand_off.surface_share_address),
+            Path::new(&surface_share_address),
             camera._runner.surface_socket_path()
         );
         let mut reader = OutputPortViewerReader::subscribe(
@@ -625,7 +669,7 @@ mod tests {
         assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
 
         let surface_share_connection =
-            connect_to_surface_share_socket(Path::new(&hand_off.surface_share_address))
+            connect_to_surface_share_socket(Path::new(&surface_share_address))
                 .expect("the viewer connects to the hand-off's surface-sharing socket");
         let (hand_over_reply, claim_table_fds) = send_request_with_fds(
             &surface_share_connection,

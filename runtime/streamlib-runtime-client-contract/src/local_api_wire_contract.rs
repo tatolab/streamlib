@@ -400,8 +400,10 @@ pub struct OpenViewerToolResult {
     /// The port's channel: the iceoryx2 service whose reserved subscriber slot the viewer takes.
     pub channel: String,
     /// Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
-    /// Linux, the surface-sharing Mach service's name on macOS.
-    pub surface_share_address: String,
+    /// Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
+    /// named no `viewer_process_id`, since the service admits only a named process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_share_address: Option<String>,
 }
 
 /// The `close_viewer` tool's result.
