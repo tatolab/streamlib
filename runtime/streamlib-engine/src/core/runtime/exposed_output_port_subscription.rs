@@ -20,7 +20,8 @@ use super::reserved_slot_forwarder::{
 };
 use super::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::compiler::compiler_ops::{
-    SourceSideHeldOpenForTheRuntimesPublisher, open_the_source_side_for_the_runtimes_publisher,
+    SourceSideHeldOpenForAReaderOnTheReservedSlot,
+    open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
@@ -243,14 +244,7 @@ fn subscribe_holding_the_source_side_open(
                 OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             )?;
             let (node, port_cast) =
-                the_output_port_named_on_this_graph(graph, &stream_id, node_name, port_name)?;
-            if !node.runs_its_processor() {
-                return Err(Error::Link(format!(
-                    "node `{}` of the stream `{stream_id}` is not running, so its port \
-                     `{port_cast}` publishes nothing yet",
-                    node.display_name,
-                )));
-            }
+                the_running_node_and_its_output_port(graph, &stream_id, node_name, port_name)?;
             let node_display_name = node.display_name.clone();
             let level_now = node
                 .get::<ExposedOutputPortsComponent>()
@@ -261,8 +255,11 @@ fn subscribe_holding_the_source_side_open(
                     ))
                 })?;
             let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
-            let source_side =
-                open_the_source_side_for_the_runtimes_publisher(graph, &source, &iceoryx2_node)?;
+            let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
+                graph,
+                &source,
+                &iceoryx2_node,
+            )?;
             Ok((node_display_name, port_cast, level_now, source_side))
         })?;
     let forwarder = start_reserved_slot_forwarder(
@@ -273,7 +270,7 @@ fn subscribe_holding_the_source_side_open(
             ring_depth: crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             items_to_forward_before_ending: None,
         },
-        ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),
+        LossTallyOfAReservedSlotReader::<UniquePublisherId>::default(),
     )?;
     Ok(ExposedOutputPortSubscription {
         forwarder,
@@ -283,6 +280,26 @@ fn subscribe_holding_the_source_side_open(
         node_name: node_display_name,
         port_name: port_cast,
     })
+}
+
+/// Output port `port_name` of node `node_name` and its cast name, refused
+/// while the node does not run, when nothing it writes reaches a reader.
+pub(super) fn the_running_node_and_its_output_port<'graph>(
+    graph: &'graph mut crate::core::graph::Graph,
+    stream_id: &str,
+    node_name: &str,
+    port_name: &str,
+) -> Result<(&'graph mut crate::core::graph::ProcessorNode, String)> {
+    let (node, port_cast) =
+        the_output_port_named_on_this_graph(graph, stream_id, node_name, port_name)?;
+    if !node.runs_its_processor() {
+        return Err(Error::Link(format!(
+            "node `{}` of the stream `{stream_id}` is not running, so its port \
+             `{port_cast}` writes nothing yet",
+            node.display_name,
+        )));
+    }
+    Ok((node, port_cast))
 }
 
 /// Whether the source of an exposed port has opened its end of the channel.
@@ -302,7 +319,7 @@ pub enum ExposedOutputPortSourceWiring {
 pub struct ExposedOutputPortSubscription {
     // Dropped first: the reader stops before the channel it reads is released.
     forwarder: ReservedSlotForwarder<MessageReadFromInputPort>,
-    source_side: SourceSideHeldOpenForTheRuntimesPublisher,
+    source_side: SourceSideHeldOpenForAReaderOnTheReservedSlot,
     level_now: LevelOfAnExposedOutputPortNow,
     stream_id: String,
     node_name: String,
@@ -360,7 +377,7 @@ impl ExposedOutputPortSubscription {
 
 /// What a source's answer about opening its end of the channel says, `None`
 /// for a source with nothing to answer.
-fn the_source_wiring_its_answer_says(
+pub(super) fn the_source_wiring_its_answer_says(
     wire_reply: Option<&OutOfProcessLinkWireReply>,
 ) -> ExposedOutputPortSourceWiring {
     let Some(wire_reply) = wire_reply else {
@@ -377,17 +394,17 @@ fn the_source_wiring_its_answer_says(
     }
 }
 
-/// An exposed port's forwarding: each bag's payload, stamp and group flag,
-/// with every message lost ahead of it — overwritten in the ring, unreadable,
-/// dropped into a full receiver, or declared lost upstream by its writer —
-/// told on the next message forwarded. A run is one publisher's unbroken
+/// A reserved-slot reader's messages: each bag's payload, stamp and group
+/// flag, with every message lost ahead of it — overwritten in the ring,
+/// unreadable, passed over by the reader, or declared lost upstream by its
+/// writer — told on the next message read. A run is one publisher's unbroken
 /// numbering.
-struct ExposedOutputPortMessageForwarding<OneUnbrokenRun> {
+pub(super) struct LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
     bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost<OneUnbrokenRun>,
     lost_ahead_of_the_next_message_forwarded: u64,
 }
 
-impl<OneUnbrokenRun> Default for ExposedOutputPortMessageForwarding<OneUnbrokenRun> {
+impl<OneUnbrokenRun> Default for LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
     fn default() -> Self {
         Self {
             bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost::default(),
@@ -396,8 +413,8 @@ impl<OneUnbrokenRun> Default for ExposedOutputPortMessageForwarding<OneUnbrokenR
     }
 }
 
-impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnbrokenRun> {
-    fn message_from_a_bag_headed(
+impl<OneUnbrokenRun: Copy + PartialEq> LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
+    pub(super) fn message_from_a_bag_headed(
         &mut self,
         run: OneUnbrokenRun,
         channel_user_header: DataChannelSampleUserHeader,
@@ -425,12 +442,15 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
         })
     }
 
-    fn count_a_message_dropped_into_a_full_receiver(&mut self, dropped: MessageReadFromInputPort) {
+    pub(super) fn count_a_message_dropped_into_a_full_receiver(
+        &mut self,
+        dropped: MessageReadFromInputPort,
+    ) {
         self.lost_ahead_of_the_next_message_forwarded += dropped.lost_since_last_read + 1;
     }
 }
 
-impl ReservedSlotBagForwarding for ExposedOutputPortMessageForwarding<UniquePublisherId> {
+impl ReservedSlotBagForwarding for LossTallyOfAReservedSlotReader<UniquePublisherId> {
     type Forwarded = MessageReadFromInputPort;
 
     fn forwarded_from(
@@ -830,7 +850,7 @@ mod tests {
     /// full receiver are each told on the next message forwarded.
     #[test]
     fn the_forwarding_tells_a_gap_an_unreadable_bag_and_a_drop_on_the_next_message() {
-        let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
+        let mut forwarding = LossTallyOfAReservedSlotReader::<u64>::default();
         let run = 1u64;
         let first = forwarding
             .message_from_a_bag_headed(run, numbered_stamping(0, 1), b"a")
@@ -866,7 +886,7 @@ mod tests {
     /// even when that message is the run's first.
     #[test]
     fn the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it() {
-        let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
+        let mut forwarding = LossTallyOfAReservedSlotReader::<u64>::default();
         let run = 1u64;
         let first_carrying_two_lost_upstream = DataChannelSampleUserHeader {
             messages_lost_upstream_before_this_one: 2,

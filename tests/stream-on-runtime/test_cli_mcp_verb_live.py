@@ -61,6 +61,8 @@ CONTROL_TOOL_NAMES = {
     "list_relays",
     "describe_runtime",
     "set_stream_clock_scale",
+    "open_viewer",
+    "close_viewer",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
