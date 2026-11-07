@@ -341,7 +341,8 @@ jobs:
         run: >-
           cargo nextest run --locked --profile ci -E "$TEST_FILTER"
           -p streamlib -p streamlib-macros -p streamlib-processor-schema
-          -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
+          -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-gpu-frame-import-client
+          -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
           -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk

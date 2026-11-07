@@ -5808,6 +5808,7 @@ dependencies = [
  "streamlib",
  "streamlib-consumer-rhi",
  "streamlib-error",
+ "streamlib-gpu-frame-import-client",
  "streamlib-ipc-types",
  "streamlib-macros",
  "streamlib-processor-schema",
@@ -5837,6 +5838,21 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-processor-schema",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "streamlib-gpu-frame-import-client"
+version = "0.68.34"
+dependencies = [
+ "objc2-core-foundation",
+ "objc2-io-surface",
+ "parking_lot",
+ "serde_json",
+ "streamlib-consumer-rhi",
+ "streamlib-ipc-types",
+ "streamlib-surface-client",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -5937,6 +5953,7 @@ dependencies = [
  "streamlib",
  "streamlib-adapter-cuda",
  "streamlib-consumer-rhi",
+ "streamlib-gpu-frame-import-client",
  "streamlib-media-builtins",
  "streamlib-runtime-client-contract",
  "streamlib-surface-client",

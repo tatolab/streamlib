@@ -44,6 +44,15 @@ pub use published_frame_id_grammar::{
     split_pool_slot_and_frame_generation,
 };
 
+/// The resource type a `check_out` answer names; a registration that names
+/// none is a pixel buffer.
+pub fn resource_type_of_a_check_out(response: &serde_json::Value) -> &str {
+    response
+        .get("resource_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("pixel_buffer")
+}
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -63,7 +72,6 @@ pub use linux_surface_check_out::{
     SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT, SurfaceShareCheckOutFds,
     check_out_surface_on_surface_share, device_uuid_of_its_hex_spelling,
     publish_image_layout_on_surface_share, release_check_out_on_surface_share,
-    resource_type_of_a_check_out,
 };
 
 #[cfg(target_os = "macos")]

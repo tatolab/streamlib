@@ -37,6 +37,7 @@ default-filter = """
       | package(streamlib-processor-schema)
       | package(streamlib-ipc-types)
       | package(streamlib-surface-client)
+      | package(streamlib-gpu-frame-import-client)
       | package(streamlib-error)
       | package(streamlib-consumer-rhi)
       | package(streamlib-python-wheel)

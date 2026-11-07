@@ -10,16 +10,10 @@ use std::sync::Arc;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use streamlib::sdk::context::GpuPoolSlotFrameDescriptorBody;
-use streamlib_surface_client::{
-    GpuPoolClaimTableHandOver, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-    SURFACE_SHARE_GPU_POOL_FIELD, gpu_pool_uuid_of_its_wire_name, gpu_pool_uuid_wire_name,
-    published_frame_id_of_pool_slot, refusal_the_surface_share_service_answered,
-};
+use streamlib_surface_client::{gpu_pool_uuid_of_its_wire_name, published_frame_id_of_pool_slot};
 
 use super::HelperProcessGpuExchangeClient;
-use super::gpu_pool_claim_tables_of_this_helper::{
-    HelperGpuPoolFrameClaimAttempt, HelperGpuPoolSlotFrameClaim,
-};
+use streamlib_gpu_frame_import_client::GpuPoolSlotFrameClaimOfThisImporter;
 
 impl HelperProcessGpuExchangeClient {
     /// Claim the frame `surface_id` names in its pool's claim table, with no
@@ -28,7 +22,7 @@ impl HelperProcessGpuExchangeClient {
     pub(crate) fn claim_in_its_pool_claim_table(
         &self,
         surface_id: &str,
-    ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
+    ) -> PyResult<Option<Arc<GpuPoolSlotFrameClaimOfThisImporter>>> {
         self.claim_in_its_pool_claim_table_refusing_by_message(surface_id)
             .map_err(PyRuntimeError::new_err)
     }
@@ -38,33 +32,18 @@ impl HelperProcessGpuExchangeClient {
     pub(crate) fn claim_in_its_pool_claim_table_refusing_by_message(
         &self,
         surface_id: &str,
-    ) -> Result<Option<Arc<HelperGpuPoolSlotFrameClaim>>, String> {
-        match self.gpu_pool_claim_tables.claim_the_frame_named(surface_id) {
-            HelperGpuPoolFrameClaimAttempt::Claimed(claimed) => Ok(Some(claimed)),
-            HelperGpuPoolFrameClaimAttempt::NotInAClaimTable => Ok(None),
-            HelperGpuPoolFrameClaimAttempt::Recycled(recycled) => Err(format!(
-                "frame {surface_id:?} was recycled: its slot publishes generation {}{}, and a \
-                 published frame is never answered with newer pixels",
-                recycled.published_generation,
-                if recycled.slot_was_retiring {
-                    " and is being handed out again"
-                } else {
-                    ""
-                }
-            )),
-        }
+    ) -> Result<Option<Arc<GpuPoolSlotFrameClaimOfThisImporter>>, String> {
+        self.gpu_pool_claim_tables
+            .claim_the_frame_named_refusing_a_recycled_one(surface_id)
     }
 
     /// Take in the pooled frame a read carried and claim it, so the slot is
-    /// never rehanded while the read's payload is held: the first frame of a
-    /// pool, or of a slot this helper does not know yet, fetches the pool's
-    /// claim table and its slot keys once. A pool whose table the service
-    /// refuses, such as one past its last claimant column, is read through
-    /// checkouts, and answers no claim.
+    /// never rehanded while the read's payload is held; see
+    /// [`GpuPoolClaimTablesOfThisImporter::note_and_claim_a_pooled_frame`](streamlib_gpu_frame_import_client::GpuPoolClaimTablesOfThisImporter::note_and_claim_a_pooled_frame).
     pub(crate) fn note_and_claim_the_pooled_gpu_frame_a_read_carries(
         &self,
         pooled_frame: GpuPoolSlotFrameDescriptorBody,
-    ) -> PyResult<Option<Arc<HelperGpuPoolSlotFrameClaim>>> {
+    ) -> PyResult<Option<Arc<GpuPoolSlotFrameClaimOfThisImporter>>> {
         self.note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(pooled_frame)
             .map_err(PyRuntimeError::new_err)
     }
@@ -75,49 +54,9 @@ impl HelperProcessGpuExchangeClient {
     pub(crate) fn note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(
         &self,
         pooled_frame: GpuPoolSlotFrameDescriptorBody,
-    ) -> Result<Option<Arc<HelperGpuPoolSlotFrameClaim>>, String> {
-        if self
-            .gpu_pool_claim_tables
-            .the_hand_over_was_refused(&pooled_frame.pool)
-        {
-            return Ok(None);
-        }
-        if !self.gpu_pool_claim_tables.knows_the_slot_of(&pooled_frame) {
-            match self.fetch_the_claim_table_of_gpu_pool(pooled_frame.pool) {
-                Ok(()) => {}
-                Err(GpuPoolClaimTableHandOverFailure::RequestFailed(request_failure)) => {
-                    tracing::warn!(
-                        "GPU pool {}: the claim table request failed ({request_failure}); \
-                         this frame is read through a checkout and the next frame asks again",
-                        gpu_pool_uuid_wire_name(&pooled_frame.pool)
-                    );
-                    return Ok(None);
-                }
-                Err(GpuPoolClaimTableHandOverFailure::Refused(refusal)) => {
-                    tracing::warn!(
-                        "GPU pool {}: {refusal}; this helper reads the pool's frames through \
-                         checkouts",
-                        gpu_pool_uuid_wire_name(&pooled_frame.pool)
-                    );
-                    self.gpu_pool_claim_tables
-                        .note_a_refused_hand_over(pooled_frame.pool);
-                    return Ok(None);
-                }
-            }
-        }
-        let Some(pool_slot_key) = self.gpu_pool_claim_tables.note_a_pooled_frame(pooled_frame)
-        else {
-            return Err(format!(
-                "a frame of GPU pool {} names claim table row {}, which the pool's claim table \
-                 hand-over leases to no slot",
-                gpu_pool_uuid_wire_name(&pooled_frame.pool),
-                pooled_frame.slot
-            ));
-        };
-        self.claim_in_its_pool_claim_table_refusing_by_message(&published_frame_id_of_pool_slot(
-            &pool_slot_key,
-            pooled_frame.generation,
-        ))
+    ) -> Result<Option<Arc<GpuPoolSlotFrameClaimOfThisImporter>>, String> {
+        self.gpu_pool_claim_tables
+            .note_and_claim_a_pooled_frame(pooled_frame, &self.surface_share_connection)
     }
 
     /// Remember the descriptor an acquire from this helper's own output pool
@@ -204,40 +143,4 @@ impl HelperProcessGpuExchangeClient {
                 published_frame_id_of_pool_slot(&pool_slot_key, pooled_frame.generation)
             })
     }
-
-    fn fetch_the_claim_table_of_gpu_pool(
-        &self,
-        pool: [u8; 16],
-    ) -> Result<(), GpuPoolClaimTableHandOverFailure> {
-        let pool_wire_name = gpu_pool_uuid_wire_name(&pool);
-        let (reply, received_handles) = self
-            .surface_share_request(&serde_json::json!({
-                "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-                SURFACE_SHARE_GPU_POOL_FIELD: pool_wire_name,
-            }))
-            .map_err(GpuPoolClaimTableHandOverFailure::RequestFailed)?;
-        if let Some(refusal) = refusal_the_surface_share_service_answered(&reply) {
-            return Err(GpuPoolClaimTableHandOverFailure::Refused(format!(
-                "the surface-share service refused the claim table of GPU pool \
-                 {pool_wire_name}: {refusal}"
-            )));
-        }
-        let claim_table_shared_rows_handle = received_handles.into_iter().next().ok_or_else(|| {
-            GpuPoolClaimTableHandOverFailure::Refused(format!(
-                "the claim table hand-over of GPU pool {pool_wire_name} carried no handle to the table's memory"
-            ))
-        })?;
-        let hand_over = GpuPoolClaimTableHandOver::from_reply(&reply)
-            .map_err(GpuPoolClaimTableHandOverFailure::Refused)?;
-        self.gpu_pool_claim_tables
-            .adopt_a_hand_over(pool, claim_table_shared_rows_handle, hand_over)
-            .map_err(GpuPoolClaimTableHandOverFailure::Refused)
-    }
-}
-
-/// Why a pool's claim table hand-over did not land: a request that never got
-/// an answer is asked again on the next frame, an answered refusal is final.
-pub(super) enum GpuPoolClaimTableHandOverFailure {
-    RequestFailed(PyErr),
-    Refused(String),
 }

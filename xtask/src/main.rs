@@ -370,6 +370,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "-p",
                 "streamlib-surface-client",
                 "-p",
+                "streamlib-gpu-frame-import-client",
+                "-p",
                 "streamlib-error",
                 "-p",
                 "streamlib-runtime-client-contract",

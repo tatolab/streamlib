@@ -190,6 +190,11 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-gpu-frame-import-client"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-surface-client"
 expression = "BUSL-1.1"
 license-files = []

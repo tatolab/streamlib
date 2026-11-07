@@ -6,6 +6,7 @@ members = [
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing service: Unix socket (Linux), raw Mach (macOS)
+    "runtime/streamlib-gpu-frame-import-client", # Imports the frames a runtime's GPU pools publish into another process — the surface-sharing connection, pool claim tables and per-slot import cache a helper process and a viewer share
     "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, codecs, audio) — native blocks statically linked into `tatolabd`
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
     "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
