@@ -12,12 +12,14 @@ import dataclasses
 import json
 
 from tatolab.stream import (
+    Input,
+    Output,
+    Records,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack, unpack
 
 
 @node
@@ -28,11 +30,9 @@ class ReportsWhichLinkEachBagCameFrom:
     it reads the one port and asks each message which link it arrived on.
     """
 
-    @node.input(delivery_profile="ordered")
-    def tracks(self) -> None: ...
+    tracks = Input(Records, delivery="ordered")
 
-    @node.output()
-    def attributions_to_downstream(self) -> None: ...
+    attributions_to_downstream = Output(Records)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Links are wired before setup() runs, so a sink knows here — before a
@@ -40,19 +40,17 @@ class ReportsWhichLinkEachBagCameFrom:
         self.links_at_setup = sorted(ctx.inputs.inbound_link_names("tracks"))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        read = ctx.inputs.read_from_inbound_link("tracks")
+        read = ctx.inputs.read_from_inbound_link(self.tracks)
         if read is None:
             return
         payload, inbound_link = read
         ctx.outputs.write(
-            "attributions_to_downstream",
-            pack(
-                {
-                    "value": unpack(payload)["value"],
-                    "arrived_on": inbound_link,
-                    "links_at_setup": self.links_at_setup,
-                }
-            ),
+            self.attributions_to_downstream,
+            {
+                "value": payload["value"],
+                "arrived_on": inbound_link,
+                "links_at_setup": self.links_at_setup,
+            },
         )
 
 
@@ -73,21 +71,19 @@ class FeedsOneValueSource:
     def __init__(self, config: FeedsOneValueSourceConfig) -> None:
         self.value = config.value
 
-    @node.output()
-    def bags_to_downstream(self) -> None: ...
+    bags_to_downstream = Output(Records)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write("bags_to_downstream", pack({"value": self.value}))
+        ctx.outputs.write(self.bags_to_downstream, {"value": self.value})
 
 
 @node
 class ReportsEachAttributionSink:
     """Reports every attribution it reads as `MARKER:ATTRIBUTION <json>`."""
 
-    @node.input(delivery_profile="ordered")
-    def attributions_from_upstream(self) -> None: ...
+    attributions_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        payload = ctx.inputs.read("attributions_from_upstream")
+        payload = ctx.inputs.read(self.attributions_from_upstream)
         if payload is not None:
-            log.info("MARKER:ATTRIBUTION " + json.dumps(unpack(payload)))
+            log.info("MARKER:ATTRIBUTION " + json.dumps(payload))

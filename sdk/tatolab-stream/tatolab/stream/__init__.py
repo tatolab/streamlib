@@ -5,15 +5,13 @@
 
 A stream is a `@stream` function that adds, links and exposes nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
-declares its execution and ports with `@node` / `@node.input` / `@node.output` and
-receives a capability-typed context in every lifecycle hook. The contexts, link
+declares its execution with `@node` and its ports as `Input` and `Output` class
+attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
 endpoints, GPU classes and timer a node is handed while it runs are
 `typing.Protocol`s the runtime implements; the clock and the timer's start are
 functions that reach the runtime when called, and raise `RuntimeError` naming
-themselves where no runtime is lent. A message's payload is bytes;
-`tatolab.stream.msgpack` packs and unpacks the msgpack records the built-ins
-carry, and `MsgpackCast` gives a class the `from_bytes` a typed read calls.
-Everything else here is pure Python, so a stream imports, type-checks and
+themselves where no runtime is lent. A read through a port attribute returns
+the family's type, and a read by name the raw payload. Everything else here is pure Python, so a stream imports, type-checks and
 compiles with no runtime installed. The built-in nodes are generated from the
 runtime's own declarations, each with a `TypedDict` for its config.
 """
@@ -21,7 +19,6 @@ runtime's own declarations, each with a `TypedDict` for its config.
 from . import catalog as catalog
 from . import clock as clock
 from . import log as log
-from . import msgpack as msgpack
 from ._built_in_nodes import ArrayToChannels as ArrayToChannels
 from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
 from ._built_in_nodes import ArrayToImage as ArrayToImage
@@ -92,7 +89,6 @@ from ._stream_graph_builder import NodeReference as NodeReference
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
 from ._stream_graph_builder import stream as stream
-from .audio_block import AudioBlock as AudioBlock
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
 )
@@ -121,13 +117,8 @@ from .model_input_tensor_kernel import (
 )
 from .model_input_tensor_kernel import ModelInputTensorKernel as ModelInputTensorKernel
 from .model_input_tensor_kernel import ModelInputTensorLayout as ModelInputTensorLayout
-from .msgpack import MsgpackCast as MsgpackCast
-from .msgpack import msgpack_typed_dict_cast as msgpack_typed_dict_cast
 from .node_output_texture_ring import NodeOutputTextureRing as NodeOutputTextureRing
-from .video_frame import ColorInfo as ColorInfo
-from .video_frame import ContentLight as ContentLight
-from .video_frame import MasteringDisplay as MasteringDisplay
-from .video_frame import VideoFrame as VideoFrame
+from .color_info import ColorInfo as ColorInfo
 from .array_frame import ArrayFrame as ArrayFrame
 from .array_frame import ArrayFrameGpuAttribute as ArrayFrameGpuAttribute
 from .image_frame import ImageFrame as ImageFrame
@@ -143,7 +134,6 @@ __all__ = [
     "ArrayToChannelsConfig",
     "ArrayToImage",
     "ArrayToImageConfig",
-    "AudioBlock",
     "AudioWindowContract",
     "CastFromMessagePayloadBytes",
     "Channels",
@@ -155,7 +145,6 @@ __all__ = [
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
-    "ContentLight",
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "Exposure",
     "GlslPixelEffect",
@@ -176,7 +165,6 @@ __all__ = [
     "KernelDispatchBatch",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
-    "MasteringDisplay",
     "Message",
     "ModelInputTensor",
     "ModelInputTensorChannelOrder",
@@ -186,7 +174,6 @@ __all__ = [
     "ModelInputTensorKernel",
     "ModelInputTensorLayout",
     "MonotonicTimer",
-    "MsgpackCast",
     "NodeInputPortReference",
     "NodeLinkDataAccess",
     "NodeOutputPortReference",
@@ -215,7 +202,6 @@ __all__ = [
     "StreamBuilder",
     "StreamClock",
     "StreamClockReading",
-    "VideoFrame",
     "catalog",
     "clock",
     "compile_stream_to_graph",
@@ -223,8 +209,6 @@ __all__ = [
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
-    "msgpack",
-    "msgpack_typed_dict_cast",
     "node",
     "start_monotonic_timer",
     "stream",

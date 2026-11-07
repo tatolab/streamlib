@@ -43,8 +43,7 @@ pub(crate) fn cast_payload_into_read_target<'py>(
         return Err(PyTypeError::new_err(format!(
             "`into=` on input port {port_name:?} was handed a {}, which has no `from_bytes` to \
              build the read from the message's payload bytes — name a class with a `from_bytes` \
-             classmethod (`tatolab.stream.MsgpackCast` gives one) or \
-             `tatolab.stream.msgpack_typed_dict_cast(SomeTypedDict)`.",
+             classmethod, or an object with a `from_bytes` method.",
             name_of_the_read_target_for_error_message(read_target)
         )));
     };
@@ -134,8 +133,8 @@ impl Drop for TypedReadGpuAccessOffer {
 ///
 /// The same capability as `ctx.gpu_limited_access`, offered so a type can do
 /// per-frame work as it is built that needs the engine — claiming the frame's
-/// surface against producer reuse is what the shipped `VideoFrame` does with
-/// it. Any class reachable through `into=` may call this; there is no
+/// surface against producer reuse is what `ClaimedSurfacePixelAccess` does
+/// with it. Any class reachable through `into=` may call this; there is no
 /// registration, no marker and no privileged type.
 #[pyfunction]
 pub(crate) fn gpu_limited_access_of_the_typed_read_in_progress(
@@ -701,8 +700,7 @@ class Detection:
         });
     }
 
-    /// `into=` takes any object with a `from_bytes`, not only a class — the
-    /// shape `msgpack_typed_dict_cast` returns.
+    /// `into=` takes any object with a `from_bytes`, not only a class.
     #[test]
     fn an_object_with_from_bytes_casts_like_a_class() {
         Python::initialize();

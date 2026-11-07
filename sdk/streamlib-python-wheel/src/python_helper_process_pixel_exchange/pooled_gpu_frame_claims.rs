@@ -182,11 +182,6 @@ impl HelperProcessGpuExchangeClient {
         }
     }
 
-    /// Whether this helper read or acquired any pooled frame a write could name.
-    pub(crate) fn knows_any_pooled_gpu_frame(&self) -> bool {
-        self.gpu_pool_claim_tables.knows_any_pooled_frame()
-    }
-
     /// The descriptor a write of the pooled frame `published_frame_id` names
     /// carries, as this helper last read or acquired it.
     pub(crate) fn descriptor_of_the_pooled_gpu_frame_named(

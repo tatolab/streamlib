@@ -111,12 +111,22 @@ mod tests {
                 .insert(0, STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
                 .unwrap();
         }
-        python
+        let namespace = python
             .import("tatolab.stream._node_declaration")
             .expect("the decorator module imports")
             .dict()
             .copy()
-            .unwrap()
+            .unwrap();
+        namespace
+            .update(
+                python
+                    .import("tatolab.stream")
+                    .expect("the package imports")
+                    .dict()
+                    .as_mapping(),
+            )
+            .unwrap();
+        namespace
     }
 
     /// Run the real decorator module, run `class_body_source` against it, and
@@ -348,9 +358,8 @@ class AudioConsumer:
         let python_outputs = read_python_declaration(
             "@node(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   @node.output('encoded_video',\n\
-             \x20                catalog=VideoEntry(codec='avc1.64001f', codedWidth=1280, codedHeight=720))\n\
-             \x20   def encoded_video(self): ...\n",
+             \x20   encoded_video = Output(Packets,\n\
+             \x20       catalog=VideoEntry(codec='avc1.64001f', codedWidth=1280, codedHeight=720))\n",
         )
         .expect("the declaration reads")
         .descriptor
@@ -380,8 +389,7 @@ class AudioConsumer:
         let refusal = python_declaration_refusal(
             "@node(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   @node.output('encoded_video', catalog=VideoEntry(codec='avc1.zz'))\n\
-             \x20   def encoded_video(self): ...\n",
+             \x20   encoded_video = Output(Packets, catalog=VideoEntry(codec='avc1.zz'))\n",
         );
         assert!(refusal.contains("encoded_video"), "got {refusal}");
     }
@@ -389,17 +397,16 @@ class AudioConsumer:
     /// The headline: one contract, two authoring languages, one schema.
     ///
     /// Both halves are read from the surfaces an author actually writes — the
-    /// `@node.input` decorator and the `#[processor]` attribute — so a divergence
+    /// `Input` attribute and the `#[processor]` attribute — so a divergence
     /// in either grammar fails here rather than reaching a user.
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @node.input('audio', delivery_profile='ordered',\n\
-             \x20               audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                                dtype='f32', window_size=512, hop=160))\n\
-             \x20   def audio_from_microphone(self): ...\n",
+             \x20   audio = Input(Channels, delivery='ordered',\n\
+             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                  dtype='f32', window_size=512, hop=160))\n",
         );
 
         let rust_descriptor =
@@ -425,16 +432,14 @@ class AudioConsumer:
     }
 
     /// A helper-placed processor opens no device stream, so the sentinel it
-    /// would need to settle never resolves — and the decorator says so at the
-    /// line the author wrote, not three seams later in placement vocabulary.
+    /// would need to settle never resolves — and `@node` says so at the class
+    /// the author wrote, not three seams later in placement vocabulary.
     #[test]
     fn a_python_declared_sentinel_is_refused_at_decoration() {
         let refusal = python_declaration_refusal(
             "@node(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   @node.input('audio', delivery_profile='ordered',\n\
-             \x20               audio_window=AUDIO_WINDOW_MATCH_DEVICE)\n\
-             \x20   def audio_from_device(self): ...\n",
+             \x20   audio = Input(Channels, delivery='ordered', window=AUDIO_WINDOW_MATCH_DEVICE)\n",
         );
 
         assert!(
@@ -451,8 +456,7 @@ class AudioConsumer:
         let ports = python_declared_ports(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @node.input('audio', delivery_profile='newest')\n\
-             \x20   def audio_from_microphone(self): ...\n",
+             \x20   audio = Input(Channels, delivery='newest')\n",
         );
 
         assert_eq!(ports[0].audio_window, None);
@@ -466,15 +470,13 @@ class AudioConsumer:
         let declaration = read_python_declaration(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @node.input(delivery_profile='newest')\n\
-             \x20   def Video(self): ...\n\
-             \x20   @node.output(name='Café Out')\n\
-             \x20   def frames_to_downstream(self): ...\n",
+             \x20   Video = Input(Image, delivery='newest')\n\
+             \x20   Frames_Out = Output(Image)\n",
         )
         .expect("the declaration reads");
 
         assert_eq!(declaration.descriptor.inputs[0].name, "video");
-        assert_eq!(declaration.descriptor.outputs[0].name, "cafe-out");
+        assert_eq!(declaration.descriptor.outputs[0].name, "frames_out");
     }
 
     #[test]
@@ -482,10 +484,9 @@ class AudioConsumer:
         let refusal = python_declaration_refusal(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @node.input('audio', delivery_profile='newest',\n\
-             \x20               audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                                dtype='f32', window_size=512))\n\
-             \x20   def audio_from_microphone(self): ...\n",
+             \x20   audio = Input(Channels, delivery='newest',\n\
+             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                  dtype='f32', window_size=512))\n",
         );
 
         assert!(

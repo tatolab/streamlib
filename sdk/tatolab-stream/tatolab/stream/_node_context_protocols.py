@@ -31,8 +31,8 @@ _PortFamilyReadType = TypeVar("_PortFamilyReadType")
 class PortPayloadBorrow(Protocol):
     """A read message's payload, held in the shared-memory sample it arrived in.
 
-    A read-only buffer: `memoryview(payload)`, `numpy.frombuffer(payload)` and
-    `msgpack.unpack(payload)` read the sample itself, and `bytes(payload)` is the
+    A read-only buffer: `memoryview(payload)` and `numpy.frombuffer(payload)`
+    read the sample itself, and `bytes(payload)` is the
     one copy. The sample counts against its link's borrow quota while the borrow
     or any `memoryview` or DLPack tensor over it lives.
     """
@@ -214,9 +214,8 @@ class PortPayloadLoan(Protocol):
 class CastFromMessagePayloadBytes(Protocol[_MessageReadTarget_co]):
     """What `read(port, into=…)` takes: anything whose `from_bytes` builds the read's result.
 
-    A class with a `from_bytes` classmethod is one — `into=VideoFrame` reads a
-    `VideoFrame` — and so is `msgpack_typed_dict_cast(SomeTypedDict)`. It is
-    handed the read's `PortPayloadBorrow`, so it takes a `Buffer`.
+    A class with a `from_bytes` classmethod is one. It is handed the read's
+    `PortPayloadBorrow`, so it takes a `Buffer`.
     """
 
     def from_bytes(self, payload: PortPayloadBorrow, /) -> _MessageReadTarget_co:
@@ -559,9 +558,7 @@ class LinkInputDataReader(Protocol):
         arrived in. With
         `into`, the borrow is handed to `into.from_bytes` and its result
         returned, so a payload that does not fit raises here, at the consuming
-        read. `into=VideoFrame` constructs and validates;
-        `into=msgpack_typed_dict_cast(SomeTypedDict)` types the map and checks
-        nothing.
+        read.
         """
         ...
 
@@ -728,8 +725,6 @@ class LinkOutputDataWriter(Protocol):
         payload: Buffer,
         timestamp_ns: int | None = None,
         starts_group: bool = True,
-        *,
-        pooled_gpu_frame: str | None = None,
     ) -> None: ...
     @overload
     def write(
@@ -748,7 +743,6 @@ class LinkOutputDataWriter(Protocol):
         timestamp_ns: int | None = None,
         starts_group: bool = True,
         *,
-        pooled_gpu_frame: str | None = None,
         start_sample: int | None = None,
     ) -> None:
         """Publish one message carrying a copy of `payload` to every downstream link on `port`.
@@ -765,16 +759,11 @@ class LinkOutputDataWriter(Protocol):
         Written by name:
 
         `payload` is any contiguous buffer — `bytes`, a `memoryview`, a numpy
-        array — and `tatolab.stream.msgpack.pack` encodes a record. Omitting `timestamp_ns` stamps stream time now.
+        array. Omitting `timestamp_ns` stamps stream time now.
         `starts_group=True` says the message stands alone; only encoded media
         passes `False`, for a message a decoder cannot enter at. A payload over
         the channel's ceiling is dropped and counted against this port, never
-        raised. A record whose `surface_id` names a pooled GPU frame this node
-        acquired or read — a `VideoFrame` read and written on, or one naming a
-        `NodeOutputTextureRing` slot — carries the frame's descriptor, so every
-        reader claims the frame with no request. `pooled_gpu_frame` names the
-        frame explicitly for any other payload; an id naming no such frame
-        raises `ValueError`.
+        raised.
         """
         ...
 
@@ -831,7 +820,7 @@ def gpu_limited_access_of_the_typed_read_in_progress() -> (
 
     The same capability as `ctx.gpu_limited_access`, offered so a type can do
     per-frame work at construction that needs the engine — claiming the frame's
-    surface against producer reuse is what the shipped `VideoFrame` does with
+    surface against producer reuse is what `ClaimedSurfacePixelAccess` does with
     it. Any class reachable through `into=` may call this; there is no
     registration, no marker and no privileged type.
     """

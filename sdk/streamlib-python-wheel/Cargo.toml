@@ -43,10 +43,6 @@ streamlib = { path = "../streamlib-sdk", version = "0.68.32" }
 # code to reach its lent ports through.
 tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.2.0", default-features = false }
 
-# The `VideoFrame` colour metadata a node-owned window's `show()` reads off a
-# frame. Nothing here registers or hosts a built-in.
-streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.68.32" }
-
 # The workspace's single DLPack home: the `#[repr(C)]` v0.8 ABI mirrors, the
 # managed-tensor builders, and the layout regression test that pins them. The
 # pixel-exchange surface builds its capsules here rather than growing a second
@@ -105,6 +101,8 @@ rmp-serde = { workspace = true }
 streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.32" }
 # The table read back through the capsule, as a module's binding reads it.
 tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.2.0", default-features = false, features = ["pyo3"] }
+# The port-family conversions an Image or Array read is checked against.
+streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.68.32" }
 
 [lints]
 workspace = true

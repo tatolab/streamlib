@@ -21,12 +21,14 @@ import traceback
 
 from engine_media_clock import engine_media_clock_now_ns
 from tatolab.stream import (
+    Input,
+    Output,
+    Records,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack, unpack
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
@@ -135,28 +137,25 @@ class TimeProbe:
 
 @node(execution="continuous", interval_ms=1)
 class ExplicitlyStampedSource:
-    @node.output()
-    def bags_to_downstream(self) -> None: ...
+    bags_to_downstream = Output(Records)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.outputs.write(
-            "bags_to_downstream", pack({"value": 1}), timestamp_ns=EXPLICIT_TIMESTAMP_NS
+            self.bags_to_downstream, {"value": 1}, timestamp_ns=EXPLICIT_TIMESTAMP_NS
         )
 
 
 @node(execution="continuous", interval_ms=1)
 class DefaultStampedSource:
-    @node.output()
-    def bags_to_downstream(self) -> None: ...
+    bags_to_downstream = Output(Records)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write("bags_to_downstream", pack({"value": 1}))
+        ctx.outputs.write(self.bags_to_downstream, {"value": 1})
 
 
 @node
 class TimestampCollectingSink:
-    @node.input(delivery_profile="ordered")
-    def bags_from_upstream(self) -> None: ...
+    bags_from_upstream = Input(Records, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -164,10 +163,10 @@ class TimestampCollectingSink:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        payload, timestamp_ns = ctx.inputs.read_with_timestamp("bags_from_upstream")
+        payload, timestamp_ns = ctx.inputs.read_with_timestamp(self.bags_from_upstream)
         if payload is not None:
             self.reported = True
-            message = unpack(payload)
+            message = payload
             _report(lambda: {"message": message, "timestamp_ns": timestamp_ns})
 
 
@@ -207,17 +206,14 @@ class WorkerThreadSource:
         self._stop = threading.Event()
         self._worker: "threading.Thread | None" = None
 
-    @node.output()
-    def bags_to_downstream(self) -> None: ...
+    bags_to_downstream = Output(Records)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         captured_outputs = ctx.outputs
 
         def produce_from_worker_thread() -> None:
             while not self._stop.is_set():
-                captured_outputs.write(
-                    "bags_to_downstream", pack({"origin": "worker-thread"})
-                )
+                captured_outputs.write(self.bags_to_downstream, {"origin": "worker-thread"})
                 self._stop.wait(0.01)
 
         self._worker = threading.Thread(target=produce_from_worker_thread, daemon=True)
@@ -231,8 +227,7 @@ class WorkerThreadSource:
 
 @node
 class WorkerThreadBagSink:
-    @node.input(delivery_profile="ordered")
-    def bags_from_upstream(self) -> None: ...
+    bags_from_upstream = Input(Records, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -240,10 +235,10 @@ class WorkerThreadBagSink:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        payload = ctx.inputs.read("bags_from_upstream")
+        payload = ctx.inputs.read(self.bags_from_upstream)
         if payload is not None:
             self.reported = True
-            message = unpack(payload)
+            message = payload
             _report(lambda: {"message": message})
 
 

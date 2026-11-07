@@ -7,7 +7,7 @@ One dataclass per catalog section. Each field is named as hang's catalog
 spells it (`codedWidth`, `sampleRate`, `numberOfChannels`) because the entry
 reaches every player that reads the broadcast's catalog unchanged — a port
 describes itself in the players' words, never the runtime's. Declare one with
-`@node.output(catalog=...)` and replace it while running with
+`Output(family, catalog=...)` and replace it while running with
 `ctx.outputs.set_catalog_entry(port_name, entry)`. The runtime parses every
 entry with hang's own types and refuses one that does not parse, naming the
 port and the field.

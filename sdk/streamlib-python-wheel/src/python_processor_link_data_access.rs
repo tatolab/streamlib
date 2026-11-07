@@ -751,7 +751,7 @@ fn claimed_pooled_gpu_frame_of_the_read(
     Ok((surface_id, claim))
 }
 
-/// The `tatolab.stream.video_frame.ColorInfo` an Image frame's H.273 codes spell.
+/// The `tatolab.stream.ColorInfo` an Image frame's H.273 codes spell.
 fn color_info_of_the_image_frame_colour<'py>(
     python: Python<'py>,
     colour: ImageFrameH273Colour,
@@ -773,7 +773,7 @@ fn color_info_of_the_image_frame_colour<'py>(
     axes.set_item("matrix", matrix)?;
     axes.set_item("range", range)?;
     python
-        .import("tatolab.stream.video_frame")?
+        .import("tatolab.stream.color_info")?
         .getattr("ColorInfo")?
         .call((), Some(&axes))
 }
@@ -1848,14 +1848,11 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
-/// The H.273 codes an `ImageFrame`'s `colour`, or a `VideoFrame`'s
-/// `color_info`, spells; unspecified when the object states neither.
+/// The H.273 codes an `ImageFrame`'s `colour` spells; unspecified when it states none.
 fn image_frame_colour_the_image_states(image: &Bound<'_, PyAny>) -> PyResult<ImageFrameH273Colour> {
-    let colour = match image.getattr_opt("colour")? {
-        Some(colour) => Some(colour),
-        None => image.getattr_opt("color_info")?,
-    }
-    .filter(|colour| !colour.is_none());
+    let colour = image
+        .getattr_opt("colour")?
+        .filter(|colour| !colour.is_none());
     let Some(colour) = colour else {
         return Ok(ImageFrameH273Colour::UNSPECIFIED);
     };
@@ -1967,7 +1964,7 @@ impl PythonBufferHeldForOneWrite {
             return Err(PyTypeError::new_err(format!(
                 "write() on output port {port_name:?} takes the message's payload as a \
                  contiguous buffer such as bytes, a memoryview or a numpy array; got a {} \
-                 ({refusal}). Encode a record with `tatolab.stream.msgpack.pack(record)`.",
+                 ({refusal}). A dict is written through a Records Output attribute.",
                 python_type_name_for_error_message(payload, "value")
             )));
         }

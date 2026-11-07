@@ -40,40 +40,37 @@ BOOTSTRAP_PATH = LEND_DIRECTORY / "tatolab" / "runtime" / "_processor_interprete
 SECONDS_A_BOOTSTRAP_HAS_TO_ANSWER = 60.0
 
 DESCRIBED_NODES_SOURCE = '''
-from tatolab.stream import AudioWindowContract, node
+from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
 
 
 @node(scheduling="high")
 class WindowedRelay:
     """Relays each audio window as a frame."""
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=AudioWindowContract(
+    audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=AudioWindowContract(
             sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=160
         ),
         description="windows from upstream",
     )
-    def audio_from_upstream(self) -> None: ...
 
-    @node.output(description="frames to downstream")
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets, description="frames to downstream")
 
     def process(self, ctx) -> None: ...
 
 
 @node(execution="continuous", interval_ms=20, description="ticks on its own")
 class Ticker:
-    @node.output()
-    def ticks_to_downstream(self) -> None: ...
+    ticks_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None: ...
 
 
 @node(execution="manual", paced_by_real_time=True, description="captures on its own")
 class LiveCapture:
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Packets)
 
 
 class Unstamped:
@@ -187,6 +184,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                         "name": "audio_from_upstream",
                         "description": "windows from upstream",
                         "delivery_profile": "ordered",
+                        "family": {"family": "channels"},
                         "audio_window": {
                             "resolved_from": "declaration",
                             "sample_rate": 16_000,
@@ -198,7 +196,11 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                     }
                 ],
                 "output_ports": [
-                    {"name": "frames_to_downstream", "description": "frames to downstream"}
+                    {
+                        "name": "frames_to_downstream",
+                        "description": "frames to downstream",
+                        "family": {"family": "packets"},
+                    }
                 ],
             }
         ],
@@ -275,15 +277,14 @@ def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
         project_directory,
         "logging_at_import_nodes",
         """
-        from tatolab.stream import log, node
+        from tatolab.stream import Input, Packets, log, node
 
         log.info("module imported", phase="import")
 
 
         @node(execution="reactive")
         class LoggingAtImport:
-            @node.input(delivery_profile="newest")
-            def frames_from_upstream(self) -> None: ...
+            frames_from_upstream = Input(Packets, delivery="newest")
 
             def process(self, ctx) -> None: ...
         """,
@@ -367,7 +368,7 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
         import subprocess
         import sys
 
-        from tatolab.stream import node
+        from tatolab.stream import Output, Packets, node
 
         print("printed at import")
         sys.stdout.write("written to sys.stdout at import\\n")
@@ -378,8 +379,7 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
 
         @node(execution="manual")
         class Noisy:
-            @node.output()
-            def noise_to_downstream(self) -> None: ...
+            noise_to_downstream = Output(Packets)
 
             def process(self, ctx) -> None:
                 print("never called")
@@ -416,7 +416,7 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
         import threading
         import time
 
-        from tatolab.stream import node
+        from tatolab.stream import Output, Packets, node
 
         threading.Thread(target=time.sleep, args=(30,)).start()
         atexit.register(time.sleep, 30)
@@ -424,8 +424,7 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
 
         @node(execution="manual")
         class Lingering:
-            @node.output()
-            def nothing_to_downstream(self) -> None: ...
+            nothing_to_downstream = Output(Packets)
 
             def process(self, ctx) -> None: ...
         """,
@@ -813,7 +812,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
         """
         import importlib.util
 
-        from tatolab.stream import node
+        from tatolab.stream import Output, Packets, node
 
         BESIDE_THE_BOOTSTRAP = (
             "_processor_hosting",
@@ -829,8 +828,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
             )
         )
         class ShadowProbe:
-            @node.output()
-            def nothing_to_downstream(self) -> None: ...
+            nothing_to_downstream = Output(Packets)
 
             def process(self, ctx) -> None: ...
         """,

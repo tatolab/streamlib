@@ -22,14 +22,18 @@ from collections.abc import Sequence
 
 import numpy
 from tatolab.stream import (
+    ColorInfo,
     GpuContextFullAccess,
+    Image,
+    ImageFrameToWrite,
+    Input,
+    NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64
@@ -454,12 +458,11 @@ void main() {{
 
 @node(execution="continuous", interval_ms=10)
 class RenderedTextureFrameProducer:
-    """Renders two known halves into a render-target texture it acquired, once,
+    """Renders two known halves into a texture from its output pool, once,
     and sends that frame downstream on every tick — no link promises delivery,
     and a bag written before the reader's interpreter subscribed is lost."""
 
-    @node.output()
-    def video_to_downstream(self) -> None: ...
+    video_to_downstream = Output(Image)
 
     def __init__(self) -> None:
         self.color_target = None
@@ -473,12 +476,9 @@ class RenderedTextureFrameProducer:
                 fragment_source=TWO_HALVES_FRAGMENT_GLSL,
                 label="python-two-halves",
             )
-            self.color_target = gpu.acquire_texture(
-                SURFACE_WIDTH,
-                SURFACE_HEIGHT,
-                COLOR_ATTACHMENT_FORMAT,
-                COLOR_TARGET_TEXTURE_USAGE,
-            )
+            self.color_target = NodeOutputTextureRing(
+                COLOR_ATTACHMENT_FORMAT, COLOR_TARGET_TEXTURE_USAGE, depth=1
+            ).next_texture_for_this_frame(gpu, SURFACE_WIDTH, SURFACE_HEIGHT)
             kernel.draw(
                 bindings={},
                 color_targets=[self.color_target],
@@ -493,15 +493,9 @@ class RenderedTextureFrameProducer:
         if self.color_target is None:
             return
         ctx.outputs.write(
-            "video_to_downstream",
-            pack(
-                {
-                    "surface_id": self.color_target.surface_id,
-                    "width": SURFACE_WIDTH,
-                    "height": SURFACE_HEIGHT,
-                    "timestamp_ns": ctx.time,
-                }
-            ),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(self.color_target, ColorInfo()),
+            timestamp_ns=ctx.time,
         )
 
 
@@ -510,8 +504,7 @@ class RenderedFrameCpuReader:
     """Reads the first frame it is handed through `cpu()`, in a processor
     interpreter of its own, and reports what each half holds."""
 
-    @node.input(delivery_profile="ordered")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="ordered")
 
     def __init__(self) -> None:
         self.reported = False
@@ -519,7 +512,7 @@ class RenderedFrameCpuReader:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None:
             return
         self.reported = True

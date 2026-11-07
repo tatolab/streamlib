@@ -7,8 +7,7 @@ import json
 import os
 import tempfile
 
-from tatolab.stream import log, monotonic_now_ns, node
-from tatolab.stream.msgpack import pack, unpack
+from tatolab.stream import Input, Output, Records, log, monotonic_now_ns, node
 
 #: Messages the reporter reads before it reports the first and the last of them.
 MESSAGES_BETWEEN_THE_FIRST_AND_THE_LAST_REPORTED = 40
@@ -22,20 +21,17 @@ def report(marker_name: str, payload: "dict[str, object]") -> None:
 class StreamTimeWriterSource:
     """Writes, with no stamp, the stream time and the machine time it wrote at."""
 
-    @node.output()
-    def stream_times_to_downstream(self) -> None: ...
+    stream_times_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         ctx.outputs.write(
-            "stream_times_to_downstream",
-            pack(
-                {
-                    "stream_time_ns": ctx.time,
-                    "machine_time_ns": monotonic_now_ns(),
-                    "mode": ctx.stream_clock.mode,
-                    "scale": ctx.stream_clock.scale,
-                }
-            ),
+            self.stream_times_to_downstream,
+            {
+                "stream_time_ns": ctx.time,
+                "machine_time_ns": monotonic_now_ns(),
+                "mode": ctx.stream_clock.mode,
+                "scale": ctx.stream_clock.scale,
+            },
         )
 
 
@@ -48,14 +44,13 @@ class StreamTimeStampReporterSink:
         self.messages_read = 0
         self.reported = False
 
-    @node.input(delivery_profile="ordered")
-    def stream_times_from_upstream(self) -> None: ...
+    stream_times_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("stream_times_from_upstream")
+        message = ctx.inputs.read_message(self.stream_times_from_upstream)
         if message is None or self.reported:
             return
-        written = unpack(message.payload)
+        written = message.payload
         seen = {
             "stamp_ns": message.timestamp_ns,
             "written_stream_time_ns": written["stream_time_ns"],
@@ -158,22 +153,19 @@ class StepTimeWriterSource:
     def __init__(self) -> None:
         self.machine_time_ns_of_the_first_write: "int | None" = None
 
-    @node.output()
-    def step_times_to_downstream(self) -> None: ...
+    step_times_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         machine_now_ns = monotonic_now_ns()
         if self.machine_time_ns_of_the_first_write is None:
             self.machine_time_ns_of_the_first_write = machine_now_ns
         ctx.outputs.write(
-            "step_times_to_downstream",
-            pack(
-                {
-                    "step_index": ctx.stream_clock.step_index,
-                    "stream_time_ns": ctx.time,
-                    "first_write_machine_time_ns": self.machine_time_ns_of_the_first_write,
-                }
-            ),
+            self.step_times_to_downstream,
+            {
+                "step_index": ctx.stream_clock.step_index,
+                "stream_time_ns": ctx.time,
+                "first_write_machine_time_ns": self.machine_time_ns_of_the_first_write,
+            },
         )
 
 
@@ -181,23 +173,21 @@ class StepTimeWriterSource:
 class SlowStepRelay:
     """Holds each message for a while before writing it on, with no stamp."""
 
-    @node.input(delivery_profile="ordered")
-    def step_times_from_upstream(self) -> None: ...
+    step_times_from_upstream = Input(Records, delivery="ordered")
 
-    @node.output()
-    def step_times_to_downstream(self) -> None: ...
+    step_times_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("step_times_from_upstream")
+        message = ctx.inputs.read_message(self.step_times_from_upstream)
         if message is None:
             return
         held_until_ns = monotonic_now_ns() + SLOW_RELAY_HOLD_MS * 1_000_000
         while monotonic_now_ns() < held_until_ns:
             pass
-        relayed = unpack(message.payload)
+        relayed = message.payload
         relayed["stamp_the_relay_read_ns"] = message.timestamp_ns
         relayed["relay_stream_time_ns"] = ctx.time
-        ctx.outputs.write("step_times_to_downstream", pack(relayed))
+        ctx.outputs.write(self.step_times_to_downstream, relayed)
 
 
 @node
@@ -207,14 +197,13 @@ class StepTimeReporterSink:
     def __init__(self) -> None:
         self.seen: "list[dict[str, object]]" = []
 
-    @node.input(delivery_profile="ordered")
-    def step_times_from_upstream(self) -> None: ...
+    step_times_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("step_times_from_upstream")
+        message = ctx.inputs.read_message(self.step_times_from_upstream)
         if message is None:
             return
-        relayed = unpack(message.payload)
+        relayed = message.payload
         self.seen.append(
             {
                 "step_index": relayed["step_index"],
@@ -248,13 +237,12 @@ REAL_TIME_PACED_MESSAGES_REPORTED = 10
 class RealTimePacedWriterSource:
     """Writes, with no stamp, the stream time and the machine time it wrote at, paced on the machine."""
 
-    @node.output()
-    def real_time_writes_to_downstream(self) -> None: ...
+    real_time_writes_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         ctx.outputs.write(
-            "real_time_writes_to_downstream",
-            pack({"stream_time_ns": ctx.time, "machine_time_ns": monotonic_now_ns()}),
+            self.real_time_writes_to_downstream,
+            {"stream_time_ns": ctx.time, "machine_time_ns": monotonic_now_ns()},
         )
 
 
@@ -265,14 +253,13 @@ class RealTimePacedReporterSink:
     def __init__(self) -> None:
         self.seen: "list[dict[str, object]]" = []
 
-    @node.input(delivery_profile="ordered")
-    def real_time_writes_from_upstream(self) -> None: ...
+    real_time_writes_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("real_time_writes_from_upstream")
+        message = ctx.inputs.read_message(self.real_time_writes_from_upstream)
         if message is None or len(self.seen) >= REAL_TIME_PACED_MESSAGES_REPORTED:
             return
-        written = unpack(message.payload)
+        written = message.payload
         self.seen.append(
             {
                 "stamp_ns": message.timestamp_ns,
@@ -293,19 +280,16 @@ STEP_THE_RELAY_HELPER_DIES_IN = 3
 class TwoWritesPerStepSource:
     """Writes two messages in every step, each naming the step."""
 
-    @node.output()
-    def step_indices_to_downstream(self) -> None: ...
+    step_indices_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         for message_in_the_step in range(2):
             ctx.outputs.write(
-                "step_indices_to_downstream",
-                pack(
-                    {
-                        "step_index": ctx.stream_clock.step_index,
-                        "message_in_the_step": message_in_the_step,
-                    }
-                ),
+                self.step_indices_to_downstream,
+                {
+                    "step_index": ctx.stream_clock.step_index,
+                    "message_in_the_step": message_in_the_step,
+                },
             )
 
 
@@ -319,23 +303,21 @@ def _flag_marking_that_a_helper_of_this_stream_died() -> str:
 class RelayWhoseFirstHelperDiesMidStep:
     """Relays each message on; its first helper ends itself mid-step, leaving one unread."""
 
-    @node.input(delivery_profile="ordered")
-    def step_indices_from_upstream(self) -> None: ...
+    step_indices_from_upstream = Input(Records, delivery="ordered")
 
-    @node.output()
-    def step_indices_to_downstream(self) -> None: ...
+    step_indices_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("step_indices_from_upstream")
+        message = ctx.inputs.read_message(self.step_indices_from_upstream)
         if message is None:
             return
-        relayed = unpack(message.payload)
+        relayed = message.payload
         flag = _flag_marking_that_a_helper_of_this_stream_died()
         if relayed["step_index"] == STEP_THE_RELAY_HELPER_DIES_IN and not os.path.exists(flag):
             with open(flag, "w"):
                 pass
             os._exit(17)
-        ctx.outputs.write("step_indices_to_downstream", pack(relayed))
+        ctx.outputs.write(self.step_indices_to_downstream, relayed)
 
 
 @node
@@ -345,14 +327,13 @@ class LastStepReporterSink:
     def __init__(self) -> None:
         self.step_indices_seen: "list[int]" = []
 
-    @node.input(delivery_profile="ordered")
-    def step_indices_from_upstream(self) -> None: ...
+    step_indices_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx) -> None:
-        message = ctx.inputs.read_message("step_indices_from_upstream")
+        message = ctx.inputs.read_message(self.step_indices_from_upstream)
         if message is None:
             return
-        step_index = unpack(message.payload)["step_index"]
+        step_index = message.payload["step_index"]
         self.step_indices_seen.append(step_index)
         if self.step_indices_seen.count(STEPPED_STREAM_STEPS - 1) == 2:
             if os.path.exists(_flag_marking_that_a_helper_of_this_stream_died()):

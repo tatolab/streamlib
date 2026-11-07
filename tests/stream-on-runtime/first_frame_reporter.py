@@ -12,7 +12,7 @@ the pipeline live.
 
 import os
 
-from tatolab.stream import log, node
+from tatolab.stream import Image, Input, log, node
 
 
 @node
@@ -22,8 +22,7 @@ class ReportsItsProcessOnFirstFrame:
     def __init__(self) -> None:
         self.announced = False
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="newest")
 
     def process(self, ctx) -> None:
         if self.announced or ctx.inputs.read("video_from_upstream") is None:

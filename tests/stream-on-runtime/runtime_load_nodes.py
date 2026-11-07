@@ -8,21 +8,19 @@ processor interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
 proves a node type registers from its description alone.
 """
 
-from tatolab.stream import RuntimeContextLimitedAccess, node
+from tatolab.stream import Image, Input, Output, RuntimeContextLimitedAccess, node
 
 
 @node
 class LoadedFrameRelay:
     """Passes each frame it reads downstream unchanged."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    video_from_upstream = Input(Image, delivery="newest")
 
-    @node.output()
-    def video_to_downstream(self) -> None: ...
+    video_to_downstream = Output(Image)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame_payload = ctx.inputs.read("video_from_upstream")
-        if frame_payload is not None:
-            ctx.outputs.write("video_to_downstream", frame_payload)
+        frame = ctx.inputs.read(self.video_from_upstream)
+        if frame is not None:
+            ctx.outputs.write(self.video_to_downstream, frame)
 

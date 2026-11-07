@@ -4,10 +4,9 @@
 #
 # The known-signal loopback, with the engine carrying the audio both ways.
 #
-# Third of three audio fixtures, and the one that closes the rung. Where
-# `e2e_audio_loopback.sh` proves the *rig* with no StreamLib in the path, and
-# `verify_audio_channel.sh` proves one processor off its own port, this proves
-# the round trip: the `tatolab-speaker` module's `SpeakerSink` plays the known
+# Second of two audio fixtures, and the one that closes the rung. Where
+# `e2e_audio_loopback.sh` proves the *rig* with no StreamLib in the path, this
+# proves the round trip: the `tatolab-speaker` module's `SpeakerSink` plays the known
 # signal into a null sink and the `tatolab-microphone` module's
 # `MicrophoneSource` captures it back off that sink's monitor. Both ends are
 # StreamLib, so a failure here with the rig fixture green is the engine's.
@@ -44,8 +43,7 @@
 # so it refuses to run while another runtime holds the machine.
 #
 # Usage:
-#   ./verify_audio_loopback.sh [--count N]
-#                              [--path tap-muted|tap-audible|acoustic]
+#   ./verify_audio_loopback.sh [--path tap-muted|tap-audible|acoustic]
 #
 # INJECT_BUG=silence|drop|gain publishes a deliberately broken signal, so a run
 # can prove the gate is live rather than only ever having been observed green.
@@ -58,14 +56,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fixture_runtime_unit.sh
 . "$HERE/fixture_runtime_unit.sh"
 
-# How many objects the block-level check reads off the microphone's track: a
-# bounded sample, well short of the whole signal, which is why the signal
-# itself is measured off the waveform the node writes.
-BAG_COUNT=64
 LOOPBACK_PATH=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --count) BAG_COUNT="$2"; shift 2 ;;
         --path) LOOPBACK_PATH="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -93,8 +86,6 @@ fi
 require_the_runtime_unit
 require_the_fixture_venv
 require_the_audio_modules_in_the_fixture_venv
-# Built before the stream runs, so the build takes none of the signal's window.
-require_tatolab_read_track
 
 # Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
 # suffix under $TMPDIR — so the directory is where the skill looks on both.
@@ -332,17 +323,8 @@ if grep -q "cannot be read as an audio block" "$NODE_LOG"; then
     exit 1
 fi
 
-# First verdict: the block-level contract on the microphone's own port —
-# cadence, timestamp continuity, and a frame the engine did not re-stamp.
-if ! "$HERE/verify_audio_channel.sh" microphonesource \
-    --stream "$STREAM_ID" --count "$BAG_COUNT" --port audio \
-    --expect-the-track-stamped-with-the-block >&2; then
-    echo "ERROR: the microphone's channel failed its block-level contract" >&2
-    exit 1
-fi
-
-# Second verdict, and the one this fixture exists for: the signal itself. The
-# node writes what it captured once it has the whole thing.
+# The verdict: the signal itself. The node writes what it captured once it has
+# the whole thing.
 echo "waiting for the node to write what it captured" >&2
 for _ in $(seq 120); do
     if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then

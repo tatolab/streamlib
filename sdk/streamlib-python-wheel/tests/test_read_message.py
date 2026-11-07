@@ -12,8 +12,9 @@ a helper-process one opened directly on it, so nothing here starts a runtime or
 touches a device.
 """
 
+import json
 import os
-from collections.abc import Iterator
+from collections.abc import Buffer, Iterator
 from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
@@ -21,11 +22,9 @@ import pytest
 from tatolab.runtime import _engine
 from tatolab.stream import (
     Message,
-    MsgpackCast,
     NodeLinkDataAccess,
     PortPayloadBorrow,
     RuntimeContextFullAccess,
-    msgpack,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -40,10 +39,14 @@ STAMP_NS = 1_700_000_000
 
 
 @dataclass
-class AccessUnitDescription(MsgpackCast):
+class AccessUnitDescription:
     """A record `into=` can cast a payload into."""
 
     codec: str
+
+    @classmethod
+    def from_bytes(cls, payload: Buffer) -> "AccessUnitDescription":
+        return cls(**json.loads(bytes(payload)))
 
 
 @dataclass
@@ -153,7 +156,7 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
 def test_into_casts_the_payload_the_way_read_does(
     one_link_into_one_port: OneLinkIntoOnePort,
 ):
-    one_link_into_one_port.deliver(msgpack.pack({"codec": "avc1.64001f"}), starts_group=False)
+    one_link_into_one_port.deliver(json.dumps({"codec": "avc1.64001f"}).encode(), starts_group=False)
 
     message = one_link_into_one_port.context.inputs.read_message(
         INPUT_PORT, into=AccessUnitDescription

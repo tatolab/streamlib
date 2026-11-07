@@ -12,8 +12,7 @@ import json
 import os
 import sys
 
-from tatolab.stream import log, node
-from tatolab.stream.msgpack import pack, unpack
+from tatolab.stream import Input, Output, Records, log, node
 
 BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS = 20
 
@@ -25,8 +24,7 @@ class ReportsItsInterpreterSource:
     def __init__(self) -> None:
         self.announced = False
 
-    @node.output()
-    def bags_to_downstream(self) -> None: ...
+    bags_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         if not self.announced:
@@ -45,7 +43,7 @@ class ReportsItsInterpreterSource:
             )
             self.announced = True
         ctx.outputs.write(
-            "bags_to_downstream", pack({"produced_by_interpreter": sys.executable})
+            self.bags_to_downstream, {"produced_by_interpreter": sys.executable}
         )
 
 
@@ -56,11 +54,10 @@ class CountsBagsFromUpstreamSink:
     def __init__(self) -> None:
         self.bags_processed = 0
 
-    @node.input(delivery_profile="ordered")
-    def bags_from_upstream(self) -> None: ...
+    bags_from_upstream = Input(Records, delivery="ordered")
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("bags_from_upstream")
+        payload = ctx.inputs.read(self.bags_from_upstream)
         if payload is None:
             return
         self.bags_processed += 1
@@ -71,7 +68,7 @@ class CountsBagsFromUpstreamSink:
                     {
                         "bags_processed": self.bags_processed,
                         "sink_interpreter": sys.executable,
-                        "upstream_interpreter": unpack(payload)["produced_by_interpreter"],
+                        "upstream_interpreter": payload["produced_by_interpreter"],
                     }
                 )
             )

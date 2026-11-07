@@ -91,11 +91,6 @@ impl HelperGpuPoolClaimTables {
             .contains(pool)
     }
 
-    /// Whether this helper read or acquired any pooled frame.
-    pub(crate) fn knows_any_pooled_frame(&self) -> bool {
-        !self.newest_frame_by_pool_slot_key.lock().is_empty()
-    }
-
     /// Whether this helper holds `frame`'s pool table and knows its row's slot.
     pub(crate) fn knows_the_slot_of(&self, frame: &GpuPoolSlotFrameDescriptorBody) -> bool {
         self.claim_tables_by_pool.lock().contains_key(&frame.pool)

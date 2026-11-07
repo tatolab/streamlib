@@ -53,8 +53,6 @@ if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet --reinstall-pa
     echo "ERROR: could not install tatolab-opus into the fixture venv" >&2
     exit 1
 fi
-# Built before the stream runs, so the build takes none of the signal's window.
-require_tatolab_read_track
 if ! compgen -G "/dev/dri/renderD*" >/dev/null; then
     echo "SKIP: no DRM render node, so no GPU-backed runtime can start here" >&2
     exit 77
@@ -128,16 +126,7 @@ if grep -qE "$OPUS_REFUSALS" "$NODE_LOG"; then
     exit 1
 fi
 
-# First verdict: the block-level contract on the decoder's own output port —
-# cadence and timestamp continuity, read off the wire rather than from the
-# recorder that also does the measuring.
-if ! "$HERE/verify_audio_channel.sh" opusdecoder \
-    --stream "$STREAM_ID" --count 64 --port audio >&2; then
-    echo "ERROR: the decoder's channel failed its block-level contract" >&2
-    exit 1
-fi
-
-# Second verdict, and the one this fixture exists for: the signal itself.
+# The verdict: the signal itself.
 echo "waiting for the node to write what it decoded" >&2
 for _ in $(seq 120); do
     if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then

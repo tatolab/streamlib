@@ -14,8 +14,7 @@ import json
 import os
 import time
 
-from tatolab.stream import log, node
-from tatolab.stream.msgpack import pack, unpack
+from tatolab.stream import Input, Output, Packets, Records, log, node
 
 #: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
 #: uses, then every byte value once, so an encode or decode anywhere between
@@ -51,14 +50,13 @@ class ReportsItsOwnProcessSource:
         self.label = config.label
         self.announced = False
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         if not self.announced:
             report("SOURCE_PID", {"label": self.label, "pid": os.getpid()})
             self.announced = True
-        ctx.outputs.write("frames_to_downstream", pack({"produced_in_pid": os.getpid()}))
+        ctx.outputs.write(self.frames_to_downstream, {"produced_in_pid": os.getpid()})
 
 
 @node
@@ -68,11 +66,10 @@ class ReportsUpstreamProcessSink:
     def __init__(self) -> None:
         self.messages_seen = 0
 
-    @node.input(delivery_profile="newest")
-    def frames_from_upstream(self) -> None: ...
+    frames_from_upstream = Input(Records, delivery="newest")
 
     def process(self, ctx) -> None:
-        payload = ctx.inputs.read("frames_from_upstream")
+        payload = ctx.inputs.read(self.frames_from_upstream)
         if payload is None:
             return
         # Announced on every tenth message rather than once: a test that waits
@@ -80,7 +77,7 @@ class ReportsUpstreamProcessSink:
         # traffic, not a marker emitted before the crash.
         self.messages_seen += 1
         if self.messages_seen % 10 == 1:
-            upstream_pid = unpack(payload)["produced_in_pid"]
+            upstream_pid = payload["produced_in_pid"]
             report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": upstream_pid})
 
 
@@ -93,8 +90,7 @@ class ReportsItsOwnProcessTrackSink:
     is what discriminates the two sides of the boundary.
     """
 
-    @node.input(delivery_profile="ordered")
-    def track_from_upstream(self) -> None: ...
+    track_from_upstream = Input(Packets, delivery="ordered")
 
     def setup(self, ctx) -> None:
         report("TRACK_SINK_PID", {"pid": os.getpid()})
@@ -111,8 +107,7 @@ class WritesRawMessagePayloadSource:
     def __init__(self) -> None:
         self.reported_the_dict_write = False
 
-    @node.output()
-    def raw_messages_to_downstream(self) -> None: ...
+    raw_messages_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None:
         if not self.reported_the_dict_write:
@@ -141,8 +136,7 @@ class ReportsTheRawMessagePayloadItReadSink:
     def __init__(self) -> None:
         self.reported = False
 
-    @node.input(delivery_profile="ordered")
-    def raw_messages_from_upstream(self) -> None: ...
+    raw_messages_from_upstream = Input(Packets, delivery="ordered")
 
     def process(self, ctx) -> None:
         payload = ctx.inputs.read("raw_messages_from_upstream")
@@ -167,8 +161,7 @@ class DiesAbruptlyProbe:
     def __init__(self) -> None:
         self.frames_before_dying = 3
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         self.frames_before_dying -= 1
@@ -187,8 +180,7 @@ class SleepsThroughItsOwnShutdownProbe:
     `teardown()` still run — which is what the markers below are for.
     """
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
@@ -213,8 +205,7 @@ class ForksAWorkerThatOutlivesItProbe:
     def __init__(self) -> None:
         self.worker_pid = None
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def process(self, ctx) -> None:
         if self.worker_pid is None:
@@ -233,8 +224,7 @@ class SleepsThroughItsOwnSetupProbe:
     reaches, and the plan still owes this processor its `teardown()`.
     """
 
-    @node.output()
-    def frames_to_downstream(self) -> None: ...
+    frames_to_downstream = Output(Records)
 
     def setup(self, ctx) -> None:
         report("ASLEEP_IN_SETUP", {"pid": os.getpid()})

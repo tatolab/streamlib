@@ -25,9 +25,9 @@ refuses a mismatch before a frame flows.
 - Landed: #3197 (families and the connect check), #3198 (conversion nodes), #3202 and #3204
   (typed reads and writes per family), #3210 (Rust test nodes), #3211 (audio window stage),
   #3199 (the engine tree; `VideoFrame` becomes `ImageFrame`, `AudioBlock` becomes
-  `ChannelsBlock`).
-- Remaining, in order: #3200 (every module in `packages/`, in PR #3238), #3201 (delete the
-  decorator ports and `MsgpackCast`).
+  `ChannelsBlock`), #3200 (every module in `packages/`, PR #3238).
+- Remaining, in order: #3201 (delete the decorator ports and `MsgpackCast`), then the macro's
+  refusal of a family-less Rust port once `RelayTrackSource` declares one.
 - Done when #3201 has merged and `/ship-change` has folded the change into the plan.
 
 ## 2. Graph foundations: variables and reference edges

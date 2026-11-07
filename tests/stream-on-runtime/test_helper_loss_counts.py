@@ -51,12 +51,14 @@ import os
 import time
 
 from tatolab.stream import (
+    Input,
+    Output,
+    Packets,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 BAGS_PER_TICK = 20
 TICKS_PER_OVERSIZED_BAG = 50
@@ -70,18 +72,16 @@ class FastBagSource:
     def __init__(self) -> None:
         self.ticks = 0
 
-    @node.output()
-    def bags(self) -> None: ...
+    bags = Output(Packets)
 
-    @node.output()
-    def oversized_bags(self) -> None: ...
+    oversized_bags = Output(Packets)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         self.ticks += 1
         for message_index in range(BAGS_PER_TICK):
             ctx.outputs.write(
                 "bags",
-                pack({{"tick": self.ticks, "message_index": message_index}}),
+                bytes([self.ticks % 256, message_index]),
                 starts_group=message_index == 0,
             )
         if self.ticks % TICKS_PER_OVERSIZED_BAG == 0:
@@ -99,8 +99,7 @@ class SlowOrderedSink:
         self.a_message_continuing_a_group_arrived = False
         self.reported_what_its_reads_were_told = False
 
-    @node.input(delivery_profile="ordered")
-    def bags(self) -> None: ...
+    bags = Input(Packets, delivery="ordered")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info("MARKER:SLOW_SINK_PID " + json.dumps({{"pid": os.getpid()}}))
@@ -136,8 +135,7 @@ class SlowOrderedSink:
 class NewestSink:
     """Drains whatever reaches it."""
 
-    @node.input(delivery_profile="newest")
-    def bags(self) -> None: ...
+    bags = Input(Packets, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.inputs.read("bags")

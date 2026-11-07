@@ -4,7 +4,7 @@
 """A stream that plays a known signal and captures it back off the same sink.
 
 The engine carries the audio in both directions: a Python node publishes
-`AudioBlock` bags, the `tatolab-speaker` module's `SpeakerSink` plays them into
+Channels blocks, the `tatolab-speaker` module's `SpeakerSink` plays them into
 the sink named by `STREAMLIB_AUDIO_SINK`, and the `tatolab-microphone` module's
 `MicrophoneSource` captures from the device named
 by `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` — by default that sink's PipeWire
@@ -13,11 +13,8 @@ all — so when this run fails and that one passes, the rig is sound and the
 engine is not.
 
 What consumes the microphone writes the capture out as one waveform, which
-measures the whole signal; the block-level check reads a bounded sample of the
-microphone's port as a track at the local relay. The recorder is an ordinary
-consumer reading the microphone's port over a real link, so the track still
-carries the same messages and the check can judge the block-level contract on
-them.
+measures the whole signal. The recorder is an ordinary consumer reading the
+microphone's port over a real link.
 """
 
 import os

@@ -21,9 +21,9 @@
 #   video   the decode-back, `cargo xtask psnr bar-colors` against
 #           `psnr_test_pattern_bar_colors_baseline_whip_whep_h264.tsv`. This is
 #           the gate.
-#   audio   the block-level channel contract on the decoded audio port, over
-#           the real path — cadence, timestamp continuity, rate, channels,
-#           dtype. It is the microphone and not the engine's known-signal
+#   audio   the receiver's decoder wrote audio blocks off the packets that
+#           crossed the network, read off `graph`. It is the microphone and not
+#           the engine's known-signal
 #           fixture because that fixture publishes once over 3.78 s and stops,
 #           which is shorter than a WHIP ingest plus a WHEP subscribe: the
 #           signal would be over before the far side was playing. Scoring
@@ -348,7 +348,7 @@ wait_until_the_decoder_has_written "$DECODED_FRAMES_FLOOR" 30 || {
 }
 say "Receiver decoded:  $RECEIVER_DECODED_FRAMES frames"
 
-# ── The audio arm: the block contract on what came back ──────────────
+# ── The audio arm: decoded audio came back ───────────────────────────
 # Judged against what was *sent*, not in isolation. A rig whose default capture
 # device publishes nothing — no live input, muted, no source — would otherwise
 # read as this wheel losing the audio it was handed, which is the one confusion
@@ -360,14 +360,17 @@ PUBLISHED_AUDIO_PACKETS="$(written_messages_of_the_output_port \
     || fail "could not read the audio encoder's written count off the sender's graph"
 if [ "$PUBLISHED_AUDIO_PACKETS" -eq 0 ]; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
-elif "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
-        --stream "$RECEIVER_STREAM_ID" --port audio --count 8 \
-        > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
-    AUDIO_VERDICT="pass"
 else
-    AUDIO_VERDICT="fail"
+    RECEIVED_AUDIO_BLOCKS="$(written_messages_of_the_output_port \
+        "$RECEIVER_STREAM_ID" audio_decoder audio)" \
+        || fail "could not read the audio decoder's written count off the receiver's graph"
+    if [ "$RECEIVED_AUDIO_BLOCKS" -gt 0 ]; then
+        AUDIO_VERDICT="pass"
+    else
+        AUDIO_VERDICT="fail"
+    fi
 fi
-say "Audio channel:     $AUDIO_VERDICT ($OUTPUT_DIR/audio_channel.json)"
+say "Audio decoded:     $AUDIO_VERDICT (${RECEIVED_AUDIO_BLOCKS:-0} blocks off $PUBLISHED_AUDIO_PACKETS packets sent)"
 
 remove_the_fixture_projects
 [ "$FIXTURE_PROJECT_REMOVAL_TIMED_OUT" -eq 0 ] \

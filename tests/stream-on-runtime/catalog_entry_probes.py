@@ -10,9 +10,8 @@ the test suite.
 
 import json
 
-from tatolab.stream import RuntimeContextLimitedAccess, log, node
+from tatolab.stream import Input, Output, Records, RuntimeContextLimitedAccess, log, node
 from tatolab.stream.catalog import BinaryEntry, JsonEntry, VideoEntry
-from tatolab.stream.msgpack import pack
 
 DECLARED_ENTRY = BinaryEntry(mode="snapshot", mime="application/msgpack")
 REPLACEMENT_ENTRY = JsonEntry(mode="stream")
@@ -22,11 +21,10 @@ REPLACEMENT_ENTRY = JsonEntry(mode="stream")
 class KeepsItsDeclaredCatalogEntry:
     """Writes a record every tick and never touches its port's entry."""
 
-    @node.output(description="Records", catalog=DECLARED_ENTRY)
-    def records(self) -> None: ...
+    records = Output(Records, description="Records", catalog=DECLARED_ENTRY)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write("records", pack({"kept": True}))
+        ctx.outputs.write(self.records, {"kept": True})
 
 
 @node(execution="continuous", interval_ms=50)
@@ -41,8 +39,7 @@ class ReplacesItsCatalogEntryOnItsFirstTick:
     def __init__(self) -> None:
         self.replaced = False
 
-    @node.output(description="Records", catalog=DECLARED_ENTRY)
-    def records(self) -> None: ...
+    records = Output(Records, description="Records", catalog=DECLARED_ENTRY)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if not self.replaced:
@@ -53,7 +50,7 @@ class ReplacesItsCatalogEntryOnItsFirstTick:
                 log.info("MARKER:CATALOG_ENTRY_REFUSED " + json.dumps(str(refusal)))
             ctx.outputs.set_catalog_entry("records", REPLACEMENT_ENTRY)
             log.info("MARKER:CATALOG_ENTRY_REPLACED")
-        ctx.outputs.write("records", pack({"replaced": True}))
+        ctx.outputs.write(self.records, {"replaced": True})
 
 
 @node
@@ -61,11 +58,10 @@ class ReportsItsUpstreamsCatalogEntry:
     """Reports the entry its one upstream port carries, every message, as
     `MARKER:UPSTREAM_CATALOG_ENTRY <json>`."""
 
-    @node.input(delivery_profile="newest")
-    def records_from_upstream(self) -> None: ...
+    records_from_upstream = Input(Records, delivery="newest")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if ctx.inputs.read("records_from_upstream") is None:
+        if ctx.inputs.read(self.records_from_upstream) is None:
             return
         log.info(
             "MARKER:UPSTREAM_CATALOG_ENTRY "

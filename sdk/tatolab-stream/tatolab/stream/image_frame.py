@@ -3,7 +3,7 @@
 
 """The frame an Image port's read returns: a borrowed GPU surface with its size, format and colour.
 
-Built from the message's Image descriptor, never a msgpack record. It holds its
+Built from the message's Image descriptor. It holds its
 surface against producer reuse while it lives and speaks `__dlpack__`, with
 `writable()` the GPU write door and `cpu()` the CPU one, all from
 `ClaimedSurfacePixelAccess`.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
-from .video_frame import ColorInfo
+from .color_info import ColorInfo
 
 if TYPE_CHECKING:
     from ._gpu_protocols import GpuSurfaceHandle

@@ -8,9 +8,8 @@ a working node. `@node` validates the declaration and stamps it on the class as
 `__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
 that set when a stream naming the class loads, so the set is the contract between
 this module and the runtime's reader, and the two move together.
-Ports are declared with the `@node.input` / `@node.output` method decorators and accessed
-at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
-are never called.
+Ports are declared as `Input` and `Output` class attributes, one family each,
+and accessed at run time through `ctx.inputs` / `ctx.outputs`.
 
 A node is named by its class's import path, derived from `__module__` and
 `__qualname__` by the runtime. Identity is never authored here.
@@ -21,9 +20,9 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import typing
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Optional, TypeVar
 
-from .catalog import AudioEntry, BinaryEntry, CatalogEntry, JsonEntry, TextEntry, VideoEntry
+from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
 
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
@@ -55,7 +54,6 @@ NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
-_DELIVERY_PROFILES = ("newest", "ordered")
 _AUDIO_WINDOW_DTYPES = ("f32", "f64")
 
 AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE = "source"
@@ -76,7 +74,7 @@ class AudioWindowMatchDeviceSentinel:
 
 AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
 """The engine-side spelling for a contract resolved at `setup()` from a device
-stream — reachable here only so [`node.input`] can recognise and refuse it.
+stream — reachable here only so an `Input`'s `window=` can recognise and refuse it.
 
 It is on no public surface: only a native node declares it, in
 Rust, where a node opens the device stream that settles it. A Python node
@@ -254,11 +252,7 @@ def _audio_window_declaration(
 
     return audio_window._as_declaration()
 
-_INPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_input_port"
-_OUTPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_output_port"
-
 NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
-MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any])
 
 
 _CATALOG_ENTRY_TYPES = (VideoEntry, AudioEntry, TextEntry, JsonEntry, BinaryEntry)
@@ -276,8 +270,7 @@ def _catalog_entry_declaration(catalog: object, port_name: str) -> "dict[str, An
 
 
 class NodeDeclarationDecorator:
-    """The type of [`node`]: `@node` itself, carrying the port decorators
-    `@node.input` and `@node.output`."""
+    """The type of [`node`]: `@node` itself."""
 
     __slots__ = ()
 
@@ -293,14 +286,14 @@ class NodeDeclarationDecorator:
     ) -> Any:
         """Mark a class as a streamlib node.
 
-        Usable bare (`@node`) or with keyword arguments; its ports are declared
-        with [`node.input`] and [`node.output`]. It declares execution,
+        Usable bare (`@node`) or with keyword arguments; its ports are `Input`
+        and `Output` class attributes, each of one family. It declares execution,
         interval, scheduling priority and description — never identity: a node is
         named by the import path of the class it is, derived from `__module__` and
         `__qualname__`.
 
         Port names are cast to lowercase URL-safe characters, the way every exposed
-        name is, so a method `Video` declares the port `video` and a lookup of
+        name is, so an attribute `Video` declares the port `video` and a lookup of
         either spelling finds it. Two ports casting alike are refused here.
 
         `execution` defaults to `"reactive"` for a class that declares at least one
@@ -352,119 +345,12 @@ class NodeDeclarationDecorator:
 
         return apply_to_class
 
-    @staticmethod
-    def input(
-        name: Optional[str] = None,
-        *,
-        description: str = "",
-        delivery_profile: Optional[str] = None,
-        borrow_quota: Optional[int] = None,
-        audio_window: Optional[AudioWindowContract] = None,
-    ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
-        """Mark a method as declaring an input port.
-
-        The port is named after the method unless `name` overrides it. The port
-        carries no type — the method's return annotation is the declaration, read
-        by humans and type checkers only. `delivery_profile` is required and names
-        a read policy: `"newest"` drains to the most recent message, `"ordered"`
-        receives them in publication order. Neither promises delivery — both drop
-        under sustained pressure, and no link ever blocks a producer. The
-        decorated method is a declaration only: messages are read with
-        `ctx.inputs.read(port_name)`.
-
-        `borrow_quota` is how many read messages each link into the port may
-        hold beyond its mailbox at once — a borrow, or a `memoryview` or DLPack
-        tensor over one, kept past the read. Past it, that link drops its newest
-        frame and counts it, and no other link is affected. It defaults to 2;
-        the runtime refuses one past its maximum at wiring.
-
-        `audio_window` is optional and opt-in: an audio input may declare an
-        [`AudioWindowContract`], stating the rate, dtype, window size and hop it
-        wants, and a channel count only where it needs a particular one — absent,
-        every window carries the source's own count. A port declaring no contract
-        at all is unchanged in every respect.
-        """
-        if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
-            raise ValueError(
-                f"invalid delivery_profile {delivery_profile!r}: must be one of "
-                f"{', '.join(_DELIVERY_PROFILES)}"
-            )
-
-        if borrow_quota is not None and (
-            isinstance(borrow_quota, bool)
-            or not isinstance(borrow_quota, int)
-            or borrow_quota < 0
-        ):
-            raise ValueError(
-                f"invalid borrow_quota {borrow_quota!r}: must be a whole number of messages, "
-                f"0 or more"
-            )
-
-        def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
-            port_name = name or method.__name__
-            # `delivery_profile` defaults to None rather than being a required
-            # keyword so the omission is caught here, where the port's name is
-            # known — a bare TypeError from the call could not name it.
-            if delivery_profile is None:
-                raise ValueError(
-                    f"input port {port_name!r} must declare a delivery_profile — one of "
-                    f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
-                    f"is declared port-locally at the consuming input port"
-                )
-            marker: "dict[str, Any]" = {
-                "name": port_name,
-                "description": description,
-                "delivery_profile": delivery_profile,
-            }
-            if borrow_quota is not None:
-                marker["borrow_quota"] = borrow_quota
-            # Present only when declared: a contract-less port's marker is what it
-            # always was, which is what makes the contract opt-in in the tree and
-            # not only in the prose.
-            if audio_window is not None:
-                marker["audio_window"] = _audio_window_declaration(
-                    audio_window, port_name, delivery_profile
-                )
-            setattr(method, _INPUT_PORT_MARKER_ATTRIBUTE, marker)
-            return method
-
-        return attach_input_port_marker
-
-    @staticmethod
-    def output(
-        name: Optional[str] = None,
-        *,
-        description: str = "",
-        catalog: "CatalogEntry | None" = None,
-    ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
-        """Mark a method as declaring an output port.
-
-        Same shape as [`node.input`], minus the delivery profile — delivery is the
-        consuming port's policy. Messages are written with
-        `ctx.outputs.write(port_name, payload_bytes)`. `catalog` is the port's
-        catalog entry, one of the `tatolab.stream.catalog` entries, which a
-        reader follows and `graph` renders; nothing checks a payload against it.
-        """
-
-        def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
-            port_name = name or method.__name__
-            marker: "dict[str, Any]" = {
-                "name": port_name,
-                "description": description,
-            }
-            if catalog is not None:
-                marker["catalog_entry"] = _catalog_entry_declaration(catalog, port_name)
-            setattr(method, _OUTPUT_PORT_MARKER_ATTRIBUTE, marker)
-            return method
-
-        return attach_output_port_marker
-
     def __repr__(self) -> str:
         return "node"
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node class; `node.input` and `node.output` declare its ports."""
+"""Declares a node class; its `Input` and `Output` attributes are its ports."""
 
 
 def _declare_node(
@@ -613,7 +499,7 @@ def _resolved_init_annotations(node_class: type) -> "dict[str, Any]":
 def _collect_declared_ports(
     node_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Every `@node.input` / `@node.output` declaration, as the dicts the engine reads,
+    """Every `Input` / `Output` declaration, as the dicts the engine reads,
     each port under its cast name."""
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
@@ -669,32 +555,21 @@ def _collect_declared_ports(
 
 
 def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
-    """Every port marker declared on the class or inherited, in declaration order:
-    a decorated method's, and an `Input` or `Output` class attribute's.
+    """Every `Input` and `Output` class attribute declared on the class or
+    inherited, in declaration order.
 
     Walks the MRO in reverse so a subclass's redeclaration of an inherited
-    attribute wins, and a base class's ports are inherited rather than lost.
+    attribute wins, a base class's ports are inherited rather than lost, and a
+    port a subclass shadows with anything else is no longer declared.
     """
-    markers_by_attribute: "dict[str, list[dict[str, Any]]]" = {}
+    port_attributes_by_name: "dict[str, Input[Any] | Output[Any]]" = {}
     for ancestor in reversed(node_class.__mro__):
         for attribute_name, attribute in vars(ancestor).items():
             if isinstance(attribute, (Input, Output)):
-                markers_by_attribute[attribute_name] = [attribute._as_port_marker()]
-                continue
-            attribute_markers = [
-                marker
-                for marker_attribute in (
-                    _INPUT_PORT_MARKER_ATTRIBUTE,
-                    _OUTPUT_PORT_MARKER_ATTRIBUTE,
-                )
-                for marker in [getattr(attribute, marker_attribute, None)]
-                if marker is not None
-            ]
-            if attribute_markers:
-                markers_by_attribute[attribute_name] = attribute_markers
-    return [
-        marker for markers in markers_by_attribute.values() for marker in markers
-    ]
+                port_attributes_by_name[attribute_name] = attribute
+            else:
+                port_attributes_by_name.pop(attribute_name, None)
+    return [attribute._as_port_marker() for attribute in port_attributes_by_name.values()]
 
 
 def _resolve_execution(
