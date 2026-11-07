@@ -173,9 +173,9 @@ The order is: the families, then variables, then the gateway and track nodes.
 - **Latest values.** An island holds the last value of each upstream input. A read returns
   `None` only before the first value.
 - **Pairing.** Several inputs pair as the latest of each; the node re-evaluates when any one
-  changes. See [NEEDS DECISION 1].
+  changes. See DECIDED 1.
 - **Evaluation count.** Once per change of inputs or timestamp, memoised, so two readers of one
-  `Random` agree. See [NEEDS DECISION 2].
+  `Random` agree. See DECIDED 2.
 - **Time.** `now` is the reader's `ctx.time` at the read, in integer nanoseconds on the
   stream's monotonic clock. Reproducible in stepped mode; read-time in real-time mode.
 - **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
@@ -183,7 +183,7 @@ The order is: the families, then variables, then the gateway and track nodes.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
   (§Inputs and config).
 - **A control value on a wire.** An island edge carrying one value is Channels with an
-  irregular control rate: one sample per message, rate unset. See [NEEDS DECISION 4].
+  irregular control rate: one sample per message, rate unset. See DECIDED 4.
 - **The step ledger** leaves links inside an island off its balance; edge links count as today.
 - **Loss.** A function-call link cannot drop; edge links take loss slots on the hosting
   helper's board, so no loss is silent.
@@ -286,7 +286,7 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   name to its board.
   When a helper dies with the breadcrumb set, its restart moves that node out to its own
   process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
-  the cost. See [NEEDS DECISION 5].
+  the cost. See DECIDED 5.
 
 ### The pool and promotion (phase 4)
 
@@ -381,19 +381,20 @@ The first two are removed in the PR that carries this proposal, by owner ruling.
 
 ## Decisions
 
-Each carries a recommendation that is built if nobody overrules it.
+All seven were settled by the owner on 2026-11-06 and 2026-11-07.
 
-- **[NEEDS DECISION 1] Pairing.** Latest of each, re-evaluated when any changes (TouchDesigner),
-  or wait for matching timestamps? *Recommendation:* latest of each; no input waits on another.
-- **[NEEDS DECISION 2] Evaluation count.** Once per change, memoised, or once per pull
-  (Blueprint)? *Recommendation:* once per change; a per-pull `Random` read twice disagrees.
+- **DECIDED 1 — Pairing (owner, 2026-11-07).** Latest of each input, re-evaluated when any
+  changes, as TouchDesigner does; no input waits on another. Rejected: waiting for matching
+  timestamps.
+- **DECIDED 2 — Evaluation count (owner, 2026-11-07).** Once per change, memoised. Rejected:
+  once per pull, as Blueprint does, since a per-pull `Random` read twice disagrees.
 - **DECIDED 3 — Pins (owner, 2026-11-06).** An unlinked input takes its pin value, else its
   default, as Blueprint's pins do; settled with DECIDED 7.
-- **[NEEDS DECISION 4] A control value on a wire.** Channels with an irregular control rate, or
-  Records? *Recommendation:* Channels, which keeps control values where the plan puts them.
-- **[NEEDS DECISION 5] A crash in an inline function node.** Breadcrumb and promotion on crash, or
-  always isolate? *Recommendation:* the breadcrumb; it bounds the damage to one restart of the
-  reader without a pool.
+- **DECIDED 4 — A control value on a wire (owner, 2026-11-07).** Channels with an irregular
+  control rate, which keeps control values where the plan puts them. Rejected: Records.
+- **DECIDED 5 — A crash in an inline function node (owner, 2026-11-07).** The breadcrumb and
+  promotion on crash; it bounds the damage to one restart of the reader without a pool.
+  Rejected: always isolating a function node in its own process.
 - **DECIDED 6 — The explicit decorators (owner, 2026-11-06).** Bare `@node` is retired: every
   node names its kind, so a reader or an agent never infers it. `@node.shader`, `@node.function`
   (stateful when it takes `State`) and `@node.process` (a class that may do anything, in its
