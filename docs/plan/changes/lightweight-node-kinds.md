@@ -290,8 +290,9 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
 
 ### The pool and promotion (phase 4)
 
-- Built only if real graphs carry Python function nodes that no Python class reads. One pool interpreter
-  per stream hosts such nodes as plain calls. A function node that runs past its island's frame
+- Required (owner, 2026-11-07): graphs grow large, are shared, and several streams run on one
+  machine, so Python function nodes that no Python class reads must not each cost a helper.
+  One pool interpreter per stream hosts such nodes as plain calls. A function node that runs past its island's frame
   interval three times running is promoted to its own process; a hung call cannot be
   pre-empted, so the pool is respawned with state handed over through the board.
 
@@ -463,7 +464,7 @@ Assumed unless overruled:
    1. Inline in a Python reader.
    2. The side-effect lint.
    3. The crash breadcrumb and promotion on crash.
-4. The pool and promotion, only if graphs need it.
+4. The pool and promotion.
 5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.
 
