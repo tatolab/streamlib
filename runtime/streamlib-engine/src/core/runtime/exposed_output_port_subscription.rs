@@ -32,9 +32,8 @@ use crate::core::graph::{
 };
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
-use crate::iceoryx2::{
-    BagsAGapInTheNumberingSaysWereLost, DataChannelSampleUserHeader, MessageReadFromInputPort,
-};
+use crate::iceoryx2::MessageReadFromInputPort;
+use streamlib_ipc_types::LossTallyOfAReservedSlotReader;
 
 /// One output port a loaded stream exposes, as it stands now.
 #[derive(Debug, Clone, PartialEq)]
@@ -394,62 +393,6 @@ pub(super) fn the_source_wiring_its_answer_says(
     }
 }
 
-/// A reserved-slot reader's messages: each bag's payload, stamp and group
-/// flag, with every message lost ahead of it — overwritten in the ring,
-/// unreadable, passed over by the reader, or declared lost upstream by its
-/// writer — told on the next message read. A run is one publisher's unbroken
-/// numbering.
-pub(super) struct LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
-    bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost<OneUnbrokenRun>,
-    lost_ahead_of_the_next_message_forwarded: u64,
-}
-
-impl<OneUnbrokenRun> Default for LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
-    fn default() -> Self {
-        Self {
-            bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost::default(),
-            lost_ahead_of_the_next_message_forwarded: 0,
-        }
-    }
-}
-
-impl<OneUnbrokenRun: Copy + PartialEq> LossTallyOfAReservedSlotReader<OneUnbrokenRun> {
-    pub(super) fn message_from_a_bag_headed(
-        &mut self,
-        run: OneUnbrokenRun,
-        channel_user_header: DataChannelSampleUserHeader,
-        sample_payload_area: &[u8],
-    ) -> Option<MessageReadFromInputPort> {
-        self.lost_ahead_of_the_next_message_forwarded = self
-            .lost_ahead_of_the_next_message_forwarded
-            .saturating_add(
-                self.bags_the_ring_overwrote
-                    .how_many_were_lost_before(run, channel_user_header.sequence_number),
-            )
-            .saturating_add(channel_user_header.messages_lost_upstream_before_this_one);
-        let Ok(payload) = channel_user_header.payload_within(sample_payload_area) else {
-            self.lost_ahead_of_the_next_message_forwarded += 1;
-            return None;
-        };
-        Some(MessageReadFromInputPort {
-            payload: payload.to_vec().into(),
-            timestamp_ns: channel_user_header.timestamp_ns,
-            group_boundary: channel_user_header.group_boundary(),
-            lost_since_last_read: std::mem::take(
-                &mut self.lost_ahead_of_the_next_message_forwarded,
-            ),
-            payload_descriptor: channel_user_header.payload_descriptor,
-        })
-    }
-
-    pub(super) fn count_a_message_dropped_into_a_full_receiver(
-        &mut self,
-        dropped: MessageReadFromInputPort,
-    ) {
-        self.lost_ahead_of_the_next_message_forwarded += dropped.lost_since_last_read + 1;
-    }
-}
-
 impl ReservedSlotBagForwarding for LossTallyOfAReservedSlotReader<UniquePublisherId> {
     type Forwarded = MessageReadFromInputPort;
 
@@ -462,10 +405,11 @@ impl ReservedSlotBagForwarding for LossTallyOfAReservedSlotReader<UniquePublishe
             bag.channel_user_header,
             bag.sample_payload_area,
         )
+        .map(MessageReadFromInputPort::from)
     }
 
     fn dropped_into_a_full_receiver(&mut self, dropped: MessageReadFromInputPort, _channel: &str) {
-        self.count_a_message_dropped_into_a_full_receiver(dropped);
+        self.count_a_message_never_delivered(dropped.lost_since_last_read);
     }
 }
 
@@ -488,7 +432,7 @@ mod tests {
         MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
     };
-    use crate::iceoryx2::{DataChannelPayloadDescriptor, MessageGroupBoundary, OutputWriterInner};
+    use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
 
     /// How long a message or a change has to arrive.
     const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
@@ -826,86 +770,6 @@ mod tests {
                 catalog_entry: Some(entry),
                 ..exposed_out1
             }]
-        );
-    }
-
-    /// A channel user header numbered `sequence_number`, stamping 7 and
-    /// `stamped_payload_bytes`, starting a group, with no declared loss.
-    fn numbered_stamping(
-        sequence_number: u64,
-        stamped_payload_bytes: usize,
-    ) -> DataChannelSampleUserHeader {
-        DataChannelSampleUserHeader {
-            sequence_number,
-            ..DataChannelSampleUserHeader::new(
-                7,
-                stamped_payload_bytes as u32,
-                MessageGroupBoundary::StartsGroup,
-                DataChannelPayloadDescriptor::bytes(),
-            )
-        }
-    }
-
-    /// A gap in the numbering, an unreadable bag and a message dropped into a
-    /// full receiver are each told on the next message forwarded.
-    #[test]
-    fn the_forwarding_tells_a_gap_an_unreadable_bag_and_a_drop_on_the_next_message() {
-        let mut forwarding = LossTallyOfAReservedSlotReader::<u64>::default();
-        let run = 1u64;
-        let first = forwarding
-            .message_from_a_bag_headed(run, numbered_stamping(0, 1), b"a")
-            .unwrap();
-        assert_eq!(
-            first,
-            a_message(b"a", 7, MessageGroupBoundary::StartsGroup, 0)
-        );
-        assert!(
-            forwarding
-                .message_from_a_bag_headed(run, numbered_stamping(3, 8), &[0u8; 4])
-                .is_none()
-        );
-        let dropped = forwarding
-            .message_from_a_bag_headed(run, numbered_stamping(4, 1), b"b")
-            .unwrap();
-        assert_eq!(
-            dropped.lost_since_last_read, 3,
-            "two overwritten, one unreadable"
-        );
-        forwarding.count_a_message_dropped_into_a_full_receiver(dropped);
-        assert_eq!(
-            forwarding
-                .message_from_a_bag_headed(run, numbered_stamping(5, 1), b"c")
-                .unwrap()
-                .lost_since_last_read,
-            4,
-            "the dropped message and the losses it carried"
-        );
-    }
-
-    /// A loss the writer declared upstream is told on the message carrying it,
-    /// even when that message is the run's first.
-    #[test]
-    fn the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it() {
-        let mut forwarding = LossTallyOfAReservedSlotReader::<u64>::default();
-        let run = 1u64;
-        let first_carrying_two_lost_upstream = DataChannelSampleUserHeader {
-            messages_lost_upstream_before_this_one: 2,
-            ..numbered_stamping(0, 1)
-        };
-        assert_eq!(
-            forwarding
-                .message_from_a_bag_headed(run, first_carrying_two_lost_upstream, b"a")
-                .unwrap()
-                .lost_since_last_read,
-            2
-        );
-        assert_eq!(
-            forwarding
-                .message_from_a_bag_headed(run, numbered_stamping(1, 1), b"b")
-                .unwrap()
-                .lost_since_last_read,
-            0,
-            "a declared loss is told once"
         );
     }
 

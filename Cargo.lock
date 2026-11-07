@@ -5863,6 +5863,7 @@ dependencies = [
  "libc",
  "loom",
  "mach2",
+ "streamlib-runtime-client-contract",
  "streamlib-surface-client",
  "tracing",
 ]
