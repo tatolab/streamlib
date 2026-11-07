@@ -1,0 +1,53 @@
+[package]
+name = "tatolab-moq"
+version = "0.68.33"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "MoQ gateway, track, send and receive nodes for StreamLib, as the tatolab-moq extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `tatolab.moq.processors` imports. It crosses the
+# CPython ABI and, for the gateway's settings and the receive node's writes, the
+# module host table.
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
+tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.12.0", features = ["pyo3"] }
+
+# The MoQ client, pinned exactly as every reader of a relay pins it.
+moq-net = { version = "=0.3.15" }
+moq-tokio = { version = "=0.19.28" }
+moq-json = { version = "=0.5.13" }
+hang = { version = "=0.21.16" }
+moq-auth = { version = "=0.2.1", default-features = false }
+# The one relay-track reader, which `tatolab-read-track` reads through too.
+streamlib-relay-track-reader = { path = "../../runtime/streamlib-relay-track-reader" }
+
+# The send, track and receive nodes reach their gateway's one session through
+# shared memory, in their own domain beside the engine's.
+iceoryx2 = "0.10.0"
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.17"
+rmpv = "1.3.1"
+url = "2.5.8"
+tracing = "0.1.44"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+moq-relay = { version = "=0.17.7", default-features = false, features = ["noq"] }
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]
