@@ -9,9 +9,9 @@ end, so a run that stalls half way still says how far it got.
 
 The encoded probe reads the encoder's output the way a moq-dev player does:
 each message a media frame — the varint timestamp, then one Opus packet — and
-the port's catalog entry carrying the `OpusHead`. The decoded probe reads with
-`read_with_timestamp`, because the frame-header stamp is what the trim and
-the derived-stamp assertions are about.
+the port's catalog entry carrying the `OpusHead`. The decoded probe reads
+each Channels block's own stamp, because that stamp is what the trim and the
+derived-stamp assertions are about.
 
 `StereoToneSource` states its own format rather than discovering one, so the
 count the encoder follows is the test's fact and not the machine's. It carries
@@ -22,15 +22,18 @@ import json
 import math
 import struct
 
+import numpy
 from hang_media_frame_reading import split_hang_legacy_container_media_frame
 from tatolab.stream import (
-    AudioBlock,
+    Channels,
+    Input,
+    Output,
+    Packets,
     RuntimeContextLimitedAccess,
     log,
     monotonic_now_ns,
     node,
 )
-from tatolab.stream.msgpack import pack
 
 ENCODED_PACKET_MARKER = "MARKER:ENCODED_PACKET "
 ENCODED_PACKETS_COMPLETE_MARKER = "MARKER:ENCODED_PACKETS_COMPLETE"
@@ -64,7 +67,6 @@ ENCODED_PACKETS_REPORTED = 40
 DECODED_BLOCKS_REPORTED = 24
 
 ENCODED_PORT = "encoded_audio_from_upstream"
-DECODED_PORT = "audio_from_upstream"
 
 
 @node(execution="continuous", interval_ms=1)
@@ -76,8 +78,7 @@ class StereoToneSource:
     read as the codec's failure rather than this fixture's.
     """
 
-    @node.output()
-    def audio(self) -> None: ...
+    audio = Output(Channels, rate=SOURCE_SAMPLE_RATE, dtype="f32")
 
     def __init__(self) -> None:
         self._frames_published = 0
@@ -97,28 +98,16 @@ class StereoToneSource:
             return
 
         at = self._frames_published
-        scalars = []
-        for offset in range(SOURCE_FRAMES_PER_BLOCK):
-            instant = (at + offset) / SOURCE_SAMPLE_RATE
-            scalars.extend([math.sin(math.tau * TONE_HZ * instant)] * SOURCE_CHANNELS)
-
+        instants = (at + numpy.arange(SOURCE_FRAMES_PER_BLOCK)) / SOURCE_SAMPLE_RATE
+        tone = numpy.sin(math.tau * TONE_HZ * instants).astype(numpy.float32)
         ctx.outputs.write(
-            "audio",
-            pack(
-                {
-                    "samples": struct.pack(f"<{len(scalars)}f", *scalars),
-                    "sample_rate": SOURCE_SAMPLE_RATE,
-                    "channels": SOURCE_CHANNELS,
-                    "sample_count": SOURCE_FRAMES_PER_BLOCK,
-                    "dtype": "f32",
-                    # Derived from the samples before it rather than read fresh,
-                    # so the stamps describe one gapless stream even though the
-                    # publishing runs ahead of real time.
-                    "first_sample_timestamp_ns": (
-                        anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
-                    ),
-                }
-            ),
+            self.audio,
+            numpy.ascontiguousarray(numpy.stack([tone] * SOURCE_CHANNELS)),
+            # Derived from the samples before it rather than read fresh, so the
+            # stamps describe one gapless stream even though the publishing
+            # runs ahead of real time.
+            timestamp_ns=anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE,
+            start_sample=at,
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
@@ -143,8 +132,7 @@ class EncodedOpusMediaFrameProbe:
     def __init__(self) -> None:
         self.packets_admitted = 0
 
-    @node.input(delivery_profile="ordered")
-    def encoded_audio_from_upstream(self) -> None: ...
+    encoded_audio_from_upstream = Input(Packets, delivery="ordered", requires_codec=("opus",))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.packets_admitted >= ENCODED_PACKETS_REPORTED:
@@ -197,30 +185,29 @@ class DecodedAudioBlockProbe:
     def __init__(self) -> None:
         self.blocks_admitted = 0
 
-    @node.input(delivery_profile="ordered")
-    def audio_from_upstream(self) -> None: ...
+    audio_from_upstream = Input(Channels, delivery="ordered")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.blocks_admitted >= DECODED_BLOCKS_REPORTED:
             return
-        payload, timestamp_ns = ctx.inputs.read_with_timestamp(DECODED_PORT)
-        if payload is None:
+        block = ctx.inputs.read(self.audio_from_upstream)
+        if block is None:
             return
-        block = AudioBlock.from_bytes(payload)
         self.blocks_admitted += 1
         log.info(
             DECODED_BLOCK_MARKER
             + json.dumps(
                 {
                     "sample_rate": block.sample_rate,
-                    "channels": block.channels,
+                    "channels": block.channel_count,
                     "dtype": block.dtype,
-                    "sample_count": block.sample_count,
+                    "sample_count": block.samples_per_channel,
+                    "start_sample": block.start_sample,
                     # Counted off the samples themselves rather than trusted
-                    # from `sample_count`, so a block declaring a length it
-                    # does not carry is caught rather than believed.
-                    "scalars_read": int(block.samples.size),
-                    "timestamp_ns": timestamp_ns,
+                    # from `samples_per_channel`, so a block declaring a length
+                    # it does not carry is caught rather than believed.
+                    "scalars_read": int(numpy.from_dlpack(block).size),
+                    "timestamp_ns": block.timestamp_ns,
                 }
             )
         )
