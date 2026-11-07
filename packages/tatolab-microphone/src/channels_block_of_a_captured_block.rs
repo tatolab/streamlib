@@ -22,14 +22,20 @@ fn interleaved_f32_samples_of_captured_bytes(
     sample_format: ModuleHostAudioSampleFormat,
 ) -> Vec<f32> {
     match sample_format {
-        ModuleHostAudioSampleFormat::F32 => interleaved_sample_bytes
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-            .collect(),
-        ModuleHostAudioSampleFormat::I16 => interleaved_sample_bytes
-            .chunks_exact(2)
-            .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32_768.0)
-            .collect(),
+        ModuleHostAudioSampleFormat::F32 => {
+            let (samples, _) = interleaved_sample_bytes.as_chunks::<4>();
+            samples
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect()
+        }
+        ModuleHostAudioSampleFormat::I16 => {
+            let (samples, _) = interleaved_sample_bytes.as_chunks::<2>();
+            samples
+                .iter()
+                .map(|bytes| f32::from(i16::from_le_bytes(*bytes)) / 32_768.0)
+                .collect()
+        }
     }
 }
 
