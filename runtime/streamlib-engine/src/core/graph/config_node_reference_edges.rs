@@ -41,6 +41,7 @@ pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
 pub(crate) struct ConfigNodeReferenceEdgeOfOneNode {
     pub(crate) edge: ConfigNodeReferenceEdgeOutput,
     pub(crate) referenced_node_type_import_path: Option<String>,
+    pub(crate) one_referrer_per_referenced_node: bool,
 }
 
 /// The reference edges `config` holds under `keys_holding_a_node_reference`. A
@@ -56,6 +57,7 @@ pub(crate) fn config_node_reference_edges_of_one_node(
         config_key,
         referenced_node_type_import_path,
         takes_a_value_other_than_a_node_reference,
+        one_referrer_per_referenced_node,
     } in keys_holding_a_node_reference
     {
         let Some(config_value) = config.get(&config_key).filter(|value| !value.is_null()) else {
@@ -78,9 +80,44 @@ pub(crate) fn config_node_reference_edges_of_one_node(
                 referenced_node: referenced_node.to_string(),
             },
             referenced_node_type_import_path,
+            one_referrer_per_referenced_node,
         });
     }
     Ok(edges)
+}
+
+/// Refuse a second node naming, under a config key that takes one referrer per
+/// referenced node, a node another node already names under that key.
+pub(crate) fn refuse_a_second_referrer_of_a_node_that_takes_one<'edge>(
+    references: impl IntoIterator<Item = &'edge ConfigNodeReferenceEdgeOfOneNode>,
+) -> Result<()> {
+    let mut first_referrer_by_key_and_referenced_node: HashMap<(String, String), &str> =
+        HashMap::new();
+    for reference in references {
+        if !reference.one_referrer_per_referenced_node {
+            continue;
+        }
+        let ConfigNodeReferenceEdgeOutput {
+            node,
+            config_key,
+            referenced_node,
+        } = &reference.edge;
+        let key_and_referenced_node = (
+            config_key.clone(),
+            cast_exposed_name_to_url_safe(referenced_node)?.into_owned(),
+        );
+        if let Some(first_referrer) =
+            first_referrer_by_key_and_referenced_node.get(&key_and_referenced_node)
+        {
+            return Err(Error::GraphError(format!(
+                "node `{node}`'s config key `{config_key}` names node `{referenced_node}`, which \
+                 node `{first_referrer}` already names under `{config_key}`; one node at most \
+                 names a node under that key"
+            )));
+        }
+        first_referrer_by_key_and_referenced_node.insert(key_and_referenced_node, node);
+    }
+    Ok(())
 }
 
 /// Refuse `reference` when the node it names is not `referenced_node_type`,
@@ -139,7 +176,7 @@ pub(crate) fn refuse_a_config_update_naming_a_node_the_graph_does_not_hold(
                 .map(|cast| (cast.into_owned(), node.processor_type.clone()))
         })
         .collect();
-    for reference in references {
+    for reference in &references {
         let referenced_node = &reference.edge.referenced_node;
         let Some(referenced_node_type) = type_of_each_live_node_by_cast
             .get(cast_exposed_name_to_url_safe(referenced_node)?.as_ref())
@@ -160,7 +197,34 @@ pub(crate) fn refuse_a_config_update_naming_a_node_the_graph_does_not_hold(
                 )
             )));
         };
-        refuse_a_reference_to_a_node_of_the_wrong_type(&reference, referenced_node_type)?;
+        refuse_a_reference_to_a_node_of_the_wrong_type(reference, referenced_node_type)?;
+    }
+    if references
+        .iter()
+        .any(|reference| reference.one_referrer_per_referenced_node)
+    {
+        let mut references_of_every_other_live_node = Vec::new();
+        for live_node in graph.traversal().v(()).iter() {
+            if &live_node.id == processor_id {
+                continue;
+            }
+            let Some(live_config) = &live_node.config else {
+                continue;
+            };
+            references_of_every_other_live_node.extend(config_node_reference_edges_of_one_node(
+                &live_node.display_name,
+                live_config,
+                config_keys_of_a_node_type_holding_a_node_reference(
+                    node_types,
+                    &live_node.processor_type,
+                ),
+            )?);
+        }
+        refuse_a_second_referrer_of_a_node_that_takes_one(
+            references_of_every_other_live_node
+                .iter()
+                .chain(references.iter()),
+        )?;
     }
     Ok(())
 }
