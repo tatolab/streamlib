@@ -23,16 +23,17 @@ Every port has one of five families (Image, Packets, Records, Channels, Array), 
 refuses a mismatch before a frame flows.
 
 - Landed: #3197 (families and the connect check), #3198 (conversion nodes), #3202 and #3204
-  (typed reads and writes per family), #3210 (Rust test nodes), #3211 (audio window stage).
-- Remaining, in order: #3199 (the engine tree; `VideoFrame` becomes `ImageFrame`, `AudioBlock`
-  becomes `ChannelsBlock`), #3200 (every module in `packages/`), #3201 (delete the decorator
-  ports and `MsgpackCast`).
+  (typed reads and writes per family), #3210 (Rust test nodes), #3211 (audio window stage),
+  #3199 (the engine tree; `VideoFrame` becomes `ImageFrame`, `AudioBlock` becomes
+  `ChannelsBlock`).
+- Remaining, in order: #3200 (every module in `packages/`, in PR #3238), #3201 (delete the
+  decorator ports and `MsgpackCast`).
 - Done when #3201 has merged and `/ship-change` has folded the change into the plan.
 
 ## 2. Graph foundations: variables and reference edges
 
-Change: `changes/lightweight-node-kinds.md` §Graph variables and reference edges, proposed in
-draft PR #3205, ticket 5 of that change (not yet filed).
+Change: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) §Graph
+variables and reference edges. Ticket: #3235.
 
 `SetVariable` and `GetVariable` as Blueprints have them, and the reference edge: a node's
 config naming another node, recorded in the graph and checked at load. A variable carries only
@@ -61,13 +62,21 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
 
 ## 5. New capability: lightweight nodes, then shaders
 
-Changes: `changes/lightweight-node-kinds.md` and `changes/slang-shader-compiler.md`, both
-proposed in draft PR #3205 with owner decisions still open in it.
+Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
+[`changes/slang-shader-compiler.md`](changes/slang-shader-compiler.md).
 
-1. Ops at the read seam (`Lfo`, `Remap`, `Clamp`, the island pass, the full op set): phase 1
-   of lightweight-node-kinds.
-2. Slang replaces shaderc and glslc as the one shader compiler (slang-shader-compiler).
-3. `@node.shader` and shader fusion: phase 2, on the Slang compiler.
-4. `@node.pure`: phase 3. The pool (phase 4) only if graphs need it.
+1. Function nodes at the read seam, phase 1 of lightweight-node-kinds: #3224 (node kinds and
+   compiled `@node.function`), #3225 (promotion when a function node crashes or stalls its
+   reader), #3226 (islands on live edits), #3227 (pins and the full `tatolab-ops` set), #3228
+   (stateful function nodes on the state board), #3232 (stateful fan-out), #3229 (Rust
+   `#[function_node]`).
+2. Slang replaces shaderc and glslc as the one shader compiler: #3222 (run-time kernels), #3223
+   (build-time shaders).
+3. Shaders, phase 2, on the Slang compiler: #3230 (asynchronous GPU submission), #3233 (one
+   `@node.shader`), #3236 (fusion).
+4. Python function nodes that do not compile, phase 3: #3234 (inline in the Python reader),
+   #3231 (the side-effect check at decoration).
+5. The pool, phase 4: #3237, one pool interpreter per stream for Python function nodes no
+   Python class reads. It is required, not optional.
 
 Nothing in steps 1 to 4 waits on this step.
