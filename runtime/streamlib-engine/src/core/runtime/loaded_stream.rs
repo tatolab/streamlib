@@ -34,9 +34,8 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::graph_variable_resolution::{
-    GraphSnapshotWithVariablesResolved, GraphVariablesAsDrawn,
-};
+use crate::core::graph_variable_resolution::GraphVariablesAsDrawn;
+use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::media_clock::MediaClock;
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
@@ -673,6 +672,7 @@ impl LoadedStreamInThisRuntime {
             if let Err(removal_failure) = &processor_removal_outcome {
                 tracing::error!("[stop] Removing the processors failed: {removal_failure}");
             }
+            *self.graph_variables_as_drawn.lock() = GraphVariablesAsDrawn::default();
 
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");
@@ -998,6 +998,12 @@ impl LoadedStreamInThisRuntime {
                 processor_id,
                 &config_json,
             )?;
+            crate::core::graph::refuse_a_config_update_naming_a_node_the_graph_does_not_hold(
+                graph,
+                &self.node_types_this_stream_resolves,
+                processor_id,
+                &config_json,
+            )?;
             tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
                 config_to_apply: config_json,
@@ -1039,7 +1045,7 @@ impl LoadedStreamInThisRuntime {
     fn reference_edges_the_configs_of(
         &self,
         nodes: &[crate::core::json_schema::ProcessorNodeOutput],
-    ) -> Vec<crate::core::json_schema::ConfigNodeReferenceEdgeOutput> {
+    ) -> Vec<ConfigNodeReferenceEdgeOutput> {
         nodes
             .iter()
             .flat_map(|node| {
@@ -1060,7 +1066,12 @@ impl LoadedStreamInThisRuntime {
                     .ok()
                 })
                 .flatten()
-                .map(|reference| reference.edge)
+                .map(|reference| ConfigNodeReferenceEdgeOutput {
+                    referenced_node: cast_exposed_name_to_url_safe(&reference.edge.referenced_node)
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or(reference.edge.referenced_node),
+                    ..reference.edge
+                })
                 .collect()
             })
             .collect()
@@ -1320,11 +1331,8 @@ impl LoadedStreamInThisRuntime {
         graph
             .clock
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
-        let GraphSnapshotWithVariablesResolved {
-            graph_the_runtime_runs,
-            variables_as_drawn,
-        } = graph.with_graph_variables_resolved()?;
-        let graph = &graph_the_runtime_runs;
+        let resolution = graph.with_graph_variables_resolved()?;
+        let graph = &resolution.graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
                 graph.nodes.iter().map(|node| &node.processor_type),
@@ -1332,7 +1340,7 @@ impl LoadedStreamInThisRuntime {
             )?;
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
-        graph.validate_a_graph_holding_no_variable_node(&self.node_types_this_stream_resolves)?;
+        resolution.validate(&self.node_types_this_stream_resolves)?;
         self.compiler
             .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 
@@ -1358,7 +1366,8 @@ impl LoadedStreamInThisRuntime {
                 InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
             )
             .map_err(|refusal| {
-                match variables_as_drawn
+                match resolution
+                    .variables_as_drawn
                     .links_resolved_from_a_variable
                     .iter()
                     .find(|resolved| resolved.link == *link)
@@ -1377,7 +1386,7 @@ impl LoadedStreamInThisRuntime {
                 }
             })?;
         }
-        *self.graph_variables_as_drawn.lock() = variables_as_drawn;
+        *self.graph_variables_as_drawn.lock() = resolution.variables_as_drawn;
 
         for exposed in &graph.exposed {
             self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;

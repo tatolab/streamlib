@@ -601,6 +601,7 @@ def _json_value(
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, NodeReference):
+        _refuse_a_container_nested_too_deep(key_path, key_paths_of_enclosing_containers_by_id)
         node_names_the_config_references.append(value.name)
         return {"node": value.name}
     if isinstance(value, str):
@@ -624,23 +625,7 @@ def _json_value(
             f"it — a value holding itself has no JSON form. Break the cycle: put the "
             f"data `{key_path}` should carry there, not the container holding it"
         )
-    containers_enclosing_this_one_counting_config = len(
-        key_paths_of_enclosing_containers_by_id
-    )
-    if (
-        containers_enclosing_this_one_counting_config
-        >= _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF
-    ):
-        raise ValueError(
-            f"config nests too deep for a graph: `{key_path}` is a container "
-            f"{containers_enclosing_this_one_counting_config + 1} deep counting `config` "
-            f"itself, and a config nests at most "
-            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — a graph nests at most "
-            f"{_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT} containers from its root, and "
-            f"the graph, its `nodes` list and the node enclose every config. Nest the data at most "
-            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
-            f"the deeper part as a `str`"
-        )
+    _refuse_a_container_nested_too_deep(key_path, key_paths_of_enclosing_containers_by_id)
     key_paths_of_enclosing_containers_by_id[id(value)] = key_path
     if isinstance(value, Mapping):
         json_container: Any = _json_object(
@@ -661,6 +646,28 @@ def _json_value(
         ]
     del key_paths_of_enclosing_containers_by_id[id(value)]
     return json_container
+
+
+def _refuse_a_container_nested_too_deep(
+    key_path: str, key_paths_of_enclosing_containers_by_id: dict[int, str]
+) -> None:
+    containers_enclosing_this_one_counting_config = len(
+        key_paths_of_enclosing_containers_by_id
+    )
+    if (
+        containers_enclosing_this_one_counting_config
+        >= _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF
+    ):
+        raise ValueError(
+            f"config nests too deep for a graph: `{key_path}` is a container "
+            f"{containers_enclosing_this_one_counting_config + 1} deep counting `config` "
+            f"itself, and a config nests at most "
+            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — a graph nests at most "
+            f"{_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT} containers from its root, and "
+            f"the graph, its `nodes` list and the node enclose every config. Nest the data at most "
+            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
+            f"the deeper part as a `str`"
+        )
 
 
 def _json_integer(value: int, key_path: str) -> int:

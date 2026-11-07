@@ -632,9 +632,10 @@ fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
     }
 }
 
-#[test]
-#[serial]
-fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
+/// Register a gateway type and a track type whose config key `gateway` takes
+/// a reference to a gateway.
+fn register_a_gateway_and_a_track_naming_one()
+-> (ProcessorClassImportPath, ProcessorClassImportPath) {
     let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
     let track_import_path =
         ProcessorClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
@@ -654,6 +655,53 @@ fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
             }
         })),
     );
+    (gateway, track_import_path)
+}
+
+#[test]
+#[serial]
+fn a_live_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_reference_renders_cast()
+ {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "live-references");
+    stream
+        .add_processor(
+            ProcessorSpec::new(gateway, serde_json::json!({}))
+                .with_display_name("Cloudflare Gateway"),
+        )
+        .expect("the gateway adds");
+    let track = stream
+        .add_processor(
+            ProcessorSpec::new(
+                track_import_path,
+                serde_json::json!({"gateway": {"node": "Cloudflare Gateway"}}),
+            )
+            .with_display_name("camera-track"),
+        )
+        .expect("the track adds");
+
+    assert_eq!(
+        the_graph_document_of(&stream)["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare-gateway"}
+        ])
+    );
+    let refusal = stream
+        .update_processor_config(&track, serde_json::json!({"gateway": {"node": "nowhere"}}))
+        .expect_err("a reference to a node the graph does not hold is refused")
+        .to_string();
+    assert!(
+        refusal.contains("names node `nowhere`") && refusal.contains("cloudflare-gateway"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
     let graph = serde_json::json!({
         "stream": "reference-edges",
         "nodes": [

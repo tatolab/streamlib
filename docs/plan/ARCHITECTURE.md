@@ -3584,8 +3584,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   opens a read of the port over the local API, and the runtime hands it the port's channel as it
   hands a helper one; an Image frame is shared, not copied — Studio imports the surface as a helper
   imports it — so a preview is zero-copy and never reaches a relay. Whoever may open the local
-  API's socket may open a viewer: the owning user. A viewer reads the latest value and skips what
-  it falls behind on, so it never slows the stream it reads. Owner, 2026-11-07.
+  API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
+  viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
+  reads.
   [gateway-nodes]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).

@@ -174,6 +174,9 @@ pub struct ConfigKeyHoldingANodeReference {
     /// The import path of the type the referenced node must be, as the
     /// schema writes it; `None` takes a node of any type.
     pub referenced_node_type_import_path: Option<String>,
+    /// Whether the key's schema also takes a value that is neither a node
+    /// reference nor `null`, as `NodeReference | str` does.
+    pub takes_a_value_other_than_a_node_reference: bool,
 }
 
 /// Every top-level key of `config_schema` that holds a node reference, in the
@@ -189,50 +192,126 @@ pub fn config_keys_holding_a_node_reference(
     properties
         .iter()
         .filter_map(|(config_key, property_schema)| {
-            node_reference_keyword_in(config_schema, property_schema, 0).map(|keyword| {
-                ConfigKeyHoldingANodeReference {
+            let schema_walk = SchemaDocumentWalk {
+                document: config_schema,
+            };
+            schema_walk
+                .node_reference_keyword_in(property_schema, &mut Vec::new())
+                .map(|keyword| ConfigKeyHoldingANodeReference {
                     config_key: config_key.clone(),
                     referenced_node_type_import_path: keyword
                         .get(NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY)
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                }
-            })
+                    takes_a_value_other_than_a_node_reference: schema_walk
+                        .takes_a_value_other_than_a_node_reference_or_null(
+                            property_schema,
+                            &mut Vec::new(),
+                        ),
+                })
         })
         .collect()
 }
 
-/// How many `$ref`s and combinators the keyword search follows before it stops,
-/// so a recursive definition ends it.
-const DEEPEST_SCHEMA_INDIRECTION_THE_NODE_REFERENCE_SEARCH_FOLLOWS: usize = 8;
-
-fn node_reference_keyword_in<'schema>(
+/// A walk through one config schema document, following each `$ref` once per
+/// path so a recursive definition ends it.
+struct SchemaDocumentWalk<'schema> {
     document: &'schema Value,
-    schema: &'schema Value,
-    depth: usize,
-) -> Option<&'schema serde_json::Map<String, Value>> {
-    if depth > DEEPEST_SCHEMA_INDIRECTION_THE_NODE_REFERENCE_SEARCH_FOLLOWS {
-        return None;
+}
+
+impl<'schema> SchemaDocumentWalk<'schema> {
+    fn definition_a_ref_names(
+        &self,
+        schema: &'schema Value,
+        refs_followed_on_this_path: &[&'schema str],
+    ) -> Option<(&'schema str, &'schema Value)> {
+        let pointer = schema.get("$ref").and_then(Value::as_str)?;
+        if refs_followed_on_this_path.contains(&pointer) {
+            return None;
+        }
+        let definition = self.document.pointer(pointer.strip_prefix('#')?)?;
+        Some((pointer, definition))
     }
-    if let Some(keyword) = schema
-        .get(NODE_REFERENCE_SCHEMA_KEYWORD)
-        .and_then(Value::as_object)
-    {
-        return Some(keyword);
+
+    fn combinator_branches(schema: &'schema Value) -> impl Iterator<Item = &'schema Value> {
+        ["anyOf", "oneOf", "allOf"]
+            .into_iter()
+            .filter_map(|combinator| schema.get(combinator).and_then(Value::as_array))
+            .flatten()
     }
-    if let Some(definition) = schema
-        .get("$ref")
-        .and_then(Value::as_str)
-        .and_then(|pointer| pointer.strip_prefix('#'))
-        .and_then(|pointer| document.pointer(pointer))
-    {
-        return node_reference_keyword_in(document, definition, depth + 1);
+
+    fn node_reference_keyword_in(
+        &self,
+        schema: &'schema Value,
+        refs_followed_on_this_path: &mut Vec<&'schema str>,
+    ) -> Option<&'schema serde_json::Map<String, Value>> {
+        if let Some(keyword) = schema
+            .get(NODE_REFERENCE_SCHEMA_KEYWORD)
+            .and_then(Value::as_object)
+        {
+            return Some(keyword);
+        }
+        if let Some((pointer, definition)) =
+            self.definition_a_ref_names(schema, refs_followed_on_this_path)
+        {
+            refs_followed_on_this_path.push(pointer);
+            let found = self.node_reference_keyword_in(definition, refs_followed_on_this_path);
+            refs_followed_on_this_path.pop();
+            if found.is_some() {
+                return found;
+            }
+        }
+        Self::combinator_branches(schema)
+            .find_map(|branch| self.node_reference_keyword_in(branch, refs_followed_on_this_path))
     }
-    ["anyOf", "oneOf", "allOf"]
-        .into_iter()
-        .filter_map(|combinator| schema.get(combinator).and_then(Value::as_array))
-        .flatten()
-        .find_map(|branch| node_reference_keyword_in(document, branch, depth + 1))
+
+    /// Whether `schema` takes a value that is neither a node reference nor
+    /// `null`: its own `$ref`, some `anyOf` or `oneOf` branch and every
+    /// `allOf` branch each take one.
+    fn takes_a_value_other_than_a_node_reference_or_null(
+        &self,
+        schema: &'schema Value,
+        refs_followed_on_this_path: &mut Vec<&'schema str>,
+    ) -> bool {
+        if schema.get(NODE_REFERENCE_SCHEMA_KEYWORD).is_some()
+            || schema.get("type").and_then(Value::as_str) == Some("null")
+        {
+            return false;
+        }
+        let mut takes_another_value = true;
+        if let Some((pointer, definition)) =
+            self.definition_a_ref_names(schema, refs_followed_on_this_path)
+        {
+            refs_followed_on_this_path.push(pointer);
+            takes_another_value &= self.takes_a_value_other_than_a_node_reference_or_null(
+                definition,
+                refs_followed_on_this_path,
+            );
+            refs_followed_on_this_path.pop();
+        }
+        let alternatives: Vec<&Value> = ["anyOf", "oneOf"]
+            .into_iter()
+            .filter_map(|combinator| schema.get(combinator).and_then(Value::as_array))
+            .flatten()
+            .collect();
+        if !alternatives.is_empty() {
+            takes_another_value &= alternatives.into_iter().any(|branch| {
+                self.takes_a_value_other_than_a_node_reference_or_null(
+                    branch,
+                    refs_followed_on_this_path,
+                )
+            });
+        }
+        if let Some(all_of) = schema.get("allOf").and_then(Value::as_array) {
+            takes_another_value &= all_of.iter().all(|branch| {
+                self.takes_a_value_other_than_a_node_reference_or_null(
+                    branch,
+                    refs_followed_on_this_path,
+                )
+            });
+        }
+        takes_another_value
+    }
 }
 
 /// The name a config value written as a node reference names, `None` when the
@@ -275,10 +354,12 @@ mod tests {
                 ConfigKeyHoldingANodeReference {
                     config_key: "anything".to_string(),
                     referenced_node_type_import_path: None,
+                    takes_a_value_other_than_a_node_reference: false,
                 },
                 ConfigKeyHoldingANodeReference {
                     config_key: "gateway".to_string(),
                     referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
+                    takes_a_value_other_than_a_node_reference: false,
                 },
             ]
         );
@@ -295,7 +376,87 @@ mod tests {
             vec![ConfigKeyHoldingANodeReference {
                 config_key: "gateway".to_string(),
                 referenced_node_type_import_path: None,
+                takes_a_value_other_than_a_node_reference: false,
             }]
+        );
+    }
+
+    #[test]
+    fn a_reference_in_an_all_of_beside_an_unmarked_ref_is_found() {
+        let document = serde_json::json!({
+            "properties": {"gateway": {
+                "$ref": "#/$defs/Described",
+                "allOf": [{NODE_REFERENCE_SCHEMA_KEYWORD: {"node_type": "tatolab.moq:MoqGateway"}}]
+            }},
+            "$defs": {"Described": {"description": "the gateway"}}
+        });
+        assert_eq!(
+            config_keys_holding_a_node_reference(&document),
+            vec![ConfigKeyHoldingANodeReference {
+                config_key: "gateway".to_string(),
+                referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
+                takes_a_value_other_than_a_node_reference: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_reference_behind_a_long_chain_of_refs_is_found_and_a_cycle_ends_the_search() {
+        let mut definitions = serde_json::Map::new();
+        for link in 0..12 {
+            definitions.insert(
+                format!("Step{link}"),
+                serde_json::json!({"$ref": format!("#/$defs/Step{}", link + 1)}),
+            );
+        }
+        definitions.insert(
+            "Step12".to_string(),
+            serde_json::json!({NODE_REFERENCE_SCHEMA_KEYWORD: {}}),
+        );
+        definitions.insert(
+            "Cycle".to_string(),
+            serde_json::json!({"anyOf": [{"$ref": "#/$defs/Cycle"}, {"type": "null"}]}),
+        );
+        let document = serde_json::json!({
+            "properties": {
+                "deep": {"$ref": "#/$defs/Step0"},
+                "cyclic": {"$ref": "#/$defs/Cycle"}
+            },
+            "$defs": definitions
+        });
+        let keys = config_keys_holding_a_node_reference(&document);
+        assert_eq!(
+            keys.iter()
+                .map(|key| key.config_key.as_str())
+                .collect::<Vec<_>>(),
+            ["deep"]
+        );
+    }
+
+    #[test]
+    fn a_key_taking_a_reference_or_a_string_takes_another_value_and_an_optional_one_does_not() {
+        let document = serde_json::json!({
+            "properties": {
+                "reference_or_name": {"anyOf": [{NODE_REFERENCE_SCHEMA_KEYWORD: {}}, {"type": "string"}]},
+                "optional_reference": {"anyOf": [{NODE_REFERENCE_SCHEMA_KEYWORD: {}}, {"type": "null"}]}
+            }
+        });
+        let takes_another_value: Vec<(String, bool)> =
+            config_keys_holding_a_node_reference(&document)
+                .into_iter()
+                .map(|key| {
+                    (
+                        key.config_key,
+                        key.takes_a_value_other_than_a_node_reference,
+                    )
+                })
+                .collect();
+        assert_eq!(
+            takes_another_value,
+            [
+                ("reference_or_name".to_string(), true),
+                ("optional_reference".to_string(), false)
+            ]
         );
     }
 

@@ -404,6 +404,44 @@ def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | 
     }
 
 
+def with_each_node_reference_field_as_a_node_reference(
+    config_class: type, configuration: "dict[str, Any]"
+) -> "dict[str, Any]":
+    """`configuration` with each `{"node": name}` under a field `config_class` annotates as a node reference turned back into the `NodeReference`."""
+    from ._stream_graph_builder import NodeReference
+
+    try:
+        annotations = typing.get_type_hints(config_class, include_extras=True)
+    except Exception:
+        return configuration
+    reconstructed = dict(configuration)
+    for field_name, annotation in annotations.items():
+        written = reconstructed.get(field_name)
+        if not (
+            isinstance(written, dict)
+            and len(written) == 1
+            and isinstance(written.get("node"), str)
+            and _annotation_takes_a_node_reference(annotation)
+        ):
+            continue
+        reconstructed[field_name] = NodeReference(written["node"])
+    return reconstructed
+
+
+def _annotation_takes_a_node_reference(annotation: Any) -> bool:
+    origin = typing.get_origin(annotation)
+    if getattr(origin, "_name", None) in _REQUIREDNESS_QUALIFIER_NAMES:
+        return _annotation_takes_a_node_reference(typing.get_args(annotation)[0])
+    if getattr(annotation, "__metadata__", None) is not None:
+        return _annotation_takes_a_node_reference(typing.get_args(annotation)[0])
+    if origin is typing.Union or origin is types.UnionType:
+        return any(
+            _annotation_takes_a_node_reference(member)
+            for member in typing.get_args(annotation)
+        )
+    return _node_reference_schema_unless_not_one(annotation) is not None
+
+
 def _enumerated_schema(members: "tuple[Any, ...]") -> "dict[str, Any]":
     rendered = [_json_representable(member) for member in members]
     if any(member is _NOT_JSON_REPRESENTABLE for member in rendered):

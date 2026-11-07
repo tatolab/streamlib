@@ -21,6 +21,7 @@ use crate::core::json_schema::{
     GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
     ProcessorNodeOutput, ProcessorNodePortsOutput,
 };
+use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
 /// The config key both variable nodes name their variable under.
@@ -82,7 +83,7 @@ impl GraphVariablesAsDrawn {
                 .unwrap_or_else(|_| name.to_string())
         };
         let same_end = |left: &LinkPortRefOutput, right: &LinkPortRefOutput| {
-            cast(&left.node) == cast(&right.node) && left.port == right.port
+            cast(&left.node) == cast(&right.node) && cast(&left.port) == cast(&right.port)
         };
         let is_the_runtime_link = |rendered: &LinkOutput, link: &GraphSnapshotLink| {
             same_end(&rendered.source, &link.source) && same_end(&rendered.target, &link.target)
@@ -188,6 +189,7 @@ impl GraphVariablesAsDrawn {
                 continue;
             };
             if node.config.as_ref() == Some(&config_naming_a_get.as_resolved) {
+                node.config_checksum = compute_json_checksum(&config_naming_a_get.as_drawn);
                 node.config = Some(config_naming_a_get.as_drawn.clone());
             }
         }
@@ -223,7 +225,7 @@ impl GraphVariablesAsDrawn {
                     processor_type: variable_node.processor_type.clone(),
                     name: variable_node_cast,
                     config: Some(variable_node.config.clone()),
-                    config_checksum: 0,
+                    config_checksum: compute_json_checksum(&variable_node.config),
                     ports: ProcessorNodePortsOutput {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
@@ -262,6 +264,8 @@ pub struct GraphSnapshotWithVariablesResolved {
     pub graph_the_runtime_runs: GraphSnapshot,
     /// What was drawn, for rendering.
     pub variables_as_drawn: GraphVariablesAsDrawn,
+    /// Every `SetVariable` and its value, by the setter's name.
+    pub values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds>,
 }
 
 /// The import path a graph names `SetVariable` by, in the built-in node module.
@@ -279,14 +283,27 @@ pub fn is_a_graph_variable_node_type(node_type: &ProcessorClassImportPath) -> bo
 }
 
 /// What one `SetVariable` holds.
-enum ValueOneSetterHolds {
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueASetVariableHolds {
+    /// The output port linked into its `value` input.
     PortOutput(LinkPortRefOutput),
+    /// The node its `node_reference` config names.
     NodeReference(String),
+}
+
+/// One `SetVariable` node and the value it holds, checked against the graph
+/// whether or not a get reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetVariableAndTheValueItHolds {
+    /// The `SetVariable` node's name, as the graph wrote it.
+    pub set_variable_node: String,
+    /// What it holds.
+    pub value: ValueASetVariableHolds,
 }
 
 struct OneSetter<'graph> {
     node: &'graph GraphSnapshotNode,
-    holds: ValueOneSetterHolds,
+    holds: ValueASetVariableHolds,
 }
 
 impl GraphSnapshot {
@@ -305,6 +322,7 @@ impl GraphSnapshot {
             return Ok(GraphSnapshotWithVariablesResolved {
                 graph_the_runtime_runs: self.clone(),
                 variables_as_drawn: GraphVariablesAsDrawn::default(),
+                values_the_set_variables_hold: Vec::new(),
             });
         }
 
@@ -408,7 +426,7 @@ impl GraphSnapshot {
             };
             refuse_a_variable_port_other_than_value(&link.source, "a link leaves")?;
             let setter = setter_of(&link.source.node, variable)?;
-            let ValueOneSetterHolds::PortOutput(setter_source) = &setter.holds else {
+            let ValueASetVariableHolds::PortOutput(setter_source) = &setter.holds else {
                 return Err(Error::GraphError(format!(
                     "`GetVariable` node `{}` is linked to `{}/{}`, and its variable \
                      `{variable}` holds a node reference, which a config key reads, never \
@@ -444,7 +462,9 @@ impl GraphSnapshot {
                 &mut resolved_config,
                 "config",
                 &mut |config_key_path, referenced| {
-                    let referenced_cast = cast_of(referenced)?;
+                    let Ok(referenced_cast) = cast_of(referenced) else {
+                        return Ok(None);
+                    };
                     if is_a_set(&referenced_cast) {
                         return Err(Error::GraphError(format!(
                             "node `{}`'s `{config_key_path}` names `SetVariable` node \
@@ -456,7 +476,8 @@ impl GraphSnapshot {
                         return Ok(None);
                     };
                     let setter = setter_of(referenced, variable)?;
-                    let ValueOneSetterHolds::NodeReference(referenced_node) = &setter.holds else {
+                    let ValueASetVariableHolds::NodeReference(referenced_node) = &setter.holds
+                    else {
                         return Err(Error::GraphError(format!(
                             "node `{}`'s `{config_key_path}` reads `GetVariable` node \
                              `{referenced}`, and its variable `{variable}` holds a port's \
@@ -493,7 +514,19 @@ impl GraphSnapshot {
             }
         }
 
+        let mut values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds> =
+            setters_by_variable
+                .values()
+                .map(|setter| SetVariableAndTheValueItHolds {
+                    set_variable_node: setter.node.name.clone(),
+                    value: setter.holds.clone(),
+                })
+                .collect();
+        values_the_set_variables_hold
+            .sort_by(|left, right| left.set_variable_node.cmp(&right.set_variable_node));
+
         Ok(GraphSnapshotWithVariablesResolved {
+            values_the_set_variables_hold,
             graph_the_runtime_runs: GraphSnapshot {
                 stream: self.stream.clone(),
                 clock: self.clock,
@@ -527,7 +560,7 @@ fn value_one_setter_holds(
     variable: &str,
     is_a_get: &dyn Fn(&str) -> bool,
     is_a_set: &dyn Fn(&str) -> bool,
-) -> Result<ValueOneSetterHolds> {
+) -> Result<ValueASetVariableHolds> {
     refuse_a_key_a_variable_node_does_not_take(
         setter,
         &[
@@ -556,7 +589,7 @@ fn value_one_setter_holds(
                     setter.name, link.source.node
                 )));
             }
-            Ok(ValueOneSetterHolds::PortOutput(link.source.clone()))
+            Ok(ValueASetVariableHolds::PortOutput(link.source.clone()))
         }
         ([], Some(reference)) => {
             let referenced = node_name_a_config_value_references(reference).ok_or_else(|| {
@@ -575,7 +608,9 @@ fn value_one_setter_holds(
                     setter.name
                 )));
             }
-            Ok(ValueOneSetterHolds::NodeReference(referenced.to_string()))
+            Ok(ValueASetVariableHolds::NodeReference(
+                referenced.to_string(),
+            ))
         }
         ([], None) => Err(Error::GraphError(format!(
             "`SetVariable` node `{}` sets the variable `{variable}` to nothing: link a port \
@@ -679,7 +714,9 @@ fn refuse_a_variable_port_other_than_value(
     end: &LinkPortRefOutput,
     how_the_link_meets_it: &str,
 ) -> Result<()> {
-    if end.port == GRAPH_VARIABLE_VALUE_PORT_NAME {
+    if cast_exposed_name_to_url_safe(&end.port)
+        .is_ok_and(|port_cast| port_cast == GRAPH_VARIABLE_VALUE_PORT_NAME)
+    {
         return Ok(());
     }
     Err(Error::GraphError(format!(
@@ -984,6 +1021,59 @@ mod tests {
             error_reason: None,
             components: serde_json::Map::new(),
         }
+    }
+
+    #[test]
+    fn a_variable_port_spelled_another_way_that_casts_to_value_resolves() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["links"][0]["target"]["port"] = serde_json::json!("VALUE");
+        graph["links"][1]["source"]["port"] = serde_json::json!("Value");
+        let resolution = resolved(graph).unwrap();
+        assert_eq!(resolution.graph_the_runtime_runs.links.len(), 2);
+    }
+
+    #[test]
+    fn a_config_object_naming_no_castable_node_is_left_as_written() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["nodes"][4]["config"] = serde_json::json!({"metadata": {"node": ""}});
+        let resolution = resolved(graph).unwrap();
+        assert_eq!(
+            resolution.graph_the_runtime_runs.nodes[1].config,
+            serde_json::json!({"metadata": {"node": ""}})
+        );
+    }
+
+    #[test]
+    fn the_render_matches_a_runtime_link_whose_ports_the_runtime_cast() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["links"][0]["source"]["port"] = serde_json::json!("VIDEO");
+        let resolution = resolved(graph).unwrap();
+        let mut graph_response = GraphResponse {
+            stream: None,
+            clock: Default::default(),
+            nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
+            links: vec![a_rendered_link(
+                "L2",
+                ("camera", "video"),
+                ("back", "video_in"),
+            )],
+            references: Vec::new(),
+            exposed: Vec::new(),
+            machine: "vm".to_string(),
+        };
+        resolution
+            .variables_as_drawn
+            .render_into(&mut graph_response);
+        assert!(
+            graph_response
+                .links
+                .iter()
+                .all(|rendered| rendered.source.node != "camera"
+                    || rendered.target.node == "set-camera"),
+            "{:?}",
+            graph_response.links
+        );
+        assert_ne!(graph_response.nodes[1].config_checksum, 0);
     }
 
     #[test]

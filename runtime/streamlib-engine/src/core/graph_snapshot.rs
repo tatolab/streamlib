@@ -24,6 +24,9 @@ use crate::core::graph::{
     node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
     refuse_a_reference_to_a_node_of_the_wrong_type,
 };
+use crate::core::graph_variable_resolution::{
+    GraphSnapshotWithVariablesResolved, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
+};
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
@@ -198,12 +201,10 @@ impl GraphSnapshot {
     /// takes, and every exposure an output port a node has, named once, at a
     /// level beyond internal.
     ///
-    /// Its variables are resolved first, and the graph the runtime would run is
-    /// the one checked.
+    /// Its variables are resolved first: the graph the runtime would run is
+    /// checked, and each setter's value with it.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
-        self.with_graph_variables_resolved()?
-            .graph_the_runtime_runs
-            .validate_a_graph_holding_no_variable_node(node_types)
+        self.with_graph_variables_resolved()?.validate(node_types)
     }
 
     /// [`Self::validate`] of a graph whose variables are already resolved.
@@ -324,6 +325,51 @@ impl GraphSnapshot {
             }
         }
 
+        Ok(())
+    }
+}
+
+impl GraphSnapshotWithVariablesResolved {
+    /// Check the graph the runtime runs, and that each `SetVariable` holds a
+    /// node of that graph, or an output port one of its nodes has, whether or
+    /// not a get reads it.
+    pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        let graph = &self.graph_the_runtime_runs;
+        graph.validate_a_graph_holding_no_variable_node(node_types)?;
+        let node_named = |node_name: &str| -> Result<Option<&GraphSnapshotNode>> {
+            let cast = cast_exposed_name_to_url_safe(node_name)?;
+            Ok(graph.nodes.iter().find(|node| {
+                cast_exposed_name_to_url_safe(&node.name).is_ok_and(|node_cast| node_cast == cast)
+            }))
+        };
+        let the_names_the_graph_holds =
+            || node_names_listed_for_a_refusal(graph.nodes.iter().map(|node| node.name.as_str()));
+        for SetVariableAndTheValueItHolds {
+            set_variable_node,
+            value,
+        } in &self.values_the_set_variables_hold
+        {
+            let held_node_name = match value {
+                ValueASetVariableHolds::PortOutput(source) => &source.node,
+                ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
+            };
+            let Some(held_node) = node_named(held_node_name)? else {
+                return Err(Error::GraphError(format!(
+                    "`SetVariable` node `{set_variable_node}` holds node `{held_node_name}`, \
+                     which the graph does not hold. The graph holds: {}",
+                    the_names_the_graph_holds()
+                )));
+            };
+            if let ValueASetVariableHolds::PortOutput(source) = value {
+                refuse_a_port_the_node_does_not_have(
+                    node_types,
+                    &source.node,
+                    held_node,
+                    &source.port,
+                    PortDirection::Output,
+                )?;
+            }
+        }
         Ok(())
     }
 }
@@ -1097,7 +1143,11 @@ mod tests {
                             streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
                                 {"node_type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}
                         },
-                        "track": {"type": "string"}
+                        "track": {"type": "string"},
+                        "gateway_or_its_name": {"anyOf": [
+                            {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+                            {"type": "string"}
+                        ]}
                     }
                 })),
             ),
@@ -1191,6 +1241,45 @@ mod tests {
             .to_string();
         assert!(
             refusal.contains("config key `gateway` holds \"cloudflare\""),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_key_taking_a_reference_or_a_string_validates_a_string() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "camera-track",
+                "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                "config": {"gateway_or_its_name": "cloudflare"}
+            }]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a string is the key's other value");
+    }
+
+    #[test]
+    fn a_setter_no_get_reads_still_holds_a_node_the_graph_holds() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                {
+                    "name": "set-gateway",
+                    "type": "tatolab.stream:SetVariable",
+                    "config": {"variable": "gateway", "node_reference": {"node": "nowhere"}}
+                }
+            ]
+        }))
+        .unwrap();
+        let refusal = graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("`SetVariable` node `set-gateway` holds node `nowhere`")
+                && refusal.contains("cloudflare"),
             "{refusal}"
         );
     }

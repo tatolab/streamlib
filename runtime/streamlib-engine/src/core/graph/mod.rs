@@ -21,6 +21,7 @@ mod graph_tests;
 // top level
 pub(crate) use config_node_reference_edges::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
+    refuse_a_config_update_naming_a_node_the_graph_does_not_hold,
     refuse_a_reference_to_a_node_of_the_wrong_type,
 };
 pub use data_structure::{Graph, GraphState};

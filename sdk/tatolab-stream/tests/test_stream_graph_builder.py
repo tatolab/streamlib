@@ -1311,10 +1311,20 @@ def test_a_variable_set_from_a_port_and_read_twice_compiles_to_its_drawn_nodes_a
         ("getvariable-2", "tatolab.stream:GetVariable"),
         ("back", BrightnessReader.__module__ + ":BrightnessReader"),
     ]
-    assert graph["links"][0] == {
-        "source": {"node": "frameinverter", "port": "video_to_downstream"},
-        "target": {"node": "setvariable", "port": "value"},
-    }
+    assert graph["links"] == [
+        {
+            "source": {"node": "frameinverter", "port": "video_to_downstream"},
+            "target": {"node": "setvariable", "port": "value"},
+        },
+        {
+            "source": {"node": "getvariable", "port": "value"},
+            "target": {"node": "front", "port": "video_from_upstream"},
+        },
+        {
+            "source": {"node": "getvariable-2", "port": "value"},
+            "target": {"node": "back", "port": "video_from_upstream"},
+        },
+    ]
 
 
 def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_one() -> None:
@@ -1334,3 +1344,24 @@ def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_on
         "node_reference": {"node": "frameinverter"},
     }
     assert nodes[3]["config"] == {"source": {"node": "getvariable"}}
+
+
+def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_too_deep() -> None:
+    from tatolab.stream._stream_graph_builder import (
+        _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF,
+    )
+
+    def config_whose_deepest_container_holds(leaf: object) -> dict[str, object]:
+        config: dict[str, object] = {"leaf": leaf}
+        for _ in range(_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF - 1):
+            config = {"down": config}
+        return config
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(BrightnessReader, config=config_whose_deepest_container_holds("a str"))
+
+    with pytest.raises(ValueError, match="config nests too deep"):
+        stream_builder.add(
+            BrightnessReader, config=config_whose_deepest_container_holds(inverter)
+        )
