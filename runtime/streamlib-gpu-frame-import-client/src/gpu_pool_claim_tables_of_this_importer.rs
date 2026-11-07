@@ -66,9 +66,11 @@ impl Drop for GpuPoolSlotFrameClaimOfThisImporter {
 }
 
 /// Why a pool's claim table hand-over did not land: a request that never got
-/// an answer is asked again on the next frame, an answered refusal is final.
+/// an answer, or a table this process could not map, is asked again on the
+/// next frame; an answered refusal is final.
 enum GpuPoolClaimTableHandOverFailure {
     RequestFailed(String),
+    AdoptionFailed(String),
     Refused(String),
 }
 
@@ -325,6 +327,15 @@ impl GpuPoolClaimTablesOfThisImporter {
                     );
                     return Ok(None);
                 }
+                Err(GpuPoolClaimTableHandOverFailure::AdoptionFailed(adoption_failure)) => {
+                    tracing::warn!(
+                        "GPU pool {}: this importer could not take in the claim table the \
+                         service handed over ({adoption_failure}); this frame is read through a \
+                         checkout and the next frame asks again",
+                        gpu_pool_uuid_wire_name(&pooled_frame.pool)
+                    );
+                    return Ok(None);
+                }
                 Err(GpuPoolClaimTableHandOverFailure::Refused(refusal)) => {
                     tracing::warn!(
                         "GPU pool {}: {refusal}; this importer reads the pool's frames through \
@@ -378,7 +389,7 @@ impl GpuPoolClaimTablesOfThisImporter {
         let hand_over = GpuPoolClaimTableHandOver::from_reply(&reply)
             .map_err(GpuPoolClaimTableHandOverFailure::Refused)?;
         self.adopt_a_hand_over(pool, claim_table_shared_rows_handle, hand_over)
-            .map_err(GpuPoolClaimTableHandOverFailure::Refused)
+            .map_err(GpuPoolClaimTableHandOverFailure::AdoptionFailed)
     }
 }
 

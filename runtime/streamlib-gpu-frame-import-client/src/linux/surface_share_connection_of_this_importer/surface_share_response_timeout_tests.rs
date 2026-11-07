@@ -31,7 +31,7 @@ fn answer(stream: &mut UnixStream, reply: &serde_json::Value) {
 /// answering never holds the calling thread, or every thread waiting on the
 /// connection's lock behind it, for good.
 #[test]
-fn a_surface_share_connection_is_opened_with_the_response_timeout() {
+fn a_surface_share_connection_is_opened_with_the_response_timeout_both_ways() {
     let socket_directory = tempfile::tempdir().expect("a socket directory");
     let socket_path = socket_directory.path().join("answers.sock");
     let listener = UnixListener::bind(&socket_path).expect("bind");
@@ -48,14 +48,23 @@ fn a_surface_share_connection_is_opened_with_the_response_timeout() {
         .request(&serde_json::json!({ "op": "check_out" }))
         .expect("the round trip");
 
-    let read_timeout = connection
-        .open_connection
-        .lock()
+    let open_connection = connection.open_connection.lock();
+    let open_stream = open_connection
         .as_ref()
-        .expect("a completed exchange keeps its connection")
-        .read_timeout()
-        .expect("the connection's read timeout is readable");
-    assert_eq!(read_timeout, Some(SURFACE_SHARE_RESPONSE_TIMEOUT));
+        .expect("a completed exchange keeps its connection");
+    assert_eq!(
+        open_stream
+            .read_timeout()
+            .expect("the connection's read timeout is readable"),
+        Some(SURFACE_SHARE_RESPONSE_TIMEOUT)
+    );
+    assert_eq!(
+        open_stream
+            .write_timeout()
+            .expect("the connection's write timeout is readable"),
+        Some(SURFACE_SHARE_RESPONSE_TIMEOUT)
+    );
+    drop(open_connection);
     drop(server.join().expect("server thread"));
 }
 
@@ -155,7 +164,7 @@ fn a_connection_whose_answer_outwaits_the_timeout_is_set_aside_rather_than_close
     );
     assert_eq!(
         connection
-            .connections_set_aside_after_a_timeout
+            .connections_set_aside_after_a_failure
             .lock()
             .len(),
         1
@@ -173,7 +182,7 @@ fn an_importer_that_set_aside_its_limit_of_connections_asks_the_service_nothing_
     for _ in 0..SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
         let (set_aside_end, _peer_end) = UnixStream::pair().expect("a socket pair");
         connection
-            .connections_set_aside_after_a_timeout
+            .connections_set_aside_after_a_failure
             .lock()
             .push(set_aside_end);
     }
@@ -188,9 +197,74 @@ fn an_importer_that_set_aside_its_limit_of_connections_asks_the_service_nothing_
     );
     assert_eq!(
         connection
-            .connections_set_aside_after_a_timeout
+            .connections_set_aside_after_a_failure
             .lock()
             .len(),
         SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST
     );
+}
+
+/// An answer this importer cannot take in leaves the connection open on the
+/// service's side, so it is set aside rather than closed: the claims made on
+/// it stay held.
+#[test]
+fn a_connection_whose_answer_cannot_be_taken_in_is_set_aside_rather_than_closed() {
+    let socket_directory = tempfile::tempdir().expect("a socket directory");
+    let socket_path = socket_directory.path().join("garbles.sock");
+    let listener = UnixListener::bind(&socket_path).expect("bind");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        read_one_request(&mut stream);
+        let not_json = b"not json";
+        stream
+            .write_all(&(not_json.len() as u32).to_be_bytes())
+            .expect("write the length");
+        stream.write_all(not_json).expect("write the answer");
+        stream
+    });
+    let connection =
+        SurfaceShareConnectionOfThisImporter::<PoolSlotImportUnderTest>::new(socket_path);
+
+    let refusal = connection
+        .request(&serde_json::json!({ "op": "check_out" }))
+        .expect_err("an answer that is not JSON fails the request");
+
+    assert!(refusal.contains("set that connection aside"), "{refusal}");
+    assert_eq!(
+        connection
+            .connections_set_aside_after_a_failure
+            .lock()
+            .len(),
+        1
+    );
+    assert!(connection.open_connection.lock().is_none());
+    drop(server.join().expect("server thread"));
+}
+
+/// A connection the service closed holds nothing on the service's side, so
+/// it is dropped rather than set aside.
+#[test]
+fn a_connection_the_service_closed_is_dropped_rather_than_set_aside() {
+    let socket_directory = tempfile::tempdir().expect("a socket directory");
+    let socket_path = socket_directory.path().join("closes.sock");
+    let listener = UnixListener::bind(&socket_path).expect("bind");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        read_one_request(&mut stream);
+    });
+    let connection =
+        SurfaceShareConnectionOfThisImporter::<PoolSlotImportUnderTest>::new(socket_path);
+
+    let refusal = connection
+        .request(&serde_json::json!({ "op": "check_out" }))
+        .expect_err("a closed connection fails the request");
+
+    assert!(refusal.contains("closed the connection"), "{refusal}");
+    assert!(
+        connection
+            .connections_set_aside_after_a_failure
+            .lock()
+            .is_empty()
+    );
+    server.join().expect("server thread");
 }
