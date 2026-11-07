@@ -1269,7 +1269,15 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            ["clock", "exposed", "links", "machine", "nodes", "references", "stream"]
+            [
+                "clock",
+                "exposed",
+                "links",
+                "machine",
+                "nodes",
+                "references",
+                "stream"
+            ]
         );
     }
 
