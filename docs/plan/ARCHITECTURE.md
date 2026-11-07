@@ -3580,11 +3580,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: previews through the local relay — the preview page, `/watch` and an encode, two
   loopback hops and a decode for a picture on the same machine, and nothing for a family a MoQ
   player cannot draw (owner, 2026-11-06).
-- **OPEN** — How a viewer reads a port, and who on the machine may open one. Direction
-  (session, not decided): Tato Studio opens a read of the port over the local API, and the
-  runtime hands it the port's channel as it hands a helper one, an Image surface imported as a
-  helper imports it, so a preview is zero-copy and never reaches a relay. Settled in the change
-  that builds viewers. [strict-port-families; gateway-nodes]
+- **DECIDED** — How a viewer reads a port, and who on the machine may open one. Tato Studio
+  opens a read of the port over the local API, and the runtime hands it the port's channel as it
+  hands a helper one; an Image frame is shared, not copied — Studio imports the surface as a helper
+  imports it — so a preview is zero-copy and never reaches a relay. Whoever may open the local
+  API's socket may open a viewer: the owning user. A viewer reads the latest value and skips what
+  it falls behind on, so it never slows the stream it reads. Owner, 2026-11-07.
+  [gateway-nodes]
+  Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
+  beside a zero-copy full view (owner, 2026-11-07).
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; a Red5 gateway; and a zero-copy
