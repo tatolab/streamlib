@@ -113,7 +113,8 @@ _Static_assert(offsetof(ModuleHostTable, input_message_payload_descriptor) == PO
 _Static_assert(offsetof(ModuleHostTable, input_message_lend_pooled_gpu_frame) == POINTER_SLOT(44), "ModuleHostTable.input_message_lend_pooled_gpu_frame");
 _Static_assert(offsetof(ModuleHostTable, output_port_write_described) == POINTER_SLOT(45), "ModuleHostTable.output_port_write_described");
 _Static_assert(offsetof(ModuleHostTable, surface_gpu_pool_slot_frame) == POINTER_SLOT(46), "ModuleHostTable.surface_gpu_pool_slot_frame");
-_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(47), "ModuleHostTable size");
+_Static_assert(offsetof(ModuleHostTable, output_port_declare_groups_given_up_before_the_next_write) == POINTER_SLOT(47), "ModuleHostTable.output_port_declare_groups_given_up_before_the_next_write");
+_Static_assert(sizeof(ModuleHostTable) == POINTER_SLOT(48), "ModuleHostTable size");
 _Static_assert(alignof(ModuleHostTable) == 8, "ModuleHostTable align");
 
 _Static_assert(sizeof(ModuleHostTableAudioStreamFormat) == 12, "ModuleHostTableAudioStreamFormat size");
@@ -147,6 +148,6 @@ _Static_assert(offsetof(ModuleHostTablePayloadDescriptor, body) == 4, "ModuleHos
 _Static_assert(sizeof(ModuleHostTablePayloadDescriptor) == 64, "ModuleHostTablePayloadDescriptor size");
 
 _Static_assert(MODULE_HOST_TABLE_ABI_MAJOR == 1, "MODULE_HOST_TABLE_ABI_MAJOR");
-_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 11, "MODULE_HOST_TABLE_ABI_MINOR");
+_Static_assert(MODULE_HOST_TABLE_ABI_MINOR == 12, "MODULE_HOST_TABLE_ABI_MINOR");
 _Static_assert(MODULE_HOST_TABLE_STATUS_REFUSED < 0, "MODULE_HOST_TABLE_STATUS_REFUSED");
 _Static_assert(MODULE_HOST_TABLE_TIMESTAMP_NOW == INT64_MIN, "MODULE_HOST_TABLE_TIMESTAMP_NOW");

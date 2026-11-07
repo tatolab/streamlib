@@ -311,6 +311,15 @@ unsafe extern "C" fn refuse_gpu_pool_slot_frame(
     MODULE_HOST_TABLE_STATUS_REFUSED
 }
 
+unsafe extern "C" fn refuse_given_up_groups_declaration(
+    _: *mut c_void,
+    _: ModuleHostTablePortHandle,
+    _: u64,
+    _: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    MODULE_HOST_TABLE_STATUS_REFUSED
+}
+
 fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
     let table = Box::leak(Box::new(ModuleHostTable {
         abi_major: 1,
@@ -363,6 +372,8 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         input_message_lend_pooled_gpu_frame: refuse_lend_pooled_gpu_frame,
         output_port_write_described: refuse_described_write,
         surface_gpu_pool_slot_frame: refuse_gpu_pool_slot_frame,
+        output_port_declare_groups_given_up_before_the_next_write:
+            refuse_given_up_groups_declaration,
     }));
     NonNull::from(table).cast()
 }
