@@ -47,7 +47,8 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
 - #3213: the `tatolab-moq` module (gateway, track, send and receive nodes) and the
   `GraphInput` / `GraphOutput` interface nodes. Waits on step 2.
 - #3215: runtime viewers. Tato Studio reads any port from the runtime and shows it by family,
-  with no relay in between. Its read path is settled in the plan before code. It does not wait
+  with no relay in between, reading the port's channel and importing an Image surface
+  zero-copy (decided 2026-11-07). It does not wait
   on #3213, so it may run beside it.
 
 ## 4. Remove the automatic path
