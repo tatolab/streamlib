@@ -170,12 +170,14 @@ async fn add_processor_impl(
             .first()
             .and_then(|node| node.config.clone())
             .unwrap_or_default();
-        if let Err(refusal) = crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
-            graph,
-            processor_interpreter_launch_record.node_types_this_stream_resolves(),
-            &node_id,
-            &config_of_the_added_node,
-        ) {
+        if let Err(refusal) =
+            crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+                graph,
+                processor_interpreter_launch_record.node_types_this_stream_resolves(),
+                &node_id,
+                &config_of_the_added_node,
+            )
+        {
             graph.traversal_mut().v(&node_id).drop();
             return Err(refusal);
         }
