@@ -1288,3 +1288,49 @@ def test_a_node_reference_to_a_node_the_stream_does_not_hold_is_refused_at_add()
 
     with pytest.raises(ValueError, match="node `gateway` is not in stream `rig`"):
         stream_builder.add(BrightnessReader, config={"source": elsewhere})
+
+
+def test_a_variable_set_from_a_port_and_read_twice_compiles_to_its_drawn_nodes_and_links() -> None:
+    from tatolab.stream import GetVariable, SetVariable
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    setter = stream_builder.add(SetVariable, config={"variable": "inverted"})
+    stream_builder.connect(inverter.output("video_to_downstream"), setter.input("value"))
+    for reader_name in ("front", "back"):
+        getter = stream_builder.add(GetVariable, config={"variable": "inverted"})
+        reader = stream_builder.add(BrightnessReader, name=reader_name)
+        stream_builder.connect(getter.output("value"), reader.input("video_from_upstream"))
+
+    graph = stream_builder._compiled_graph()
+    assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
+        ("frameinverter", FrameInverter.__module__ + ":FrameInverter"),
+        ("setvariable", "tatolab.stream:SetVariable"),
+        ("getvariable", "tatolab.stream:GetVariable"),
+        ("front", BrightnessReader.__module__ + ":BrightnessReader"),
+        ("getvariable-2", "tatolab.stream:GetVariable"),
+        ("back", BrightnessReader.__module__ + ":BrightnessReader"),
+    ]
+    assert graph["links"][0] == {
+        "source": {"node": "frameinverter", "port": "video_to_downstream"},
+        "target": {"node": "setvariable", "port": "value"},
+    }
+
+
+def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_one() -> None:
+    from tatolab.stream import GetVariable, SetVariable
+
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(
+        SetVariable, config={"variable": "connection", "node_reference": inverter}
+    )
+    getter = stream_builder.add(GetVariable, config={"variable": "connection"})
+    stream_builder.add(BrightnessReader, config={"source": getter})
+
+    nodes = stream_builder._compiled_graph()["nodes"]
+    assert nodes[1]["config"] == {
+        "variable": "connection",
+        "node_reference": {"node": "frameinverter"},
+    }
+    assert nodes[3]["config"] == {"source": {"node": "getvariable"}}

@@ -80,6 +80,10 @@ from ._port_family_declaration import PortFamily as PortFamily
 from ._port_family_declaration import PortNamesFromConfig as PortNamesFromConfig
 from ._port_family_declaration import Records as Records
 from ._port_family_declaration import from_config as from_config
+from ._graph_variable_nodes import GetVariable as GetVariable
+from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
+from ._graph_variable_nodes import SetVariable as SetVariable
+from ._graph_variable_nodes import SetVariableConfig as SetVariableConfig
 from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
@@ -150,6 +154,8 @@ __all__ = [
     "ComputeKernel",
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "Exposure",
+    "GetVariable",
+    "GetVariableConfig",
     "GlslPixelEffect",
     "GlslPixelEffectDialType",
     "GpuContextFullAccess",
@@ -202,6 +208,8 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "ScaledStreamClock",
+    "SetVariable",
+    "SetVariableConfig",
     "SteppedStreamClock",
     "StreamBuilder",
     "StreamClock",

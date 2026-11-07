@@ -34,6 +34,9 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph_variable_resolution::{
+    GraphSnapshotWithVariablesResolved, GraphVariablesAsDrawn,
+};
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::media_clock::MediaClock;
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
@@ -108,6 +111,9 @@ pub struct LoadedStreamInThisRuntime {
     pub(crate) processor_interpreter_launch_record:
         Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+    /// The variable nodes, and what they resolved to, of the graph this stream
+    /// loaded, so `graph` renders them as drawn.
+    graph_variables_as_drawn: Mutex<GraphVariablesAsDrawn>,
     /// How long this stream's teardown has before its watchdog abandons it.
     teardown_watchdog_budget: Duration,
     /// Held for the whole of a start or a stop, so a stop that lands while
@@ -294,6 +300,7 @@ impl LoadedStreamInThisRuntime {
                 ),
             ),
             node_types_this_stream_resolves,
+            graph_variables_as_drawn: Mutex::new(GraphVariablesAsDrawn::default()),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -1020,6 +1027,9 @@ impl LoadedStreamInThisRuntime {
             .compiler
             .scope(|graph, _tx| graph.to_graph_response(machine_name));
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
+        self.graph_variables_as_drawn
+            .lock()
+            .render_into(&mut graph_response);
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }
@@ -1310,6 +1320,11 @@ impl LoadedStreamInThisRuntime {
         graph
             .clock
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        let GraphSnapshotWithVariablesResolved {
+            graph_the_runtime_runs,
+            variables_as_drawn,
+        } = graph.with_graph_variables_resolved()?;
+        let graph = &graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
                 graph.nodes.iter().map(|node| &node.processor_type),
@@ -1317,7 +1332,7 @@ impl LoadedStreamInThisRuntime {
             )?;
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
-        graph.validate(&self.node_types_this_stream_resolves)?;
+        graph.validate_a_graph_holding_no_variable_node(&self.node_types_this_stream_resolves)?;
         self.compiler
             .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
 
@@ -1341,8 +1356,28 @@ impl LoadedStreamInThisRuntime {
             self.connect(
                 OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
                 InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
-            )?;
+            )
+            .map_err(|refusal| {
+                match variables_as_drawn
+                    .links_resolved_from_a_variable
+                    .iter()
+                    .find(|resolved| resolved.link == *link)
+                {
+                    Some(resolved) => Error::GraphError(format!(
+                        "`GetVariable` node `{}` reads the variable `{}`, which holds \
+                         `{}/{}`, into `{}/{}`, and that link is refused: {refusal}",
+                        resolved.get_variable_node,
+                        resolved.variable,
+                        link.source.node,
+                        link.source.port,
+                        link.target.node,
+                        link.target.port
+                    )),
+                    None => refusal,
+                }
+            })?;
         }
+        *self.graph_variables_as_drawn.lock() = variables_as_drawn;
 
         for exposed in &graph.exposed {
             self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;

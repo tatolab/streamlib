@@ -197,7 +197,20 @@ impl GraphSnapshot {
     /// graph holds, every reference edge a node of the type its config key
     /// takes, and every exposure an output port a node has, named once, at a
     /// level beyond internal.
+    ///
+    /// Its variables are resolved first, and the graph the runtime would run is
+    /// the one checked.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        self.with_graph_variables_resolved()?
+            .graph_the_runtime_runs
+            .validate_a_graph_holding_no_variable_node(node_types)
+    }
+
+    /// [`Self::validate`] of a graph whose variables are already resolved.
+    pub fn validate_a_graph_holding_no_variable_node(
+        &self,
+        node_types: &NodeTypesOneStreamResolves,
+    ) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             node_types.refuse_a_node_this_stream_cannot_add(

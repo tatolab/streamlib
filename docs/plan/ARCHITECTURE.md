@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes, lightweight-node-kinds; unbuilt: the five port families, subgraphs, Input and Output nodes, variables, reference edges; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes, lightweight-node-kinds; unbuilt: the five port families, subgraphs, Input and Output nodes; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
