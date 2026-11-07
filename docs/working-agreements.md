@@ -119,8 +119,6 @@ topic; `CLAUDE.md` holds only what every session must load.
   60 s and sample `/proc/<pid>/fd`.
 - **Throughput comparisons need a quiet machine.** A concurrent cargo build or gate battery invalidates
   frame counts and makes camera fixtures lose every claim race. Re-run quiet and A/B against main.
-- **`check-no-in-process-placement` keys exempt lines by path and exact text.** Archiving a change
-  file or rewrapping a plan paragraph breaks it. Re-point or rewrap in the same PR; never weaken it.
 - **macOS CI logs truncate.** Fetch the full zip with
   `gh api repos/tatolab/streamlib/actions/runs/<id>/logs` and grep the macOS job's file.
 - **A red only on the runner can be the toolchain.** Ubuntu's apt `glslc` corrupts non-ASCII bytes

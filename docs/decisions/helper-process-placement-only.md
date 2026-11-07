@@ -1,7 +1,5 @@
 # Helper-process placement only
 
-<!-- check-no-in-process-placement:allow-file — this ADR must name the banned model to ban it -->
-
 Rationale for the `[helper-process-placement-only]` entries in `docs/plan/ARCHITECTURE.md`,
 decided by the owner 2026-08-04, direction confirmed verbatim the same day. Supersedes the
 placement clauses of `importable-python-library.md`, the `__main__` bullet of
@@ -18,19 +16,28 @@ asks why every Python processor is a child process.
 
 ## The direction, verbatim (owner-confirmed)
 
-1. Helper-process placement is the only execution placement StreamLib has: every Python
-   processor runs in its own child process, spawned by the Rust engine as an exec of
-   ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, never a
-   pool — with its own interpreter and its own GIL.
+1. ~~Helper-process placement is the only execution placement StreamLib has: every Python
+   processor runs~~ A Python class node runs in its own child process, spawned by the Rust engine as an exec of
+   ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, ~~never a
+   pool~~ — with its own interpreter and its own GIL.
    > Superseded 2026-10-02 by `package-split-and-lend.md`: the exec is the stream's own venv
    > interpreter running the runtime's processor-interpreter bootstrap by path, with the
    > runtime's lend directory and then the project on `PYTHONPATH`. One child, one interpreter,
    > one GIL per processor stands.
-2. In-process hosting of a Python processor is banned outright — not a default, not a
+   > Amended 2026-11-06 by `lightweight-node-kinds.md`: this holds for a Python **class**
+   > node (`@node.process`). A `@node.function` node gets no process of its own: it runs inside
+   > a node that reads it (a Python reader, or a native one when it is compiled), in the
+   > per-stream function-node helper when it holds state and feeds several readers, or in the
+   > per-stream pool; it moves to its own process after it crashes or stalls its host.
+2. ~~In-process hosting of a Python processor is banned outright — not a default, not a
    fallback, not an engine policy choice, not a latency optimisation — because the axis
    being optimised is isolation, not latency: no processor may ever block, stall, or degrade
    another, and that dora-style isolation at Holoscan-class performance is why StreamLib
-   exists.
+   exists.~~
+   > Superseded 2026-11-06 by `lightweight-node-kinds.md`: no Python **class** node is hosted
+   > in another node's process, and isolation between class nodes stands. A function node,
+   > whose state and time are parameters, runs inside its reader's interpreter; a crash
+   > breadcrumb moves it to its own process if it takes the reader down.
 3. The ban is scoped to Python processor hosting — the engine's native built-ins stay in the
    app process, `rt.run()` still owns the main thread with the GIL released, and the
    GIL-release contract survives only so the wheel's blocking bindings never stall their own
@@ -42,8 +49,12 @@ asks why every Python processor is a child process.
    `app.py`.
 5. Shipped in-process hosting is legacy ripped out inside #1714 with no parallel
    coexistence; #1714 takes the critical path and grows to carry cross-process bags and
-   pixel exchange; and the ban is held by a `.claude/rules/placement.md` stop-work rule,
-   hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.
+   pixel exchange; ~~and the ban is held by a `.claude/rules/placement.md` stop-work rule,
+   hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.~~
+   > Superseded 2026-11-06 by owner ruling: the rule file, the reviewer hard-fails and the
+   > gate are retired — rules do not dictate architecture; the plan does. The plan's
+   > placement entry is amended by `docs/plan/changes/lightweight-node-kinds.md`, which
+   > keeps a Python class node in its own process and adds node kinds that run without one.
 
 ## Why
 
@@ -136,11 +147,12 @@ spec-forbidden).
   `[NEEDS DECISION]` — its module-global queues assume a shared interpreter.
 - The GIL-release contract narrows to protecting each interpreter's own threads; the
   #1702 spike's numbers are retracted as placement evidence (annotated at the source).
-- Enforcement lands as its own operating-model PR per `.claude/rules/flow.md`:
+- ~~Enforcement lands as its own operating-model PR per `.claude/rules/flow.md`:
   `.claude/rules/placement.md` (stop-work shapes and the app-process boundary), hard-fail
   insertions in `review-pr` and `rust-craftsmanship-reviewer`, and the
   `check-no-in-process-placement` xtask gate (vocabulary now; the behavioural
   no-hosting-in-the-parent test lands with #1714 — the app's own registration import
   is parent-side by construction; hosting is what never is). "In-process" is retired as
   a word for the surviving app-process senses — the glossary now says **app-process** —
-  so the banned term stays unambiguous and greppable.
+  so the banned term stays unambiguous and greppable.~~
+  > Superseded 2026-11-06 by owner ruling: the enforcement is retired (see item 5).

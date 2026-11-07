@@ -1,16 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The behavioural gate on where a Python processor runs.
+"""The behavioural gate on where a Python class node runs.
 
 Every `@node` class runs in its own child process of `tatolabd` — own
-interpreter, own GIL. That is the library's reason to exist, so it is asserted
-behaviourally rather than trusted: `tatolabd` never imports the processor's
-module, and the pid a bag was produced in is not `tatolabd`'s.
-
-`cargo xtask check-no-in-process-placement` gates the vocabulary; this gates
-the behaviour. A change that reintroduces the banned model without using any
-of the banned words still turns these red.
+interpreter, own GIL: `tatolabd` never imports the processor's module, and the
+pid a bag was produced in is not `tatolabd`'s.
 """
 
 from __future__ import annotations

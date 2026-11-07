@@ -16,7 +16,6 @@ pub mod check_iceoryx2_construction;
 pub mod check_module_host_table_surface;
 pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
-pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
 pub mod check_no_tatolab_namespace_package_init;
 pub mod check_no_unbounded_cstr_from_ptr;
@@ -184,16 +183,12 @@ type SourceWalkingGate = fn(&Path) -> Result<()>;
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all sixteen in well under a second, and why CI runs them as
+/// lets one process run all fifteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     ("lint-logging", lint_logging::run),
     ("check-boundaries", check_boundaries::run),
     ("check-vendored-trees", check_vendored_trees::run),
-    (
-        "check-no-in-process-placement",
-        check_no_in_process_placement::run,
-    ),
     (
         "check-module-host-table-surface",
         check_module_host_table_surface::run,
@@ -518,15 +513,6 @@ enum Commands {
     /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
     CheckBoundaries,
 
-    /// CI gate for the helper-process-placement-only ruling. Fails on the
-    /// vocabulary of the banned model anywhere in
-    /// the engine tree or `docs/`; the banned patterns and the two escape
-    /// hatches are enumerated in
-    /// [`check_no_in_process_placement`]. Markdown and Rust doc comments are
-    /// scanned on purpose: a violation can announce itself in a `//!` line.
-    /// See `docs/decisions/helper-process-placement-only.md`.
-    CheckNoInProcessPlacement,
-
     /// CI gate keeping the module host table data-plane only: every field of
     /// `tatolab-module-sdk`'s `#[repr(C)]` table is plain data, a handle or an
     /// `extern "C"` verb over them — never an engine or RHI type — and the SDK
@@ -773,9 +759,6 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
-        Commands::CheckNoInProcessPlacement => {
-            check_no_in_process_placement::run(&workspace_root()?)?
-        }
         Commands::CheckModuleHostTableSurface => {
             check_module_host_table_surface::run(&workspace_root()?)?
         }
