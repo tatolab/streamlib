@@ -495,6 +495,11 @@ struct OpenViewerToolArguments {
     node: String,
     #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
     port: String,
+    #[schemars(
+        description = "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket."
+    )]
+    #[serde(default)]
+    viewer_process_id: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -986,13 +991,16 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running."
+        description = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running."
     )]
     async fn open_viewer(
         &self,
-        Parameters(OpenViewerToolArguments { stream, node, port }): Parameters<
-            OpenViewerToolArguments,
-        >,
+        Parameters(OpenViewerToolArguments {
+            stream,
+            node,
+            port,
+            viewer_process_id,
+        }): Parameters<OpenViewerToolArguments>,
     ) -> ToolCallAnswer {
         if matches!(
             self.mcp_connection,
@@ -1017,7 +1025,7 @@ impl LocalApiMcpServerHandler {
         }
         let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
         let viewer_held_open = stream_operations
-            .open_a_viewer_of_an_output_port(node, port)
+            .open_a_viewer_of_an_output_port(node, port, viewer_process_id)
             .await
             .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
         let hand_off = viewer_held_open.hand_off().clone();
@@ -1047,6 +1055,7 @@ impl LocalApiMcpServerHandler {
                 port: hand_off.port,
                 iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),
                 channel: hand_off.channel_service_name,
+                surface_share_address: hand_off.surface_share_address,
             },
         )
     }

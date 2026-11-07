@@ -28,6 +28,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
             &self,
             node_name: String,
             port_name: String,
+            _process_id_of_the_viewer: Option<u32>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
             ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::OutputPortViewerHeldOpen>,

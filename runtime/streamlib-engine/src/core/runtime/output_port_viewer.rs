@@ -51,6 +51,63 @@ pub struct OutputPortViewerChannelHandOff {
     pub iceoryx2_domain_root: PathBuf,
     /// The channel's iceoryx2 service name.
     pub channel_service_name: String,
+    /// Where the viewer imports an Image frame's surface, as a helper process
+    /// does: the surface-sharing socket's path on Linux, the surface-sharing
+    /// Mach service's name on macOS. `None` on macOS when no viewer process
+    /// was admitted, which leaves the viewer nothing it may connect to.
+    pub surface_share_address: Option<String>,
+}
+
+/// What lets a viewer's process import an Image frame's surface while the
+/// viewer stays open.
+struct SurfaceShareAccessOfAViewer {
+    surface_share_address: Option<String>,
+    #[cfg(target_os = "macos")]
+    _admission_of_the_viewer_process:
+        Option<crate::apple::surface_share::SurfaceShareHelperProcessAdmission>,
+}
+
+impl SurfaceShareAccessOfAViewer {
+    /// The access process `process_id_of_the_viewer` gets: on Linux, the
+    /// socket its file permission already opens to this user; on macOS, the
+    /// Mach service once the process is admitted, refused unless it is a
+    /// running process of this user.
+    fn granted_to(
+        engine_resources: &super::runtime::EngineResourcesSharedByEveryStream,
+        process_id_of_the_viewer: Option<u32>,
+    ) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = process_id_of_the_viewer;
+            Ok(Self {
+                surface_share_address: Some(engine_resources.surface_share_address()),
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let Some(viewer_process_id) = process_id_of_the_viewer else {
+                return Ok(Self {
+                    surface_share_address: None,
+                    _admission_of_the_viewer_process: None,
+                });
+            };
+            let admission = crate::apple::surface_share::admit_a_viewer_process(
+                &engine_resources.surface_share_mach_service_rendezvous,
+                viewer_process_id,
+            )?;
+            Ok(Self {
+                surface_share_address: Some(engine_resources.surface_share_address()),
+                _admission_of_the_viewer_process: Some(admission),
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (engine_resources, process_id_of_the_viewer);
+            Ok(Self {
+                surface_share_address: None,
+            })
+        }
+    }
 }
 
 /// A viewer's read of one output port, held open by the runtime: the port's
@@ -58,6 +115,7 @@ pub struct OutputPortViewerChannelHandOff {
 pub struct OutputPortViewerHeldOpen {
     hand_off: OutputPortViewerChannelHandOff,
     source_side: SourceSideHeldOpenForAReaderOnTheReservedSlot,
+    _surface_share_access_of_the_viewer: SurfaceShareAccessOfAViewer,
 }
 
 impl std::fmt::Debug for OutputPortViewerHeldOpen {
@@ -88,20 +146,21 @@ impl LoadedStreamInThisRuntime {
     /// say how to subscribe to its channel's reserved slot. The graph is not
     /// changed. Answers once the port's source has opened its end of the
     /// channel, and refused while the node does not run or when its helper
-    /// process could not open the port.
+    /// process could not open the port. On macOS, process
+    /// `process_id_of_the_viewer` may open new connections to the
+    /// surface-sharing service while the viewer stays open, and is refused
+    /// unless it is a running process of this user.
     pub(crate) async fn open_a_viewer_of_an_output_port_holding_its_channel(
         &self,
         node_name: &str,
         port_name: &str,
+        process_id_of_the_viewer: Option<u32>,
     ) -> Result<OutputPortViewerHeldOpen> {
-        let iceoryx2_node = self
-            .engine_resources_shared_by_every_stream()
-            .iceoryx2_node
-            .clone();
-        let iceoryx2_domain_root = self
-            .engine_resources_shared_by_every_stream()
-            .runtime_directory
-            .iceoryx2_domain_root();
+        let engine_resources = self.engine_resources_shared_by_every_stream();
+        let surface_share_access_of_the_viewer =
+            SurfaceShareAccessOfAViewer::granted_to(engine_resources, process_id_of_the_viewer)?;
+        let iceoryx2_node = engine_resources.iceoryx2_node.clone();
+        let iceoryx2_domain_root = engine_resources.runtime_directory.iceoryx2_domain_root();
         let compiler = Arc::clone(&self.compiler);
         let stream_id = self.stream_id().to_string();
         let node_name = node_name.to_string();
@@ -131,8 +190,12 @@ impl LoadedStreamInThisRuntime {
                         port: port_cast,
                         iceoryx2_domain_root,
                         channel_service_name: source_side.channel_service_name.clone(),
+                        surface_share_address: surface_share_access_of_the_viewer
+                            .surface_share_address
+                            .clone(),
                     },
                     source_side,
+                    _surface_share_access_of_the_viewer: surface_share_access_of_the_viewer,
                 })
             }),
         )
@@ -357,10 +420,12 @@ mod tests {
         }
 
         fn open_a_viewer(&self, port_name: &str) -> Result<OutputPortViewerHeldOpen> {
-            self.async_runtime.block_on(
-                self.stream
-                    .open_a_viewer_of_an_output_port("camera".into(), port_name.into()),
-            )
+            self.async_runtime
+                .block_on(self.stream.open_a_viewer_of_an_output_port(
+                    "camera".into(),
+                    port_name.into(),
+                    None,
+                ))
         }
 
         fn write(&self, payload: &[u8], timestamp_ns: i64) {
@@ -471,5 +536,202 @@ mod tests {
             (&b"frame 50"[..], 50, 48)
         );
         assert!(reader.read_the_latest_message().unwrap().is_none());
+    }
+
+    /// A viewer imports the pool slot an Image message names from the
+    /// surface-sharing socket its hand-off names, as a helper process does,
+    /// and reads the very memory the engine wrote. Needs a Vulkan device that
+    /// exports OPAQUE_FD memory; skips where none comes up.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_viewer_imports_the_pool_slot_an_image_message_names_from_its_hand_off() {
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+        use streamlib_ipc_types::{
+            DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
+            GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
+        };
+        use streamlib_surface_client::{
+            CheckedOutPixelBufferMemory, CheckedOutSurface, GpuPoolClaimTableHandOver,
+            MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+            SURFACE_SHARE_GPU_POOL_FIELD, check_out_surface_on_surface_share,
+            connect_to_surface_share_socket, gpu_pool_uuid_wire_name,
+            published_frame_id_of_pool_slot, refusal_the_surface_share_service_answered,
+            release_check_out_on_surface_share, send_request_with_fds,
+        };
+
+        use crate::core::context::GpuPoolClaimTablesOfOnePool;
+        use crate::core::rhi::{PixelBuffer, PixelFormat};
+        use crate::vulkan::rhi::{HostVulkanBuffer, HostVulkanDevice};
+
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 16;
+        const BYTE_SIZE: u64 = (WIDTH * 4 * HEIGHT) as u64;
+        const STAMP: u8 = 0x5A;
+        const POOL_SLOT_KEY: &str = "a-viewed-pool-slot";
+
+        let host_device = match HostVulkanDevice::new() {
+            Ok(host_device) => host_device,
+            Err(unavailable) => {
+                tracing::warn!("skipping: no host Vulkan device ({unavailable})");
+                return;
+            }
+        };
+        let exported = match HostVulkanBuffer::new_opaque_fd_export(&host_device, BYTE_SIZE) {
+            Ok(exported) => exported,
+            Err(unavailable) => {
+                tracing::warn!(
+                    "skipping: no OPAQUE_FD buffer export on this device ({unavailable})"
+                );
+                return;
+            }
+        };
+        // SAFETY: the export is a live mapping of BYTE_SIZE bytes.
+        unsafe { std::ptr::write_bytes(exported.mapped_ptr(), STAMP, BYTE_SIZE as usize) };
+        let pool_slot = PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(exported),
+            WIDTH,
+            HEIGHT,
+            4,
+            PixelFormat::Bgra32,
+        );
+
+        let camera = ARunningCameraWithNoLinks::load();
+        let engine_resources = Arc::clone(camera.stream.engine_resources_shared_by_every_stream());
+        let engine_surface_store = engine_resources
+            .a_connected_surface_store_owned_by("engine:a-viewed-pool".to_string())
+            .expect("the engine's surface store connects");
+        engine_surface_store
+            .register_buffer(POOL_SLOT_KEY, &pool_slot)
+            .expect("the engine registers the pool slot");
+        let mut claim_tables_of_the_pool = GpuPoolClaimTablesOfOnePool::named("a-viewed-pool");
+        let row_lease = claim_tables_of_the_pool
+            .lease_a_row_for_a_slot(
+                engine_resources
+                    .surface_check_out_leases
+                    .gpu_pool_claim_tables(),
+                POOL_SLOT_KEY,
+            )
+            .expect("the pool leases its slot a row");
+        row_lease.row().publish_generation(1);
+        engine_resources
+            .surface_check_out_leases
+            .publish_frame_generation(POOL_SLOT_KEY, 1)
+            .expect("the lease table takes the frame");
+
+        let viewer = camera.open_a_viewer("out1").unwrap();
+        let hand_off = viewer.hand_off().clone();
+        let surface_share_address = hand_off
+            .surface_share_address
+            .clone()
+            .expect("Linux hands every viewer the surface-sharing socket");
+        assert_eq!(
+            Path::new(&surface_share_address),
+            camera._runner.surface_socket_path()
+        );
+        let mut reader = OutputPortViewerReader::subscribe(
+            &hand_off.iceoryx2_domain_root,
+            &hand_off.channel_service_name,
+            "a-viewer",
+        )
+        .unwrap();
+        camera
+            .camera_output
+            .write_bytes_described_by(
+                "out1",
+                &[],
+                1,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
+                    slot: GpuPoolSlotFrameDescriptorBody {
+                        pool: row_lease.table().pool_uuid(),
+                        slot: row_lease.row_index(),
+                        generation: 1,
+                        timeline_value: 0,
+                        image_layout: 0,
+                    },
+                    width: WIDTH,
+                    height: HEIGHT,
+                    format: 0,
+                    colour: ImageFrameH273Colour::UNSPECIFIED,
+                }),
+            )
+            .expect("the camera writes the frame");
+
+        let message = the_next_message_read(&mut reader);
+        assert_eq!(
+            message.payload_descriptor.kind,
+            DataChannelPayloadDescriptorKind::ImageFrame as u32
+        );
+        let frame =
+            ImageFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
+        assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
+
+        let surface_share_connection =
+            connect_to_surface_share_socket(Path::new(&surface_share_address))
+                .expect("the viewer connects to the hand-off's surface-sharing socket");
+        let (hand_over_reply, claim_table_fds) = send_request_with_fds(
+            &surface_share_connection,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
+                SURFACE_SHARE_GPU_POOL_FIELD: gpu_pool_uuid_wire_name(&frame.slot.pool),
+            }),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect("the service answers the pool's claim table");
+        // SAFETY: each fd arrived over SCM_RIGHTS and is owned by nothing else.
+        drop(
+            claim_table_fds
+                .into_iter()
+                .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            refusal_the_surface_share_service_answered(&hand_over_reply),
+            None,
+            "{hand_over_reply}"
+        );
+        let hand_over = GpuPoolClaimTableHandOver::from_reply(&hand_over_reply).unwrap();
+        let (_, pool_slot_key) = hand_over
+            .pool_slot_key_by_row
+            .iter()
+            .find(|(row, _)| *row == frame.slot.slot)
+            .expect("the hand-over names the frame's row");
+        let published_frame_id =
+            published_frame_id_of_pool_slot(pool_slot_key, frame.slot.generation);
+        let CheckedOutSurface::PixelBuffer(checked_out) =
+            check_out_surface_on_surface_share(&surface_share_connection, &published_frame_id)
+                .expect("the viewer checks the frame out")
+        else {
+            panic!("a pixel_buffer registration checks out as a pixel buffer");
+        };
+        let CheckedOutPixelBufferMemory::OpaqueFd {
+            memory_fd,
+            vk_memory_type_index,
+            exporting_device_uuid,
+        } = checked_out.memory
+        else {
+            panic!("an OPAQUE_FD export checks out as OPAQUE_FD memory");
+        };
+        let viewer_device = Arc::new(
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(exporting_device_uuid)
+                .expect("the viewer opens the exporting device"),
+        );
+        let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &viewer_device,
+            memory_fd,
+            BYTE_SIZE,
+            vk_memory_type_index,
+        )
+        .expect("the viewer imports the slot's memory");
+        // SAFETY: the import maps BYTE_SIZE bytes while `imported` lives.
+        let pixels =
+            unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), BYTE_SIZE as usize) };
+        assert!(pixels.iter().all(|byte| *byte == STAMP));
+        drop(imported);
+        release_check_out_on_surface_share(&surface_share_connection, &published_frame_id)
+            .expect("the viewer lets the frame go");
     }
 }
