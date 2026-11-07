@@ -911,3 +911,33 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
         "{refusal}"
     );
 }
+
+#[test]
+#[serial]
+fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    let display =
+        register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let mut graph = an_image_variable_read_by_two_readers(&camera, &display);
+    graph["nodes"][5]["name"] = serde_json::json!("Back Display");
+    graph["links"][2]["target"]["node"] = serde_json::json!("Back Display");
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(&runner, project_directory.path(), graph).expect("the stream loads");
+    let links_into = |rendered: &serde_json::Value, node: &str| -> Vec<serde_json::Value> {
+        rendered["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|link| link["target"]["node"] == node)
+            .cloned()
+            .collect()
+    };
+    let rendered = the_graph_document_of(&stream);
+    let into_the_back_display = links_into(&rendered, "back-display");
+    assert_eq!(into_the_back_display.len(), 1, "{into_the_back_display:?}");
+    assert_eq!(into_the_back_display[0]["source"]["node"], "get-camera-2");
+    assert!(!into_the_back_display[0]["id"].as_str().unwrap().is_empty());
+}

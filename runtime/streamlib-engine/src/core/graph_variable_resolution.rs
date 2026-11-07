@@ -18,16 +18,10 @@ use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::json_schema::{
-    GraphResponse, LinkOutput, LinkPortRefOutput, ProcessorNodeOutput, ProcessorNodePortsOutput,
+    GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
+    ProcessorNodeOutput, ProcessorNodePortsOutput,
 };
 use crate::core::{Error, Result};
-use streamlib_processor_schema::BUILT_IN_NODE_CLASS_MODULE;
-
-/// The short name of the node type that names a variable's value.
-pub const SET_VARIABLE_NODE_TYPE_SHORT_NAME: &str = "SetVariable";
-
-/// The short name of the node type that reads a variable.
-pub const GET_VARIABLE_NODE_TYPE_SHORT_NAME: &str = "GetVariable";
 
 /// The config key both variable nodes name their variable under.
 pub const GRAPH_VARIABLE_NAME_CONFIG_KEY: &str = "variable";
@@ -54,9 +48,18 @@ pub struct GraphVariablesAsDrawn {
     pub positions_of_links_touching_a_variable_node: Vec<usize>,
     /// Every link the runtime runs that a get resolved to.
     pub links_resolved_from_a_variable: Vec<LinkResolvedFromAGraphVariable>,
-    /// The config each node had before a reference naming a get was resolved,
-    /// by node name.
-    pub configs_naming_a_get_by_node_name: HashMap<String, serde_json::Value>,
+    /// Each config that named a get, as drawn and as resolved, by the cast of
+    /// its node's name.
+    pub configs_naming_a_get_by_node_name: HashMap<String, ConfigNamingAGet>,
+}
+
+/// A node's config that named a get: as drawn, and as the runtime runs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigNamingAGet {
+    /// The config as the graph wrote it, naming the get.
+    pub as_drawn: serde_json::Value,
+    /// The config the runtime runs, naming the setter's node.
+    pub as_resolved: serde_json::Value,
 }
 
 /// The component key a variable node, and a drawn link with an end on one,
@@ -65,15 +68,24 @@ pub const GRAPH_VARIABLE_COMPONENT_KEY: &str = "graph_variable";
 
 impl GraphVariablesAsDrawn {
     /// Render the variables into `graph_response`, a render of the graph the
-    /// runtime runs: each variable node and its drawn links in, each link a
-    /// get resolved to out, its live state carried on the get's drawn link,
-    /// and each config naming a get as drawn.
+    /// runtime runs: each variable node and each drawn link whose other end is
+    /// still in the graph in, each link a get resolved to out, its live state
+    /// carried on the get's drawn link, and each config naming a get as drawn
+    /// while the runtime still runs it as resolved.
     pub fn render_into(&self, graph_response: &mut GraphResponse) {
         if self.variable_nodes.is_empty() {
             return;
         }
+        let cast = |name: &str| {
+            cast_exposed_name_to_url_safe(name)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_else(|_| name.to_string())
+        };
+        let same_end = |left: &LinkPortRefOutput, right: &LinkPortRefOutput| {
+            cast(&left.node) == cast(&right.node) && left.port == right.port
+        };
         let is_the_runtime_link = |rendered: &LinkOutput, link: &GraphSnapshotLink| {
-            rendered.source == link.source && rendered.target == link.target
+            same_end(&rendered.source, &link.source) && same_end(&rendered.target, &link.target)
         };
         let mut rendered_links_resolved_from_a_variable = Vec::new();
         graph_response.links.retain(|rendered| {
@@ -86,14 +98,19 @@ impl GraphVariablesAsDrawn {
             }
             !resolved_from_a_variable
         });
-        let variable_by_node_name: HashMap<&str, &str> = self
+        let casts_of_the_running_nodes: HashSet<String> = graph_response
+            .nodes
+            .iter()
+            .map(|node| cast(&node.name))
+            .collect();
+        let variable_by_node_cast: HashMap<String, &str> = self
             .variable_nodes
             .iter()
             .filter_map(|node| {
                 node.config
                     .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
                     .and_then(serde_json::Value::as_str)
-                    .map(|variable| (node.name.as_str(), variable))
+                    .map(|variable| (cast(&node.name), variable))
             })
             .collect();
         for (drawn, drawn_position) in self
@@ -101,23 +118,35 @@ impl GraphVariablesAsDrawn {
             .iter()
             .zip(&self.positions_of_links_touching_a_variable_node)
         {
-            let variable = variable_by_node_name
-                .get(drawn.source.node.as_str())
-                .or_else(|| variable_by_node_name.get(drawn.target.node.as_str()))
-                .copied()
-                .unwrap_or_default();
+            let source_cast = cast(&drawn.source.node);
+            let target_cast = cast(&drawn.target.node);
+            let end_is_in_the_graph = |end_cast: &String| {
+                variable_by_node_cast.contains_key(end_cast)
+                    || casts_of_the_running_nodes.contains(end_cast)
+            };
+            if !end_is_in_the_graph(&source_cast) || !end_is_in_the_graph(&target_cast) {
+                continue;
+            }
             let runtime_link = self
                 .links_resolved_from_a_variable
                 .iter()
                 .find(|resolved| {
-                    resolved.get_variable_node == drawn.source.node
-                        && resolved.link.target == drawn.target
+                    cast(&resolved.get_variable_node) == source_cast
+                        && same_end(&resolved.link.target, &drawn.target)
                 })
                 .and_then(|resolved| {
                     rendered_links_resolved_from_a_variable
                         .iter()
                         .find(|rendered| is_the_runtime_link(rendered, &resolved.link))
                 });
+            if variable_by_node_cast.contains_key(&source_cast) && runtime_link.is_none() {
+                continue;
+            }
+            let variable = variable_by_node_cast
+                .get(&source_cast)
+                .or_else(|| variable_by_node_cast.get(&target_cast))
+                .copied()
+                .unwrap_or_default();
             let mut components = runtime_link
                 .map(|rendered| rendered.components.clone())
                 .unwrap_or_default();
@@ -132,13 +161,19 @@ impl GraphVariablesAsDrawn {
                     id: runtime_link
                         .map(|rendered| rendered.id.clone())
                         .unwrap_or_default(),
-                    source: drawn.source.clone(),
-                    target: drawn.target.clone(),
+                    source: LinkPortRefOutput {
+                        node: source_cast,
+                        port: drawn.source.port.clone(),
+                    },
+                    target: LinkPortRefOutput {
+                        node: target_cast,
+                        port: drawn.target.port.clone(),
+                    },
                     capacity: runtime_link
                         .map(|rendered| rendered.capacity)
                         .unwrap_or_default(),
                     state: runtime_link
-                        .map(|rendered| rendered.state.clone())
+                        .map(|rendered| rendered.state)
                         .unwrap_or_default(),
                     error_reason: runtime_link.and_then(|rendered| rendered.error_reason.clone()),
                     components,
@@ -146,8 +181,14 @@ impl GraphVariablesAsDrawn {
             );
         }
         for node in &mut graph_response.nodes {
-            if let Some(drawn_config) = self.configs_naming_a_get_by_node_name.get(&node.name) {
-                node.config = Some(drawn_config.clone());
+            let Some(config_naming_a_get) = self
+                .configs_naming_a_get_by_node_name
+                .get(&cast(&node.name))
+            else {
+                continue;
+            };
+            if node.config.as_ref() == Some(&config_naming_a_get.as_resolved) {
+                node.config = Some(config_naming_a_get.as_drawn.clone());
             }
         }
         for (variable_node, drawn_position) in self
@@ -155,26 +196,45 @@ impl GraphVariablesAsDrawn {
             .iter()
             .zip(&self.variable_node_positions)
         {
+            let variable_node_cast = cast(&variable_node.name);
             let mut components = serde_json::Map::new();
             components.insert(
                 GRAPH_VARIABLE_COMPONENT_KEY.to_string(),
                 serde_json::json!({
-                    GRAPH_VARIABLE_NAME_CONFIG_KEY:
-                        variable_by_node_name.get(variable_node.name.as_str())
+                    GRAPH_VARIABLE_NAME_CONFIG_KEY: variable_by_node_cast.get(&variable_node_cast)
                 }),
             );
+            let value_port = PortInfoOutput {
+                name: GRAPH_VARIABLE_VALUE_PORT_NAME.to_string(),
+                description: String::new(),
+                port_kind: PortKindOutput::default(),
+                delivery_profile: None,
+                borrow_quota: None,
+                audio_window: None,
+                catalog_entry: None,
+                family: None,
+            };
+            let is_a_setter = variable_node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,
                 ProcessorNodeOutput {
                     id: String::new(),
                     processor_type: variable_node.processor_type.clone(),
-                    name: variable_node.name.clone(),
+                    name: variable_node_cast,
                     config: Some(variable_node.config.clone()),
                     config_checksum: 0,
                     ports: ProcessorNodePortsOutput {
-                        inputs: Vec::new(),
-                        outputs: Vec::new(),
+                        inputs: if is_a_setter {
+                            vec![value_port.clone()]
+                        } else {
+                            Vec::new()
+                        },
+                        outputs: if is_a_setter {
+                            Vec::new()
+                        } else {
+                            vec![value_port]
+                        },
                     },
                     components,
                 },
@@ -204,24 +264,18 @@ pub struct GraphSnapshotWithVariablesResolved {
     pub variables_as_drawn: GraphVariablesAsDrawn,
 }
 
-/// The import path a graph names `SetVariable` by.
-pub fn set_variable_node_type() -> ProcessorClassImportPath {
-    variable_node_type(SET_VARIABLE_NODE_TYPE_SHORT_NAME)
-}
+/// The import path a graph names `SetVariable` by, in the built-in node module.
+pub const SET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:SetVariable";
 
-/// The import path a graph names `GetVariable` by.
-pub fn get_variable_node_type() -> ProcessorClassImportPath {
-    variable_node_type(GET_VARIABLE_NODE_TYPE_SHORT_NAME)
-}
-
-fn variable_node_type(short_name: &str) -> ProcessorClassImportPath {
-    ProcessorClassImportPath::new(format!("{BUILT_IN_NODE_CLASS_MODULE}:{short_name}"))
-        .expect("a variable node's import path is well formed")
-}
+/// The import path a graph names `GetVariable` by, in the built-in node module.
+pub const GET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:GetVariable";
 
 /// Whether `node_type` is `SetVariable` or `GetVariable`.
 pub fn is_a_graph_variable_node_type(node_type: &ProcessorClassImportPath) -> bool {
-    *node_type == set_variable_node_type() || *node_type == get_variable_node_type()
+    matches!(
+        node_type.as_str(),
+        SET_VARIABLE_NODE_TYPE | GET_VARIABLE_NODE_TYPE
+    )
 }
 
 /// What one `SetVariable` holds.
@@ -242,8 +296,6 @@ impl GraphSnapshot {
     /// variable does not hold. A graph with no variable node resolves to
     /// itself.
     pub fn with_graph_variables_resolved(&self) -> Result<GraphSnapshotWithVariablesResolved> {
-        let set_type = set_variable_node_type();
-        let get_type = get_variable_node_type();
         let variable_nodes: Vec<&GraphSnapshotNode> = self
             .nodes
             .iter()
@@ -256,6 +308,23 @@ impl GraphSnapshot {
             });
         }
 
+        let mut type_of_each_node_by_cast: HashMap<String, &str> = HashMap::new();
+        for node in &self.nodes {
+            let cast = cast_of(&node.name)?;
+            if type_of_each_node_by_cast
+                .insert(cast.clone(), node.processor_type.as_str())
+                .is_some()
+            {
+                return Err(Error::NodeNameTaken {
+                    name: node.name.clone(),
+                    cast,
+                });
+            }
+        }
+        let is_a_get =
+            |cast: &str| type_of_each_node_by_cast.get(cast) == Some(&GET_VARIABLE_NODE_TYPE);
+        let is_a_set =
+            |cast: &str| type_of_each_node_by_cast.get(cast) == Some(&SET_VARIABLE_NODE_TYPE);
         let variable_node_casts: HashSet<String> = variable_nodes
             .iter()
             .map(|node| cast_of(&node.name))
@@ -264,7 +333,7 @@ impl GraphSnapshot {
         let mut setters_by_variable: HashMap<String, OneSetter<'_>> = HashMap::new();
         for node in &variable_nodes {
             let variable = variable_a_node_names(node)?;
-            if node.processor_type == get_type {
+            if node.processor_type.as_str() == GET_VARIABLE_NODE_TYPE {
                 refuse_a_key_a_variable_node_does_not_take(
                     node,
                     &[GRAPH_VARIABLE_NAME_CONFIG_KEY],
@@ -272,10 +341,9 @@ impl GraphSnapshot {
                 variable_of_each_get_by_cast.insert(cast_of(&node.name)?, variable);
                 continue;
             }
-            debug_assert_eq!(node.processor_type, set_type);
             let setter = OneSetter {
                 node,
-                holds: value_one_setter_holds(self, node, &variable)?,
+                holds: value_one_setter_holds(self, node, &variable, &is_a_get, &is_a_set)?,
             };
             if let Some(first) = setters_by_variable.insert(variable.clone(), setter) {
                 return Err(Error::GraphError(format!(
@@ -296,6 +364,13 @@ impl GraphSnapshot {
             })
         };
 
+        for get_node in variable_nodes
+            .iter()
+            .filter(|node| node.processor_type.as_str() == GET_VARIABLE_NODE_TYPE)
+        {
+            setter_of(&get_node.name, &variable_a_node_names(get_node)?)?;
+        }
+
         let mut runtime_links = Vec::new();
         let mut links_touching_a_variable_node = Vec::new();
         let mut positions_of_links_touching_a_variable_node = Vec::new();
@@ -311,15 +386,25 @@ impl GraphSnapshot {
             }
             links_touching_a_variable_node.push(link.clone());
             positions_of_links_touching_a_variable_node.push(link_position);
-            if variable_node_casts.contains(&target_cast) {
-                continue;
-            }
-            let Some(variable) = variable_of_each_get_by_cast.get(&source_cast) else {
+            if is_a_set(&source_cast) {
                 return Err(Error::GraphError(format!(
                     "a link leaves `SetVariable` node `{}`, which has no output: read a \
                      variable through a `GetVariable` node",
                     link.source.node
                 )));
+            }
+            if is_a_get(&target_cast) {
+                return Err(Error::GraphError(format!(
+                    "a link enters `GetVariable` node `{}`, which has no input: set a \
+                     variable by linking into a `SetVariable` node",
+                    link.target.node
+                )));
+            }
+            if is_a_set(&target_cast) {
+                continue;
+            }
+            let Some(variable) = variable_of_each_get_by_cast.get(&source_cast) else {
+                continue;
             };
             refuse_a_variable_port_other_than_value(&link.source, "a link leaves")?;
             let setter = setter_of(&link.source.node, variable)?;
@@ -353,43 +438,47 @@ impl GraphSnapshot {
                 runtime_nodes.push(node.clone());
                 continue;
             };
-            let mut resolved_config = config_object.clone();
+            let mut resolved_config = serde_json::Value::Object(config_object.clone());
             let mut named_a_get = false;
-            for (config_key, config_value) in config_object {
-                let Some(referenced) = node_name_a_config_value_references(config_value) else {
-                    continue;
-                };
-                let referenced_cast = cast_of(referenced)?;
-                let Some(variable) = variable_of_each_get_by_cast.get(&referenced_cast) else {
-                    if variable_node_casts.contains(&referenced_cast) {
+            resolve_each_config_value_naming_a_get(
+                &mut resolved_config,
+                "config",
+                &mut |config_key_path, referenced| {
+                    let referenced_cast = cast_of(referenced)?;
+                    if is_a_set(&referenced_cast) {
                         return Err(Error::GraphError(format!(
-                            "node `{}`'s config key `{config_key}` names `SetVariable` node \
+                            "node `{}`'s `{config_key_path}` names `SetVariable` node \
                              `{referenced}`: read a variable through a `GetVariable` node",
                             node.name
                         )));
                     }
-                    continue;
-                };
-                let setter = setter_of(referenced, variable)?;
-                let ValueOneSetterHolds::NodeReference(referenced_node) = &setter.holds else {
-                    return Err(Error::GraphError(format!(
-                        "node `{}`'s config key `{config_key}` reads `GetVariable` node \
-                         `{referenced}`, and its variable `{variable}` holds a port's \
-                         output, which a link reads, never a config key",
-                        node.name
-                    )));
-                };
-                resolved_config.insert(
-                    config_key.clone(),
-                    serde_json::json!({ NODE_REFERENCE_NODE_KEY: referenced_node }),
-                );
-                named_a_get = true;
-            }
+                    let Some(variable) = variable_of_each_get_by_cast.get(&referenced_cast) else {
+                        return Ok(None);
+                    };
+                    let setter = setter_of(referenced, variable)?;
+                    let ValueOneSetterHolds::NodeReference(referenced_node) = &setter.holds else {
+                        return Err(Error::GraphError(format!(
+                            "node `{}`'s `{config_key_path}` reads `GetVariable` node \
+                             `{referenced}`, and its variable `{variable}` holds a port's \
+                             output, which a link reads, never a config value",
+                            node.name
+                        )));
+                    };
+                    named_a_get = true;
+                    Ok(Some(referenced_node.clone()))
+                },
+            )?;
             if named_a_get {
-                configs_naming_a_get_by_node_name.insert(node.name.clone(), node.config.clone());
+                configs_naming_a_get_by_node_name.insert(
+                    cast_of(&node.name)?,
+                    ConfigNamingAGet {
+                        as_drawn: node.config.clone(),
+                        as_resolved: resolved_config.clone(),
+                    },
+                );
             }
             runtime_nodes.push(GraphSnapshotNode {
-                config: serde_json::Value::Object(resolved_config),
+                config: resolved_config,
                 ..node.clone()
             });
         }
@@ -436,6 +525,8 @@ fn value_one_setter_holds(
     graph: &GraphSnapshot,
     setter: &GraphSnapshotNode,
     variable: &str,
+    is_a_get: &dyn Fn(&str) -> bool,
+    is_a_set: &dyn Fn(&str) -> bool,
 ) -> Result<ValueOneSetterHolds> {
     refuse_a_key_a_variable_node_does_not_take(
         setter,
@@ -458,10 +549,7 @@ fn value_one_setter_holds(
         .filter(|value| !value.is_null());
     match (links_in.as_slice(), node_reference) {
         ([link], None) => {
-            if graph.nodes.iter().any(|node| {
-                node.processor_type == get_variable_node_type()
-                    && cast_of(&node.name).ok() == cast_of(&link.source.node).ok()
-            }) {
+            if is_a_get(&cast_of(&link.source.node)?) {
                 return Err(Error::GraphError(format!(
                     "`SetVariable` node `{}` takes its value from `GetVariable` node `{}`; \
                      link it from the port that variable's setter takes",
@@ -470,16 +558,25 @@ fn value_one_setter_holds(
             }
             Ok(ValueOneSetterHolds::PortOutput(link.source.clone()))
         }
-        ([], Some(reference)) => node_name_a_config_value_references(reference)
-            .map(|referenced| ValueOneSetterHolds::NodeReference(referenced.to_string()))
-            .ok_or_else(|| {
+        ([], Some(reference)) => {
+            let referenced = node_name_a_config_value_references(reference).ok_or_else(|| {
                 Error::GraphError(format!(
                     "`SetVariable` node `{}`'s `{SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY}` \
                      holds {reference}, and it holds a reference to a node, written \
                      {{\"node\": \"<name>\"}}. Pass the reference `add` returned",
                     setter.name
                 ))
-            }),
+            })?;
+            let referenced_cast = cast_of(referenced)?;
+            if is_a_get(&referenced_cast) || is_a_set(&referenced_cast) {
+                return Err(Error::GraphError(format!(
+                    "`SetVariable` node `{}` holds variable node `{referenced}`; a variable \
+                     holds a node that runs, never another variable",
+                    setter.name
+                )));
+            }
+            Ok(ValueOneSetterHolds::NodeReference(referenced.to_string()))
+        }
         ([], None) => Err(Error::GraphError(format!(
             "`SetVariable` node `{}` sets the variable `{variable}` to nothing: link a port \
              into its `{GRAPH_VARIABLE_VALUE_PORT_NAME}` input, or name a node in its \
@@ -499,6 +596,43 @@ fn value_one_setter_holds(
             links_in.len()
         ))),
     }
+}
+
+/// Replace each node reference in `config_value` that `resolve` resolves with
+/// the node it names, at any depth, naming each by its key path.
+fn resolve_each_config_value_naming_a_get(
+    config_value: &mut serde_json::Value,
+    key_path: &str,
+    resolve: &mut dyn FnMut(&str, &str) -> Result<Option<String>>,
+) -> Result<()> {
+    if let Some(referenced) = node_name_a_config_value_references(config_value) {
+        if let Some(resolved) = resolve(key_path, referenced)? {
+            *config_value = serde_json::json!({ NODE_REFERENCE_NODE_KEY: resolved });
+        }
+        return Ok(());
+    }
+    match config_value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                resolve_each_config_value_naming_a_get(
+                    value,
+                    &format!("{key_path}[{key:?}]"),
+                    resolve,
+                )?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                resolve_each_config_value_naming_a_get(
+                    item,
+                    &format!("{key_path}[{index}]"),
+                    resolve,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn variable_a_node_names(node: &GraphSnapshotNode) -> Result<String> {
@@ -720,7 +854,8 @@ mod tests {
         assert_eq!(
             resolution
                 .variables_as_drawn
-                .configs_naming_a_get_by_node_name["camera-track"],
+                .configs_naming_a_get_by_node_name["camera-track"]
+                .as_drawn,
             serde_json::json!({"gateway": {"node": "get-connection"}, "track": "camera"})
         );
     }
@@ -767,5 +902,146 @@ mod tests {
         let mut unknown_key = a_camera_variable_read_by_two_displays();
         unknown_key["nodes"][2]["config"]["colour"] = serde_json::json!("red");
         assert!(refusal_of(unknown_key).contains("carries the config key `colour`"));
+    }
+    #[test]
+    fn a_variable_node_whose_name_casts_like_another_nodes_is_refused() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["nodes"][2]["name"] = serde_json::json!("Camera");
+        let refusal = resolved(graph).unwrap_err();
+        assert!(
+            matches!(refusal, Error::NodeNameTaken { ref cast, .. } if cast == "camera"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_link_into_a_get_is_refused_naming_where_a_variable_is_set() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["links"].as_array_mut().unwrap().push(serde_json::json!(
+            {"source": {"node": "camera", "port": "video"}, "target": {"node": "get-camera", "port": "value"}}
+        ));
+        assert!(refusal_of(graph).contains("a link enters `GetVariable` node `get-camera`"));
+    }
+
+    #[test]
+    fn a_get_no_link_or_config_reads_yet_still_needs_a_setter() {
+        let mut graph = a_camera_variable_read_by_two_displays();
+        graph["nodes"].as_array_mut().unwrap().push(serde_json::json!(
+            {"name": "get-camra", "type": "tatolab.stream:GetVariable", "config": {"variable": "camra"}}
+        ));
+        assert!(
+            refusal_of(graph).contains("reads the variable `camra`, which no `SetVariable` sets")
+        );
+    }
+
+    #[test]
+    fn a_node_reference_naming_a_get_at_any_depth_resolves() {
+        let mut graph = a_gateway_variable_read_by_a_tracks_config();
+        graph["nodes"][3]["config"] =
+            serde_json::json!({"routes": [{"gateway": {"node": "get-connection"}}]});
+        let resolution = resolved(graph).unwrap();
+        assert_eq!(
+            resolution.graph_the_runtime_runs.nodes[1].config,
+            serde_json::json!({"routes": [{"gateway": {"node": "cloudflare"}}]})
+        );
+    }
+
+    #[test]
+    fn a_setter_holding_another_variable_node_is_refused() {
+        let mut graph = a_gateway_variable_read_by_a_tracks_config();
+        graph["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(
+                {"name": "set-alias", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "alias", "node_reference": {"node": "get-connection"}}}
+            ));
+        assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
+    }
+    fn a_rendered_node(name: &str) -> ProcessorNodeOutput {
+        ProcessorNodeOutput {
+            id: format!("id-{name}"),
+            processor_type: ProcessorClassImportPath::new("rig:Node").unwrap(),
+            name: name.to_string(),
+            config: Some(serde_json::json!({})),
+            config_checksum: 0,
+            ports: ProcessorNodePortsOutput {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+            },
+            components: serde_json::Map::new(),
+        }
+    }
+
+    fn a_rendered_link(id: &str, source: (&str, &str), target: (&str, &str)) -> LinkOutput {
+        let GraphSnapshotLink { source, target } = link(source, target);
+        LinkOutput {
+            id: id.to_string(),
+            source,
+            target,
+            capacity: 4,
+            state: Default::default(),
+            error_reason: None,
+            components: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_is_gone() {
+        let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
+        let mut graph_response = GraphResponse {
+            stream: None,
+            clock: Default::default(),
+            nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
+            links: vec![a_rendered_link(
+                "L2",
+                ("camera", "video"),
+                ("back", "video_in"),
+            )],
+            references: Vec::new(),
+            exposed: Vec::new(),
+            machine: "vm".to_string(),
+        };
+        resolution
+            .variables_as_drawn
+            .render_into(&mut graph_response);
+
+        let rendered_links: Vec<(String, String, String)> = graph_response
+            .links
+            .iter()
+            .map(|rendered| {
+                (
+                    rendered.id.clone(),
+                    rendered.source.node.clone(),
+                    rendered.target.node.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rendered_links,
+            [
+                (
+                    String::new(),
+                    "camera".to_string(),
+                    "set-camera".to_string()
+                ),
+                (
+                    "L2".to_string(),
+                    "get-camera-2".to_string(),
+                    "back".to_string()
+                ),
+            ]
+        );
+        let rendered_nodes: Vec<&str> = graph_response
+            .nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect();
+        assert_eq!(
+            rendered_nodes,
+            ["camera", "set-camera", "get-camera", "get-camera-2", "back"]
+        );
+        assert_eq!(graph_response.nodes[1].ports.inputs[0].name, "value");
+        assert_eq!(graph_response.nodes[2].ports.outputs[0].name, "value");
     }
 }
