@@ -85,13 +85,20 @@ pub enum GpuPoolFrameClaimAttemptOfThisImporter {
     NotInAClaimTable,
 }
 
+/// The slot a claim table row was leased to when this importer was handed
+/// the table, under the lease that row carried.
+struct PoolSlotLeasedARow {
+    pool_slot_key: String,
+    row_lease_number: u64,
+}
+
 /// This importer's claim tables, the pool slot each of their rows is leased to,
 /// and the newest frame of each slot this importer read or acquired.
 #[derive(Default)]
 pub struct GpuPoolClaimTablesOfThisImporter {
     claim_tables_by_pool: Mutex<HashMap<[u8; 16], Arc<GpuPoolClaimTableOfThisImporter>>>,
     pools_whose_claim_table_was_refused: Mutex<HashSet<[u8; 16]>>,
-    pool_slot_key_by_pool_and_row: Mutex<HashMap<([u8; 16], u32), String>>,
+    leased_slot_by_pool_and_row: Mutex<HashMap<([u8; 16], u32), PoolSlotLeasedARow>>,
     newest_frame_by_pool_slot_key: Mutex<HashMap<String, GpuPoolSlotFrameDescriptorBody>>,
     live_claims_by_published_frame_id:
         Mutex<HashMap<String, Weak<GpuPoolSlotFrameClaimOfThisImporter>>>,
@@ -111,13 +118,20 @@ impl GpuPoolClaimTablesOfThisImporter {
             .contains(pool)
     }
 
-    /// Whether this importer holds `frame`'s pool table and knows its row's slot.
+    /// Whether this importer holds `frame`'s pool table and knows the slot its
+    /// row is leased to now: a row the engine leased again since the hand-over
+    /// carries a newer lease number, and its slot is unknown until the next.
     pub fn knows_the_slot_of(&self, frame: &GpuPoolSlotFrameDescriptorBody) -> bool {
-        self.claim_tables_by_pool.lock().contains_key(&frame.pool)
-            && self
-                .pool_slot_key_by_pool_and_row
-                .lock()
-                .contains_key(&(frame.pool, frame.slot))
+        let Some(claim_table) = self.claim_tables_by_pool.lock().get(&frame.pool).cloned() else {
+            return false;
+        };
+        let Some(row) = claim_table.shared_rows.rows().get(frame.slot as usize) else {
+            return false;
+        };
+        self.leased_slot_by_pool_and_row
+            .lock()
+            .get(&(frame.pool, frame.slot))
+            .is_some_and(|leased_slot| leased_slot.row_lease_number == row.lease_number())
     }
 
     /// Take in a `claim_table_of_gpu_pool` reply: map the table the first
@@ -145,10 +159,16 @@ impl GpuPoolClaimTablesOfThisImporter {
                 claimant_column,
             }));
         }
-        let mut pool_slot_key_by_pool_and_row = self.pool_slot_key_by_pool_and_row.lock();
-        pool_slot_key_by_pool_and_row.retain(|(row_pool, _), _| *row_pool != pool);
-        for (row_index, pool_slot_key) in hand_over.pool_slot_key_by_row {
-            pool_slot_key_by_pool_and_row.insert((pool, row_index), pool_slot_key);
+        let mut leased_slot_by_pool_and_row = self.leased_slot_by_pool_and_row.lock();
+        leased_slot_by_pool_and_row.retain(|(row_pool, _), _| *row_pool != pool);
+        for leased_row in hand_over.rows_leased_to_slots {
+            leased_slot_by_pool_and_row.insert(
+                (pool, leased_row.row_index),
+                PoolSlotLeasedARow {
+                    pool_slot_key: leased_row.pool_slot_key,
+                    row_lease_number: leased_row.row_lease_number,
+                },
+            );
         }
         Ok(())
     }
@@ -157,11 +177,7 @@ impl GpuPoolClaimTablesOfThisImporter {
     /// known, answering the slot's key; `None` when this importer does not know
     /// the slot its row is leased to.
     pub fn note_a_pooled_frame(&self, frame: GpuPoolSlotFrameDescriptorBody) -> Option<String> {
-        let pool_slot_key = self
-            .pool_slot_key_by_pool_and_row
-            .lock()
-            .get(&(frame.pool, frame.slot))
-            .cloned()?;
+        let pool_slot_key = self.pool_slot_key_of(&frame)?;
         self.newest_frame_by_pool_slot_key
             .lock()
             .entry(pool_slot_key.clone())
@@ -177,10 +193,10 @@ impl GpuPoolClaimTablesOfThisImporter {
     /// The key of the slot `frame`'s claim table row is leased to, when this
     /// importer knows it.
     pub fn pool_slot_key_of(&self, frame: &GpuPoolSlotFrameDescriptorBody) -> Option<String> {
-        self.pool_slot_key_by_pool_and_row
+        self.leased_slot_by_pool_and_row
             .lock()
             .get(&(frame.pool, frame.slot))
-            .cloned()
+            .map(|leased_slot| leased_slot.pool_slot_key.clone())
     }
 
     /// Remember `frame` as the newest of the slot `published_frame_id` names:
@@ -395,12 +411,22 @@ impl GpuPoolClaimTablesOfThisImporter {
 
 #[cfg(test)]
 mod tests {
+    use streamlib_surface_client::GpuPoolClaimTableRowLeasedToASlot;
+
     use super::*;
 
-    fn a_hand_over_of_one_row(row_index: u32, pool_slot_key: &str) -> GpuPoolClaimTableHandOver {
+    fn a_hand_over_of_one_row(
+        row_index: u32,
+        pool_slot_key: &str,
+        row_lease_number: u64,
+    ) -> GpuPoolClaimTableHandOver {
         GpuPoolClaimTableHandOver {
             claimant_column_index: 2,
-            pool_slot_key_by_row: vec![(row_index, pool_slot_key.to_string())],
+            rows_leased_to_slots: vec![GpuPoolClaimTableRowLeasedToASlot {
+                row_index,
+                pool_slot_key: pool_slot_key.to_string(),
+                row_lease_number,
+            }],
         }
     }
 
@@ -435,15 +461,31 @@ mod tests {
     ) {
         let engine_side = GpuPoolClaimTableSharedRows::create("importer-claims").unwrap();
         let pool = [7u8; 16];
+        let row_lease_number = engine_side.rows()[3].begin_a_lease();
         let tables = GpuPoolClaimTablesOfThisImporter::default();
         tables
             .adopt_a_hand_over(
                 pool,
                 a_hand_over_handle_of(&engine_side),
-                a_hand_over_of_one_row(3, "slot-d"),
+                a_hand_over_of_one_row(3, "slot-d", row_lease_number),
             )
             .unwrap();
         (tables, engine_side, pool)
+    }
+
+    #[test]
+    fn a_row_the_engine_leased_again_since_the_hand_over_is_a_slot_this_importer_does_not_know() {
+        let (tables, engine_side, pool) = a_table_and_its_engine_side();
+        engine_side.rows()[3].publish_generation(5);
+        assert!(tables.knows_the_slot_of(&the_frame(pool, 3, 5)));
+
+        engine_side.rows()[3].begin_a_lease();
+        engine_side.rows()[3].publish_generation(6);
+
+        assert!(
+            !tables.knows_the_slot_of(&the_frame(pool, 3, 6)),
+            "the row's slot is asked for again rather than read as the slot before's"
+        );
     }
 
     #[test]
