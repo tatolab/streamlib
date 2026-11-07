@@ -19,8 +19,13 @@ use serde::{Deserialize, Serialize};
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
-    port_names_listed_for_a_refusal,
+    OutputPortExposureLevel, cast_exposed_name_to_url_safe,
+    config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
+    node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
+    refuse_a_reference_to_a_node_of_the_wrong_type,
+};
+use crate::core::graph_variable_resolution::{
+    GraphSnapshotWithVariablesResolved, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
 };
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
@@ -84,7 +89,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
     spec_keys: &["stream", "clock", "nodes", "links", "exposed"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
-    live_keys: &["extensions", "machine", "runtime_name"],
+    live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
@@ -192,9 +197,21 @@ impl GraphSnapshot {
     /// Check the graph without loading it: every `type` one the stream
     /// resolves on this floor, every config one its type takes, names unique
     /// once cast, every link end a port of the right direction on a node the
-    /// graph holds, and every exposure an output port a node has, named once,
-    /// at a level beyond internal.
+    /// graph holds, every reference edge a node of the type its config key
+    /// takes, and every exposure an output port a node has, named once, at a
+    /// level beyond internal.
+    ///
+    /// Its variables are resolved first: the graph the runtime would run is
+    /// checked, and each setter's value with it.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        self.with_graph_variables_resolved()?.validate(node_types)
+    }
+
+    /// [`Self::validate`] of a graph whose variables are already resolved.
+    pub fn validate_a_graph_holding_no_variable_node(
+        &self,
+        node_types: &NodeTypesOneStreamResolves,
+    ) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             node_types.refuse_a_node_this_stream_cannot_add(
@@ -244,6 +261,34 @@ impl GraphSnapshot {
             }
         }
 
+        for node in &self.nodes {
+            for reference in config_node_reference_edges_of_one_node(
+                &node.name,
+                &node.config,
+                config_keys_of_a_node_type_holding_a_node_reference(
+                    node_types,
+                    &node.processor_type,
+                ),
+            )? {
+                let referenced_node_name = &reference.edge.referenced_node;
+                let Some(referenced_node) = nodes_by_cast_name
+                    .get(cast_exposed_name_to_url_safe(referenced_node_name)?.as_ref())
+                else {
+                    return Err(Error::GraphError(format!(
+                        "node `{}`'s config key `{}` names node `{referenced_node_name}`, which \
+                         the graph does not hold. The graph holds: {}",
+                        node.name,
+                        reference.edge.config_key,
+                        the_names_the_graph_holds()
+                    )));
+                };
+                refuse_a_reference_to_a_node_of_the_wrong_type(
+                    &reference,
+                    &referenced_node.processor_type,
+                )?;
+            }
+        }
+
         let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
         for exposed in &self.exposed {
             let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?.into_owned();
@@ -280,6 +325,51 @@ impl GraphSnapshot {
             }
         }
 
+        Ok(())
+    }
+}
+
+impl GraphSnapshotWithVariablesResolved {
+    /// Check the graph the runtime runs, and that each `SetVariable` holds a
+    /// node of that graph, or an output port one of its nodes has, whether or
+    /// not a get reads it.
+    pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        let graph = &self.graph_the_runtime_runs;
+        graph.validate_a_graph_holding_no_variable_node(node_types)?;
+        let node_named = |node_name: &str| -> Result<Option<&GraphSnapshotNode>> {
+            let cast = cast_exposed_name_to_url_safe(node_name)?;
+            Ok(graph.nodes.iter().find(|node| {
+                cast_exposed_name_to_url_safe(&node.name).is_ok_and(|node_cast| node_cast == cast)
+            }))
+        };
+        let the_names_the_graph_holds =
+            || node_names_listed_for_a_refusal(graph.nodes.iter().map(|node| node.name.as_str()));
+        for SetVariableAndTheValueItHolds {
+            set_variable_node,
+            value,
+        } in &self.values_the_set_variables_hold
+        {
+            let held_node_name = match value {
+                ValueASetVariableHolds::PortOutput(source) => &source.node,
+                ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
+            };
+            let Some(held_node) = node_named(held_node_name)? else {
+                return Err(Error::GraphError(format!(
+                    "`SetVariable` node `{set_variable_node}` holds node `{held_node_name}`, \
+                     which the graph does not hold. The graph holds: {}",
+                    the_names_the_graph_holds()
+                )));
+            };
+            if let ValueASetVariableHolds::PortOutput(source) = value {
+                refuse_a_port_the_node_does_not_have(
+                    node_types,
+                    &source.node,
+                    held_node,
+                    &source.port,
+                    PortDirection::Output,
+                )?;
+            }
+        }
         Ok(())
     }
 }
@@ -1032,6 +1122,181 @@ mod tests {
             ),
             "a stream that described nothing resolved another stream's type"
         );
+    }
+
+    const GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Gateway";
+    const TRACK_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Track";
+
+    /// A stream that described a gateway type and a track type whose config
+    /// key `gateway` takes a reference to a gateway.
+    fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStreamResolves {
+        let node_types = NodeTypesOneStreamResolves::new();
+        for (short_name, import_path, config_schema) in [
+            ("Gateway", GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS, None),
+            (
+                "Track",
+                TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "gateway": {
+                            streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
+                                {"node_type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}
+                        },
+                        "track": {"type": "string"},
+                        "gateway_or_its_name": {"anyOf": [
+                            {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+                            {"type": "string"}
+                        ]}
+                    }
+                })),
+            ),
+        ] {
+            let mut descriptor = crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
+                ProcessorClassImportPath::new(import_path).unwrap(),
+                "graph snapshot reference test",
+            );
+            if let Some(config_schema) = config_schema {
+                descriptor = descriptor.with_config_schema(config_schema);
+            }
+            node_types
+                .register_a_type_described_in_this_streams_processor_interpreter(
+                    descriptor,
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                )
+                .expect("the type is described into the stream");
+        }
+        node_types
+    }
+
+    fn a_graph_whose_track_names_in_its_gateway_key(
+        gateway_config_value: serde_json::Value,
+    ) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                {"name": "other-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS},
+                {
+                    "name": "camera-track",
+                    "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                    "config": {"gateway": gateway_config_value, "track": "camera"}
+                }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_reference_to_a_node_of_the_type_its_key_takes_validates_and_round_trips() {
+        let graph =
+            a_graph_whose_track_names_in_its_gateway_key(serde_json::json!({"node": "cloudflare"}));
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a track naming a gateway validates");
+        let reread = GraphSnapshot::from_json_str(&graph.to_json_string().unwrap()).unwrap();
+        assert_eq!(reread, graph);
+        assert_eq!(
+            reread.nodes[2].config["gateway"],
+            serde_json::json!({"node": "cloudflare"})
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_node_the_graph_does_not_hold_is_refused_naming_it() {
+        let refusal =
+            a_graph_whose_track_names_in_its_gateway_key(serde_json::json!({"node": "nowhere"}))
+                .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+                .unwrap_err()
+                .to_string();
+        assert!(
+            refusal.contains("node `camera-track`'s config key `gateway` names node `nowhere`")
+                && refusal.contains("cloudflare"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_node_of_the_wrong_type_is_refused_naming_both_types() {
+        let refusal = a_graph_whose_track_names_in_its_gateway_key(
+            serde_json::json!({"node": "other-track"}),
+        )
+        .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refusal.contains(TRACK_CLASS_FOR_THE_REFERENCE_TESTS)
+                && refusal.contains(&format!(
+                    "takes a `{GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}`"
+                )),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_reference_key_holding_anything_but_a_node_object_is_refused_naming_the_key() {
+        let refusal = a_graph_whose_track_names_in_its_gateway_key(serde_json::json!("cloudflare"))
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("config key `gateway` holds \"cloudflare\""),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_key_taking_a_reference_or_a_string_validates_a_string() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "camera-track",
+                "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                "config": {"gateway_or_its_name": "cloudflare"}
+            }]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a string is the key's other value");
+    }
+
+    #[test]
+    fn a_setter_no_get_reads_still_holds_a_node_the_graph_holds() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                {
+                    "name": "set-gateway",
+                    "type": "tatolab.stream:SetVariable",
+                    "config": {"variable": "gateway", "node_reference": {"node": "nowhere"}}
+                }
+            ]
+        }))
+        .unwrap();
+        let refusal = graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("`SetVariable` node `set-gateway` holds node `nowhere`")
+                && refusal.contains("cloudflare"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_node_object_under_a_key_no_schema_marks_is_plain_config() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "cloudflare",
+                "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS,
+                "config": {"anything": {"node": "nowhere"}}
+            }]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a key no schema marks is never read as a reference");
     }
 
     /// A link's ends are both in the stream that loads the graph, so an end

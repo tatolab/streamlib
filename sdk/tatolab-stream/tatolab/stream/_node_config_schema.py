@@ -326,6 +326,9 @@ def _json_schema_for_annotation(
         return {"type": "null"}
     if annotation is Any:
         return {}
+    node_reference_schema = _node_reference_schema_unless_not_one(annotation)
+    if node_reference_schema is not None:
+        return node_reference_schema
 
     origin = typing.get_origin(annotation)
     if origin is typing.Union or origin is types.UnionType:
@@ -368,6 +371,75 @@ def _json_schema_for_annotation(
             )
 
     return {}
+
+
+# The keyword a config key holding a node reference carries, as the engine's
+# `NODE_REFERENCE_SCHEMA_KEYWORD` reads it; its `node_type` names the type the
+# referenced node must be.
+_NODE_REFERENCE_SCHEMA_KEYWORD = "x-tatolab-node-reference"
+
+
+def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | None":
+    # Imported here: the builder imports node declaration, which imports this
+    # module, and every annotation is read after the package has loaded.
+    from ._stream_graph_builder import (
+        NodeReference,
+        NodeReferenceToNodeType,
+        _node_type_of,
+    )
+
+    if annotation is NodeReference or annotation is NodeReferenceToNodeType:
+        keyword: "dict[str, Any]" = {}
+    elif typing.get_origin(annotation) is NodeReferenceToNodeType:
+        (node_class_the_reference_names,) = typing.get_args(annotation)
+        keyword = {"node_type": _node_type_of(node_class_the_reference_names)}
+    else:
+        return None
+    return {
+        "type": "object",
+        "properties": {"node": {"type": "string"}},
+        "required": ["node"],
+        "additionalProperties": False,
+        _NODE_REFERENCE_SCHEMA_KEYWORD: keyword,
+    }
+
+
+def with_each_node_reference_field_as_a_node_reference(
+    config_class: type, configuration: "dict[str, Any]"
+) -> "dict[str, Any]":
+    """`configuration` with each `{"node": name}` under a field `config_class` annotates as a node reference turned back into the `NodeReference`."""
+    from ._stream_graph_builder import NodeReference
+
+    try:
+        annotations = typing.get_type_hints(config_class, include_extras=True)
+    except Exception:
+        return configuration
+    reconstructed = dict(configuration)
+    for field_name, annotation in annotations.items():
+        written = reconstructed.get(field_name)
+        if not (
+            isinstance(written, dict)
+            and len(written) == 1
+            and isinstance(written.get("node"), str)
+            and _annotation_takes_a_node_reference(annotation)
+        ):
+            continue
+        reconstructed[field_name] = NodeReference(written["node"])
+    return reconstructed
+
+
+def _annotation_takes_a_node_reference(annotation: Any) -> bool:
+    origin = typing.get_origin(annotation)
+    if getattr(origin, "_name", None) in _REQUIREDNESS_QUALIFIER_NAMES:
+        return _annotation_takes_a_node_reference(typing.get_args(annotation)[0])
+    if getattr(annotation, "__metadata__", None) is not None:
+        return _annotation_takes_a_node_reference(typing.get_args(annotation)[0])
+    if origin is typing.Union or origin is types.UnionType:
+        return any(
+            _annotation_takes_a_node_reference(member)
+            for member in typing.get_args(annotation)
+        )
+    return _node_reference_schema_unless_not_one(annotation) is not None
 
 
 def _enumerated_schema(members: "tuple[Any, ...]") -> "dict[str, Any]":

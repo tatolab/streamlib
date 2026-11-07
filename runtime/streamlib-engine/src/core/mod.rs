@@ -30,6 +30,7 @@ pub mod error;
 pub mod execution;
 pub mod graph;
 pub mod graph_snapshot;
+pub mod graph_variable_resolution;
 pub mod hang_legacy_container_media_frame;
 pub mod json_schema;
 pub mod machine_global_unique_name;

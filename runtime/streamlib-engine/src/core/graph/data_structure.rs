@@ -199,6 +199,7 @@ impl Graph {
                 .map(|idx| &self.digraph[idx])
                 .map(|link| LinkOutput::of_a_link(link, &node_names))
                 .collect(),
+            references: Vec::new(),
             exposed: self
                 .digraph
                 .node_weights()
