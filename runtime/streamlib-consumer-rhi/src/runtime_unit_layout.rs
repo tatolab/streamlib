@@ -3,7 +3,8 @@
 
 //! Where a runtime unit lays out what it carries: `bin/` beside the lend, the
 //! preview page beside the lend, and on macOS and Linux the bundled Vulkan
-//! driver beside `_engine` in the lent `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
+//! driver and the Slang shader compiler beside `_engine` in the lent
+//! `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
 //! binaries in `Contents/MacOS`, the lend in `Contents/Resources/lend`, and the
 //! lend's Mach-Os in `Contents/Frameworks/tatolab-runtime`.
 //!
@@ -87,6 +88,45 @@ pub const BUNDLED_VULKAN_DRIVER_FILE_NAMES: [&str; 3] = [
     BUNDLED_ICD_MANIFEST_FILE_NAME,
 ];
 
+/// The Slang shader compiler's directory, beside `_engine` in the runtime
+/// package — in the wheel and in the lend alike.
+pub const BUNDLED_SLANG_COMPILER_DIRECTORY_NAME: &str = "_slang_compiler";
+
+/// The Slang release the bundled compiler directory carries; Slang loads its
+/// optimiser by a file name that embeds it.
+pub const BUNDLED_SLANG_COMPILER_VERSION: &str = "2026.12";
+
+#[cfg(target_os = "macos")]
+mod bundled_slang_compiler_file_names_on_this_platform {
+    /// The Slang compiler library the engine opens by path.
+    pub const SLANG_COMPILER_LIBRARY_FILE_NAME: &str = "libslang-compiler.dylib";
+
+    /// The SPIR-V optimiser the Slang compiler loads from its own directory.
+    pub const SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME: &str = "libslang-glslang-2026.12.dylib";
+}
+
+#[cfg(target_os = "linux")]
+mod bundled_slang_compiler_file_names_on_this_platform {
+    /// The Slang compiler library the engine opens by path.
+    pub const SLANG_COMPILER_LIBRARY_FILE_NAME: &str = "libslang-compiler.so";
+
+    /// The SPIR-V optimiser the Slang compiler loads from its own directory.
+    pub const SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME: &str = "libslang-glslang-2026.12.so";
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use bundled_slang_compiler_file_names_on_this_platform::{
+    SLANG_COMPILER_LIBRARY_FILE_NAME, SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME,
+};
+
+/// Every file `scripts/stage_slang_compiler_libraries.sh` writes into the
+/// bundled Slang compiler directory.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub const BUNDLED_SLANG_COMPILER_FILE_NAMES: [&str; 2] = [
+    SLANG_COMPILER_LIBRARY_FILE_NAME,
+    SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME,
+];
+
 /// The directory name of a macOS app bundle's `Contents/`.
 pub const APP_BUNDLE_CONTENTS_DIRECTORY_NAME: &str = "Contents";
 
@@ -146,6 +186,13 @@ pub fn bundled_vulkan_driver_directory_in_the_lend(lend_directory: &Path) -> Pat
         .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
 }
 
+/// The bundled Slang compiler directory in the lend at `lend_directory`.
+pub fn bundled_slang_compiler_directory_in_the_lend(lend_directory: &Path) -> PathBuf {
+    lend_directory
+        .join(LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND)
+        .join(BUNDLED_SLANG_COMPILER_DIRECTORY_NAME)
+}
+
 /// The app bundle's `Contents/` when `executable_directory` is its
 /// `Contents/MacOS`, else `None`.
 pub fn app_bundle_contents_directory_holding_the_executable_directory(
@@ -175,6 +222,17 @@ pub fn bundled_vulkan_driver_directory_in_the_app_bundle_contents(
         .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
 }
 
+/// The bundled Slang compiler directory among the lent runtime package's
+/// Mach-Os in the app bundle whose `Contents/` is
+/// `app_bundle_contents_directory`.
+pub fn bundled_slang_compiler_directory_in_the_app_bundle_contents(
+    app_bundle_contents_directory: &Path,
+) -> PathBuf {
+    app_bundle_contents_directory
+        .join(LENT_RUNTIME_PACKAGE_MACH_O_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
+        .join(BUNDLED_SLANG_COMPILER_DIRECTORY_NAME)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +256,25 @@ mod tests {
         assert_eq!(
             BUNDLED_VULKAN_DRIVER_FILE_NAMES,
             ["libvulkan.so.1", "libvulkan_lvp.so", "lvp_icd.x86_64.json"]
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_bundled_optimiser_file_name_names_the_bundled_slang_version() {
+        assert!(
+            SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME
+                .contains(&format!("-{BUNDLED_SLANG_COMPILER_VERSION}.")),
+            "Slang loads its optimiser by a versioned name, so the two must move together"
+        );
+    }
+
+    #[test]
+    fn the_slang_compiler_sits_beside_the_vulkan_driver_in_the_lend() {
+        let lend_directory = lend_directory_in_the_runtime_unit(Path::new("/opt/tatolab"));
+        assert_eq!(
+            bundled_slang_compiler_directory_in_the_lend(&lend_directory).parent(),
+            bundled_vulkan_driver_directory_in_the_lend(&lend_directory).parent()
         );
     }
 

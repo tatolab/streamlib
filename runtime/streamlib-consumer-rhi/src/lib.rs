@@ -91,6 +91,8 @@ mod vulkan_instance_api_version;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_layout;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod slang_compiler_library;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_loader_library;
 
 pub use error::{ConsumerRhiError, Result};
@@ -147,6 +149,8 @@ pub use vulkan_image_usage::VulkanImageUsage;
 pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_layout::{SampledImageReadLayout, VulkanLayout};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use slang_compiler_library::slang_compiler_library_candidate_paths;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_loader_library::{
     VulkanLoaderLibraryNotFound, open_the_first_vulkan_loader_library_that_opens,
