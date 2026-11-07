@@ -2829,8 +2829,8 @@ mod tests {
     #[test]
     fn a_claim_table_hand_over_maps_the_engines_rows_and_names_every_leased_slot() {
         use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
-        use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
         use std::os::fd::OwnedFd;
+        use streamlib_ipc_types::GpuPoolClaimTableMemfd;
         use streamlib_ipc_types::GpuPoolClaimantColumn;
         use streamlib_surface_client::GpuPoolClaimTableHandOver;
 

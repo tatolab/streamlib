@@ -15,12 +15,9 @@ use mach2::vm_inherit::VM_INHERIT_NONE;
 use mach2::vm_prot::{VM_PROT_READ, VM_PROT_WRITE};
 use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
-use streamlib_ipc_types::{
-    GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow,
-};
 use streamlib_surface_client::OwnedMachSendRight;
 
-use crate::core::{Error, Result};
+use crate::{GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow};
 
 /// `MAP_MEM_VM_SHARE` from `<mach/memory_object_types.h>`: the entry shares
 /// the pages of the mapping it names rather than copying them.
@@ -42,7 +39,7 @@ unsafe impl Sync for GpuPoolClaimTableMachMemoryEntry {}
 
 impl GpuPoolClaimTableMachMemoryEntry {
     /// A fresh table: zeroed rows, which publish nothing and hold no claims.
-    pub fn create(_pool_name: &str) -> Result<Self> {
+    pub fn create(_pool_name: &str) -> std::io::Result<Self> {
         let mut mapped_address: mach_vm_address_t = 0;
         // SAFETY: allocates fresh zero-filled pages anywhere in this task.
         let allocated = unsafe {
@@ -91,17 +88,20 @@ impl GpuPoolClaimTableMachMemoryEntry {
                     GPU_POOL_CLAIM_TABLE_BYTES as mach_vm_size_t,
                 )
             };
-            return Err(Error::Runtime(format!(
-                "a GPU pool claim table's memory entry is {entry_size} bytes, short of the \
-                 {GPU_POOL_CLAIM_TABLE_BYTES} a claim table spans"
-            )));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "a GPU pool claim table's memory entry is {entry_size} bytes, short of the \
+                     {GPU_POOL_CLAIM_TABLE_BYTES} a claim table spans"
+                ),
+            ));
         }
         Self::over(memory_entry, mapped_address)
     }
 
     /// Map a table another process created, from the memory entry it handed
     /// over.
-    pub fn adopt(memory_entry: OwnedMachSendRight) -> Result<Self> {
+    pub fn adopt(memory_entry: OwnedMachSendRight) -> std::io::Result<Self> {
         let mut mapped_address: mach_vm_address_t = 0;
         // SAFETY: maps one table's bytes of the entry, shared and read-write,
         // anywhere in this task; a smaller entry is refused by the kernel.
@@ -126,9 +126,12 @@ impl GpuPoolClaimTableMachMemoryEntry {
         Self::over(memory_entry, mapped_address)
     }
 
-    fn over(memory_entry: OwnedMachSendRight, mapped_address: mach_vm_address_t) -> Result<Self> {
+    fn over(
+        memory_entry: OwnedMachSendRight,
+        mapped_address: mach_vm_address_t,
+    ) -> std::io::Result<Self> {
         let rows = NonNull::new(mapped_address as usize as *mut GpuPoolClaimTableRow)
-            .ok_or_else(|| Error::Runtime("a GPU pool claim table mapped at null".into()))?;
+            .ok_or_else(|| std::io::Error::other("a GPU pool claim table mapped at null"))?;
         Ok(Self { memory_entry, rows })
     }
 
@@ -159,8 +162,8 @@ impl Drop for GpuPoolClaimTableMachMemoryEntry {
     }
 }
 
-fn claim_table_mach_failure(call: &str, kern_return: i32) -> Error {
-    Error::Runtime(format!(
+fn claim_table_mach_failure(call: &str, kern_return: i32) -> std::io::Error {
+    std::io::Error::other(format!(
         "GPU pool claim table {call} answered kern_return {kern_return:#x}"
     ))
 }
@@ -168,7 +171,7 @@ fn claim_table_mach_failure(call: &str, kern_return: i32) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_ipc_types::GpuPoolClaimantColumn;
+    use crate::GpuPoolClaimantColumn;
 
     #[test]
     fn a_claim_taken_through_an_adopted_memory_entry_holds_the_creators_row() {

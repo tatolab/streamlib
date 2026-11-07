@@ -5844,7 +5844,10 @@ name = "streamlib-ipc-types"
 version = "0.68.34"
 dependencies = [
  "iceoryx2",
+ "libc",
  "loom",
+ "mach2",
+ "streamlib-surface-client",
  "tracing",
 ]
 

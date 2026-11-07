@@ -7,11 +7,7 @@
 use std::os::fd::{AsFd, BorrowedFd, FromRawFd as _, OwnedFd};
 use std::ptr::NonNull;
 
-use streamlib_ipc_types::{
-    GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow,
-};
-
-use crate::core::{Error, Result};
+use crate::{GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow};
 
 /// A claim table's rows, in a memfd whose size is sealed so no holder can
 /// shrink the mapping under another.
@@ -28,12 +24,15 @@ unsafe impl Sync for GpuPoolClaimTableMemfd {}
 
 impl GpuPoolClaimTableMemfd {
     /// A fresh table: zeroed rows, which publish nothing and hold no claims.
-    pub fn create(pool_name: &str) -> Result<Self> {
+    pub fn create(pool_name: &str) -> std::io::Result<Self> {
         let memfd_name = std::ffi::CString::new(format!("streamlib-gpu-pool-claims-{pool_name}"))
             .map_err(|_| {
-            Error::Configuration(format!(
-                "GPU pool name {pool_name:?} holds a NUL byte and cannot name its claim table"
-            ))
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "GPU pool name {pool_name:?} holds a NUL byte and cannot name its claim table"
+                ),
+            )
         })?;
         // SAFETY: a NUL-terminated name and documented flags.
         let raw_memfd = unsafe {
@@ -66,7 +65,7 @@ impl GpuPoolClaimTableMemfd {
     }
 
     /// Map a table another process created, from the fd it handed over.
-    pub fn adopt(memfd: OwnedFd) -> Result<Self> {
+    pub fn adopt(memfd: OwnedFd) -> std::io::Result<Self> {
         // SAFETY: an all-zero stat is a valid out-parameter.
         let mut memfd_status: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: a valid fd and a valid out-parameter.
@@ -74,10 +73,14 @@ impl GpuPoolClaimTableMemfd {
             return Err(claim_table_os_failure("fstat"));
         }
         if memfd_status.st_size as usize != GPU_POOL_CLAIM_TABLE_BYTES {
-            return Err(Error::Runtime(format!(
-                "a GPU pool claim table fd is {} bytes; a claim table is {GPU_POOL_CLAIM_TABLE_BYTES}",
-                memfd_status.st_size
-            )));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "a GPU pool claim table fd is {} bytes; a claim table is \
+                     {GPU_POOL_CLAIM_TABLE_BYTES}",
+                    memfd_status.st_size
+                ),
+            ));
         }
         // SAFETY: F_GET_SEALS on a valid fd reads its seals.
         let seals =
@@ -86,16 +89,16 @@ impl GpuPoolClaimTableMemfd {
             return Err(claim_table_os_failure("F_GET_SEALS"));
         }
         if seals & libc::F_SEAL_SHRINK == 0 {
-            return Err(Error::Runtime(
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
                 "a GPU pool claim table fd is not sealed against shrinking; a mapping of it could \
-                 fault"
-                    .into(),
+                 fault",
             ));
         }
         Self::mapping(memfd)
     }
 
-    fn mapping(memfd: OwnedFd) -> Result<Self> {
+    fn mapping(memfd: OwnedFd) -> std::io::Result<Self> {
         // SAFETY: maps the whole of a memfd sized to one table, shared.
         let mapped = unsafe {
             libc::mmap(
@@ -111,7 +114,7 @@ impl GpuPoolClaimTableMemfd {
             return Err(claim_table_os_failure("mmap"));
         }
         let rows = NonNull::new(mapped.cast::<GpuPoolClaimTableRow>())
-            .ok_or_else(|| Error::Runtime("mmap of a GPU pool claim table answered null".into()))?;
+            .ok_or_else(|| std::io::Error::other("mmap of a GPU pool claim table answered null"))?;
         Ok(Self { memfd, rows })
     }
 
@@ -135,17 +138,18 @@ impl Drop for GpuPoolClaimTableMemfd {
     }
 }
 
-fn claim_table_os_failure(call: &str) -> Error {
-    Error::Runtime(format!(
-        "GPU pool claim table {call}: {}",
-        std::io::Error::last_os_error()
-    ))
+fn claim_table_os_failure(call: &str) -> std::io::Error {
+    let os_error = std::io::Error::last_os_error();
+    std::io::Error::new(
+        os_error.kind(),
+        format!("GPU pool claim table {call}: {os_error}"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_ipc_types::GpuPoolClaimantColumn;
+    use crate::GpuPoolClaimantColumn;
 
     #[test]
     fn a_claim_taken_through_an_adopted_fd_holds_the_creators_row() {

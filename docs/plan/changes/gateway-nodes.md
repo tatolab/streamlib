@@ -219,6 +219,13 @@ value and skips what it falls behind on, so it never slows the stream it reads. 
 runtime downscaling each frame to a thumbnail sent over the local API; thumbnail tiles beside a
 zero-copy full view (owner, 2026-11-07).
 
+**Decided 7 — a viewer's frame import lives in a shared Rust crate (owner, 2026-11-07).** The
+helper's import client moves out of the Python wheel into a crate without pyo3 that the wheel and
+Tato Studio both link, so a helper and a viewer import a frame through one system. The claim
+table's shared memory lives beside its row layout in `streamlib-ipc-types`, which a viewer links
+anyway to read the channel. Rejected: Studio writing its own import on the surface-sharing wire
+crate; a `tatolab.stream` viewer Studio calls into (owner, 2026-11-07).
+
 ## Tickets (as few tracer bullets as the change needs)
 
 1. **`tatolab-moq` with the gateway, track, send and receive nodes**, the interface nodes, and
