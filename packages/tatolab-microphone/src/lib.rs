@@ -24,9 +24,7 @@ use tatolab_module_sdk::{
     ModuleHostAudioSampleFormat, ModuleHostCapturedAudioBlock, ModuleHostLogLevel,
 };
 
-use captured_audio_block_hand_off_ring::{
-    CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
-};
+use captured_audio_block_hand_off_ring::CapturedAudioBlockHandOffRing;
 use captured_audio_block_publishing::{CapturedAudioBlockPublishing, MICROPHONE_LOG_TARGET};
 
 /// The one port a captured block is published on.
@@ -177,11 +175,9 @@ impl MicrophoneCapture {
             capture_stream.start_delivering_to(Box::new(
                 move |captured: ModuleHostCapturedAudioBlock<'_>| {
                     hand_off_ring_in_the_device_callback.hand_off_from_device_callback(
-                        CapturedAudioBlockAwaitingPublish {
-                            interleaved_sample_bytes: captured.interleaved_sample_bytes.to_vec(),
-                            sample_count: captured.sample_count,
-                            first_sample_timestamp_ns: captured.first_sample_timestamp_ns,
-                        },
+                        captured.interleaved_sample_bytes.to_vec(),
+                        captured.sample_count,
+                        captured.first_sample_timestamp_ns,
                     );
                 },
             ))

@@ -27,10 +27,6 @@ class ChannelsBlockProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    # The plan's profile for audio: order carries meaning, so the probe reads
-    # blocks in the order they were published rather than skipping to the
-    # freshest. It promises nothing about how many arrive — loss at the device
-    # edge is counted there, loss on this link is counted at this port.
     audio_from_upstream = Input(Channels, delivery="ordered")
 
     def process(self, ctx) -> None:

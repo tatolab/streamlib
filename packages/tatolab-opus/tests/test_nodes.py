@@ -330,3 +330,24 @@ def test_a_message_on_the_decoders_link_that_is_no_media_frame_is_refused_by_nam
         decoder._decoder.decode_one_arriving_message(
             b"\x00\xfc\xff\xfe", 0, True, 0, {"section": "video", "entry": {"codec": "avc1"}}
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class DecodedBlockStandIn:
+    first_sample_timestamp_ns: int
+    sample_count: int = SAMPLES_IN_ONE_WINDOW
+
+
+def test_a_loss_advances_the_decoders_start_sample_by_the_samples_it_left_out():
+    decoder = OpusDecoder.__new__(OpusDecoder)
+    decoder._next_first_sample_timestamp_ns = 10 * NANOSECONDS_PER_WINDOW
+    contiguous_block = DecodedBlockStandIn(first_sample_timestamp_ns=10 * NANOSECONDS_PER_WINDOW)
+    block_after_three_lost_windows = DecodedBlockStandIn(
+        first_sample_timestamp_ns=13 * NANOSECONDS_PER_WINDOW
+    )
+
+    assert decoder._samples_skipped_before(contiguous_block) == 0  # type: ignore[arg-type]
+    assert (
+        decoder._samples_skipped_before(block_after_three_lost_windows)  # type: ignore[arg-type]
+        == 3 * SAMPLES_IN_ONE_WINDOW
+    )

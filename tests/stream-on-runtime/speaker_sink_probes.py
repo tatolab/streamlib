@@ -29,9 +29,6 @@ class AudioBlockCountingProbe:
     def __init__(self) -> None:
         self.blocks_seen = 0
 
-    # The plan's profile for audio: order carries meaning, so blocks arrive in
-    # the order they were published rather than skipping to the freshest. It
-    # promises nothing about how many arrive.
     audio_from_upstream = Input(Channels, delivery="ordered")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

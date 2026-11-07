@@ -352,6 +352,12 @@ def test_an_absent_colour_axis_takes_the_engines_ycbcr_default():
     ) == ColorInfo("bt709", "srgb", "smpte170m", "full")
 
 
+def test_an_rgb_frames_identity_matrix_takes_the_engines_ycbcr_matrix():
+    assert yuyv_picture_color_of(
+        ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
+    ) == ColorInfo("bt709", "srgb", "smpte170m", "full")
+
+
 @pytest.mark.parametrize(
     "color, fields",
     [

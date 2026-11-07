@@ -3,7 +3,7 @@ name = "tatolab-browser-page-mixes-inputs"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "tatolab-stream>=0.68.8",
+    "tatolab-stream>=0.68.32",
     "tatolab-browser",
     "tatolab-camera",
     "tatolab-microphone",

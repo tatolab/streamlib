@@ -30,7 +30,7 @@ classifiers = [
 # processor interpreter, which borrows `tatolab.runtime` from the runtime that
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
-dependencies = ["tatolab-stream>=0.47.0"]
+dependencies = ["tatolab-stream>=0.68.32"]
 
 # The node catalog lists these in every stream whose environment installs this
 # distribution, before a graph names one.

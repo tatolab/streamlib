@@ -42,6 +42,7 @@ ENCODED_AUDIO_PORT = "encoded_audio"
 
 #: Opus's own clock, which the encoder's window contract resamples to.
 OPUS_SAMPLE_RATE_HZ = 48_000
+NANOSECONDS_PER_SECOND = 1_000_000_000
 #: One 20 ms Opus frame at 48 kHz, in per-channel samples.
 SAMPLES_IN_ONE_OPUS_WINDOW = 960
 OPUS_CATALOG_CODEC_STRING = "opus"
@@ -216,6 +217,7 @@ class OpusDecoder:
     def __init__(self) -> None:
         self._decoder = _native.EncodedPacketToAudioBlockDecoder()
         self._next_start_sample = 0
+        self._next_first_sample_timestamp_ns: int | None = None
 
     encoded_audio = Input(
         Packets,
@@ -252,6 +254,7 @@ class OpusDecoder:
                 .reshape(block.sample_count, block.channels)
                 .T
             )
+            self._next_start_sample += self._samples_skipped_before(block)
             ctx.outputs.write(
                 self.audio,
                 planar_samples,
@@ -259,6 +262,17 @@ class OpusDecoder:
                 start_sample=self._next_start_sample,
             )
             self._next_start_sample += block.sample_count
+            self._next_first_sample_timestamp_ns = block.first_sample_timestamp_ns + (
+                block.sample_count * NANOSECONDS_PER_SECOND // OPUS_SAMPLE_RATE_HZ
+            )
+
+    def _samples_skipped_before(self, block: _native.DecodedAudioBlock) -> int:
+        """The samples a loss left out between the last published block and
+        `block`, measured from the stamp the decoder re-anchored on."""
+        if self._next_first_sample_timestamp_ns is None:
+            return 0
+        skipped_ns = block.first_sample_timestamp_ns - self._next_first_sample_timestamp_ns
+        return max(0, round(skipped_ns * OPUS_SAMPLE_RATE_HZ / NANOSECONDS_PER_SECOND))
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx

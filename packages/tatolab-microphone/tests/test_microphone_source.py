@@ -113,7 +113,7 @@ def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_o
         assert block.dtype == "f32"
         assert block.samples_per_channel > 0
     for earlier, later in zip(blocks, blocks[1:]):
-        assert later.start_sample == earlier.start_sample + earlier.samples_per_channel
+        assert later.start_sample >= earlier.start_sample + earlier.samples_per_channel
     stamps = [block.timestamp_ns for block in blocks]
     assert stamps == sorted(stamps) and len(set(stamps)) == len(stamps)
     assert capture.published_block_count >= BLOCKS_READ_PER_TEST

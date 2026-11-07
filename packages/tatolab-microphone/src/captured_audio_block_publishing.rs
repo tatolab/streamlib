@@ -50,7 +50,6 @@ impl CapturedAudioBlockPublishing {
     pub(crate) fn publish_until_stopped(self) {
         let mut dropped_blocks_last_reported = 0u64;
         let mut consecutive_failed_writes = 0u64;
-        let mut next_start_sample = 0u64;
         while self.is_publishing.load(Ordering::Acquire) {
             if let Some(failure) = self.failure_that_ended_the_capture() {
                 self.module_host.log(
@@ -69,11 +68,7 @@ impl CapturedAudioBlockPublishing {
                 .wait_for_next_block_to_publish(PUBLISH_WAIT_POLL_INTERVAL)
             {
                 NextCapturedAudioBlockToPublish::Block(captured) => {
-                    self.publish_one(
-                        captured,
-                        &mut next_start_sample,
-                        &mut consecutive_failed_writes,
-                    );
+                    self.publish_one(captured, &mut consecutive_failed_writes);
                     self.warn_about_any_new_drops(&mut dropped_blocks_last_reported);
                 }
                 NextCapturedAudioBlockToPublish::WaitTimedOut => {}
@@ -86,11 +81,7 @@ impl CapturedAudioBlockPublishing {
             .hand_off_ring
             .wait_for_next_block_to_publish(Duration::ZERO)
         {
-            self.publish_one(
-                captured,
-                &mut next_start_sample,
-                &mut consecutive_failed_writes,
-            );
+            self.publish_one(captured, &mut consecutive_failed_writes);
         }
         self.warn_about_any_new_drops(&mut dropped_blocks_last_reported);
     }
@@ -105,7 +96,6 @@ impl CapturedAudioBlockPublishing {
     fn publish_one(
         &self,
         captured: CapturedAudioBlockAwaitingPublish,
-        next_start_sample: &mut u64,
         consecutive_failed_writes: &mut u64,
     ) {
         let first_sample_stream_timestamp_ns = self
@@ -114,10 +104,9 @@ impl CapturedAudioBlockPublishing {
         let captured_channels_block = channels_block_of_a_captured_block(
             &captured.interleaved_sample_bytes,
             captured.sample_count,
-            *next_start_sample,
+            captured.start_sample,
             self.stream_format,
         );
-        *next_start_sample += u64::from(captured.sample_count);
         // The device stamped the block; a write stamped "now" would name the
         // instant of publication, not of capture.
         let written = self
