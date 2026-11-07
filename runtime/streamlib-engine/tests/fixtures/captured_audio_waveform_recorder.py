@@ -4,8 +4,7 @@
 """Writes what a microphone captured to a WAV, for the signal analysis to read.
 
 The measurement is taken inside the graph, over the whole known signal — this
-is a consumer like any other, reading the microphone's port over a real link —
-while the block-level check reads only a bounded sample of the port's track.
+is a consumer like any other, reading the microphone's port over a real link.
 
 Blocks are placed by their own start samples rather than concatenated. Audio that
 went missing then stays missing, which is what lets `known_audio_signal analyse`

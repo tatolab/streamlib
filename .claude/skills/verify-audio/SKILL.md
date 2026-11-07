@@ -25,14 +25,10 @@ so their reports are directly comparable.
   its monitor, no StreamLib anywhere in the path. It answers "is this machine's audio sound",
   which is the question a tool living inside the runtime can never answer — it runs whether or not
   the engine compiles.
-- **`verify_audio_loopback.sh [--count N] [--path P]` — through-engine.**
+- **`verify_audio_loopback.sh [--path P]` — through-engine.**
   `SpeakerSink` plays the signal into the same null sink and `MicrophoneSource` captures it back
-  off that sink's monitor, so both ends are StreamLib. It also runs the block-level channel
-  contract on the microphone's own port on the way through — `verify_audio_channel.sh` reads that
-  port's `AudioBlock` track at the local relay with `tatolab-read-track` and decodes each object's
-  msgpack in the script (cadence, timestamp continuity, a frame the engine did not re-stamp) — and
-  fails on that before it ever measures the signal. `--count` is how many objects that
-  intermediate read measures, not anything about the signal; `--path` is macOS-only (below) and exits 2 elsewhere.
+  off that sink's monitor, so both ends are StreamLib. `--path` is macOS-only (below) and exits 2
+  elsewhere.
 
 **Through-engine is the default.** It is the question a PR usually has. Run rig-only alone only
 when the engine will not build, or when you are checking the machine rather than the change.
@@ -170,22 +166,15 @@ Running`, with the tails of `stream_run.log` and `node.log` — both are real fa
 interrupted. The through-engine fixture adds `2` for a bad argument; the rig-only one has no
 argument parser, so it takes its output directory positionally and cannot report that.
 
-**stdout is the report JSON and nothing else**, so it pipes. Progress goes to stderr — and on a
-through-engine run the *channel* report JSON goes to stderr as well, because that verdict is an
-intermediate one. Don't mistake it for the signal report on stdout.
+**stdout is the report JSON and nothing else**, so it pipes. Progress goes to stderr.
 
-**Artifacts land in a `mktemp` directory named on the last `artifacts: <dir>` line of stderr.** A
-through-engine run prints two: the first is the nested channel read's directory, the last is the
-loopback's own. Take the last one — that is where `captured.wav`, `spectrogram.png` and `node.log`
-are.
+**Artifacts land in a `mktemp` directory named on the `artifacts: <dir>` line of stderr** — that
+is where `captured.wav`, `spectrogram.png` and `node.log` are.
 
-**On any non-zero exit, recover the directory rather than trusting the last `artifacts:` line.**
-An analyser `FAIL` prints that line exactly as a pass does, so far so good. But a *channel*
-contract that fails its analysis prints exactly one `artifacts:` line — the nested read's — and
-"take the last one" then lands you in a `streamlib-audio-channel-` directory with no `node.log`,
-no `captured.wav` and no spectrogram. Anything that fails earlier still (channel resolution, the
-track read itself, the speaker-format refusal, a runtime that never served) prints none at all. Those are
-exactly the runs whose `node.log` you need:
+**On any non-zero exit, recover the directory rather than trusting the `artifacts:` line.** An
+analyser `FAIL` prints that line exactly as a pass does, but anything that fails earlier (the
+speaker-format refusal, a runtime that never served) prints none at all. Those are exactly the
+runs whose `node.log` you need:
 
 ```bash
 dirname "$(/bin/ls -t "${TMPDIR:-/tmp}"/streamlib-audio-loopback-*/node.log | head -1)"
@@ -202,8 +191,7 @@ because that is where the fixtures put artifacts: on macOS `TMPDIR` is a per-use
 `/var/folders/…` directory, so a bare `/tmp` glob there finds nothing.
 
 The rig-only fixture is the only one that takes an output directory as an argument, and it tees a
-`report.json` into it; the nested channel read writes one into its own directory too, beside the track dump. The
-through-engine fixture's own signal report is the one that exists on stdout alone — capture it
+`report.json` into it. The through-engine fixture's own signal report is the one that exists on stdout alone — capture it
 yourself.
 
 The fields that matter when reading a failure — the analyser has already judged them, so these are
@@ -333,8 +321,6 @@ without its label invites it to be read as though it were.
 - Holes: `missing_loud_audio_ms` <n> · `silent_stretch_ms` <n> · `emptiest_region` <region>
 - Acoustic only: `raw_tone_rms_dbfs` <n> · `room_noise_rms_dbfs` <n> · `tone_to_noise_db` <n> ·
   `exact_zero_stretch_ms` <n> · output volume <n> — or `n/a`
-- Channel contract (through-engine only): <verdict + `blocks` · `block_continuity_error_ms` · `track_versus_block_timestamp_error_ns`, or "n/a">
-- Track read belonged to this run's own stream: yes — `<broadcast read>` vs `node.log` | n/a
 
 #### Spectrogram
 
