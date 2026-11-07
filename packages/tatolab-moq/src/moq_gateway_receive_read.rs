@@ -19,10 +19,6 @@ use crate::moq_node_ipc::{
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
 };
 
-/// How long a read waits for the broadcast's catalog subscription before it
-/// reads the track without one.
-const A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST: Duration = Duration::from_secs(2);
-
 /// How often a read sends the track's catalog entry again, so a receive node
 /// whose sample of it was overwritten learns it at the next group.
 const THE_CATALOG_ENTRY_IS_SENT_AGAIN_EVERY: Duration = Duration::from_secs(1);
@@ -116,31 +112,13 @@ pub async fn read_a_track_for_a_receive_node(
                 return format!("the track `{}` was refused: {refusal}", request.track);
             }
         };
-    let catalog_subscription =
-        tokio::time::timeout(A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST, async {
-            broadcast
-                .track(hang::Catalog::DEFAULT_NAME)?
-                .subscribe(None)
-                .await
-        })
-        .await;
-    let mut catalog_of_the_broadcast = match catalog_subscription {
-        Ok(Ok(catalog_subscriber)) => Some(moq_json::snapshot::Consumer::new(
-            catalog_subscriber,
-            moq_json::snapshot::consumer::Config::default(),
-        )),
-        Ok(Err(refusal)) => {
-            tracing::debug!("MoqGateway: `{broadcast_path}` serves no catalog: {refusal}");
-            None
-        }
-        Err(_) => {
-            tracing::debug!(
-                "MoqGateway: `{broadcast_path}`'s catalog did not answer within \
-                 {A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST:?}; reading the track without it"
-            );
-            None
-        }
-    };
+    let mut catalog_subscription = Some(Box::pin(async {
+        broadcast
+            .track(hang::Catalog::DEFAULT_NAME)?
+            .subscribe(None)
+            .await
+    }));
+    let mut catalog_of_the_broadcast = None;
     tracing::info!(
         "MoqGateway: reading `{broadcast_path}` track `{}` for `{}`",
         request.track,
@@ -153,6 +131,20 @@ pub async fn read_a_track_for_a_receive_node(
     loop {
         tokio::select! {
             biased;
+            subscribed = the_catalog_subscription_answer_of(&mut catalog_subscription) => {
+                catalog_subscription = None;
+                match subscribed {
+                    Ok(catalog_subscriber) => {
+                        catalog_of_the_broadcast = Some(moq_json::snapshot::Consumer::new(
+                            catalog_subscriber,
+                            moq_json::snapshot::consumer::Config::default(),
+                        ));
+                    }
+                    Err(refusal) => {
+                        tracing::debug!("MoqGateway: `{broadcast_path}` serves no catalog: {refusal}");
+                    }
+                }
+            }
             catalog = the_next_catalog_of(&mut catalog_of_the_broadcast) => match catalog {
                 Some(catalog) => {
                     let catalog_entry = the_catalog_entry_of_the_track_named(&catalog, &request.track);
@@ -204,6 +196,15 @@ pub async fn read_a_track_for_a_receive_node(
                 }
             },
         }
+    }
+}
+
+async fn the_catalog_subscription_answer_of<CatalogSubscription: Future + Unpin>(
+    catalog_subscription: &mut Option<CatalogSubscription>,
+) -> CatalogSubscription::Output {
+    match catalog_subscription {
+        Some(catalog_subscription) => catalog_subscription.await,
+        None => std::future::pending().await,
     }
 }
 
