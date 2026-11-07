@@ -1003,7 +1003,7 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
             "nodes": [
                 {"name": "camera", "type": camera.as_str()},
                 {"name": "camera-out", "type": "tatolab.stream:GraphOutput",
-                 "config": {"port": "camera", "family": output_family}},
+                 "config": {"port": "Camera", "family": output_family}},
                 {"name": "overlay-in", "type": "tatolab.stream:GraphInput",
                  "config": {"port": "overlay", "family": "image"}},
                 {"name": "display", "type": display.as_str()}
@@ -1038,6 +1038,38 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
         the_spec_in(graph),
         "graph renders the interface as drawn"
     );
+    let camera_id = rendered["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "camera")
+        .and_then(|node| node["id"].as_str())
+        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
+        .expect("the camera renders its id");
+    let removal_refusal = first
+        .remove_processor(&camera_id)
+        .expect_err("removing the node the GraphOutput's link names is refused")
+        .to_string();
+    assert!(
+        removal_refusal.contains("node `camera` cannot be removed"),
+        "{removal_refusal}"
+    );
+    let name_refusal = first
+        .add_processor(
+            ProcessorSpec::new(display.clone(), serde_json::json!({}))
+                .with_display_name("Overlay In"),
+        )
+        .expect_err("a node added live under an interface node's name is refused");
+    assert!(
+        matches!(&name_refusal, Error::NodeNameTaken { cast, .. } if cast == "overlay-in"),
+        "{name_refusal:?}"
+    );
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&first)),
+        the_spec_in(rendered.clone()),
+        "the refused changes leave the graph as drawn"
+    );
+
     let second_runner = Runner::new().unwrap();
     let second = load(&second_runner, project_directory.path(), rendered.clone())
         .expect("a rendered graph holding interface nodes loads back");
@@ -1057,7 +1089,7 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
     )
     .to_string();
     assert!(
-        refusal.contains("`GraphOutput` node `camera-out` declares `camera` as Packets")
+        refusal.contains("`GraphOutput` node `camera-out` declares `Camera` as Packets")
             && refusal.contains("camera.video (Image)"),
         "{refusal}"
     );

@@ -11,8 +11,8 @@ use streamlib::sdk::iceoryx2::{
 use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_port_payload::PythonPortPayloadLoan;
 use crate::python_processor_link_data_access::{
-    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, PortFamilyOfTheRead,
-    PortPayloadReadShape, PythonProcessorLinkDataAccess,
+    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, PortFamiliesOfTheRead,
+    PortFamilyOfTheRead, PortPayloadReadShape, PythonProcessorLinkDataAccess,
 };
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -223,18 +223,28 @@ fn input_port_and_read_shape_named_by<'target, 'py>(
     let read_shape = match into {
         Some(into) => PortPayloadReadShape::CastInto(into),
         None => {
-            let declaration_name: String = port
-                .getattr("family")?
-                .getattr("declaration_name")?
-                .extract()?;
-            let family =
+            let family_of = |port_family: Bound<'py, PyAny>| -> PyResult<PortFamilyOfTheRead> {
+                let declaration_name: String =
+                    port_family.getattr("declaration_name")?.extract()?;
                 PortFamilyOfTheRead::of_declaration_name(&declaration_name).ok_or_else(|| {
                     PyTypeError::new_err(format!(
                         "input port {port_name:?} declares family {declaration_name:?}, which \
                          is none of Image, Array, Channels, Packets, Records"
                     ))
-                })?;
-            PortPayloadReadShape::FamilyType(family)
+                })
+            };
+            let declared_family = family_of(port.getattr("family")?)?;
+            let also_taken_families = port
+                .getattr("also_takes")?
+                .try_iter()?
+                .map(|port_family| family_of(port_family?))
+                .collect::<PyResult<Vec<_>>>()?;
+            PortPayloadReadShape::FamilyType(
+                PortFamiliesOfTheRead::of_the_declared_family_and_also(
+                    declared_family,
+                    also_taken_families,
+                ),
+            )
         }
     };
     Ok((port_name, read_shape))

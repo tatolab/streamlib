@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -110,8 +110,8 @@ pub struct LoadedStreamInThisRuntime {
     pub(crate) processor_interpreter_launch_record:
         Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
-    /// The variable nodes, and what they resolved to, of the graph this stream
-    /// loaded, so `graph` renders them as drawn.
+    /// The variable and interface nodes, and what they resolved to, of the
+    /// graph this stream loaded, so `graph` renders them as drawn.
     graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
     /// How long this stream's teardown has before its watchdog abandons it.
     teardown_watchdog_budget: Duration,
@@ -673,6 +673,9 @@ impl LoadedStreamInThisRuntime {
                 tracing::error!("[stop] Removing the processors failed: {removal_failure}");
             }
             *self.graph_only_nodes_as_drawn.lock() = GraphOnlyNodesAsDrawn::default();
+            self.compiler.scope(|this_streams_graph, _tx| {
+                this_streams_graph.set_node_names_the_graph_only_nodes_hold(HashSet::new())
+            });
 
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");
@@ -981,6 +984,26 @@ impl LoadedStreamInThisRuntime {
     /// Disconnect a link in this stream's graph.
     pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
         <Self as RuntimeOperations>::disconnect(self, link_id)
+    }
+
+    /// Refuse removing `processor_id` while a drawn link to a variable or
+    /// interface node names it.
+    pub(crate) fn refuse_removing_a_node_a_drawn_link_names(
+        &self,
+        processor_id: &ProcessorUniqueId,
+    ) -> Result<()> {
+        let Some(node_name) = self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(processor_id)
+                .first()
+                .map(|node| node.display_name.clone())
+        }) else {
+            return Ok(());
+        };
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .refuse_removing_a_node_a_drawn_link_names(&node_name)
     }
 
     /// Update a processor's configuration, applied at the next commit.
@@ -1355,8 +1378,13 @@ impl LoadedStreamInThisRuntime {
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         resolution.validate(&self.node_types_this_stream_resolves)?;
-        self.compiler
-            .scope(|this_streams_graph, _tx| this_streams_graph.set_stream_clock_spec(graph.clock));
+        let node_names_the_graph_only_nodes_hold =
+            resolution.graph_only_nodes_as_drawn.node_names_cast();
+        self.compiler.scope(|this_streams_graph, _tx| {
+            this_streams_graph.set_stream_clock_spec(graph.clock);
+            this_streams_graph
+                .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold);
+        });
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {

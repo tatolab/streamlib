@@ -550,6 +550,9 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+        if let Err(refusal) = self.refuse_removing_a_node_a_drawn_link_names(&processor_id) {
+            return Box::pin(std::future::ready(Err(refusal)));
+        }
         self.in_this_streams_log_route(remove_processor_impl(
             self.live_graph_change(),
             processor_id,
@@ -591,6 +594,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+        self.refuse_removing_a_node_a_drawn_link_names(processor_id)?;
         self.block_on_the_engines_tokio_runtime(remove_processor_impl(
             self.live_graph_change(),
             processor_id.clone(),

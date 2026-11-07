@@ -153,7 +153,7 @@ def test_a_port_a_subclass_shadows_with_another_attribute_is_not_declared():
 
 def test_a_mistyped_key_is_refused_at_import():
     with pytest.raises(TypeError, match="requirs"):
-        Input(Channels, delivery="ordered", requirs=("left",))  # pyright: ignore[reportCallIssue]
+        Input(Channels, delivery="ordered", requirs=("left",))  # pyright: ignore[reportArgumentType, reportCallIssue]
 
 
 @pytest.mark.parametrize(
@@ -208,6 +208,31 @@ def test_an_input_taking_several_families_declares_the_others_it_takes():
     }
 
 
+def test_an_input_taking_several_families_states_the_keys_of_each():
+    @node
+    class TrackSend:
+        content = Input(
+            Packets,
+            delivery="ordered",
+            also_takes=(Records,),
+            requires=("pts",),
+            requires_codec=("h264",),
+        )
+
+    (declared_input,) = TrackSend.__tatolab_node_input_ports__
+    assert declared_input["family"]["requires"] == ["pts"]
+    assert declared_input["family"]["requires_codec"] == ["h264"]
+
+
+def test_an_output_reading_its_family_from_config_states_names():
+    @node(execution="manual")
+    class TrackReceive:
+        content = Output(Packets, family_from=from_config("family"), names=("pts",))
+
+    (declared_output,) = TrackReceive.__tatolab_node_output_ports__
+    assert declared_output["family"]["names"] == {"stated": ["pts"]}
+
+
 def test_an_output_reads_its_family_and_codec_from_config():
     @node(execution="manual")
     class TrackReceive:
@@ -223,6 +248,6 @@ def test_an_output_reads_its_family_and_codec_from_config():
 
 def test_also_takes_naming_something_that_is_not_a_family_is_refused():
     with pytest.raises(TypeError, match="also_takes"):
-        Input(Packets, delivery="ordered", also_takes=Records)  # pyright: ignore[reportArgumentType]
+        Input(Packets, delivery="ordered", also_takes=Records)  # pyright: ignore[reportArgumentType, reportCallIssue]
     with pytest.raises(TypeError, match="family"):
-        Input(Packets, delivery="ordered", also_takes=("records",))  # pyright: ignore[reportArgumentType]
+        Input(Packets, delivery="ordered", also_takes=("records",))  # pyright: ignore[reportArgumentType, reportCallIssue]

@@ -271,14 +271,12 @@ impl GraphInterfaceAsDrawn {
             .map(|interface_node| &interface_node.declared_port)
     }
 
-    /// Whether `node_name` names one of the interface's nodes.
-    pub fn holds_an_interface_node_named(&self, node_name: &str) -> bool {
-        let Ok(cast) = cast_of(node_name) else {
-            return false;
-        };
-        self.interface_nodes
-            .iter()
-            .any(|interface_node| cast_of(&interface_node.node.name).is_ok_and(|name| name == cast))
+    /// The interface node `node_name` names, if it names one.
+    pub fn interface_node_named(&self, node_name: &str) -> Option<&GraphInterfaceNodeAsDrawn> {
+        let cast = cast_of(node_name).ok()?;
+        self.interface_nodes.iter().find(|interface_node| {
+            cast_of(&interface_node.node.name).is_ok_and(|name| name == cast)
+        })
     }
 
     /// Refuse a port the interface declares whose linked port is not a port of
@@ -462,7 +460,13 @@ impl GraphInterfacePort {
         }
         .into_iter()
         .find(|port| port.name == port_cast)
-        .and_then(|port| port.family);
+        .and_then(|port| port.family)
+        .map(|declaration| match self.direction {
+            GraphInterfacePortDirection::Output => declaration,
+            GraphInterfacePortDirection::Input => {
+                the_input_without_what_only_the_graphs_producer_can_meet(declaration)
+            }
+        });
         let declared_family = PortFamilyDeclaration::of_family(self.family);
         let interface_end = PortFamilyLinkEndpoint {
             node_name: &self.interface_node,
@@ -499,15 +503,45 @@ impl GraphInterfacePort {
         }
     }
 
+    /// Why `output` is not this port's own output, the `value` of a
+    /// `GraphInput` and the one output an interface node has; `None` when it is.
+    pub fn refusal_of_an_output_it_does_not_have(
+        &self,
+        output: &LinkPortRefOutput,
+    ) -> Option<String> {
+        let is_the_value_output = self.direction == GraphInterfacePortDirection::Input
+            && cast_of(&output.port).is_ok_and(|port| port == GRAPH_INTERFACE_VALUE_PORT_NAME);
+        (!is_the_value_output).then(|| {
+            format!(
+                "`{}/{}` is no output of `{}`, and an interface node's one output is a \
+                 `GraphInput`'s `{GRAPH_INTERFACE_VALUE_PORT_NAME}`",
+                output.node, output.port, self.interface_node
+            )
+        })
+    }
+
     fn as_component(&self) -> serde_json::Value {
         serde_json::json!({
             "direction": match self.direction {
                 GraphInterfacePortDirection::Input => "input",
                 GraphInterfacePortDirection::Output => "output",
             },
-            GRAPH_INTERFACE_PORT_CONFIG_KEY: self.port,
+            GRAPH_INTERFACE_PORT_CONFIG_KEY: cast_or_as_written(&self.port),
             GRAPH_INTERFACE_FAMILY_CONFIG_KEY: self.family.wire_name(),
         })
+    }
+}
+
+/// `input_declaration` with no required names or codec: a `GraphInput` states
+/// only a family, and the producer whose names and codec would meet them is
+/// outside the graph.
+fn the_input_without_what_only_the_graphs_producer_can_meet(
+    input_declaration: PortFamilyDeclaration,
+) -> PortFamilyDeclaration {
+    PortFamilyDeclaration {
+        requires: Vec::new(),
+        requires_codec: Vec::new(),
+        ..input_declaration
     }
 }
 

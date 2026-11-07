@@ -361,6 +361,56 @@ pub struct GraphOnlyNodesAsDrawn {
 }
 
 impl GraphOnlyNodesAsDrawn {
+    /// Refuse removing the node named `node_name` while a drawn link between it
+    /// and a variable or interface node names it, which would leave that link
+    /// dangling in the graph `graph` renders.
+    pub fn refuse_removing_a_node_a_drawn_link_names(&self, node_name: &str) -> Result<()> {
+        let node_cast = cast_exposed_name_to_url_safe(node_name)?;
+        let names_the_node = |end: &LinkPortRefOutput| {
+            cast_exposed_name_to_url_safe(&end.node).is_ok_and(|end_cast| end_cast == node_cast)
+        };
+        let links_drawn_to_a_graph_only_node = self
+            .variables_as_drawn
+            .links_touching_a_variable_node
+            .iter()
+            .chain(
+                self.interface_as_drawn
+                    .links_touching_an_interface_node
+                    .iter()
+                    .map(|drawn| &drawn.link),
+            );
+        for link in links_drawn_to_a_graph_only_node {
+            if names_the_node(&link.source) || names_the_node(&link.target) {
+                return Err(Error::GraphError(format!(
+                    "node `{node_name}` cannot be removed: the graph links `{}/{}` to `{}/{}`, \
+                     an end of which is a variable or interface node, and that link would \
+                     name a node the graph no longer holds",
+                    link.source.node, link.source.port, link.target.node, link.target.port
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The cast name of every variable and interface node drawn.
+    pub fn node_names_cast(&self) -> HashSet<String> {
+        self.variables_as_drawn
+            .variable_nodes
+            .iter()
+            .chain(
+                self.interface_as_drawn
+                    .interface_nodes
+                    .iter()
+                    .map(|interface_node| &interface_node.node),
+            )
+            .filter_map(|node| {
+                cast_exposed_name_to_url_safe(&node.name)
+                    .ok()
+                    .map(std::borrow::Cow::into_owned)
+            })
+            .collect()
+    }
+
     /// Render the graph-only nodes into `graph_response`, a render of the graph
     /// the runtime runs: the interface first, which was resolved out of the
     /// graph its variables resolved to, then the variables.
@@ -409,11 +459,21 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
                 ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
             };
             let Some(held_node) = node_named(held_node_name)? else {
-                if self
+                if let Some(interface_node) = self
                     .graph_only_nodes_as_drawn
                     .interface_as_drawn
-                    .holds_an_interface_node_named(held_node_name)
+                    .interface_node_named(held_node_name)
                 {
+                    if let ValueASetVariableHolds::PortOutput(source) = value
+                        && let Some(refusal) = interface_node
+                            .declared_port
+                            .refusal_of_an_output_it_does_not_have(source)
+                    {
+                        return Err(Error::GraphError(format!(
+                            "`SetVariable` node `{set_variable_node}` holds a port the graph \
+                             does not hold: {refusal}"
+                        )));
+                    }
                     continue;
                 }
                 return Err(Error::GraphError(format!(
@@ -1518,8 +1578,10 @@ mod tests {
             (
                 "PacketsSink",
                 PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS,
-                PortDescriptor::new("encoded", "", false)
-                    .with_family(PortFamilyDeclaration::of_family(PortFamily::Packets)),
+                PortDescriptor::new("encoded", "", false).with_family(PortFamilyDeclaration {
+                    requires_codec: vec!["h264".into()],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                }),
             ),
         ] {
             let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
@@ -1569,7 +1631,7 @@ mod tests {
     fn interface_ports_of_the_family_their_linked_ports_carry_validate() {
         a_graph_offering_the_source_and_feeding_the_sink("image", "packets")
             .validate(&node_types_with_an_image_source_and_a_packets_sink())
-            .expect("an Image Output and a Packets Input validate");
+            .expect("an Image Output, and a Packets Input into a sink requiring a codec, validate");
     }
 
     #[test]
@@ -1637,5 +1699,66 @@ mod tests {
         graph
             .validate(&node_types_with_an_image_source_and_a_packets_sink())
             .expect("a GraphInput held in a variable and read by the sink validates");
+    }
+
+    fn a_variable_set_from(held_node: &str, held_port: &str) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
+                {"name": "video", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "video", "family": "image"}},
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": "packets"}},
+                {"name": "set-unread", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "unread"}},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "video"},
+                 "target": {"node": "video", "port": "value"}},
+                {"source": {"node": held_node, "port": held_port},
+                 "target": {"node": "set-unread", "port": "value"}},
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_variable_set_from_an_interface_port_other_than_a_graph_inputs_value_is_refused() {
+        let node_types = node_types_with_an_image_source_and_a_packets_sink();
+        a_variable_set_from("encoded", "value")
+            .validate(&node_types)
+            .expect("an unread variable set from a GraphInput's value validates");
+        for (held_node, held_port) in [("encoded", "typo"), ("video", "value")] {
+            let refusal = a_variable_set_from(held_node, held_port)
+                .validate(&node_types)
+                .expect_err("the setter holds no port the graph holds")
+                .to_string();
+            assert!(
+                refusal.contains("`SetVariable` node `set-unread`")
+                    && refusal.contains(&format!("`{held_node}/{held_port}`")),
+                "{refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_node_a_link_to_an_interface_or_variable_node_names_is_refused_naming_the_link() {
+        let resolution = a_variable_set_from("encoded", "value")
+            .with_graph_only_nodes_resolved()
+            .expect("resolves");
+        let graph_only_nodes = &resolution.graph_only_nodes_as_drawn;
+        let refusal = graph_only_nodes
+            .refuse_removing_a_node_a_drawn_link_names("Source")
+            .expect_err("the GraphOutput's link names the source")
+            .to_string();
+        assert!(
+            refusal.contains("node `Source` cannot be removed")
+                && refusal.contains("`source/video` to `video/value`"),
+            "{refusal}"
+        );
+        assert_eq!(
+            graph_only_nodes.node_names_cast(),
+            HashSet::from(["video", "encoded", "set-unread"].map(String::from))
+        );
     }
 }

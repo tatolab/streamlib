@@ -11,7 +11,7 @@ frame flows.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, Generic, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Final, Generic, Optional, TypeVar, Union, overload
 
 if TYPE_CHECKING:
     from ._node_context_protocols import ChannelsBlock, PacketsUnit
@@ -189,7 +189,8 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     Records), `requires_codec=` the codecs it decodes (Packets), `formats=` the
     pixel formats it reads (Image), and `window=` the audio window it wants
     (Channels). `also_takes=` names the families the input takes a link from
-    besides its own. `connect` refuses a link whose output does not meet them.
+    besides its own; a read of such an input hands back the arriving family's
+    type. `connect` refuses a link whose output does not meet them.
     """
 
     __slots__ = (
@@ -202,23 +203,53 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         "also_takes",
     )
 
+    @overload
     def __init__(
         self,
-        family: "PortFamily[_PortFamilyReadType]",
+        family: PortFamily[_PortFamilyReadType],
         *,
         delivery: Optional[str] = None,
         borrow_quota: Optional[int] = None,
-        requires: "tuple[str, ...]" = (),
-        requires_codec: "tuple[str, ...]" = (),
-        formats: "tuple[str, ...]" = (),
-        window: "Optional[AudioWindowContract]" = None,
-        also_takes: "tuple[PortFamily[Any], ...]" = (),
+        requires: tuple[str, ...] = (),
+        requires_codec: tuple[str, ...] = (),
+        formats: tuple[str, ...] = (),
+        window: Optional[AudioWindowContract] = None,
+        also_takes: tuple[()] = (),
+        description: str = "",
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Input[Any],
+        family: PortFamily[Any],
+        *,
+        delivery: Optional[str] = None,
+        borrow_quota: Optional[int] = None,
+        requires: tuple[str, ...] = (),
+        requires_codec: tuple[str, ...] = (),
+        formats: tuple[str, ...] = (),
+        window: Optional[AudioWindowContract] = None,
+        also_takes: tuple[PortFamily[Any], ...],
+        description: str = "",
+    ) -> None: ...
+
+    def __init__(
+        self,
+        family: PortFamily[Any],
+        *,
+        delivery: Optional[str] = None,
+        borrow_quota: Optional[int] = None,
+        requires: tuple[str, ...] = (),
+        requires_codec: tuple[str, ...] = (),
+        formats: tuple[str, ...] = (),
+        window: Optional[AudioWindowContract] = None,
+        also_takes: tuple[PortFamily[Any], ...] = (),
         description: str = "",
     ) -> None:
         super().__init__(_refuse_a_port_family_that_is_not_one(family, "Input"), description)
         if isinstance(also_takes, PortFamily) or not isinstance(also_takes, (tuple, list)):
             raise TypeError(f"`also_takes=` takes a tuple of port families, got {also_takes!r}")
-        self.also_takes: "tuple[PortFamily[Any], ...]" = tuple(
+        self.also_takes: tuple[PortFamily[Any], ...] = tuple(
             _refuse_a_port_family_that_is_not_one(each, "Input(also_takes=…)")
             for each in also_takes
         )
@@ -246,11 +277,14 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     def _as_port_marker(self) -> "dict[str, Any]":
         from ._node_declaration import _audio_window_declaration
 
+        families_the_input_takes = (self.family, *self.also_takes)
         self._refuse_keys_the_family_does_not_take(
             "input",
             {
-                "requires": bool(self.requires) and self.family not in _FAMILIES_WITH_NAMES,
-                "requires_codec": bool(self.requires_codec) and self.family is not Packets,
+                "requires": bool(self.requires)
+                and not any(each in _FAMILIES_WITH_NAMES for each in families_the_input_takes),
+                "requires_codec": bool(self.requires_codec)
+                and Packets not in families_the_input_takes,
                 "formats": bool(self.formats) and self.family is not Image,
                 "window": self.window is not None and self.family is not Channels,
             },
@@ -360,7 +394,9 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
         self._refuse_keys_the_family_does_not_take(
             "output",
             {
-                "names": self.names is not None and self.family not in _FAMILIES_WITH_NAMES,
+                "names": self.names is not None
+                and self.family not in _FAMILIES_WITH_NAMES
+                and self.family_from is None,
                 "codec": self.codec is not None
                 and self.family is not Packets
                 and not (isinstance(self.codec, PortNamesFromConfig) and self.family_from is not None),
