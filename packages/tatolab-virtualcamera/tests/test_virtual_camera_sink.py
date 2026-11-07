@@ -28,6 +28,10 @@ from tatolab.virtualcamera import (
     virtual_camera_door_taken,
 )
 from tatolab.virtualcamera import v4l2_output_device_abi as abi
+from tatolab.virtualcamera.upstream_frame_rate import (
+    FirstFrameOfAnExtentAwaitingItsRate,
+    frames_per_second_between,
+)
 from tatolab.virtualcamera.v4l2_color_fields import (
     V4l2PixFormatColorFields,
     v4l2_color_fields_of,
@@ -271,6 +275,7 @@ def test_a_new_camera_asks_for_the_next_free_device_and_four_buffers():
         (abi.V4l2Capability, 104),
         (abi.V4l2PixFormat, 48),
         (abi.V4l2Format, 208),
+        (abi.V4l2StreamParm, 204),
         (abi.V4l2RequestBuffers, 20),
         (abi.V4l2Buffer, 88),
         (abi.V4l2LoopbackConfig, 72),
@@ -308,6 +313,7 @@ def test_every_request_number_is_the_one_the_headers_define():
         "DQBUF": abi.VIDIOC_DQBUF,
         "STREAMON": abi.VIDIOC_STREAMON,
         "STREAMOFF": abi.VIDIOC_STREAMOFF,
+        "S_PARM": abi.VIDIOC_S_PARM,
         "CTL_VERSION": abi.V4L2LOOPBACK_CTL_VERSION,
         "CTL_ADD": abi.V4L2LOOPBACK_CTL_ADD,
         "CTL_REMOVE": abi.V4L2LOOPBACK_CTL_REMOVE,
@@ -321,6 +327,7 @@ def test_every_request_number_is_the_one_the_headers_define():
         "DQBUF": 0xC0585611,
         "STREAMON": 0x40045612,
         "STREAMOFF": 0x40045613,
+        "S_PARM": 0xC0CC5616,
         "CTL_VERSION": 0x80047E00,
         "CTL_ADD": 0x40487E01,
         "CTL_REMOVE": 0x40047E02,
@@ -389,6 +396,38 @@ def test_an_rgb_frames_identity_matrix_takes_the_engines_ycbcr_matrix():
 )
 def test_the_device_announces_the_colour_the_engine_converts_under(color, fields):
     assert v4l2_color_fields_of(color) == fields
+
+
+@pytest.mark.parametrize(
+    "interval_ns, frames_per_second",
+    [
+        (16_666_667, 60),
+        (33_366_667, 30),
+        (40_000_000, 25),
+        (1_000_000_000, 1),
+        (0, None),
+        (-1, None),
+        (3_000_000_000, None),
+    ],
+)
+def test_the_interval_between_two_frames_gives_the_rate_the_camera_advertises(
+    interval_ns, frames_per_second
+):
+    earlier_frame_timestamp_ns = 5_000_000_000
+
+    assert (
+        frames_per_second_between(
+            earlier_frame_timestamp_ns, earlier_frame_timestamp_ns + interval_ns
+        )
+        == frames_per_second
+    )
+
+
+def test_a_frame_of_another_extent_does_not_complete_the_rate_measurement():
+    first_frame = FirstFrameOfAnExtentAwaitingItsRate(1280, 720, timestamp_ns=0)
+
+    assert first_frame.is_the_extent_of(1280, 720)
+    assert not first_frame.is_the_extent_of(1920, 1080)
 
 
 def test_rows_copy_into_a_padded_device_buffer_and_in_one_move_when_both_are_packed():

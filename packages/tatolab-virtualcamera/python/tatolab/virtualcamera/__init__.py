@@ -38,6 +38,10 @@ from tatolab.stream import (
 
 from ._native import PipeWireCameraDoor
 from .pipewire_camera_presentation import PipeWireCameraPresentation
+from .upstream_frame_rate import (
+    FirstFrameOfAnExtentAwaitingItsRate,
+    frames_per_second_between,
+)
 from .v4l2_color_fields import yuyv_picture_color_of
 from .v4l2_loopback_output_device import (
     UDEV_GRANT_DEADLINE_SECONDS,
@@ -148,8 +152,10 @@ class _LatchedRefusal(Exception):
 class VirtualCameraSink:
     """Each frame's picture, converted to YUYV, as the camera's next picture.
 
-    The camera's format follows the first frame's extent and colour, and an
-    extent change re-negotiates it, which readers see as the camera re-plugged.
+    The camera's format follows the extent and colour of the first frame of
+    each extent, and its frame interval follows the interval from that frame to
+    the next, so a loopback camera starts on the second frame. An extent change
+    re-negotiates the format, which readers see as the camera re-plugged.
     A frame of odd width, or one the camera refuses to be configured for,
     drops every later frame. A loopback device a reader still holds at teardown
     is left in place and reclaimed by its name at the next setup.
@@ -162,6 +168,9 @@ class VirtualCameraSink:
         self._device: "V4l2LoopbackOutputDevice | None" = None
         self._pipewire_camera: "PipeWireCameraPresentation | None" = None
         self._streaming: "StreamingOutputFormat | None" = None
+        self._first_frame_awaiting_its_rate: "FirstFrameOfAnExtentAwaitingItsRate | None" = (
+            None
+        )
         self._yuyv_pixel_buffer: "GpuSurfaceHandle | None" = None
         self._latched_refusal: "str | None" = None
         self._frames_written = 0
@@ -353,6 +362,8 @@ class VirtualCameraSink:
         if device is None:
             return
         streaming = self._streaming_format_for(ctx, device, frame)
+        if streaming is None:
+            return
         device.reclaim_dequeued_buffers(streaming)
         buffer = streaming.next_free_buffer()
         if buffer is None:
@@ -437,7 +448,7 @@ class VirtualCameraSink:
         ctx: RuntimeContextLimitedAccess,
         device: V4l2LoopbackOutputDevice,
         frame: ImageFrame,
-    ) -> StreamingOutputFormat:
+    ) -> "StreamingOutputFormat | None":
         streaming = self._streaming
         if streaming is not None and streaming.matches(frame.width, frame.height):
             return streaming
@@ -457,10 +468,21 @@ class VirtualCameraSink:
                 raise _LatchedRefusal(
                     f"the device could not be reconfigured: {refusal}"
                 ) from refusal
+        first_frame = self._first_frame_awaiting_its_rate
+        if first_frame is None or not first_frame.is_the_extent_of(frame.width, frame.height):
+            self._first_frame_awaiting_its_rate = FirstFrameOfAnExtentAwaitingItsRate(
+                frame.width, frame.height, frame.timestamp_ns
+            )
+            return None
+        self._first_frame_awaiting_its_rate = None
+        frames_per_second = frames_per_second_between(
+            first_frame.timestamp_ns, frame.timestamp_ns
+        )
         try:
             streaming = device.negotiate_format_and_start_streaming(
                 frame.width,
                 frame.height,
+                frames_per_second,
                 yuyv_picture_color_of(frame.colour),
                 self._camera_name,
             )

@@ -69,6 +69,35 @@ class V4l2Format(ctypes.Structure):
     _fields_ = [("type", ctypes.c_uint32), ("fmt", _V4l2FormatUnion)]
 
 
+class V4l2Fract(ctypes.Structure):
+    """`struct v4l2_fract`."""
+
+    _fields_ = [("numerator", ctypes.c_uint32), ("denominator", ctypes.c_uint32)]
+
+
+class V4l2OutputParm(ctypes.Structure):
+    """`struct v4l2_outputparm`."""
+
+    _fields_ = [
+        ("capability", ctypes.c_uint32),
+        ("outputmode", ctypes.c_uint32),
+        ("timeperframe", V4l2Fract),
+        ("extendedmode", ctypes.c_uint32),
+        ("writebuffers", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 4),
+    ]
+
+
+class _V4l2StreamParmUnion(ctypes.Union):
+    _fields_ = [("output", V4l2OutputParm), ("raw_data", ctypes.c_uint8 * 200)]
+
+
+class V4l2StreamParm(ctypes.Structure):
+    """`struct v4l2_streamparm`, what `VIDIOC_S_PARM` takes."""
+
+    _fields_ = [("type", ctypes.c_uint32), ("parm", _V4l2StreamParmUnion)]
+
+
 class V4l2RequestBuffers(ctypes.Structure):
     """`struct v4l2_requestbuffers`, what `VIDIOC_REQBUFS` takes and fills."""
 
@@ -173,6 +202,9 @@ VIDIOC_QBUF = linux_ioc(_IOC_READ | _IOC_WRITE, "V", 15, ctypes.sizeof(V4l2Buffe
 VIDIOC_DQBUF = linux_ioc(_IOC_READ | _IOC_WRITE, "V", 17, ctypes.sizeof(V4l2Buffer))
 VIDIOC_STREAMON = linux_ioc(_IOC_WRITE, "V", 18, ctypes.sizeof(ctypes.c_int))
 VIDIOC_STREAMOFF = linux_ioc(_IOC_WRITE, "V", 19, ctypes.sizeof(ctypes.c_int))
+VIDIOC_S_PARM = linux_ioc(
+    _IOC_READ | _IOC_WRITE, "V", 22, ctypes.sizeof(V4l2StreamParm)
+)
 
 V4L2LOOPBACK_CTL_VERSION = linux_ioc(_IOC_READ, "~", 0, ctypes.sizeof(ctypes.c_uint32))
 V4L2LOOPBACK_CTL_ADD = linux_ioc(_IOC_WRITE, "~", 1, ctypes.sizeof(V4l2LoopbackConfig))
