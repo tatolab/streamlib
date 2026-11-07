@@ -118,7 +118,6 @@ jobs:
         with:
           shared-key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # A red main still saves, so a failing main never leaves every PR building cold.
           cache-on-failure: true
 
       - name: cargo fmt --all --check
@@ -233,7 +232,6 @@ jobs:
         with:
           shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # A red main still saves, so a failing main never leaves every PR building cold.
           cache-on-failure: true
 
       - name: Restore the compile-fail tests' build
@@ -447,7 +445,6 @@ jobs:
             packages/streamlib-h265 -> target
             packages/tatolab-virtualcamera -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # A red main still saves, so a failing main never leaves every PR building cold.
           cache-on-failure: true
 
       - name: Install uv
@@ -821,7 +818,6 @@ jobs:
           # SDK a cached artifact was linked against.
           shared-key: macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # A red main still saves, so a failing main never leaves every PR building cold.
           cache-on-failure: true
 
       - name: Install Python
@@ -1063,7 +1059,6 @@ jobs:
             packages/tatolab-speaker -> target
             packages/tatolab-opus -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # A red main still saves, so a failing main never leaves every PR building cold.
           cache-on-failure: true
 
       - name: Cache the local relay build
