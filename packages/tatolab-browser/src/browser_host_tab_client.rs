@@ -45,8 +45,8 @@ use crate::page_data_messages::{
     events_msgpack_map_of_published_json, page_data_detail_json_of_msgpack_map,
 };
 use crate::page_input_messages::{PageInputAudioBlock, PageInputVideoFrameExtent};
-#[cfg(target_os = "linux")]
 use crate::painted_page_image_frame::image_frame_payload_descriptor_of_a_painted_page;
+#[cfg(target_os = "linux")]
 use crate::painted_textures_adopted_by_the_node::PaintedTextureDmaBufIdentity;
 use crate::painted_textures_adopted_by_the_node::{
     PaintedTextureIdentity, PaintedTextureLayout, PaintedTexturesAdoptedByTheNode,
