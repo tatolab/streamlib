@@ -41,6 +41,10 @@ pub struct GraphResponse {
     pub nodes: Vec<ProcessorNodeOutput>,
     /// All links between nodes' ports.
     pub links: Vec<LinkOutput>,
+    /// Every reference edge: a node's config key naming another node. A live
+    /// key, read back from the configs; absent when the graph holds none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ConfigNodeReferenceEdgeOutput>,
     /// The output ports the stream exposes. Always present; empty when it
     /// exposes none.
     #[serde(default)]
@@ -187,6 +191,18 @@ impl LinkPortRefOutput {
             port: port_name.to_string(),
         }
     }
+}
+
+/// One reference edge: the config key `config_key` of node `node` names node
+/// `referenced_node`. It carries no data and is never a link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct ConfigNodeReferenceEdgeOutput {
+    /// The name of the node whose config holds the reference.
+    pub node: String,
+    /// The config key the reference sits under.
+    pub config_key: String,
+    /// The name of the node the reference names.
+    pub referenced_node: String,
 }
 
 /// One output port a stream exposes, named by its node's name, at its level.
@@ -1253,7 +1269,7 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            ["clock", "exposed", "links", "machine", "nodes", "stream"]
+            ["clock", "exposed", "links", "machine", "nodes", "references", "stream"]
         );
     }
 

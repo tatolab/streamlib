@@ -326,6 +326,9 @@ def _json_schema_for_annotation(
         return {"type": "null"}
     if annotation is Any:
         return {}
+    node_reference_schema = _node_reference_schema_unless_not_one(annotation)
+    if node_reference_schema is not None:
+        return node_reference_schema
 
     origin = typing.get_origin(annotation)
     if origin is typing.Union or origin is types.UnionType:
@@ -368,6 +371,37 @@ def _json_schema_for_annotation(
             )
 
     return {}
+
+
+# The keyword a config key holding a node reference carries, as the engine's
+# `NODE_REFERENCE_SCHEMA_KEYWORD` reads it; its `node_type` names the type the
+# referenced node must be.
+_NODE_REFERENCE_SCHEMA_KEYWORD = "x-tatolab-node-reference"
+
+
+def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | None":
+    # Imported here: the builder imports node declaration, which imports this
+    # module, and every annotation is read after the package has loaded.
+    from ._stream_graph_builder import (
+        NodeReference,
+        NodeReferenceToNodeType,
+        _node_type_of,
+    )
+
+    if annotation is NodeReference or annotation is NodeReferenceToNodeType:
+        keyword: "dict[str, Any]" = {}
+    elif typing.get_origin(annotation) is NodeReferenceToNodeType:
+        (node_class_the_reference_names,) = typing.get_args(annotation)
+        keyword = {"node_type": _node_type_of(node_class_the_reference_names)}
+    else:
+        return None
+    return {
+        "type": "object",
+        "properties": {"node": {"type": "string"}},
+        "required": ["node"],
+        "additionalProperties": False,
+        _NODE_REFERENCE_SCHEMA_KEYWORD: keyword,
+    }
 
 
 def _enumerated_schema(members: "tuple[Any, ...]") -> "dict[str, Any]":

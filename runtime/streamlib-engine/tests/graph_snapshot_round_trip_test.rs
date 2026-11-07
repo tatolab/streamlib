@@ -631,3 +631,61 @@ fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
         );
     }
 }
+
+#[test]
+#[serial]
+fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
+    let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
+    let track_import_path =
+        ProcessorClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("ReferenceEdgeTrack").unwrap(),
+            track_import_path.clone(),
+            "graph round-trip test",
+        )
+        .with_config_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "gateway": {
+                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
+                        {"node_type": gateway.as_str()}
+                }
+            }
+        })),
+    );
+    let graph = serde_json::json!({
+        "stream": "reference-edges",
+        "nodes": [
+            {"name": "cloudflare", "type": gateway.as_str()},
+            {
+                "name": "camera-track",
+                "type": track_import_path.as_str(),
+                "config": {"gateway": {"node": "cloudflare"}}
+            }
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph).expect("the stream loads");
+    let rendered = the_graph_document_of(&first);
+    assert_eq!(
+        rendered["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
+    );
+    assert!(
+        rendered["links"].as_array().unwrap().is_empty(),
+        "a reference edge is never a link"
+    );
+
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("a rendered reference edge loads back");
+    assert_eq!(
+        the_graph_document_of(&second)["references"],
+        rendered["references"]
+    );
+}

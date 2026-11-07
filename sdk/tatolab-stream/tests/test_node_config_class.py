@@ -572,3 +572,35 @@ def test_a_fixed_length_tuple_states_its_length_not_only_its_positions():
         "items": {"type": "integer"},
         "default": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# A config key holding a reference to another node
+# ---------------------------------------------------------------------------
+
+
+def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> None:
+    from stream_graph_builder_nodes import FrameInverter
+    from tatolab.stream import NodeReference, NodeReferenceToNodeType
+    from tatolab.stream._node_config_schema import derive_config_class_json_schema
+
+    class TrackConfig(TypedDict):
+        gateway: NodeReferenceToNodeType[FrameInverter]
+        anything: NotRequired[Optional[NodeReference]]
+
+    document = derive_config_class_json_schema(TrackConfig)
+    node_object = {
+        "type": "object",
+        "properties": {"node": {"type": "string"}},
+        "required": ["node"],
+        "additionalProperties": False,
+    }
+    assert document["properties"]["gateway"] == {
+        **node_object,
+        "x-tatolab-node-reference": {
+            "node_type": "stream_graph_builder_nodes:FrameInverter"
+        },
+    }
+    assert document["properties"]["anything"] == {
+        "anyOf": [{**node_object, "x-tatolab-node-reference": {}}, {"type": "null"}]
+    }

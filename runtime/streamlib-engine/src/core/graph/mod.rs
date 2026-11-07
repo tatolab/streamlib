@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod components;
+mod config_node_reference_edges;
 mod data_structure;
 
 mod edges;
@@ -18,6 +19,10 @@ mod validation;
 mod graph_tests;
 
 // top level
+pub(crate) use config_node_reference_edges::{
+    config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
+    refuse_a_reference_to_a_node_of_the_wrong_type,
+};
 pub use data_structure::{Graph, GraphState};
 pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
