@@ -26,7 +26,9 @@ rive-runtime's own `build/build_rive.sh`, together with the C++ bridge in
 `native/`. It needs `git`, `ninja`, `clang`, `make`, `python3`,
 `glslangValidator`, `spirv-opt`, `nm` and `objcopy` on `PATH`, and libuuid's
 headers (`uuid-dev`) for premake. Set
-`TATOLAB_RIVE_RUNTIME_DIRECTORY` to build against a checkout of your own.
+`TATOLAB_RIVE_RUNTIME_DIRECTORY` to build against a checkout of your own, and
+`TATOLAB_RIVE_BUILD_DIRECTORY` to keep one rive-runtime build that every cargo
+profile reuses instead of rebuilding it in each `OUT_DIR`.
 
 ## Run it
 

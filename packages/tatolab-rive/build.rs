@@ -8,7 +8,11 @@
 //! the static libraries it produces.
 //!
 //! A checkout named by `TATOLAB_RIVE_RUNTIME_DIRECTORY` is used as it is;
-//! otherwise the pinned revision is fetched into `OUT_DIR`. The build needs
+//! otherwise the pinned revision is fetched into the build directory. The
+//! build directory is `TATOLAB_RIVE_BUILD_DIRECTORY` when set, so every cargo
+//! profile and every invocation reuses one rive-runtime build, else `OUT_DIR`.
+//! A build of the pinned revision is skipped when the directory's stamp
+//! matches the revision, the build arguments and the bridge sources. The build needs
 //! `git`, `ninja`, `clang`, `make`, `python3`, `glslangValidator`,
 //! `spirv-opt`, `nm` and `objcopy` on `PATH`, and libuuid's headers for
 //! rive-runtime's premake.
@@ -19,6 +23,8 @@ use std::process::Command;
 const RIVE_RUNTIME_REPOSITORY: &str = "https://github.com/rive-app/rive-runtime";
 const RIVE_RUNTIME_REVISION: &str = "788f82c2a11d16fa7a4af865ff383a87e976c4ab";
 const RIVE_RUNTIME_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "TATOLAB_RIVE_RUNTIME_DIRECTORY";
+const RIVE_BUILD_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "TATOLAB_RIVE_BUILD_DIRECTORY";
+const RIVE_BUILD_STAMP_FILE_NAME: &str = ".tatolab-rive-build-stamp";
 
 /// `build_rive.sh` arguments: a release build of the runtime with text and
 /// layout, the Vulkan renderer only, position-independent for a cdylib and
@@ -49,24 +55,45 @@ fn main() {
         return;
     }
     println!("cargo:rerun-if-env-changed={RIVE_RUNTIME_DIRECTORY_ENVIRONMENT_VARIABLE}");
+    println!("cargo:rerun-if-env-changed={RIVE_BUILD_DIRECTORY_ENVIRONMENT_VARIABLE}");
     for bridge_source in BRIDGE_SOURCES {
         println!("cargo:rerun-if-changed={bridge_source}");
     }
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let rive_runtime_directory = match std::env::var_os(RIVE_RUNTIME_DIRECTORY_ENVIRONMENT_VARIABLE)
-    {
-        Some(named_checkout) => {
-            let named_checkout = PathBuf::from(named_checkout);
-            stage_the_licence_of_a_named_checkout(&named_checkout, &out_dir.join("rive-runtime"));
-            named_checkout
-        }
-        None => fetch_the_pinned_rive_runtime_revision(&out_dir.join("rive-runtime")),
+    let build_directory = match std::env::var_os(RIVE_BUILD_DIRECTORY_ENVIRONMENT_VARIABLE) {
+        Some(named_build_directory) => PathBuf::from(named_build_directory),
+        None => PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")),
     };
-
-    let bridge_workspace = out_dir.join("rive-bridge-workspace");
-    std::fs::create_dir_all(&bridge_workspace).expect("the bridge workspace is created");
     let manifest_directory =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
+    let bridge_workspace = build_directory.join("rive-bridge-workspace");
+    let relative_build_output = "out/release";
+    let build_output = bridge_workspace.join(relative_build_output);
+
+    let named_rive_runtime_checkout =
+        std::env::var_os(RIVE_RUNTIME_DIRECTORY_ENVIRONMENT_VARIABLE).map(PathBuf::from);
+    let build_stamp = match named_rive_runtime_checkout {
+        Some(_) => None,
+        None => Some(rive_build_stamp_of_the_pinned_revision(&manifest_directory)),
+    };
+    let build_stamp_file = build_directory.join(RIVE_BUILD_STAMP_FILE_NAME);
+    if build_stamp.is_some() && std::fs::read_to_string(&build_stamp_file).ok() == build_stamp {
+        link_every_static_library_in(&build_output);
+        return;
+    }
+    let _ = std::fs::remove_file(&build_stamp_file);
+
+    let rive_runtime_directory = match named_rive_runtime_checkout {
+        Some(named_checkout) => {
+            stage_the_licence_of_a_named_checkout(
+                &named_checkout,
+                &build_directory.join("rive-runtime"),
+            );
+            named_checkout
+        }
+        None => fetch_the_pinned_rive_runtime_revision(&build_directory.join("rive-runtime")),
+    };
+
+    std::fs::create_dir_all(&bridge_workspace).expect("the bridge workspace is created");
     for bridge_source in BRIDGE_SOURCES {
         let source = manifest_directory.join(bridge_source);
         let file_name = source.file_name().expect("each bridge source names a file");
@@ -74,7 +101,6 @@ fn main() {
             .unwrap_or_else(|copy_failure| panic!("copying {}: {copy_failure}", source.display()));
     }
 
-    let relative_build_output = "out/release";
     let status = Command::new(rive_runtime_directory.join("build/build_rive.sh"))
         .args(RIVE_BUILD_ARGUMENTS)
         .current_dir(&bridge_workspace)
@@ -87,9 +113,30 @@ fn main() {
         .expect("rive-runtime's build/build_rive.sh runs");
     assert!(status.success(), "rive-runtime's build failed: {status}");
 
-    let build_output = bridge_workspace.join(relative_build_output);
     give_the_rive_renderer_its_own_vma_symbols(&build_output.join(RIVE_RENDERER_STATIC_LIBRARY));
+    if let Some(build_stamp) = build_stamp {
+        std::fs::write(&build_stamp_file, build_stamp).expect("the rive build stamp is written");
+    }
     link_every_static_library_in(&build_output);
+}
+
+/// The stamp a finished build of the pinned revision leaves: the revision,
+/// the build arguments and the bridge sources it was built from.
+fn rive_build_stamp_of_the_pinned_revision(manifest_directory: &Path) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut build_inputs_hasher = DefaultHasher::new();
+    RIVE_RUNTIME_REVISION.hash(&mut build_inputs_hasher);
+    RIVE_BUILD_ARGUMENTS.hash(&mut build_inputs_hasher);
+    for bridge_source in BRIDGE_SOURCES {
+        let source = manifest_directory.join(bridge_source);
+        std::fs::read(&source)
+            .unwrap_or_else(|read_failure| panic!("reading {}: {read_failure}", source.display()))
+            .hash(&mut build_inputs_hasher);
+    }
+    format!(
+        "{RIVE_RUNTIME_REVISION} {:016x}",
+        build_inputs_hasher.finish()
+    )
 }
 
 /// Rename every VMA symbol in the Rive renderer's archive, definitions and

@@ -118,6 +118,8 @@ jobs:
         with:
           shared-key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red main still saves, so a failing main never leaves every PR building cold.
+          cache-on-failure: true
 
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
@@ -231,6 +233,8 @@ jobs:
         with:
           shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red main still saves, so a failing main never leaves every PR building cold.
+          cache-on-failure: true
 
       - name: Restore the compile-fail tests' build
         if: github.event_name != 'pull_request'
@@ -449,6 +453,8 @@ jobs:
             packages/tatolab-rive -> target
             packages/tatolab-virtualcamera -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red main still saves, so a failing main never leaves every PR building cold.
+          cache-on-failure: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -624,11 +630,30 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install "numpy>=2.1" "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           uvx pyright@1.1.411
 
+      # The C++ build of rive-runtime and the bridge, which every cargo profile
+      # below shares: its stamp and static libraries are all a stamped build
+      # links, so they are restored when nothing it is built from changed.
+      - name: "Extension: the runner image the tatolab-rive C++ build is compiled on"
+        id: rive-build-image
+        run: echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      - name: "Extension: restore the tatolab-rive C++ build"
+        id: restore-rive-build
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-rive-build/.tatolab-rive-build-stamp
+            ${{ runner.temp }}/tatolab-rive-build/rive-bridge-workspace/out/release/*.a
+          key: tatolab-rive-build-${{ steps.rive-build-image.outputs.image }}-${{ hashFiles('packages/tatolab-rive/build.rs', 'packages/tatolab-rive/native/**') }}
+
       # rive-runtime draws on the GPU, which the rig runs; CI holds the
       # data mapping, lints, stub and types over a full build of the bridge.
       - name: "Extension: tatolab-rive formatting, crate tests, clippy, stub and types"
         working-directory: packages/tatolab-rive
+        env:
+          TATOLAB_RIVE_BUILD_DIRECTORY: ${{ runner.temp }}/tatolab-rive-build
         run: |
+          mkdir -p "$TATOLAB_RIVE_BUILD_DIRECTORY"
           cargo fmt --all --check
           cargo test --locked --lib
           cargo clippy --locked --lib --all-targets -- -D warnings
@@ -637,6 +662,15 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
           .venv/bin/python -m mypy.stubtest tatolab.rive._native
           uvx pyright@1.1.411
+
+      - name: "Extension: save the tatolab-rive C++ build"
+        if: steps.restore-rive-build.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-rive-build/.tatolab-rive-build-stamp
+            ${{ runner.temp }}/tatolab-rive-build/rive-bridge-workspace/out/release/*.a
+          key: ${{ steps.restore-rive-build.outputs.cache-primary-key }}
 
       # Pure Python; its pixel tests ran in the integration suite above, whose
       # venv installs it.
@@ -835,6 +869,8 @@ jobs:
           # SDK a cached artifact was linked against.
           shared-key: macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red main still saves, so a failing main never leaves every PR building cold.
+          cache-on-failure: true
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -1075,6 +1111,8 @@ jobs:
             packages/tatolab-speaker -> target
             packages/tatolab-opus -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # A red main still saves, so a failing main never leaves every PR building cold.
+          cache-on-failure: true
 
       - name: Cache the local relay build
         if: steps.restore.outputs.cache-hit != 'true'
