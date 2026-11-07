@@ -26,7 +26,7 @@ libc.workspace = true
 # Mach send right a Metal shared event crosses as on macOS.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies.streamlib-surface-client]
 path = "../streamlib-surface-client"
-version = "0.68.32"
+version = "0.68.33"
 
 # The owned-device tier's allocator: a codec module's sessions, reference
 # pictures and bitstream buffers on the device it owns.
