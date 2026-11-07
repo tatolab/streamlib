@@ -14,22 +14,12 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use streamlib_ipc_types::{
     GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS, GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT,
-    GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow, GpuPoolClaimantColumn,
+    GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow, GpuPoolClaimTableSharedRows,
+    GpuPoolClaimantColumn,
 };
 
 use super::SurfaceStore;
 use crate::core::{Error, Result};
-
-/// A claim table's rows in memory every interpreter handed the table maps:
-/// a sealed memfd on Linux.
-#[cfg(target_os = "linux")]
-pub type GpuPoolClaimTableSharedRows =
-    crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
-/// A claim table's rows in memory every interpreter handed the table maps:
-/// a Mach memory entry on macOS.
-#[cfg(target_os = "macos")]
-pub type GpuPoolClaimTableSharedRows =
-    crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
 
 /// The process a claimant column is assigned to: its pid and which process
 /// holding that pid it is, so a later process that reuses the pid is a
@@ -72,7 +62,14 @@ impl GpuPoolClaimTable {
         Ok(Self {
             pool_uuid,
             pool_name: pool_name.to_string(),
-            shared_rows: GpuPoolClaimTableSharedRows::create(pool_name)?,
+            shared_rows: GpuPoolClaimTableSharedRows::create(pool_name).map_err(
+                |claim_table_failure| {
+                    Error::Runtime(format!(
+                        "GPU pool {pool_name:?} could not create its claim table: \
+                         {claim_table_failure}"
+                    ))
+                },
+            )?,
             bookkeeping: Mutex::new(GpuPoolClaimTableBookkeeping {
                 occupant_by_row: (0..GPU_POOL_CLAIM_TABLE_ROWS)
                     .map(|_| GpuPoolClaimTableRowOccupant::default())

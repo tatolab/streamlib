@@ -6,7 +6,6 @@
 pub mod alsa_audio_device_backend;
 pub mod audio_clock;
 pub(crate) mod dma_buf_mapped_for_cpu_reads;
-pub mod gpu_pool_claim_table_memfd;
 pub mod pipewire_audio_device_backend;
 pub mod pipewire_runtime_library;
 pub mod pipewire_video_source;
