@@ -82,6 +82,16 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
     })?
 }
 
+/// Whether an added node's config references are checked against the graph it joins.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfigReferencesOfTheAddedNode {
+    /// A live add: every node a reference names must already be in the graph.
+    CheckedAgainstTheGraphItJoins,
+    /// A graph load: the whole graph was validated before its first node was
+    /// added, so a reference may name a node listed after it.
+    ValidatedWithTheWholeGraphBeforeTheAdd,
+}
+
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
 ///
 /// Reports the node it became, id and name together. Both come out
@@ -93,6 +103,7 @@ async fn add_processor_impl(
     processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     lend_directory: Option<PathBuf>,
     spec: ProcessorSpec,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
 ) -> Result<NodeInTheGraph> {
     let LiveGraphChangeOnOneStream {
         compiler,
@@ -162,6 +173,28 @@ async fn add_processor_impl(
             return Err(Error::UnknownProcessorType {
                 ident: ident_for_err,
             });
+        }
+
+        if config_references_of_the_added_node
+            == ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins
+        {
+            let config_of_the_added_node = graph
+                .traversal()
+                .v(&node_id)
+                .first()
+                .and_then(|node| node.config.clone())
+                .unwrap_or_default();
+            if let Err(refusal) =
+                crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+                    graph,
+                    processor_interpreter_launch_record.node_types_this_stream_resolves(),
+                    &node_id,
+                    &config_of_the_added_node,
+                )
+            {
+                graph.traversal_mut().v(&node_id).drop();
+                return Err(refusal);
+            }
         }
 
         emit_will_add(&node_id);
@@ -527,6 +560,22 @@ impl LoadedStreamInThisRuntime {
             Arc::clone(&self.processor_interpreter_launch_record),
             self.lend_directory(),
             spec,
+            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+        ))
+    }
+
+    /// Add one node of a graph load whose references were validated with the
+    /// whole graph, so a reference may name a node the load adds later.
+    pub(crate) fn add_processor_of_a_validated_graph_load(
+        &self,
+        spec: ProcessorSpec,
+    ) -> Result<NodeInTheGraph> {
+        self.block_on_the_engines_tokio_runtime(add_processor_impl(
+            self.live_graph_change(),
+            Arc::clone(&self.processor_interpreter_launch_record),
+            self.lend_directory(),
+            spec,
+            ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
         ))
     }
 }
@@ -542,6 +591,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             Arc::clone(&self.processor_interpreter_launch_record),
             self.lend_directory(),
             spec,
+            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
         ))
     }
 

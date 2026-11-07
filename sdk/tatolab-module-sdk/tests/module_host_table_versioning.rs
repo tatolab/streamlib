@@ -62,6 +62,7 @@ struct StoodUpNodeHost {
     lease_calls: Mutex<Vec<String>>,
     node_failure_reasons: Mutex<Vec<String>>,
     virtual_camera_calls: Mutex<Vec<String>>,
+    given_up_group_declarations: Mutex<Vec<(u64, u64)>>,
 }
 
 /// What the stood-up host knows of the one playback stream it opens.
@@ -910,25 +911,43 @@ unsafe extern "C" fn gpu_pool_slot_frame_naming_the_handle(
     MODULE_HOST_TABLE_STATUS_OK
 }
 
-unsafe extern "C" fn a_verb_added_at_minor_12(_node_host: *mut c_void) -> u32 {
+unsafe extern "C" fn declare_given_up_groups_refusing_none(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    given_up_group_count: u64,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    if given_up_group_count == 0 {
+        unsafe { (*error_message).write("no group was given up") };
+        return MODULE_HOST_TABLE_STATUS_REFUSED;
+    }
+    node_host_of(node_host)
+        .given_up_group_declarations
+        .lock()
+        .unwrap()
+        .push((port.value, given_up_group_count));
+    MODULE_HOST_TABLE_STATUS_OK
+}
+
+unsafe extern "C" fn a_verb_added_at_minor_13(_node_host: *mut c_void) -> u32 {
     13
 }
 
-/// v1.11's fields, then one verb a later minor appended.
+/// v1.12's fields, then one verb a later minor appended.
 #[repr(C)]
-struct ModuleHostTableAtMinor12 {
-    fields_of_minor_11: ModuleHostTable,
-    a_verb_added_at_minor_12: unsafe extern "C" fn(*mut c_void) -> u32,
+struct ModuleHostTableAtMinor13 {
+    fields_of_minor_12: ModuleHostTable,
+    a_verb_added_at_minor_13: unsafe extern "C" fn(*mut c_void) -> u32,
 }
 
 fn stood_up_node_host() -> &'static StoodUpNodeHost {
     Box::leak(Box::new(StoodUpNodeHost::default()))
 }
 
-fn v1_11_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
+fn v1_12_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
     ModuleHostTable {
         abi_major: 1,
-        abi_minor: 11,
+        abi_minor: 12,
         table_size_bytes: std::mem::size_of::<ModuleHostTable>() as u64,
         node_host: std::ptr::from_ref(node_host).cast_mut().cast(),
         node_host_retain: retain,
@@ -978,40 +997,42 @@ fn v1_11_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
         input_message_lend_pooled_gpu_frame: lend_the_pooled_frame_as_surface_8,
         output_port_write_described,
         surface_gpu_pool_slot_frame: gpu_pool_slot_frame_naming_the_handle,
+        output_port_declare_groups_given_up_before_the_next_write:
+            declare_given_up_groups_refusing_none,
     }
 }
 
 #[test]
-fn this_sdk_reads_table_1_11() {
+fn this_sdk_reads_table_1_12() {
     assert_eq!(
         (MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR),
-        (1, 11)
+        (1, 12)
     );
 }
 
 #[test]
-fn a_module_built_against_1_11_loads_on_a_runtime_lending_1_12_and_reaches_its_ports() {
+fn a_module_built_against_1_12_loads_on_a_runtime_lending_1_13_and_reaches_its_ports() {
     let node_host = stood_up_node_host();
-    let mut fields_of_minor_11 = v1_11_table_over(node_host);
-    fields_of_minor_11.abi_minor = 12;
-    fields_of_minor_11.table_size_bytes = std::mem::size_of::<ModuleHostTableAtMinor12>() as u64;
-    let table_at_minor_11 = ModuleHostTableAtMinor12 {
-        fields_of_minor_11,
-        a_verb_added_at_minor_12,
+    let mut fields_of_minor_12 = v1_12_table_over(node_host);
+    fields_of_minor_12.abi_minor = 13;
+    fields_of_minor_12.table_size_bytes = std::mem::size_of::<ModuleHostTableAtMinor13>() as u64;
+    let table_at_minor_13 = ModuleHostTableAtMinor13 {
+        fields_of_minor_12,
+        a_verb_added_at_minor_13,
     };
     assert_eq!(
-        unsafe { (table_at_minor_11.a_verb_added_at_minor_12)(std::ptr::null_mut()) },
+        unsafe { (table_at_minor_13.a_verb_added_at_minor_13)(std::ptr::null_mut()) },
         13
     );
 
     let module_host = unsafe {
         ModuleHost::from_module_host_table_pointer(
-            std::ptr::from_ref(&table_at_minor_11).cast::<ModuleHostTable>(),
+            std::ptr::from_ref(&table_at_minor_13).cast::<ModuleHostTable>(),
         )
     }
-    .expect("a 1.11 module loads on a 1.12 runtime");
+    .expect("a 1.12 module loads on a 1.13 runtime");
 
-    assert_eq!(module_host.module_host_table_version(), (1, 12));
+    assert_eq!(module_host.module_host_table_version(), (1, 13));
     let output_port = module_host
         .open_output_port("lent")
         .expect("the lent port opens");
@@ -1039,7 +1060,7 @@ fn a_module_built_against_1_11_loads_on_a_runtime_lending_1_12_and_reaches_its_p
 #[test]
 fn a_runtime_of_another_major_is_refused_naming_both_versions() {
     let node_host = stood_up_node_host();
-    let mut table = v1_11_table_over(node_host);
+    let mut table = v1_12_table_over(node_host);
     table.abi_major = 2;
     table.abi_minor = 0;
 
@@ -1051,11 +1072,11 @@ fn a_runtime_of_another_major_is_refused_naming_both_versions() {
             runtime_major: 2,
             runtime_minor: 0,
             module_major: 1,
-            module_minor: 11,
+            module_minor: 12,
         }
     );
     let message = refusal.to_string();
-    assert!(message.contains("module host table 1.11"), "{message}");
+    assert!(message.contains("module host table 1.12"), "{message}");
     assert!(message.contains("lends 2.0"), "{message}");
     assert_eq!(
         node_host.references.load(Ordering::SeqCst),
@@ -1076,9 +1097,9 @@ fn a_runtime_older_than_the_minor_a_module_needs_is_refused_naming_the_update() 
 }
 
 #[test]
-fn a_1_11_module_is_refused_on_a_runtime_lending_1_1() {
+fn a_1_12_module_is_refused_on_a_runtime_lending_1_1() {
     let node_host = stood_up_node_host();
-    let mut table = v1_11_table_over(node_host);
+    let mut table = v1_12_table_over(node_host);
     table.abi_minor = 1;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
@@ -1087,7 +1108,7 @@ fn a_1_11_module_is_refused_on_a_runtime_lending_1_1() {
         refusal,
         ModuleHostError::ModuleHostTableOlderThanTheModuleNeeds {
             runtime_minor: 1,
-            module_minor: 11,
+            module_minor: 12,
             ..
         }
     ));
@@ -1096,7 +1117,7 @@ fn a_1_11_module_is_refused_on_a_runtime_lending_1_1() {
 #[test]
 fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let imported = module_host
@@ -1168,7 +1189,7 @@ fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it
 #[test]
 fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -1190,7 +1211,7 @@ fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() 
 #[test]
 fn a_host_memory_write_carries_its_geometry_and_refuses_a_buffer_short_of_it() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_texture = module_host
         .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
@@ -1244,7 +1265,7 @@ fn a_host_memory_write_carries_its_geometry_and_refuses_a_buffer_short_of_it() {
 #[test]
 fn a_host_memory_read_fills_the_modules_memory_and_refuses_memory_short_of_it() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let upstream_frame = module_host
         .lend_surface_a_message_names("camera#3")
@@ -1292,7 +1313,7 @@ fn a_host_memory_read_fills_the_modules_memory_and_refuses_memory_short_of_it() 
 #[test]
 fn a_table_smaller_than_its_minor_states_is_refused() {
     let node_host = stood_up_node_host();
-    let mut table = v1_11_table_over(node_host);
+    let mut table = v1_12_table_over(node_host);
     table.table_size_bytes = 16;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
@@ -1316,7 +1337,7 @@ fn a_null_table_is_refused() {
 #[test]
 fn every_handle_on_the_node_host_holds_one_reference_until_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
 
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_port = module_host.open_output_port("lent").unwrap();
@@ -1330,7 +1351,7 @@ fn every_handle_on_the_node_host_holds_one_reference_until_it_drops() {
 #[test]
 fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host.open_output_port("never lent").unwrap_err();
@@ -1353,7 +1374,7 @@ fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
 #[test]
 fn a_message_reads_its_descriptor_and_lends_its_pooled_frame_and_a_described_write_carries_one() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let input_port = module_host.open_input_port("lent").unwrap();
     let message = input_port.read().unwrap().expect("one message waits");
@@ -1390,9 +1411,33 @@ fn a_message_reads_its_descriptor_and_lends_its_pooled_frame_and_a_described_wri
 }
 
 #[test]
+fn a_given_up_groups_declaration_reaches_the_host_and_a_refusal_carries_its_message() {
+    let node_host = stood_up_node_host();
+    let table = v1_12_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+    let output_port = module_host.open_output_port("lent").unwrap();
+
+    output_port
+        .declare_groups_given_up_before_the_next_write(3)
+        .unwrap();
+    let refusal = output_port
+        .declare_groups_given_up_before_the_next_write(0)
+        .unwrap_err();
+
+    assert_eq!(
+        *node_host.given_up_group_declarations.lock().unwrap(),
+        vec![(7, 3)]
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "output_port_declare_groups_given_up_before_the_next_write: no group was given up"
+    );
+}
+
+#[test]
 fn a_pool_textures_slot_is_read_and_any_other_surfaces_is_refused() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_texture = module_host
         .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
@@ -1423,7 +1468,7 @@ fn a_pool_textures_slot_is_read_and_any_other_surfaces_is_refused() {
 #[test]
 fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let input_port = module_host.open_input_port("lent").unwrap();
 
@@ -1442,7 +1487,7 @@ fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
 #[test]
 fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     assert_eq!(module_host.monotonic_now_ns(), 1_000);
@@ -1471,7 +1516,7 @@ fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
 #[test]
 fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to(&module_host);
@@ -1490,41 +1535,41 @@ fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
 }
 
 /// A runtime lending 1.0 has no audio or surface verbs, so a module built
-/// against 1.11 never reads past the end of its table.
+/// against 1.12 never reads past the end of its table.
 #[test]
-fn a_module_built_against_1_11_is_refused_on_a_runtime_lending_1_0() {
+fn a_module_built_against_1_12_is_refused_on_a_runtime_lending_1_0() {
     let node_host = stood_up_node_host();
-    let mut table = v1_11_table_over(node_host);
+    let mut table = v1_12_table_over(node_host);
     table.abi_minor = 0;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
 
     assert_eq!(
         refusal.to_string(),
-        "this module needs module host table 1.11, and this runtime lends 1.0 — update the runtime"
+        "this module needs module host table 1.12, and this runtime lends 1.0 — update the runtime"
     );
 }
 
-/// A runtime lending 1.10 has no described reads or writes, so a module
-/// built against 1.11 never reads past the end of its table.
+/// A runtime lending 1.11 has no given-up groups declaration, so a module
+/// built against 1.12 never reads past the end of its table.
 #[test]
-fn a_module_built_against_1_11_is_refused_on_a_runtime_lending_1_10() {
+fn a_module_built_against_1_12_is_refused_on_a_runtime_lending_1_11() {
     let node_host = stood_up_node_host();
-    let mut table = v1_11_table_over(node_host);
-    table.abi_minor = 10;
+    let mut table = v1_12_table_over(node_host);
+    table.abi_minor = 11;
 
     let refusal = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap_err();
 
     assert_eq!(
         refusal.to_string(),
-        "this module needs module host table 1.11, and this runtime lends 1.10 — update the runtime"
+        "this module needs module host table 1.12, and this runtime lends 1.11 — update the runtime"
     );
 }
 
 #[test]
 fn a_capture_stream_carries_the_request_and_reports_the_format_it_opened_in() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let capture_stream = module_host
@@ -1555,7 +1600,7 @@ fn a_capture_stream_carries_the_request_and_reports_the_format_it_opened_in() {
 #[test]
 fn a_capture_request_naming_nothing_asks_for_the_default_device_in_its_own_format() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let _capture_stream = module_host
@@ -1573,7 +1618,7 @@ fn a_capture_request_naming_nothing_asks_for_the_default_device_in_its_own_forma
 #[test]
 fn a_capture_stream_the_host_refuses_carries_its_message() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -1592,7 +1637,7 @@ fn a_capture_stream_the_host_refuses_carries_its_message() {
 #[test]
 fn captured_blocks_reach_the_hand_off_until_delivery_stops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -1629,7 +1674,7 @@ fn captured_blocks_reach_the_hand_off_until_delivery_stops() {
 #[test]
 fn a_capture_stream_reports_the_failure_that_ended_it() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -1650,7 +1695,7 @@ fn a_capture_stream_reports_the_failure_that_ended_it() {
 #[test]
 fn a_dropped_capture_stream_is_closed_and_releases_its_reference() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -1672,7 +1717,7 @@ fn a_dropped_capture_stream_is_closed_and_releases_its_reference() {
 #[test]
 fn a_playback_stream_carries_the_request_and_reports_the_format_and_period_it_opened_with() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let playback_stream = module_host
@@ -1707,7 +1752,7 @@ fn a_playback_stream_carries_the_request_and_reports_the_format_and_period_it_op
 #[test]
 fn a_playback_stream_whose_host_reports_no_period_reports_none() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let playback_stream = module_host
@@ -1724,7 +1769,7 @@ fn a_playback_stream_whose_host_reports_no_period_reports_none() {
 #[test]
 fn a_playback_stream_the_host_refuses_carries_its_message() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -1743,7 +1788,7 @@ fn a_playback_stream_the_host_refuses_carries_its_message() {
 #[test]
 fn the_hand_off_fills_the_devices_own_buffer_until_requesting_stops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -1777,7 +1822,7 @@ fn the_hand_off_fills_the_devices_own_buffer_until_requesting_stops() {
 #[test]
 fn a_playback_stream_reports_the_failure_that_ended_it() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -1796,7 +1841,7 @@ fn a_playback_stream_reports_the_failure_that_ended_it() {
 #[test]
 fn a_dropped_playback_stream_is_closed_and_releases_its_reference() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -1818,7 +1863,7 @@ fn a_dropped_playback_stream_is_closed_and_releases_its_reference() {
 #[test]
 fn an_iosurface_import_carries_its_surface_and_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let stand_in_iosurface = std::ptr::without_provenance::<c_void>(0x1000);
 
@@ -1845,7 +1890,7 @@ fn an_iosurface_import_carries_its_surface_and_is_released_once_when_it_drops() 
 #[test]
 fn an_iosurface_import_of_a_null_surface_is_refused_before_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -1866,7 +1911,7 @@ fn an_iosurface_import_of_a_null_surface_is_refused_before_the_host() {
 #[test]
 fn a_surface_a_message_names_is_lent_by_its_id_and_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let lent = module_host
@@ -1892,7 +1937,7 @@ fn a_surface_a_message_names_is_lent_by_its_id_and_released_once_when_it_drops()
 #[test]
 fn a_lease_names_its_endpoint_and_tenant_reports_its_state_and_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let lease = module_host
@@ -1934,7 +1979,7 @@ fn a_lease_names_its_endpoint_and_tenant_reports_its_state_and_is_released_once_
 #[test]
 fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -1956,7 +2001,7 @@ fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
 #[test]
 fn a_node_fails_itself_with_the_reason_it_gives() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     module_host
@@ -1972,7 +2017,7 @@ fn a_node_fails_itself_with_the_reason_it_gives() {
 #[test]
 fn a_virtual_camera_offers_an_extent_writes_rows_and_is_closed_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let camera = module_host
@@ -2004,7 +2049,7 @@ fn a_virtual_camera_offers_an_extent_writes_rows_and_is_closed_once_when_it_drop
 #[test]
 fn a_virtual_camera_the_host_cannot_open_is_refused_in_its_words() {
     let node_host = stood_up_node_host();
-    let table = v1_11_table_over(node_host);
+    let table = v1_12_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host.open_virtual_camera_stream("").unwrap_err();

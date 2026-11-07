@@ -660,7 +660,7 @@ fn register_a_gateway_and_a_track_naming_one()
 
 #[test]
 #[serial]
-fn a_live_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_reference_renders_cast()
+fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_reference_renders_cast()
  {
     let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -675,7 +675,7 @@ fn a_live_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_r
     let track = stream
         .add_processor(
             ProcessorSpec::new(
-                track_import_path,
+                track_import_path.clone(),
                 serde_json::json!({"gateway": {"node": "Cloudflare Gateway"}}),
             )
             .with_display_name("camera-track"),
@@ -695,6 +695,55 @@ fn a_live_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_r
     assert!(
         refusal.contains("names node `nowhere`") && refusal.contains("cloudflare-gateway"),
         "{refusal}"
+    );
+    let refusal = stream
+        .add_processor(
+            ProcessorSpec::new(
+                track_import_path,
+                serde_json::json!({"gateway": {"node": "nowhere"}}),
+            )
+            .with_display_name("screen-track"),
+        )
+        .expect_err("a live add naming a node the graph does not hold is refused")
+        .to_string();
+    assert!(refusal.contains("names node `nowhere`"), "{refusal}");
+    let names_in_the_graph: Vec<serde_json::Value> = the_graph_document_of(&stream)["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["name"].clone())
+        .collect();
+    assert!(
+        !names_in_the_graph.contains(&serde_json::json!("screen-track")),
+        "the refused node is not left in the graph: {names_in_the_graph:?}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_load_listing_a_referrer_before_the_node_it_names_loads() {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let graph = serde_json::json!({
+        "stream": "referrer-listed-first",
+        "nodes": [
+            {
+                "name": "camera-track",
+                "type": track_import_path.as_str(),
+                "config": {"gateway": {"node": "cloudflare"}}
+            },
+            {"name": "cloudflare", "type": gateway.as_str()}
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(&runner, project_directory.path(), graph)
+        .expect("a referrer listed before the node it names loads");
+    assert_eq!(
+        the_graph_document_of(&stream)["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
     );
 }
 

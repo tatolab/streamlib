@@ -375,8 +375,10 @@ def _json_schema_for_annotation(
 
 # The keyword a config key holding a node reference carries, as the engine's
 # `NODE_REFERENCE_SCHEMA_KEYWORD` reads it; its `node_type` names the type the
-# referenced node must be.
+# referenced node must be, and its `one_referrer_per_referenced_node` lets one
+# node at most name a given node under the key.
 _NODE_REFERENCE_SCHEMA_KEYWORD = "x-tatolab-node-reference"
+_NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY = "one_referrer_per_referenced_node"
 
 
 def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | None":
@@ -385,14 +387,23 @@ def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | 
     from ._stream_graph_builder import (
         NodeReference,
         NodeReferenceToNodeType,
+        SoleReferrerNodeReferenceToNodeType,
         _node_type_of,
     )
 
     if annotation is NodeReference or annotation is NodeReferenceToNodeType:
         keyword: "dict[str, Any]" = {}
+    elif annotation is SoleReferrerNodeReferenceToNodeType:
+        keyword = {_NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY: True}
     elif typing.get_origin(annotation) is NodeReferenceToNodeType:
         (node_class_the_reference_names,) = typing.get_args(annotation)
         keyword = {"node_type": _node_type_of(node_class_the_reference_names)}
+    elif typing.get_origin(annotation) is SoleReferrerNodeReferenceToNodeType:
+        (node_class_the_reference_names,) = typing.get_args(annotation)
+        keyword = {
+            "node_type": _node_type_of(node_class_the_reference_names),
+            _NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY: True,
+        }
     else:
         return None
     return {

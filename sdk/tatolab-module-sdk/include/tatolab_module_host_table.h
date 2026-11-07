@@ -26,7 +26,8 @@
  * verbs minor 8 adds, the stream-time conversion minor 10 adds and the
  * described reads and writes minor 11 adds act in the helper itself; its lend
  * of a message's pooled frame and its slot of a pool texture reach the
- * surface-share service the helper already holds.
+ * surface-share service the helper already holds. The given-up groups minor
+ * 12 adds act in the helper itself.
  */
 #ifndef TATOLAB_MODULE_HOST_TABLE_H
 #define TATOLAB_MODULE_HOST_TABLE_H
@@ -47,7 +48,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(11)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(12)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -855,6 +856,12 @@ typedef struct ModuleHostTable {
      * carries in its body's first 40 bytes.
      */
     ModuleHostTableStatus (*surface_gpu_pool_slot_frame)(void *node_host, ModuleHostTableSurfaceHandle surface, ModuleHostTablePayloadDescriptor *gpu_pool_slot_frame, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 12: declare `given_up_group_count` groups given up before the
+     * port's next write, which its readers count as lost since their last
+     * read when that write reaches them.
+     */
+    ModuleHostTableStatus (*output_port_declare_groups_given_up_before_the_next_write)(void *node_host, ModuleHostTablePortHandle port, uint64_t given_up_group_count, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

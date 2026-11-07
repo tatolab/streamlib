@@ -21,7 +21,8 @@
 //! verbs minor 8 adds, the stream-time conversion minor 10 adds and the
 //! described reads and writes minor 11 adds act in the helper itself; its lend
 //! of a message's pooled frame and its slot of a pool texture reach the
-//! surface-share service the helper already holds.
+//! surface-share service the helper already holds. The given-up groups minor
+//! 12 adds act in the helper itself.
 
 use std::ffi::{CStr, c_void};
 
@@ -30,7 +31,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 11;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 12;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -776,6 +777,16 @@ pub struct ModuleHostTable {
         gpu_pool_slot_frame: *mut ModuleHostTablePayloadDescriptor,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
+    /// Minor 12: declare `given_up_group_count` groups given up before the
+    /// port's next write, which its readers count as lost since their last
+    /// read when that write reaches them.
+    pub output_port_declare_groups_given_up_before_the_next_write:
+        unsafe extern "C" fn(
+            node_host: *mut c_void,
+            port: ModuleHostTablePortHandle,
+            given_up_group_count: u64,
+            error_message: *mut ModuleHostTableErrorMessage,
+        ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTablePayloadDescriptor {
@@ -1257,7 +1268,20 @@ mod layout_regression_tests {
         for (slot, offset) in pointer_slots_appended_at_minor_11.into_iter().enumerate() {
             assert_eq!(offset, 16 + (43 + slot) * POINTER, "minor 11 slot {slot}");
         }
-        assert_eq!(size_of::<ModuleHostTable>(), 16 + 47 * POINTER);
+    }
+
+    /// Minor 12 appends its given-up groups declaration after the minor 11
+    /// described reads and writes.
+    #[test]
+    fn the_v1_12_table_appends_its_given_up_groups_declaration_after_every_v1_11_field() {
+        assert_eq!(
+            offset_of!(
+                ModuleHostTable,
+                output_port_declare_groups_given_up_before_the_next_write
+            ),
+            16 + 47 * POINTER
+        );
+        assert_eq!(size_of::<ModuleHostTable>(), 16 + 48 * POINTER);
     }
 
     /// A payload descriptor lays out as the engine's 64-byte channel-sample

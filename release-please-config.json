@@ -79,6 +79,20 @@
         },
         {
           "type": "toml",
+          "path": "packages/tatolab-moq/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "packages/tatolab-moq/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "generic",
+          "path": "packages/tatolab-moq/pyproject.toml"
+        },
+        {
+          "type": "toml",
           "path": "packages/streamlib-h265/Cargo.toml",
           "jsonpath": "$.package.version"
         },

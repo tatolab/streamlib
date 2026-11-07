@@ -46,6 +46,12 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         }
     }
 
+    /// The node types this stream resolves, which a live add checks its
+    /// config's references against.
+    pub(crate) fn node_types_this_stream_resolves(&self) -> &NodeTypesOneStreamResolves {
+        &self.node_types_this_stream_resolves
+    }
+
     pub(crate) fn stream_environment(&self) -> Option<&StreamEnvironment> {
         self.stream_environment.as_ref()
     }

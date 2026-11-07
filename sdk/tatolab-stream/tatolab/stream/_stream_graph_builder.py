@@ -40,6 +40,7 @@ __all__ = [
     "NodeOutputPortReference",
     "NodeReference",
     "NodeReferenceToNodeType",
+    "SoleReferrerNodeReferenceToNodeType",
     "StreamBuilder",
     "compile_stream_to_graph",
     "is_stream_function",
@@ -252,6 +253,9 @@ class NodeReference:
 
 type NodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
 """A config field holding a reference to a node of `NodeClassTheReferenceNames`, checked at load."""
+
+type SoleReferrerNodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
+"""A config field holding a reference to a node of `NodeClassTheReferenceNames` that no other node names under the same key, checked at load."""
 
 
 @dataclass(frozen=True)

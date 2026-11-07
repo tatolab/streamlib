@@ -16,7 +16,8 @@ use serde_json::Value;
 
 /// The schema keyword a config key holding a node reference carries. Its value
 /// is an object; its `node_type` key, when present, is the import path the
-/// referenced node must be.
+/// referenced node must be, and its `one_referrer_per_referenced_node` key,
+/// when `true`, refuses a second node whose key names the same node.
 pub const NODE_REFERENCE_SCHEMA_KEYWORD: &str = "x-tatolab-node-reference";
 
 /// The key of the object a node reference is written as.
@@ -24,6 +25,11 @@ pub const NODE_REFERENCE_NODE_KEY: &str = "node";
 
 /// The keyword's key naming the node type a reference must name.
 const NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY: &str = "node_type";
+
+/// The keyword's key that, when `true`, lets one node at most name a given
+/// node under the config key.
+pub const NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: &str =
+    "one_referrer_per_referenced_node";
 
 /// A config value naming another node of the graph, of any type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -177,6 +183,9 @@ pub struct ConfigKeyHoldingANodeReference {
     /// Whether the key's schema also takes a value that is neither a node
     /// reference nor `null`, as `NodeReference | str` does.
     pub takes_a_value_other_than_a_node_reference: bool,
+    /// Whether one node at most may name a given node under this key, as one
+    /// send node at most writes a track.
+    pub one_referrer_per_referenced_node: bool,
 }
 
 /// Every top-level key of `config_schema` that holds a node reference, in the
@@ -203,6 +212,10 @@ pub fn config_keys_holding_a_node_reference(
                         .get(NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY)
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    one_referrer_per_referenced_node: keyword
+                        .get(NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY)
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     takes_a_value_other_than_a_node_reference: schema_walk
                         .takes_a_value_other_than_a_node_reference_or_null(
                             property_schema,
@@ -329,6 +342,27 @@ mod tests {
     use super::*;
     use crate::ProcessorConfigJsonSchema;
 
+    #[test]
+    fn a_key_whose_keyword_takes_one_referrer_per_referenced_node_says_so() {
+        let schema = serde_json::json!({
+            "properties": {
+                "track": {NODE_REFERENCE_SCHEMA_KEYWORD: {
+                    "node_type": "tatolab.moq:MoqTrack",
+                    NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
+                }},
+            }
+        });
+        assert_eq!(
+            config_keys_holding_a_node_reference(&schema),
+            vec![ConfigKeyHoldingANodeReference {
+                config_key: "track".to_string(),
+                referenced_node_type_import_path: Some("tatolab.moq:MoqTrack".to_string()),
+                takes_a_value_other_than_a_node_reference: false,
+                one_referrer_per_referenced_node: true,
+            }]
+        );
+    }
+
     struct GatewayNodeTypeForTheTest;
 
     impl NodeTypeANodeReferenceNames for GatewayNodeTypeForTheTest {
@@ -355,11 +389,13 @@ mod tests {
                     config_key: "anything".to_string(),
                     referenced_node_type_import_path: None,
                     takes_a_value_other_than_a_node_reference: false,
+                    one_referrer_per_referenced_node: false,
                 },
                 ConfigKeyHoldingANodeReference {
                     config_key: "gateway".to_string(),
                     referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
                     takes_a_value_other_than_a_node_reference: false,
+                    one_referrer_per_referenced_node: false,
                 },
             ]
         );
@@ -377,6 +413,7 @@ mod tests {
                 config_key: "gateway".to_string(),
                 referenced_node_type_import_path: None,
                 takes_a_value_other_than_a_node_reference: false,
+                one_referrer_per_referenced_node: false,
             }]
         );
     }
@@ -396,6 +433,7 @@ mod tests {
                 config_key: "gateway".to_string(),
                 referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
                 takes_a_value_other_than_a_node_reference: false,
+                one_referrer_per_referenced_node: false,
             }]
         );
     }

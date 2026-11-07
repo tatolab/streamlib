@@ -448,6 +448,7 @@ jobs:
             packages/streamlib-h265 -> target
             packages/tatolab-rive -> target
             packages/tatolab-virtualcamera -> target
+            packages/tatolab-moq -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
@@ -637,6 +638,21 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
           .venv/bin/python -m mypy.stubtest tatolab.rive._native
           uvx pyright@1.1.411
+
+      # The crate's tests carry the send-to-receive round trip through a
+      # `moq-relay` started in the test process on loopback; no GPU, no rig.
+      - name: "Extension: tatolab-moq formatting, crate tests, clippy, stub, types and tests"
+        working-directory: packages/tatolab-moq
+        run: |
+          cargo fmt --all --check
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+          .venv/bin/python -m mypy.stubtest tatolab.moq._native
+          uvx pyright@1.1.411
+          .venv/bin/python -m pytest tests/ -v
 
       # Pure Python; its pixel tests ran in the integration suite above, whose
       # venv installs it.
