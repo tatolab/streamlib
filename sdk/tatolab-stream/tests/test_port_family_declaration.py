@@ -138,6 +138,19 @@ def test_a_subclass_inherits_the_ports_its_base_declares():
     assert declared_output["family"] == {"family": "packets"}
 
 
+def test_a_port_a_subclass_shadows_with_another_attribute_is_not_declared():
+    class BaseFilter:
+        video_in = Input(Image, delivery="newest")
+        packets_out = Output(Packets)
+
+    @node(execution="manual")
+    class Generator(BaseFilter):
+        video_in = None
+
+    assert Generator.__tatolab_node_input_ports__ == []
+    assert [port["name"] for port in Generator.__tatolab_node_output_ports__] == ["packets_out"]
+
+
 def test_a_mistyped_key_is_refused_at_import():
     with pytest.raises(TypeError, match="requirs"):
         Input(Channels, delivery="ordered", requirs=("left",))  # pyright: ignore[reportCallIssue]

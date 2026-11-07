@@ -90,7 +90,7 @@ Cloudflare Stream carries the stream key **in the URL path**, so each endpoint U
 ## Audio loopback rigs
 Two fixture rigs guard the audio path, measuring a known signal — tone frequency / amplitude / distortion, plus a DTMF symbol grid whose *spacing* is what a dropped block moves. Both gate on `virtual_audio_device.sh check` and **exit 77** (`SKIP: no virtual audio device available on this machine`) where no PipeWire session is reachable; 77 is cannot-run and is never reported as a pass:
 - **`e2e_audio_loopback.sh <out>`** — `pw-play` into a null sink, `pw-record` off its monitor, no StreamLib in the path, so it answers "is the rig sound" when the engine won't build. Negative modes: `INJECT_BUG=silence` (30 ms of the tone body zeroed), `drop` (30 ms excised, shifting everything after), `gain` (0.6× amplitude).
-- **`verify_audio_loopback.sh [--count N]`** — the same loop with `SpeakerSink` playing and `MicrophoneSource` capturing, so both ends are StreamLib; it runs the block-level channel contract on the microphone's port first. No injection mode — corrupting what the *engine* carries is a different fixture's job.
+- **`verify_audio_loopback.sh [--path P]`** — the same loop with `SpeakerSink` playing and `MicrophoneSource` capturing, so both ends are StreamLib; `--path` is macOS-only. No injection mode — corrupting what the *engine* carries is a different fixture's job.
 
 Drive these through **`/verify-audio`**, which owns the workflow: it picks the mode, re-runs the rig-only fixture when the through-engine one fails (so "the engine broke it" is never read as "the rig is broken"), and reports the numbers with the spectrogram.
 

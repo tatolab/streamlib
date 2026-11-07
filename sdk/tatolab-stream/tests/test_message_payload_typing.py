@@ -120,6 +120,9 @@ def write_every_spelling(outputs: LinkOutputDataWriter) -> None:
     outputs.write("video", FRAME_EXTENT.to_bytes(), timestamp_ns=5)
     outputs.write("video", b"\x00", timestamp_ns=6, starts_group=False)
     outputs.write("video", memoryview(bytearray(b"\x01")))
+
+
+def refuse_a_write_of_a_dict(outputs: LinkOutputDataWriter) -> None:
     outputs.write("video", {"width": 1280})  # type: ignore[arg-type]
 
 
@@ -152,6 +155,10 @@ def test_every_write_spelling_hands_the_payload_on_as_bytes():
         (5, True),
         (6, False),
         (None, True),
-        (None, True),
     ]
-    assert FrameExtent.from_bytes(port.written[0][1]) == FRAME_EXTENT
+    assert [bytes(payload) for _, payload, _, _ in port.written] == [
+        FRAME_EXTENT.to_bytes(),
+        FRAME_EXTENT.to_bytes(),
+        b"\x00",
+        b"\x01",
+    ]

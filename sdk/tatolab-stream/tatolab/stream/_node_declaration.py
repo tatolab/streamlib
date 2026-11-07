@@ -559,13 +559,16 @@ def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
     inherited, in declaration order.
 
     Walks the MRO in reverse so a subclass's redeclaration of an inherited
-    attribute wins, and a base class's ports are inherited rather than lost.
+    attribute wins, a base class's ports are inherited rather than lost, and a
+    port a subclass shadows with anything else is no longer declared.
     """
     port_attributes_by_name: "dict[str, Input[Any] | Output[Any]]" = {}
     for ancestor in reversed(node_class.__mro__):
         for attribute_name, attribute in vars(ancestor).items():
             if isinstance(attribute, (Input, Output)):
                 port_attributes_by_name[attribute_name] = attribute
+            else:
+                port_attributes_by_name.pop(attribute_name, None)
     return [attribute._as_port_marker() for attribute in port_attributes_by_name.values()]
 
 

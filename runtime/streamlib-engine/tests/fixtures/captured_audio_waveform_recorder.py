@@ -32,6 +32,21 @@ RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 SECONDS_TO_RECORD = float(os.environ.get("STREAMLIB_CAPTURED_WAVEFORM_SECONDS", "5.0"))
 
 
+def waveform_placed_by_start_sample(
+    blocks: "list[tuple[int, numpy.ndarray]]",
+) -> numpy.ndarray:
+    """One mono waveform holding each block at its start sample, the first at zero."""
+    origin_sample = blocks[0][0]
+    waveform_length = max(
+        start_sample - origin_sample + len(mono) for start_sample, mono in blocks
+    )
+    waveform = numpy.zeros(waveform_length, dtype="<f8")
+    for start_sample, mono in blocks:
+        at = start_sample - origin_sample
+        waveform[at : at + len(mono)] = mono
+    return waveform
+
+
 @node
 class CapturedAudioWaveformRecorder:
     """Accumulates captured blocks, then writes them once as one waveform."""
@@ -63,6 +78,11 @@ class CapturedAudioWaveformRecorder:
         # Mixed down here rather than in the analysis, so what is written is one
         # waveform whatever the device's channel count turned out to be.
         mono = numpy.from_dlpack(block).astype("<f8").mean(axis=0)
+        if self._blocks and block.start_sample < self._blocks[-1][0]:
+            # A restarted source counts its samples from zero again, so the
+            # blocks before it share no timeline with the ones after.
+            self._blocks.clear()
+            self._samples_recorded = 0
         self._blocks.append((block.start_sample, mono))
         self._samples_recorded += len(mono)
 
@@ -73,12 +93,6 @@ class CapturedAudioWaveformRecorder:
     def _write_the_waveform(self) -> None:
         self._written = True
         path = os.environ["STREAMLIB_CAPTURED_WAVEFORM"]
-        origin_sample = self._blocks[0][0]
-        placed_at = [start_sample - origin_sample for start_sample, _ in self._blocks]
-        waveform = numpy.zeros(
-            placed_at[-1] + len(self._blocks[-1][1]), dtype="<f8"
-        )
-        for at, (_, mono) in zip(placed_at, self._blocks):
-            waveform[at : at + len(mono)] = mono
+        waveform = waveform_placed_by_start_sample(self._blocks)
         known_audio_signal.write_wav(path, waveform, self._sample_rate)
         log.info(f"{RESULT_MARKER}{path}")

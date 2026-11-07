@@ -27,6 +27,7 @@ from tatolab.stream import (
     Image,
     ImageFrameToWrite,
     Input,
+    NodeOutputTextureRing,
     Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -457,7 +458,7 @@ void main() {{
 
 @node(execution="continuous", interval_ms=10)
 class RenderedTextureFrameProducer:
-    """Renders two known halves into a render-target texture it acquired, once,
+    """Renders two known halves into a texture from its output pool, once,
     and sends that frame downstream on every tick — no link promises delivery,
     and a bag written before the reader's interpreter subscribed is lost."""
 
@@ -475,12 +476,9 @@ class RenderedTextureFrameProducer:
                 fragment_source=TWO_HALVES_FRAGMENT_GLSL,
                 label="python-two-halves",
             )
-            self.color_target = gpu.acquire_texture(
-                SURFACE_WIDTH,
-                SURFACE_HEIGHT,
-                COLOR_ATTACHMENT_FORMAT,
-                COLOR_TARGET_TEXTURE_USAGE,
-            )
+            self.color_target = NodeOutputTextureRing(
+                COLOR_ATTACHMENT_FORMAT, COLOR_TARGET_TEXTURE_USAGE, depth=1
+            ).next_texture_for_this_frame(gpu, SURFACE_WIDTH, SURFACE_HEIGHT)
             kernel.draw(
                 bindings={},
                 color_targets=[self.color_target],
