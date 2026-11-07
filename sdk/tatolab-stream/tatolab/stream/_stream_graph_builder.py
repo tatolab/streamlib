@@ -606,7 +606,7 @@ def _json_value(
         node_names_the_config_references.append(value.name)
         return {"node": value.name}
     if isinstance(value, PortFamily):
-        return value.declaration_name.lower()
+        return value._wire_name  # pyright: ignore[reportPrivateUsage]
     if isinstance(value, str):
         return str.__str__(value)
     if isinstance(value, int):

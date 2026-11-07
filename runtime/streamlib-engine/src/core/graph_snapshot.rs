@@ -409,6 +409,13 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
                 ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
             };
             let Some(held_node) = node_named(held_node_name)? else {
+                if self
+                    .graph_only_nodes_as_drawn
+                    .interface_as_drawn
+                    .holds_an_interface_node_named(held_node_name)
+                {
+                    continue;
+                }
                 return Err(Error::GraphError(format!(
                     "`SetVariable` node `{set_variable_node}` holds node `{held_node_name}`, \
                      which the graph does not hold. The graph holds: {}",
@@ -576,7 +583,7 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
 
 /// Refuse `port` unless `node`'s type declares it in `direction`, listing the
 /// ports it does declare there.
-fn refuse_a_port_the_node_does_not_have(
+pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
     node: &GraphSnapshotNode,
@@ -1574,7 +1581,7 @@ mod tests {
             .to_string();
         assert!(
             output_refusal.contains("`GraphOutput` node `video` declares `video` as Array")
-                && output_refusal.contains("`source/video` writes Image"),
+                && output_refusal.contains("source.video (Image)"),
             "{output_refusal}"
         );
         let input_refusal = a_graph_offering_the_source_and_feeding_the_sink("image", "records")
@@ -1583,8 +1590,52 @@ mod tests {
             .to_string();
         assert!(
             input_refusal.contains("`GraphInput` node `encoded` declares `encoded` as Records")
-                && input_refusal.contains("`sink/encoded` reads Packets"),
+                && input_refusal.contains("sink.encoded (Packets)"),
             "{input_refusal}"
         );
+    }
+
+    #[test]
+    fn an_interface_node_linked_to_a_port_its_node_does_not_have_is_refused_naming_the_ports() {
+        let mut graph = serde_json::to_value(a_graph_offering_the_source_and_feeding_the_sink(
+            "image", "packets",
+        ))
+        .unwrap();
+        graph["links"][0]["source"]["port"] = serde_json::json!("vidoe");
+        let refusal = GraphSnapshot::from_graph_document(graph)
+            .unwrap()
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("node `source` has no output port `vidoe`")
+                && refusal.contains("video"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_variable_set_from_a_graph_input_validates() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": "packets"}},
+                {"name": "set-encoded", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "encoded"}},
+                {"name": "get-encoded", "type": "tatolab.stream:GetVariable",
+                 "config": {"variable": "encoded"}},
+                {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
+            ],
+            "links": [
+                {"source": {"node": "encoded", "port": "value"},
+                 "target": {"node": "set-encoded", "port": "value"}},
+                {"source": {"node": "get-encoded", "port": "value"},
+                 "target": {"node": "sink", "port": "encoded"}},
+            ]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .expect("a GraphInput held in a variable and read by the sink validates");
     }
 }

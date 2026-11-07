@@ -1058,7 +1058,69 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
     .to_string();
     assert!(
         refusal.contains("`GraphOutput` node `camera-out` declares `camera` as Packets")
-            && refusal.contains("writes Image"),
+            && refusal.contains("camera.video (Image)"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port_is_refused() {
+    use streamlib::sdk::descriptors::{PortFamily, PortFamilyDeclaration};
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!()))
+            .unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("InterfaceTrackReceive").unwrap(),
+            import_path.clone(),
+            "graph interface test",
+        )
+        .with_output(PortDescriptor::new("content", "", false).with_family(
+            PortFamilyDeclaration {
+                family_from_config_key: Some("family".into()),
+                ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+            },
+        )),
+    );
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "interface-live-update",
+            "nodes": [
+                {"name": "receive", "type": import_path.as_str(), "config": {"family": "packets"}},
+                {"name": "received", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "received", "family": "packets"}}
+            ],
+            "links": [
+                {"source": {"node": "receive", "port": "content"},
+                 "target": {"node": "received", "port": "value"}}
+            ]
+        }),
+    )
+    .expect("an Output fed by a port whose family its config names loads");
+    let receive_id = the_graph_document_of(&stream)["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "receive")
+        .and_then(|node| node["id"].as_str())
+        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
+        .expect("the receive node renders its id");
+
+    stream
+        .update_processor_config(&receive_id, serde_json::json!({"family": "packets"}))
+        .expect("an update keeping the family is taken");
+    let refusal = stream
+        .update_processor_config(&receive_id, serde_json::json!({"family": "records"}))
+        .expect_err("an update changing the family under the declared Output is refused")
+        .to_string();
+    assert!(
+        refusal.contains("`GraphOutput` node `received` declares `received` as Packets")
+            && refusal.contains("receive.content (Records)"),
         "{refusal}"
     );
 }

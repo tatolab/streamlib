@@ -356,7 +356,7 @@ pub fn output_port_family_resolved_against_config(
         None | Some(serde_json::Value::Null) => Ok(declaration.family),
         Some(serde_json::Value::String(wire_name)) => PortFamily::ALL
             .into_iter()
-            .find(|family| family.declaration_name().eq_ignore_ascii_case(wire_name))
+            .find(|family| family.wire_name() == wire_name)
             .ok_or_else(|| {
                 format!(
                     "config key {config_key:?} names family {wire_name:?}, and a family is one \
@@ -503,7 +503,10 @@ pub fn refusal_of_a_link_between_port_families(
             ));
         }
     }
-    if !output_declaration.formats.is_empty() && !input_declaration.formats.is_empty() {
+    if output_family == PortFamily::Image
+        && !output_declaration.formats.is_empty()
+        && !input_declaration.formats.is_empty()
+    {
         let output_formats: BTreeSet<&String> = output_declaration.formats.iter().collect();
         let formats_overlap = input_declaration
             .formats

@@ -1004,6 +1004,20 @@ impl LoadedStreamInThisRuntime {
                 processor_id,
                 &config_json,
             )?;
+            if let Some(node) = graph.traversal().v(processor_id).first() {
+                self.graph_only_nodes_as_drawn
+                    .lock()
+                    .interface_as_drawn
+                    .refuse_a_config_update_that_breaks_a_declared_port(
+                        &self.node_types_this_stream_resolves,
+                        &crate::core::graph_snapshot::GraphSnapshotNode {
+                            name: node.display_name.clone(),
+                            processor_type: node.processor_type.clone(),
+                            config: node.config.clone().unwrap_or_default(),
+                        },
+                        &config_json,
+                    )?;
+            }
             tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
                 config_to_apply: config_json,

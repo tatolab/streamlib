@@ -363,7 +363,7 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
                 "names": self.names is not None and self.family not in _FAMILIES_WITH_NAMES,
                 "codec": self.codec is not None
                 and self.family is not Packets
-                and self.family_from is None,
+                and not (isinstance(self.codec, PortNamesFromConfig) and self.family_from is not None),
                 "rate": self.rate is not None and self.family is not Channels,
                 "dtype": self.dtype is not None and self.family is not Channels,
                 "formats": bool(self.formats) and self.family is not Image,
