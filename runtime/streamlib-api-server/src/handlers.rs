@@ -475,7 +475,7 @@ pub(crate) mod router_surface_tests {
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
-        crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("route");
+        crate::control_plane_stub_support::every_reserved_slot_reader_is_unreachable!("route");
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 

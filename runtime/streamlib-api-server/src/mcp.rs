@@ -137,6 +137,23 @@ pub(crate) struct ViewersOneLocalApiConnectionHoldsOpen {
     viewers_by_id: parking_lot::Mutex<std::collections::BTreeMap<String, OutputPortViewerHeldOpen>>,
 }
 
+impl Drop for ViewersOneLocalApiConnectionHoldsOpen {
+    /// Releasing a port's channel may wait on its helper process, so the
+    /// viewers a connection left open are released off the async workers.
+    fn drop(&mut self) {
+        let viewers_left_open = std::mem::take(self.viewers_by_id.get_mut());
+        if viewers_left_open.is_empty() {
+            return;
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(async_runtime) => {
+                drop(async_runtime.spawn_blocking(move || drop(viewers_left_open)))
+            }
+            Err(_) => drop(viewers_left_open),
+        }
+    }
+}
+
 /// The runtime's MCP server handler: its tools, resources and prompts over the
 /// streams the runtime loads, for one connection.
 #[derive(Clone)]
@@ -987,6 +1004,17 @@ impl LocalApiMcpServerHandler {
                     .to_string(),
             );
         }
+        let viewer = format!("{stream}/{node}/{port}");
+        if self
+            .viewers_this_connection_holds_open
+            .viewers_by_id
+            .lock()
+            .contains_key(&viewer)
+        {
+            return Err(format!(
+                "open_viewer failed: this connection already holds viewer `{viewer}` open"
+            ));
+        }
         let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
         let viewer_held_open = stream_operations
             .open_a_viewer_of_an_output_port(node, port)
@@ -994,10 +1022,22 @@ impl LocalApiMcpServerHandler {
             .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
         let hand_off = viewer_held_open.hand_off().clone();
         let viewer = format!("{}/{}/{}", hand_off.stream, hand_off.node, hand_off.port);
-        self.viewers_this_connection_holds_open
-            .viewers_by_id
-            .lock()
-            .insert(viewer.clone(), viewer_held_open);
+        let viewer_already_open = {
+            let mut viewers_by_id = self.viewers_this_connection_holds_open.viewers_by_id.lock();
+            match viewers_by_id.entry(viewer.clone()) {
+                std::collections::btree_map::Entry::Occupied(_) => Some(viewer_held_open),
+                std::collections::btree_map::Entry::Vacant(vacant) => {
+                    vacant.insert(viewer_held_open);
+                    None
+                }
+            }
+        };
+        if let Some(viewer_opened_twice) = viewer_already_open {
+            let _ = tokio::task::spawn_blocking(move || drop(viewer_opened_twice)).await;
+            return Err(format!(
+                "open_viewer failed: this connection already holds viewer `{viewer}` open"
+            ));
+        }
         serialized_tool_result(
             "open_viewer",
             &OpenViewerToolResult {
@@ -1542,7 +1582,7 @@ pub(crate) mod tests {
             let exported_graph = self.exported_graph.lock().clone();
             Box::pin(async move { Ok(exported_graph) })
         }
-        crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("tool");
+        crate::control_plane_stub_support::every_reserved_slot_reader_is_unreachable!("tool");
         crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))

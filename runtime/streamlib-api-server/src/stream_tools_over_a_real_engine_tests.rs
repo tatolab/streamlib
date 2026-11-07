@@ -5,9 +5,8 @@
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
 //! `stop_stream`, `start_stream`, `remove_project`, `rename_stream` and
-//! `expose_port` act by stream id, `open_viewer` holds a viewer open only
-//! for the `/mcp/stdio` connection that opened it, on an engine recording its streams in a temporary state
-//! directory.
+//! `expose_port` act by stream id on an engine recording its streams in a
+//! temporary state directory, and `open_viewer` opens only over `/mcp/stdio`.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose

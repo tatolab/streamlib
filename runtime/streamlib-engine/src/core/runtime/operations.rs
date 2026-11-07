@@ -98,7 +98,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// answering how the viewer subscribes to its channel's reserved slot from
     /// its own process. No node is added and the graph is not changed; the
     /// channel stays open until what this answers drops. Refused while the
-    /// node does not run and while the slot is held.
+    /// node does not run, and when its helper process cannot open the port.
     fn open_a_viewer_of_an_output_port(
         &self,
         node_name: String,

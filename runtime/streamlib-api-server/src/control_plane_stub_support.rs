@@ -4,9 +4,9 @@
 //! Shared test scaffolding for the control plane's two front ends and for
 //! the tests that assert on what it logs.
 
-/// The exposed-port subscription a control-plane stub never reaches: the
-/// control plane does not read an exposed port's channel.
-macro_rules! the_exposed_port_subscription_is_unreachable {
+/// The reserved-slot readers a control-plane stub never reaches: the control
+/// plane neither subscribes to an exposed port nor opens a viewer.
+macro_rules! every_reserved_slot_reader_is_unreachable {
     ($surface:literal) => {
         fn subscribe_to_an_exposed_output_port(
             &self,
@@ -41,7 +41,7 @@ macro_rules! the_exposed_port_subscription_is_unreachable {
         }
     };
 }
-pub(crate) use the_exposed_port_subscription_is_unreachable;
+pub(crate) use every_reserved_slot_reader_is_unreachable;
 
 /// Implement every graph-mutating [`RuntimeOperations`] method, and the one
 /// stream's own shutdown request, as `unreachable!`, naming `$surface`
