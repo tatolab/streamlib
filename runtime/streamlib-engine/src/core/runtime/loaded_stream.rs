@@ -1016,10 +1016,44 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(machine_name))
-                .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
-        })
+        let mut graph_response = self
+            .compiler
+            .scope(|graph, _tx| graph.to_graph_response(machine_name));
+        graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
+        serde_json::to_value(graph_response)
+            .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// Every reference edge the configs of `nodes` hold, under the keys their
+    /// types mark; a config holding a malformed one renders none for that key.
+    fn reference_edges_the_configs_of(
+        &self,
+        nodes: &[crate::core::json_schema::ProcessorNodeOutput],
+    ) -> Vec<crate::core::json_schema::ConfigNodeReferenceEdgeOutput> {
+        nodes
+            .iter()
+            .flat_map(|node| {
+                let Some(config) = &node.config else {
+                    return Vec::new();
+                };
+                crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference(
+                    &self.node_types_this_stream_resolves,
+                    &node.processor_type,
+                )
+                .into_iter()
+                .filter_map(|key| {
+                    crate::core::graph::config_node_reference_edges_of_one_node(
+                        &node.name,
+                        config,
+                        vec![key],
+                    )
+                    .ok()
+                })
+                .flatten()
+                .map(|reference| reference.edge)
+                .collect()
+            })
+            .collect()
     }
 
     // =========================================================================

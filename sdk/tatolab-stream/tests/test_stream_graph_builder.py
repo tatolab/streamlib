@@ -543,7 +543,7 @@ def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
     message = str(refusal.value)
     assert message.startswith(
         f"config must be JSON: `config['enabled']` is of type `{type_as_written}`, and a "
-        f"graph carries only dict, list, tuple, str, int, float, bool and None"
+        f"graph carries only dict, list, tuple, str, int, float, bool, None and "
     )
     assert (
         "convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`" in message
@@ -1266,3 +1266,25 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_node_declaration"),
                 (1, "_stream_clock_spec"),
             }, module_name
+
+
+def test_a_node_reference_in_config_compiles_to_the_node_object_it_names() -> None:
+    stream_builder = StreamBuilder("rig")
+    inverter = stream_builder.add(FrameInverter)
+    stream_builder.add(
+        BrightnessReader, config={"source": inverter, "nested": [{"also": inverter}]}
+    )
+
+    assert stream_builder._compiled_graph()["nodes"][1]["config"] == {
+        "source": {"node": "frameinverter"},
+        "nested": [{"also": {"node": "frameinverter"}}],
+    }
+
+
+def test_a_node_reference_to_a_node_the_stream_does_not_hold_is_refused_at_add() -> None:
+    elsewhere = StreamBuilder("elsewhere").add(FrameInverter, name="gateway")
+    stream_builder = StreamBuilder("rig")
+    stream_builder.add(FrameInverter)
+
+    with pytest.raises(ValueError, match="node `gateway` is not in stream `rig`"):
+        stream_builder.add(BrightnessReader, config={"source": elsewhere})

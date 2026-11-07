@@ -86,6 +86,9 @@ from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
+from ._stream_graph_builder import (
+    NodeReferenceToNodeType as NodeReferenceToNodeType,
+)
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
 from ._stream_graph_builder import stream as stream
@@ -179,6 +182,7 @@ __all__ = [
     "NodeOutputPortReference",
     "NodeOutputTextureRing",
     "NodeReference",
+    "NodeReferenceToNodeType",
     "OpaqueFdAllocationExport",
     "Output",
     "Packets",
