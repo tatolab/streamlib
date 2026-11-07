@@ -147,3 +147,5 @@ def test_a_gateway_refuses_a_relay_kind_it_does_not_dial_and_a_track_a_catalog_o
         MoqTrackConfig(
             gateway=NodeReference("gateway"), track="camera", catalog={"section": "data", "entry": {}}
         )
+    with pytest.raises(ValueError, match="writes its catalog on"):
+        MoqTrackConfig(gateway=NodeReference("gateway"), track="Catalog.json")

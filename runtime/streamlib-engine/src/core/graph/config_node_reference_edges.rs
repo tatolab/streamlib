@@ -144,9 +144,10 @@ pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     )))
 }
 
-/// Refuse a live config update of `processor_id` whose node references name a
-/// node the live graph does not hold, or one of the wrong type.
-pub(crate) fn refuse_a_config_update_naming_a_node_the_graph_does_not_hold(
+/// Refuse a config `processor_id` takes live, as it is added or updated, whose
+/// node references name a node the live graph does not hold, one of the wrong
+/// type, or one another node already names under a key taking one referrer.
+pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
     graph: &Graph,
     node_types: &NodeTypesOneStreamResolves,
     processor_id: &ProcessorUniqueId,

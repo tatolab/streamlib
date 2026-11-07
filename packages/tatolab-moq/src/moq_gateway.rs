@@ -32,6 +32,10 @@ pub const A_DECLARATION_EXPIRES_AFTER: Duration = Duration::from_secs(5);
 /// soon it sees new settings, a stop, and a declaration that expired.
 const THE_GATEWAY_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(20);
 
+/// The most samples of one track's content a pass writes, so one busy track
+/// never holds back the others, the control messages or a stop.
+const CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK: usize = 64;
+
 /// How long after a read ends a fresh one starts for the same request.
 const A_READ_THAT_ENDED_STARTS_AGAIN_AFTER: Duration = Duration::from_secs(1);
 
@@ -173,13 +177,15 @@ impl MoqGatewayPasses {
             let now = Instant::now();
             self.take_the_newest_settings_and_redial_when_due(now);
             self.take_every_control_message(now);
-            self.write_every_tracks_content();
+            let content_is_left_to_write = self.write_every_tracks_content();
             self.expire_what_was_not_heard_from_since(now);
             self.publish_the_catalog(now);
             self.start_every_read_not_running(now);
-            let _ = self
-                .wake
-                .timed_wait(|_| {}, THE_GATEWAY_WAKES_AT_LEAST_EVERY);
+            if !content_is_left_to_write {
+                let _ = self
+                    .wake
+                    .timed_wait(|_| {}, THE_GATEWAY_WAKES_AT_LEAST_EVERY);
+            }
         }
         self.receives.clear();
         self.tracks.clear();
@@ -365,7 +371,10 @@ impl MoqGatewayPasses {
         }
     }
 
-    fn write_every_tracks_content(&mut self) {
+    /// Write up to a buffer's worth of each track's content; whether any
+    /// track's content was left unread for the next pass.
+    fn write_every_tracks_content(&mut self) -> bool {
+        let mut content_is_left_to_write = false;
         let session = self.session.as_ref();
         for (track_node, declared) in &mut self.tracks {
             if declared.writer.is_none()
@@ -380,7 +389,13 @@ impl MoqGatewayPasses {
                     }
                 }
             }
+            let mut samples_left_this_pass = CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK;
             loop {
+                if samples_left_this_pass == 0 {
+                    content_is_left_to_write = true;
+                    break;
+                }
+                samples_left_this_pass -= 1;
                 let sample = match declared.content.receive() {
                     Ok(Some(sample)) => sample,
                     Ok(None) => break,
@@ -396,6 +411,9 @@ impl MoqGatewayPasses {
                     .next_sequence_number
                     .is_some_and(|expected| header.sequence_number != expected);
                 declared.next_sequence_number = Some(header.sequence_number + 1);
+                if a_sample_was_overwritten && let Some(writer) = &mut declared.writer {
+                    writer.give_up_the_group_being_written();
+                }
                 if header.kind == MoqTrackContentSampleKind::UpstreamCatalogEntry as u32 {
                     let catalog_entry_upstream = if sample.payload().is_empty() {
                         None
@@ -411,7 +429,7 @@ impl MoqGatewayPasses {
                 let Some(writer) = &mut declared.writer else {
                     continue;
                 };
-                if a_sample_was_overwritten || header.lost_since_last_read > 0 {
+                if header.lost_since_last_read > 0 {
                     writer.give_up_the_group_being_written();
                 }
                 writer.write_object(
@@ -421,6 +439,7 @@ impl MoqGatewayPasses {
                 );
             }
         }
+        content_is_left_to_write
     }
 
     fn expire_what_was_not_heard_from_since(&mut self, now: Instant) {

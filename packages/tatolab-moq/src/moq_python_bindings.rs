@@ -327,7 +327,7 @@ struct MoqReceivedTrackModuleHostOutput {
 }
 
 impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
-    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) {
+    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool {
         let payload_descriptor = match &self.family {
             MoqReceivedTrackFamily::Records => Ok(records_message_payload_descriptor()),
             MoqReceivedTrackFamily::Packets { codec } => {
@@ -344,8 +344,12 @@ impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
                 )
                 .map_err(|refusal| refusal.to_string())
         });
-        if let Err(refusal) = written {
-            tracing::debug!("MoqTrackReceive: an object was not written: {refusal}");
+        match written {
+            Ok(()) => true,
+            Err(refusal) => {
+                tracing::debug!("MoqTrackReceive: an object was not written: {refusal}");
+                false
+            }
         }
     }
 

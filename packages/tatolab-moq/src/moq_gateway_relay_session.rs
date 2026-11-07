@@ -125,7 +125,7 @@ impl MoqGatewayBroadcastAtTheRelay {
                 broadcast,
                 catalog,
                 compressed_catalog,
-                catalog_published_last: serde_json::json!({}),
+                catalog_published_last: serde_json::Value::Null,
                 catalog_last_written_whole_at: Instant::now(),
             })
         })();

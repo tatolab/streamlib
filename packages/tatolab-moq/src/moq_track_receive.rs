@@ -22,6 +22,10 @@ pub const A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY: Duration = Duration::from_secs(
 /// stop and whether its request is due again.
 const THE_RECEIVE_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(50);
 
+/// The most samples a pass writes before it sends its request again or sees
+/// a stop.
+const CONTENT_SAMPLES_A_PASS_WRITES: usize = 64;
+
 /// The family a receive node's `content` output carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MoqReceivedTrackFamily {
@@ -33,8 +37,9 @@ pub enum MoqReceivedTrackFamily {
 
 /// Where a receive node writes what its gateway reads.
 pub trait MoqReceivedTrackOutput: Send {
-    /// Write one object stamped `timestamp_ns` on the stream's clock.
-    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool);
+    /// Write one object stamped `timestamp_ns` on the stream's clock; whether
+    /// it was written.
+    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool;
     /// Count `given_up_group_count` groups lost before the next write.
     fn declare_groups_given_up(&mut self, given_up_group_count: u64);
     /// Carry the track's catalog entry, `{"section", "entry"}`.
@@ -97,21 +102,28 @@ impl MoqTrackReceiveThread {
                     }
                     request_last_sent_at = Some(now);
                 }
-                loop {
+                let mut content_is_left_to_write = true;
+                for _ in 0..CONTENT_SAMPLES_A_PASS_WRITES {
                     match content.receive() {
                         Ok(Some(sample)) => writing.write_the_sample(
                             *sample.user_header(),
                             sample.payload(),
                             output.as_mut(),
                         ),
-                        Ok(None) => break,
+                        Ok(None) => {
+                            content_is_left_to_write = false;
+                            break;
+                        }
                         Err(refusal) => {
                             tracing::debug!("MoqTrackReceive: content did not read: {refusal:?}");
+                            content_is_left_to_write = false;
                             break;
                         }
                     }
                 }
-                let _ = wake.timed_wait(|_| {}, THE_RECEIVE_WAKES_AT_LEAST_EVERY);
+                if !content_is_left_to_write {
+                    let _ = wake.timed_wait(|_| {}, THE_RECEIVE_WAKES_AT_LEAST_EVERY);
+                }
             }
         })?;
         Ok(Self { thread })
@@ -124,12 +136,23 @@ impl MoqTrackReceiveThread {
 }
 
 /// The writing of what a gateway sent onto the output, carried across samples.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MoqReceivedContentWriting {
-    next_sequence_number: Option<u64>,
+    next_sequence_number: u64,
     timestamps_ride_the_hang_legacy_container: bool,
     track_timestamp_rebasing: TrackTimestampRebasedOntoTheStreamClock,
     waiting_for_a_group_start: bool,
+}
+
+impl Default for MoqReceivedContentWriting {
+    fn default() -> Self {
+        Self {
+            next_sequence_number: 0,
+            timestamps_ride_the_hang_legacy_container: false,
+            track_timestamp_rebasing: TrackTimestampRebasedOntoTheStreamClock::default(),
+            waiting_for_a_group_start: true,
+        }
+    }
 }
 
 impl MoqReceivedContentWriting {
@@ -140,10 +163,10 @@ impl MoqReceivedContentWriting {
         payload: &[u8],
         output: &mut dyn MoqReceivedTrackOutput,
     ) {
-        let samples_overwritten = self.next_sequence_number.map_or(0, |expected| {
-            header.sequence_number.saturating_sub(expected)
-        });
-        self.next_sequence_number = Some(header.sequence_number + 1);
+        let samples_overwritten = header
+            .sequence_number
+            .saturating_sub(self.next_sequence_number);
+        self.next_sequence_number = header.sequence_number + 1;
         if samples_overwritten > 0 {
             output.declare_groups_given_up(1);
             self.waiting_for_a_group_start = true;
@@ -177,7 +200,10 @@ impl MoqReceivedContentWriting {
                 let timestamp_ns = self
                     .track_timestamp_rebasing
                     .stamp_on_the_stream_clock(track_timestamp_ns, output.stream_time_now_ns());
-                output.write_object(payload, timestamp_ns, starts_group);
+                if !output.write_object(payload, timestamp_ns, starts_group) {
+                    output.declare_groups_given_up(1);
+                    self.waiting_for_a_group_start = true;
+                }
             }
             _ => {}
         }

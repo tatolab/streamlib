@@ -15,6 +15,10 @@ use _native::moq_track_receive::{
 };
 use _native::moq_track_send::{MoqTrackDeclarationThread, MoqTrackDeclared, MoqTrackSendPublisher};
 
+/// Every object arrives at the output's one fixed stream time, so a re-based
+/// stamp leads it by at most the receive's own bound.
+const A_REBASED_STAMP_LEADS_THE_FIXED_ARRIVAL_BY_AT_MOST_NS: i64 = 100_000_000;
+
 #[derive(Debug, Clone, PartialEq)]
 struct ObjectWritten {
     payload: Vec<u8>,
@@ -32,12 +36,13 @@ struct WhatTheReceiveWrote {
 struct RecordedReceiveOutput(Arc<Mutex<WhatTheReceiveWrote>>);
 
 impl MoqReceivedTrackOutput for RecordedReceiveOutput {
-    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) {
+    fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool {
         self.0.lock().unwrap().objects.push(ObjectWritten {
             payload: payload.to_vec(),
             timestamp_ns,
             starts_group,
         });
+        true
     }
 
     fn declare_groups_given_up(&mut self, given_up_group_count: u64) {
@@ -217,10 +222,11 @@ fn a_track_written_by_a_send_reaches_a_receive_through_the_relay_in_group_order(
         "the objects arrive in group order: {indices:?}"
     );
     let spacing = received.objects[1].timestamp_ns - received.objects[0].timestamp_ns;
+    let track_spacing = i64::try_from(indices[1] - indices[0]).unwrap() * 33_000_000;
     assert_eq!(
         spacing,
-        i64::try_from(indices[1] - indices[0]).unwrap() * 33_000_000,
-        "the track's spacing is kept"
+        track_spacing.min(A_REBASED_STAMP_LEADS_THE_FIXED_ARRIVAL_BY_AT_MOST_NS),
+        "the track's spacing is kept, up to the lead a stamp may take over its arrival"
     );
     drop(received);
 

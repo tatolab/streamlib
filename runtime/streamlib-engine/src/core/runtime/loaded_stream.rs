@@ -1021,7 +1021,7 @@ impl LoadedStreamInThisRuntime {
                 processor_id,
                 &config_json,
             )?;
-            crate::core::graph::refuse_a_config_update_naming_a_node_the_graph_does_not_hold(
+            crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
                 graph,
                 &self.node_types_this_stream_resolves,
                 processor_id,

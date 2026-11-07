@@ -57,6 +57,9 @@ NATIVE_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 #: The sections of a broadcast's catalog a track's entry belongs in.
 CATALOG_SECTIONS = ("video", "audio", "text", "json", "binary")
 
+# The tracks a gateway writes its broadcast's catalog on, which no `MoqTrack` takes.
+GATEWAY_CATALOG_TRACK_NAMES = ("catalog.json", "catalog.json.z")
+
 MoqGatewayRelayKind = Literal["moq-relay", "cloudflare", "moqpro"]
 MoqTrackReceiveFamily = Literal["packets", "records"]
 
@@ -190,6 +193,10 @@ class MoqTrackConfig:
         if not isinstance(self.track, str) or not self.track:
             raise ValueError(f"MoqTrack: `track` is {self.track!r}; it takes a non-empty str")
         self.track = cast_exposed_name_to_url_safe(self.track)
+        if self.track in GATEWAY_CATALOG_TRACK_NAMES:
+            raise ValueError(
+                f"MoqTrack: `track` is {self.track!r}, a name the gateway writes its catalog on"
+            )
         if self.catalog is not None and (
             not isinstance(self.catalog, dict)
             or self.catalog.get("section") not in CATALOG_SECTIONS

@@ -5,7 +5,7 @@
 //! and each run of given-up groups handed to the node over shared memory, with
 //! the track's catalog entry whenever it changes.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::ipc_threadsafe;
@@ -18,6 +18,14 @@ use crate::moq_node_ipc::{
     MoqNodeSlicePublisher, MoqReceivedContentSampleKind,
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
 };
+
+/// How long a read waits for the broadcast's catalog subscription before it
+/// reads the track without one.
+const A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST: Duration = Duration::from_secs(2);
+
+/// How often a read sends the track's catalog entry again, so a receive node
+/// whose sample of it was overwritten learns it at the next group.
+const THE_CATALOG_ENTRY_IS_SENT_AGAIN_EVERY: Duration = Duration::from_secs(1);
 
 /// What a receive node asked its gateway to read, each name exactly as its
 /// publisher wrote it.
@@ -70,6 +78,19 @@ impl MoqReceiveNodeContentSentByTheGateway {
         }
         let _ = self.notifier.notify();
     }
+
+    fn send_the_catalog_entry(&mut self, catalog_entry: Option<&serde_json::Value>) {
+        let payload = catalog_entry
+            .map(|entry| entry.to_string().into_bytes())
+            .unwrap_or_default();
+        self.send(
+            MoqReceivedContentSampleKind::CatalogEntry,
+            0,
+            0,
+            false,
+            &payload,
+        );
+    }
 }
 
 /// Read `request`'s track from `announced_broadcasts` into `content` until the
@@ -95,20 +116,28 @@ pub async fn read_a_track_for_a_receive_node(
                 return format!("the track `{}` was refused: {refusal}", request.track);
             }
         };
-    let mut catalog_of_the_broadcast = match async {
-        broadcast
-            .track(hang::Catalog::DEFAULT_NAME)?
-            .subscribe(None)
-            .await
-    }
-    .await
-    {
-        Ok(catalog_subscriber) => Some(moq_json::snapshot::Consumer::new(
+    let catalog_subscription =
+        tokio::time::timeout(A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST, async {
+            broadcast
+                .track(hang::Catalog::DEFAULT_NAME)?
+                .subscribe(None)
+                .await
+        })
+        .await;
+    let mut catalog_of_the_broadcast = match catalog_subscription {
+        Ok(Ok(catalog_subscriber)) => Some(moq_json::snapshot::Consumer::new(
             catalog_subscriber,
             moq_json::snapshot::consumer::Config::default(),
         )),
-        Err(refusal) => {
+        Ok(Err(refusal)) => {
             tracing::debug!("MoqGateway: `{broadcast_path}` serves no catalog: {refusal}");
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                "MoqGateway: `{broadcast_path}`'s catalog did not answer within \
+                 {A_CATALOG_SUBSCRIPTION_IS_AWAITED_AT_MOST:?}; reading the track without it"
+            );
             None
         }
     };
@@ -118,7 +147,7 @@ pub async fn read_a_track_for_a_receive_node(
         request.receive_node
     );
 
-    let mut catalog_entry_sent_last: Option<Option<serde_json::Value>> = None;
+    let mut catalog_entry_sent_last: Option<(Option<serde_json::Value>, Instant)> = None;
     let mut group_being_read: Option<moq_net::group::Consumer> = None;
     let mut the_next_object_starts_a_group = false;
     loop {
@@ -127,13 +156,9 @@ pub async fn read_a_track_for_a_receive_node(
             catalog = the_next_catalog_of(&mut catalog_of_the_broadcast) => match catalog {
                 Some(catalog) => {
                     let catalog_entry = the_catalog_entry_of_the_track_named(&catalog, &request.track);
-                    if catalog_entry_sent_last.as_ref() != Some(&catalog_entry) {
-                        let payload = catalog_entry
-                            .as_ref()
-                            .map(|entry| entry.to_string().into_bytes())
-                            .unwrap_or_default();
-                        content.send(MoqReceivedContentSampleKind::CatalogEntry, 0, 0, false, &payload);
-                        catalog_entry_sent_last = Some(catalog_entry);
+                    if catalog_entry_sent_last.as_ref().map(|(sent, _)| sent) != Some(&catalog_entry) {
+                        content.send_the_catalog_entry(catalog_entry.as_ref());
+                        catalog_entry_sent_last = Some((catalog_entry, Instant::now()));
                     }
                 }
                 None => catalog_of_the_broadcast = None,
@@ -141,6 +166,12 @@ pub async fn read_a_track_for_a_receive_node(
             released = groups_of_the_track.next_released_group(), if group_being_read.is_none() => {
                 match released {
                     Ok(Some(ReleasedRelayTrackGroup::InSequence(group))) => {
+                        if let Some((catalog_entry, sent_at)) = &mut catalog_entry_sent_last
+                            && sent_at.elapsed() >= THE_CATALOG_ENTRY_IS_SENT_AGAIN_EVERY
+                        {
+                            content.send_the_catalog_entry(catalog_entry.as_ref());
+                            *sent_at = Instant::now();
+                        }
                         group_being_read = Some(*group);
                         the_next_object_starts_a_group = true;
                     }
@@ -169,6 +200,7 @@ pub async fn read_a_track_for_a_receive_node(
                 Err(refusal) => {
                     tracing::debug!("MoqGateway: a group ended early: {refusal}");
                     group_being_read = None;
+                    content.send(MoqReceivedContentSampleKind::GroupsGivenUp, 1, 0, false, &[]);
                 }
             },
         }

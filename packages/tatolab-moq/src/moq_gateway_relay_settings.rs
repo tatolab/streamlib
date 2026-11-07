@@ -273,8 +273,22 @@ fn optional_string(settings: &Map<String, Value>, key: &str) -> Result<Option<St
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(other) => Err(refused(format!(
-            "`{key}` holds {other}, and it takes a string"
+            "`{key}` holds {}, and it takes a string",
+            json_type_name_of(other)
         ))),
+    }
+}
+
+/// What kind of JSON value `value` is, named without its contents, since a
+/// setting may hold a credential.
+fn json_type_name_of(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
     }
 }
 
@@ -507,6 +521,22 @@ mod tests {
         .to_string();
         assert!(
             refusal.contains("`relay_url` is not a URL") && !refusal.contains("secret"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_setting_of_the_wrong_type_is_refused_without_its_value() {
+        let refusal = settings(json!({
+            "kind": "moqpro",
+            "broadcast": "desk",
+            "project_id": "project",
+            "signing_key": {"kty": "oct", "k": "s3cr3t"},
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refusal.contains("`signing_key` holds an object") && !refusal.contains("s3cr3t"),
             "{refusal}"
         );
     }
