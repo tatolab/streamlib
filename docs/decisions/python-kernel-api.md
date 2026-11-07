@@ -38,8 +38,7 @@ SPIR-V, or when someone asks why the four GPU bridge traits were deleted.
    by source hash; SPIR-V remains an escape hatch. The wheel carries a C++ compiler
    (shaderc / glslang).~~
    > Superseded 2026-11-06 by owner ruling: Slang is the source contract, compiled by the
-   > engine's one Slang compiler, with GLSL accepted through Slang's GLSL front end
-   > (`slang-shader-compiler.md`).
+   > engine's one Slang compiler, and the only source language (`slang-shader-compiler.md`).
 5. **The four bridge traits are deleted.** Compute, graphics, ray tracing and CPU readback
    are always-present capabilities of `GpuContext`.
    > Amended 2026-09-30 by `one-runtime-per-machine.md`: accelerators are optional, so a stream that needs no GPU

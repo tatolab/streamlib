@@ -194,7 +194,9 @@ The order is: the families, then variables, then the gateway and track nodes.
   means tearing something down and rebuilding it (a device, a resolution, a file to load, a
   codec, a model) is config. A tint's colour is an input; a camera's resolution is config.
 - **Every input of every kind has a pin value.** An unlinked input takes the value set on its
-  pin, else its declared default; with neither it must be linked, refused by name at `connect`.
+  pin, else its declared default; with neither it must be linked, refused by name when the
+  stream starts. During a live edit such a node holds without evaluating, and `graph` names
+  the unlinked input, so a node's inputs can be wired one at a time.
   The graph records pin values per node beside its config, `graph` shows them, and an edit to
   one is live and costs nothing. Function and shader inputs take their default from the
   parameter's; a `@node.process` input declares one on its port
@@ -251,7 +253,7 @@ class SmoothedValue:
     value: float
 
 @node.function
-def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) -> Stateful[float, SmoothedValue]:
+def smooth(x: float, seconds: float, *, now: Time, previous: State[SmoothedValue]) -> Stateful[float, SmoothedValue]:
     ...
 ```
 
@@ -278,15 +280,17 @@ def smooth(x: float, seconds: float, now: Time, previous: State[SmoothedValue]) 
   It refuses by name calls to `time.*`, `random.*`, `open`, `socket`, `threading`,
   `os.urandom` and `datetime.now`, `global` and `nonlocal`, closures, and referenced mutable
   globals. It cannot see aliased, dynamic or transitive access; a function that cheats computes
-  wrong values but cannot crash anything outside its interpreter. A Rust function node is held to
+  wrong values, and a crash it causes is caught by the breadcrumb. A Rust function node is held to
   the same contract by review, not a lint.
 - A body that compiles runs as native code (§The function-node contract); the rest of this section
   is how a body that does not compile runs.
-- **A crash breadcrumb.** Before each function-node call, in either language, the helper writes the node's
-  name to its board.
-  When a helper dies with the breadcrumb set, its restart moves that node out to its own
-  process: promotion on crash, counted under `metrics` in `graph`. One crash of the reader is
-  the cost. See DECIDED 5.
+- **A crash breadcrumb.** Before each function-node call, compiled, Rust or Python, the helper
+  writes the node's name to its board, and clears it when the call returns. When a helper dies
+  with the breadcrumb set, its restart moves that node out to its own process: promotion on
+  crash, counted under `metrics` in `graph`. One crash of the reader is the cost. See DECIDED 5.
+- **A stall is handled as a crash.** A call cannot be pre-empted, so the run loop's watchdog
+  ends a helper whose function-node call has run past three of its island's frame intervals,
+  and the breadcrumb promotes the node on restart.
 
 ### The pool and promotion (phase 4)
 
@@ -319,7 +323,8 @@ both and defines neither.
     to a reference edge from the reader to that node. A connection is held this way, as a
     reference to its gateway node, and a track the same way; neither is ever a record on a link.
   - A get with no setter, two setters of one name, or a get read as the wrong family or node type
-    is refused by name at `connect`.
+    is refused by name when the stream starts, whether the get resolves to a link or a reference
+    edge. During a live edit such a get holds, and `graph` names it.
 - **Inside an island** a resolved variable is the link it resolved to, so a get feeding a function node is
   a function call like any other.
 
@@ -417,6 +422,9 @@ Assumed unless overruled:
 - Numba ships in the runtime's Python environment; the size (about 40 MB with llvmlite) is
   accepted, as Slang's was. Numba supports a new CPython some months after its release; in that
   gap function nodes run as Python, slower, and a native reader of one is refused by name.
+- A required input left unlinked, and a get with no setter, refuse when the stream starts, not
+  per `connect`, so a live edit can wire a node one input at a time.
+- A stalled inline call is handled as a crash, by the watchdog, since it cannot be pre-empted.
 - Wasm is out of scope.
 
 ## Proof
@@ -450,20 +458,21 @@ Assumed unless overruled:
       across the engine tree; the one run loop; the function-node contract;
       `@node.function` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
       `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
-   2. The island pass on live edits, with cycle refusal.
-   3. Pin values on every kind's inputs, expose-as-pin for config fields, and the full
+   2. The crash breadcrumb, the stall watchdog and promotion, for compiled and Rust function
+      nodes, before phase 1 is released.
+   3. The island pass on live edits, with cycle refusal.
+   4. Pin values on every kind's inputs, expose-as-pin for config fields, and the full
       `tatolab-ops` set.
-   4. Stateful function nodes on the state board.
-   5. Fan-out of a stateful function node in the per-stream function-node helper.
-   6. Rust `#[function_node]` in `tatolab-module-sdk`, proven by a fixture module.
+   5. Stateful function nodes on the state board.
+   6. Fan-out of a stateful function node in the per-stream function-node helper.
+   7. Rust `#[function_node]` in `tatolab-module-sdk`, proven by a fixture module.
 2. Shaders:
    1. Asynchronous GPU submission.
    2. One `@node.shader` on the native evaluator.
    3. Fusion under the split rule.
 3. Python function nodes that do not compile:
-   1. Inline in a Python reader.
+   1. Inline in a Python reader, under the breadcrumb from 1.2.
    2. The side-effect lint.
-   3. The crash breadcrumb and promotion on crash.
 4. The pool and promotion.
 5. Graph variables and the reference edge, after `strict-port-families`' contract ticket and
    before `gateway-nodes`' module ticket. Independent of phases 1 to 4.

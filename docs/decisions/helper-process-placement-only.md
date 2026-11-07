@@ -25,14 +25,15 @@ asks why every Python processor is a child process.
    > runtime's lend directory and then the project on `PYTHONPATH`. One child, one interpreter,
    > one GIL per processor stands.
    > Amended 2026-11-06 by `lightweight-node-kinds.md`: this holds for a Python **class**
-   > node (`@node.process`). A `@node.function` node gets no process of its own: it runs inside the
-   > Python node that reads it, in a per-stream pool only if real graphs need one, and in
-   > its own process after it crashes or stalls its host.
+   > node (`@node.process`). A `@node.function` node gets no process of its own: it runs inside
+   > a node that reads it (a Python reader, or a native one when it is compiled), in the
+   > per-stream function-node helper when it holds state and feeds several readers, or in the
+   > per-stream pool; it moves to its own process after it crashes or stalls its host.
 2. ~~In-process hosting of a Python processor is banned outright — not a default, not a
-   fallback, not an engine policy choice, not a latency optimisation —~~ because the axis
+   fallback, not an engine policy choice, not a latency optimisation — because the axis
    being optimised is isolation, not latency: no processor may ever block, stall, or degrade
    another, and that dora-style isolation at Holoscan-class performance is why StreamLib
-   exists.
+   exists.~~
    > Superseded 2026-11-06 by `lightweight-node-kinds.md`: no Python **class** node is hosted
    > in another node's process, and isolation between class nodes stands. A function node,
    > whose state and time are parameters, runs inside its reader's interpreter; a crash

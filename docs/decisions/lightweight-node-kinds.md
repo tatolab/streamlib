@@ -101,7 +101,7 @@ Python are the user path's own proof.
   a reload, and can be shown.
 - A function node's time and state are parameters, so evaluation is reproducible in stepped mode.
 - Purity is linted at decoration but cannot be enforced in Python; a function that cheats computes
-  wrong values without crashing anything outside its interpreter.
+  wrong values, and a crash it causes ends its reader once before the breadcrumb moves it out.
 - One crash of a reader is the accepted cost of finding a crashing function node.
 - Shader nodes need asynchronous GPU submission before they scale across streams.
 - The editor gets two signals: wire colour from the family, node style from the kind.

@@ -21,8 +21,9 @@ GLSL text to `create_compute_kernel`, `create_graphics_kernel` and
   written in Slang. Slang is the only source language: GLSL is retired, and every GLSL shader in
   the engine tree is rewritten in Slang. `GlslPixelEffect` is replaced by `@node.shader`
   (`lightweight-node-kinds`). See DECIDED 1.
-- **The compiler takes a target**, compute SPIR-V today, so a later change can ask it for a
-  fragment stage or another backend without a second compiler.
+- **The compiler takes a target**: every stage the engine has today, to SPIR-V. A later change
+  asks it for another backend, or a material graph's fragment shader, without a second
+  compiler.
 - **Nothing changes after compilation.** Reflection, binding by the shader's own names, the
   push-constant check and the capability refusals read Slang's SPIR-V unchanged.
 
@@ -67,8 +68,12 @@ recorded here so the tickets need not re-derive them.
 ### The compiler
 
 - One module in `runtime/streamlib-engine/src/core/rhi/` owns every Slang call: one global
-  session per process, created on first use and kept for the process's life; a session per
-  target; load from a source string; the entry point checked by stage; and the SPIR-V out.
+  session per process, created on first use and kept for the process's life; a fresh session
+  per compile, so no loaded module outlives its compile and an edited source never returns the
+  old one; load from a source string; the entry point checked by stage; and the SPIR-V out.
+- **Compiles are serialised** by the module's lock, held across the whole compile: a Slang
+  global session and what it creates are not thread-safe. A compile runs at kernel
+  construction or a graph edit, about 40 ms, never per frame.
   It replaces `glsl_shader_source_compiler.rs` and keeps its role and its cache.
 - **The binding is `shader-slang`, pinned by exact version** behind that module. Its three
   missing calls, loading from a source string, `findAndCheckEntryPoint`, and a global session
@@ -103,8 +108,12 @@ recorded here so the tickets need not re-derive them.
   (`vulkan/rhi/shaders`, 21), `streamlib-vulkan-video`'s (2), `packages/test-fixtures`' (6) and
   the SDK's GLSL kernels (`model_input_tensor_kernel.py`). The build scripts compile them
   through the same library.
-- Consumers' GLSL (`examples/`, `packages/tatolab-testpattern`, the scaffold's
-  `HalftoneLensEffect`) moves to `@node.shader` as consumer backlog.
+- **A new project's first stream never breaks.** The scaffold's sample stream runs
+  `packages/tatolab-testpattern`'s kernel and the scaffold's `HalftoneLensEffect`, so both move
+  in the ticket that makes the constructors Slang-only: the testpattern kernel is rewritten in
+  Slang, and `HalftoneLensEffect` becomes a `@node.process` over a Slang compute kernel until
+  `@node.shader` exists.
+- The rest of consumers' GLSL (`examples/`) moves to Slang as consumer backlog.
 
 ## MODIFIED
 
@@ -154,10 +163,12 @@ recorded here so the tickets need not re-derive them.
 
 ## Tickets (expected)
 
-1. The Slang compiler module and the packaging, behind the existing constructors: a Slang
-   compute kernel from Python, on both floors.
-2. The engine tree's shaders in Slang through the build scripts; `shaderc`, `glslc` and
-   `GlslPixelEffect` removed.
+1. The run-time compiler: the Slang module and the packaging, the constructors taking Slang
+   only, and every kernel compiled at run time in the engine tree in Slang (the SDK's kernels
+   and the test fixtures), with the testpattern kernel and the scaffold's `HalftoneLensEffect`;
+   `shaderc` and `GlslPixelEffect` removed. A Slang compute kernel from Python, on both floors.
+2. The build-time shaders: the engine's and `streamlib-vulkan-video`'s in Slang through the
+   build scripts; `glslc` removed.
 
 ## Notes (not in scope)
 
