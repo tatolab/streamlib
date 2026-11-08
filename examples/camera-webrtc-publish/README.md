@@ -19,7 +19,7 @@ the graph links both encoders into its `tracks`:
 ```json
 {
   "nodes": [
-    {"name": "h264encoder", "type": "tatolab.h264:H264Encoder", "config": {}},
+    {"name": "h264encoder", "type": "tatolab.h264.processors:H264Encoder", "config": {}},
     {"name": "opusencoder", "type": "tatolab.opus:OpusEncoder", "config": {}},
     {"name": "whippublisher",
      "type": "nodes.whip_publisher_to_the_runtime_environments_endpoint:WhipPublisherToTheRuntimeEnvironmentsEndpoint",

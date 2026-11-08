@@ -20,7 +20,7 @@
       },
       "id": "b5b8fec2-2f25-4f19-975c-8c030f5ba3ec",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {
@@ -28,7 +28,7 @@
       },
       "id": "048c4b84-bcf0-4a7c-8e2a-d9913235cd0e",
       "name": "capturetodownstreamlatencyprobe",
-      "type": "tatolab.camera:CaptureToDownstreamLatencyProbe"
+      "type": "tatolab.camera.capture_to_downstream_latency_probe:CaptureToDownstreamLatencyProbe"
     }
   ]
 }

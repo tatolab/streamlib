@@ -40,7 +40,7 @@ declares.
 ```json
 {
   "nodes": [
-    {"name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {"max_width": 1920, "max_height": 1080}},
+    {"name": "camerasource", "type": "tatolab.camera.camera_source:CameraSource", "config": {"max_width": 1920, "max_height": 1080}},
     {"name": "halftonecompute", "type": "nodes.halftone_compute:HalftoneCompute", "config": {"cell_size": 8, "dot_boost": 1.3, "background_level": 0.0627}}
   ],
   "links": [

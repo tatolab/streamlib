@@ -47,13 +47,13 @@
       "config": {},
       "id": "f4dbf39b-121f-456a-ad2f-17ff9b628a92",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {},
       "id": "44bdb0c6-251d-4fd5-83a3-968fe94a7eb8",
       "name": "h264encoder",
-      "type": "tatolab.h264:H264Encoder"
+      "type": "tatolab.h264.processors:H264Encoder"
     },
     {
       "config": {},

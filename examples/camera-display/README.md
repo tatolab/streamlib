@@ -14,7 +14,7 @@ and the links between their ports — and the runtime is its one writer:
 ```json
 {
   "nodes": [
-    {"id": "…", "name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {}}
+    {"id": "…", "name": "camerasource", "type": "tatolab.camera.camera_source:CameraSource", "config": {}}
   ],
   "links": []
 }

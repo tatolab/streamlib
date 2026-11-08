@@ -129,8 +129,13 @@ class ChordMixer:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # A reactive `process()` runs as soon as any one port has a full window,
         # so a call normally finds one voice ready and the others not yet.
-        for port_name in VOICE_INPUT_PORTS:
-            block = ctx.inputs.read(port_name)
+        voice_inputs_by_port_name = {
+            ROOT_VOICE_INPUT_PORT: self.root_voice_from_upstream,
+            THIRD_VOICE_INPUT_PORT: self.third_voice_from_upstream,
+            FIFTH_VOICE_INPUT_PORT: self.fifth_voice_from_upstream,
+        }
+        for port_name, voice_input in voice_inputs_by_port_name.items():
+            block = ctx.inputs.read(voice_input)
             if block is None:
                 continue
             self._hold(port_name, ChordVoiceWindow.copied_from(block))
