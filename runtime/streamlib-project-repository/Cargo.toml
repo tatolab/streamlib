@@ -17,6 +17,9 @@ path = "src/lib.rs"
 [dependencies]
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 parking_lot = "0.12"
+# Git's smart HTTP over the runtime's own TLS stack, so libgit2 carries no OpenSSL.
+rustls = "0.23"
+rustls-platform-verifier = "0.7"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

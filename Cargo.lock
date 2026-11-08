@@ -5980,6 +5980,8 @@ version = "0.68.34"
 dependencies = [
  "git2",
  "parking_lot",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2 0.10.9",

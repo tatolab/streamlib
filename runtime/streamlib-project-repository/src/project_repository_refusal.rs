@@ -50,6 +50,8 @@ pub enum ProjectRepositoryRefusal {
     EmptyTransaction,
     #[error("the transaction's author needs a name")]
     AuthorWithoutAName,
+    #[error("the history remote {url} refused the push: {why}")]
+    HistoryRemoteRefused { url: String, why: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("the project's history refused the change: {0}")]
