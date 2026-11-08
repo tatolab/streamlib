@@ -125,6 +125,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
                 "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
         }
+        fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+            &self,
+            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a reader's own host asks for a function node's promotion")
+        }
     };
 }
 
@@ -525,6 +533,14 @@ macro_rules! graph_mutation_ops_record_the_call {
             unreachable!(
                 "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
+        }
+        fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+            &self,
+            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a reader's own host asks for a function node's promotion")
         }
     };
 }

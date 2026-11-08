@@ -8,7 +8,9 @@ use parking_lot::RwLock;
 use crate::core::ProcessorDescriptor;
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
-use crate::core::graph::{PortInfo, ProcessorNode};
+use crate::core::graph::{
+    FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, PortInfo, ProcessorNode,
+};
 use crate::core::processors::processor_instance_factory::{
     refuse_catalog_entries_hang_does_not_read, refuse_port_names_not_cast_or_declared_twice,
 };
@@ -30,8 +32,11 @@ pub(crate) enum HowANodeOfADescribedTypeRuns {
     /// stream's interpreter.
     AsAProcessorItsConstructorBuilds(DynamicProcessorConstructorFn),
     /// Inside the read of each node it feeds, with no processor of its own: a
-    /// function node.
-    InsideTheReadOfEachNodeItFeeds,
+    /// function node, until it is promoted out of its readers' islands and the
+    /// constructor builds the processor of its own helper.
+    InsideTheReadOfEachNodeItFeeds {
+        processor_once_promoted_to_its_own_process: DynamicProcessorConstructorFn,
+    },
 }
 
 /// The installed distribution that declares a node type in its `tatolab.nodes`
@@ -204,7 +209,12 @@ impl NodeTypesOneStreamResolves {
             HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor) => {
                 constructor
             }
-            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                processor_once_promoted_to_its_own_process,
+            } if node.has::<FunctionNodePromotedToItsOwnProcessComponent>() => {
+                processor_once_promoted_to_its_own_process
+            }
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds { .. } => {
                 return Err(Error::Configuration(format!(
                     "`{}` is a function node, which runs inside the read of the node it \
                      feeds and has no processor of its own",

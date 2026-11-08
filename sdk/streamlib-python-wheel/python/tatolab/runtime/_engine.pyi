@@ -22,11 +22,12 @@ conformance gate prints as its allowlist.
 
 import sys
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
 __all__ = [
+    "FunctionNodeEvaluatedAsItsHelpersProcessor",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
@@ -39,6 +40,24 @@ __all__ = [
     "open_runtime_context_full_access_for_helper_process",
     "run_the_scheduling_loop_of_this_helper",
 ]
+
+@final
+class FunctionNodeEvaluatedAsItsHelpersProcessor:
+    """The function node a helper runs as its own processor, once it is promoted out of its readers' islands."""
+
+    def __new__(
+        cls,
+        *,
+        link_data_access: _stream_protocols.NodeLinkDataAccess,
+        node_id: str,
+        evaluate_entry_address: int,
+        input_count: int,
+        config_values: list[float],
+        initial_state_values: list[float],
+        output_count: int,
+    ) -> FunctionNodeEvaluatedAsItsHelpersProcessor: ...
+    def evaluate(self, input_values: list[float]) -> list[float]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,

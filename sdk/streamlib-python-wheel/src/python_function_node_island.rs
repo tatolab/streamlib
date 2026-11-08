@@ -11,6 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
+    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
     HelperProcessLossCountBoardWriter,
 };
@@ -86,26 +87,37 @@ impl FunctionNodeIslandEvaluation {
                     WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value) => pin_value,
                 };
             }
-            let call_under_way = self
-                .call_breadcrumb_board_writer
-                .as_ref()
-                .map(|board_writer| {
-                    board_writer.note_a_function_node_call_started(
-                        function_node.breadcrumb_number,
-                        monotonic_clock_now_ns(),
-                    )
-                });
-            let called = function_node.call_its_evaluate_entry_at(now_ns);
-            if let (Some(board_writer), Some(call_under_way)) =
-                (&self.call_breadcrumb_board_writer, call_under_way)
-            {
-                board_writer.note_the_function_node_call_returned(call_under_way);
-            }
-            called?;
+            call_noting_its_breadcrumb_on(
+                self.call_breadcrumb_board_writer.as_deref(),
+                function_node,
+                now_ns,
+            )?;
         }
         self.last_evaluated_at_ns = Some(now_ns);
         Ok(())
     }
+}
+
+/// Call `function_node` at `now_ns` with its breadcrumb noted on
+/// `call_breadcrumb_board_writer` for the length of the call.
+fn call_noting_its_breadcrumb_on(
+    call_breadcrumb_board_writer: Option<&HelperProcessLossCountBoardWriter>,
+    function_node: &mut FunctionNodeCompiledIntoAnIsland,
+    now_ns: i64,
+) -> Result<()> {
+    let call_under_way = call_breadcrumb_board_writer.map(|board_writer| {
+        board_writer.note_a_function_node_call_started(
+            function_node.breadcrumb_number,
+            monotonic_clock_now_ns(),
+        )
+    });
+    let called = function_node.call_its_evaluate_entry_at(now_ns);
+    if let (Some(board_writer), Some(call_under_way)) =
+        (call_breadcrumb_board_writer, call_under_way)
+    {
+        board_writer.note_the_function_node_call_returned(call_under_way);
+    }
+    called
 }
 
 impl FunctionNodeCompiledIntoAnIsland {
@@ -263,6 +275,94 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 call_breadcrumb_board_writer,
             }),
             stream_clock_now_ns,
+        })
+    }
+}
+
+/// The function node a helper runs as its own processor, once it is promoted
+/// out of its readers' islands: called with the values its process reads.
+#[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersProcessor", frozen)]
+pub(crate) struct FunctionNodeEvaluatedAsItsHelpersProcessor {
+    function_node: Mutex<FunctionNodeCompiledIntoAnIsland>,
+    call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
+}
+
+#[pymethods]
+impl FunctionNodeEvaluatedAsItsHelpersProcessor {
+    #[new]
+    #[pyo3(signature = (
+        *,
+        link_data_access,
+        node_id,
+        evaluate_entry_address,
+        input_count,
+        config_values,
+        initial_state_values,
+        output_count,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        link_data_access: &PythonProcessorLinkDataAccess,
+        node_id: String,
+        evaluate_entry_address: usize,
+        input_count: usize,
+        config_values: Vec<f64>,
+        initial_state_values: Vec<f64>,
+        output_count: usize,
+    ) -> PyResult<Self> {
+        if evaluate_entry_address == 0 {
+            return Err(PyValueError::new_err(format!(
+                "function node `{node_id}` was handed over with no evaluate entry"
+            )));
+        }
+        // SAFETY: the bootstrap hands over the address of an entry it compiled
+        // to this signature and keeps alive for as long as this helper runs,
+        // and the address was refused above when null.
+        let evaluate_entry = unsafe {
+            std::mem::transmute::<usize, ModuleHostTableFunctionNodeEvaluateEntry>(
+                evaluate_entry_address,
+            )
+        };
+        Ok(Self {
+            function_node: Mutex::new(FunctionNodeCompiledIntoAnIsland {
+                node_id,
+                breadcrumb_number:
+                    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
+                evaluate_entry,
+                where_each_input_takes_its_value: Vec::new(),
+                config_values,
+                input_values: vec![0.0; input_count],
+                state_values_of_the_call_under_way: vec![0.0; initial_state_values.len()],
+                state_values: initial_state_values,
+                output_values: vec![0.0; output_count],
+            }),
+            call_breadcrumb_board_writer: link_data_access
+                .shared_loss_count_board_writer_of_this_helper(),
+        })
+    }
+
+    /// Call the node with `input_values` at the stream's time now, answering
+    /// its outputs; refused when it refuses, keeping the state it had.
+    fn evaluate(&self, python: Python<'_>, input_values: Vec<f64>) -> PyResult<Vec<f64>> {
+        let now_ns = helper_stream_clock_now_ns();
+        python.detach(|| {
+            let mut function_node = self.function_node.lock();
+            if input_values.len() != function_node.input_values.len() {
+                return Err(PyValueError::new_err(format!(
+                    "function node `{}` takes {} inputs, and was called with {}",
+                    function_node.node_id,
+                    function_node.input_values.len(),
+                    input_values.len()
+                )));
+            }
+            function_node.input_values.copy_from_slice(&input_values);
+            call_noting_its_breadcrumb_on(
+                self.call_breadcrumb_board_writer.as_deref(),
+                &mut function_node,
+                now_ns,
+            )
+            .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+            Ok(function_node.output_values.clone())
         })
     }
 }

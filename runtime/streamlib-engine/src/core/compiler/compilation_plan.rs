@@ -14,6 +14,19 @@ pub(super) struct CompilationPlan {
     pub(super) links_to_remove: Vec<LinkUniqueId>,
     /// Each processor to reconfigure, beside the configuration it is handed.
     pub(super) config_updates: Vec<(ProcessorUniqueId, serde_json::Value)>,
+    /// Each function node to promote out of the islands of the reader whose
+    /// helper it crashed, beside that reader and why.
+    pub(super) function_node_promotions:
+        Vec<FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed>,
+}
+
+/// One function node to promote out of the islands of the reader whose helper
+/// it crashed.
+#[derive(Debug, Clone)]
+pub(super) struct FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
+    pub(super) function_node_id: ProcessorUniqueId,
+    pub(super) reader_id: ProcessorUniqueId,
+    pub(super) reason: String,
 }
 
 impl CompilationPlan {
@@ -24,6 +37,7 @@ impl CompilationPlan {
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
+            && self.function_node_promotions.is_empty()
     }
 
     /// Record each config update for a processor this same batch constructs on

@@ -1541,13 +1541,15 @@ impl PythonProcessorLinkDataAccess {
         timestamp_ns: Option<i64>,
         starts_group: bool,
     ) -> PyResult<()> {
-        if sample_rate == 0 {
-            return Err(PyValueError::new_err(format!(
-                "write_channels_block() on output port {port_name:?} takes a sample_rate above 0"
-            )));
-        }
         let (held_samples, sample_type, channel_count, samples_per_channel) =
             PythonBufferHeldForOneWrite::of_planar_channel_samples(port_name, samples)?;
+        if sample_rate == 0 && samples_per_channel != 1 {
+            return Err(PyValueError::new_err(format!(
+                "write_channels_block() on output port {port_name:?} takes a sample_rate above \
+                 0, or 0 for a control value of one sample per channel, which states no \
+                 regular rate; it was handed {samples_per_channel} samples per channel at 0"
+            )));
+        }
         if let Some(declared_sample_type) = declared_shape.sample_type
             && declared_sample_type != sample_type
         {

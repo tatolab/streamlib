@@ -44,9 +44,13 @@ use crate::core::context::{
 use crate::core::descriptors::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::ProcessorNode;
+use crate::core::graph::{
+    FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, ProcessorNode,
+};
 use crate::core::media_clock::MediaClock;
-use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
+use crate::core::processors::{
+    DynGeneratedProcessor, FunctionNodeCallUnderWayInTheFarSide, OutOfProcessLinkWiringEnvelope,
+};
 use crate::core::runtime::{
     LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment,
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
@@ -96,6 +100,10 @@ pub const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
 /// Generous because a cold child imports the whole runtime — but bounded, so a
 /// class that blocks at import time fails the graph instead of hanging it.
 const REGISTRATION_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How long a reader's host waits for the promotion of a function node that
+/// crashed its helper to compile before it starts the next helper without it.
+const LONGEST_WAIT_FOR_A_FUNCTION_NODE_PROMOTION_TO_COMPILE: Duration = Duration::from_secs(30);
 
 /// How many of its reader's frame intervals one function-node call may run
 /// before its helper is ended as stalled.
@@ -273,6 +281,10 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// Why the helper died on its own — its exit and the end of its standard
     /// error — once the engine noticed and took its group down.
     why_the_helper_process_died_on_its_own: Option<String>,
+    /// The call to a function node of one of its islands the helper was in
+    /// when it died or was ended; that node is promoted out of them before the
+    /// next helper starts.
+    function_node_call_that_lost_the_helper: Option<FunctionNodeCallUnderWayInTheFarSide>,
     /// Set once this helper has been through the shutdown ask, so the ladder's
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
@@ -738,6 +750,60 @@ impl ProcessorInterpreterSpawnHostProcessor {
     /// `start_the_helper_process`, and give the helper up if that fails — so a
     /// link held behind a setup command that never went out is refused rather
     /// than pending for good.
+    fn promote_a_function_node_out_of_its_islands_before_the_next_helper_starts(
+        &self,
+        ctx: &RuntimeContextFullAccess<'_>,
+        call_that_lost_the_helper: &FunctionNodeCallUnderWayInTheFarSide,
+        why_the_helper_process_died: &str,
+    ) {
+        let FunctionNodeCallUnderWayInTheFarSide {
+            function_node_id,
+            function_node_name,
+            ..
+        } = call_that_lost_the_helper;
+        self.link_wiring
+            .await_a_function_node_promotion_out_of_its_islands();
+        if let Err(refusal) = ctx
+            .runtime()
+            .request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+                &function_node_id.as_str().into(),
+                &self.processor_id.as_str().into(),
+                why_the_helper_process_died,
+            )
+        {
+            tracing::warn!(
+                "[{}] function node `{function_node_name}` stays in its islands: its promotion \
+                 could not be asked for: {refusal}",
+                self.processor_display_name
+            );
+            return;
+        }
+        let shutdown_escalation = &self.the_stream_this_helper_belongs_to.shutdown_escalation;
+        match self
+            .link_wiring
+            .wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+                LONGEST_WAIT_FOR_A_FUNCTION_NODE_PROMOTION_TO_COMPILE,
+                || shutdown_escalation.is_requested(),
+            ) {
+            Some(Ok(())) => tracing::info!(
+                "[{}] function node `{function_node_name}` was promoted out of its islands into \
+                 a helper process of its own",
+                self.processor_display_name
+            ),
+            Some(Err(refusal)) => tracing::warn!(
+                "[{}] function node `{function_node_name}` stays in its islands: its promotion \
+                 was refused: {refusal}",
+                self.processor_display_name
+            ),
+            None => tracing::warn!(
+                "[{}] function node `{function_node_name}` stays in its islands: its promotion \
+                 had not compiled within {} s",
+                self.processor_display_name,
+                LONGEST_WAIT_FOR_A_FUNCTION_NODE_PROMOTION_TO_COMPILE.as_secs()
+            ),
+        }
+    }
+
     fn set_up_holding_every_later_link_until_the_setup_command_goes_out(
         &mut self,
         start_the_helper_process: impl FnOnce(&mut Self) -> Result<()>,
@@ -1474,6 +1540,13 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                 tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
             })
             .unwrap_or_default();
+        let the_call_is_known_to_have_lost_the_helper = stalled_function_node_call.is_some()
+            || function_node_call_under_way
+                .as_ref()
+                .is_some_and(|call_under_way| call_under_way.function_node_calls_under_way <= 1);
+        self.function_node_call_that_lost_the_helper = function_node_call_under_way
+            .filter(|_| the_call_is_known_to_have_lost_the_helper)
+            .filter(|call_under_way| call_under_way.function_node_id != self.processor_id);
         self.why_the_helper_process_died_on_its_own = Some(format!(
             "{why_the_helper_was_lost}{how_the_helper_process_ended} (pid={helper_process_id}). {}",
             standard_error_tail_as_a_refusal_quotes_it(&standard_error_tail)
@@ -1497,13 +1570,24 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         if self.child.is_some() {
             self.take_the_helper_process_group_down();
         }
-        self.why_the_helper_process_died_on_its_own = None;
+        let why_the_helper_process_died = self
+            .why_the_helper_process_died_on_its_own
+            .take()
+            .unwrap_or_default();
         self.child_is_gone = false;
         self.shutdown_was_already_asked_of_this_helper = false;
         self.child_standard_error_tail = None;
         self.bridge = None;
         self.link_wiring
             .reopen_for_a_new_far_side_in_place_of_one_that_died();
+        if let Some(call_that_lost_the_helper) = self.function_node_call_that_lost_the_helper.take()
+        {
+            self.promote_a_function_node_out_of_its_islands_before_the_next_helper_starts(
+                ctx,
+                &call_that_lost_the_helper,
+                &why_the_helper_process_died,
+            );
+        }
         tracing::info!(
             "[{}] starting a new helper process in place of the one that died",
             self.processor_display_name
@@ -1664,6 +1748,7 @@ pub(crate) fn spawn_host_for_processor_node(
         bridge: None,
         child_is_gone: false,
         why_the_helper_process_died_on_its_own: None,
+        function_node_call_that_lost_the_helper: None,
         shutdown_was_already_asked_of_this_helper: false,
         what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::clone(node.catalog_entries_of_output_ports()),
@@ -1679,6 +1764,43 @@ pub(crate) fn spawn_host_for_processor_node(
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
     }
+}
+
+/// Build the host of a function node promoted out of its readers' islands:
+/// its helper runs the node as its processor, driven the way its promotion
+/// says, and numbers it first on its function-node call breadcrumb.
+pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
+    function_node_import_path: &str,
+    descriptor: &ProcessorDescriptor,
+    node: &ProcessorNode,
+    stream_environment: &StreamEnvironment,
+    processor_interpreter_lend_directory: &Path,
+    the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
+) -> Result<ProcessorInterpreterSpawnHostProcessor> {
+    let promotion = node
+        .get::<FunctionNodePromotedToItsOwnProcessComponent>()
+        .ok_or_else(|| {
+            Error::Configuration(format!(
+                "function node `{}` has no process of its own until it is promoted out of its \
+                 readers' islands",
+                node.id
+            ))
+        })?;
+    let host = spawn_host_for_processor_node(
+        function_node_import_path,
+        descriptor,
+        ExecutionConfig::new(promotion.process_execution),
+        node,
+        stream_environment,
+        processor_interpreter_lend_directory,
+        the_stream_this_helper_belongs_to,
+    );
+    host.link_wiring
+        .number_the_function_node_its_far_side_runs_as_its_processor(
+            node.id.as_str(),
+            &node.display_name,
+        );
+    Ok(host)
 }
 
 #[cfg(test)]

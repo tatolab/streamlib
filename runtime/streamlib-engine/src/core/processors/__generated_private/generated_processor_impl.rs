@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
@@ -193,6 +193,15 @@ struct FunctionNodeNumberedOnTheBreadcrumb {
     function_node_name: String,
 }
 
+/// How the request to promote a function node out of one far side's islands
+/// ended, which the far side's host waits on before it starts the far side
+/// standing in for the one that function node crashed.
+#[derive(Default)]
+struct FunctionNodePromotionOutOfTheIslandsOfOneFarSide {
+    outcome_once_settled: Mutex<Option<std::result::Result<(), String>>>,
+    settled: Condvar,
+}
+
 /// A call to one function node a far side had under way, as its breadcrumb
 /// names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +238,7 @@ pub struct OutOfProcessLinkWiringEnvelope {
     loss_counts: Arc<HelperPlacedProcessorLossCounts>,
     output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
     far_side_process_execution: ProcessExecution,
+    function_node_promotion_out_of_its_islands: FunctionNodePromotionOutOfTheIslandsOfOneFarSide,
 }
 
 impl std::fmt::Debug for OutOfProcessLinkWiringEnvelope {
@@ -270,6 +280,7 @@ impl OutOfProcessLinkWiringEnvelope {
             loss_counts: Arc::default(),
             output_frames_kept_by_its_output_links: Arc::default(),
             far_side_process_execution,
+            function_node_promotion_out_of_its_islands: Default::default(),
         }
     }
 
@@ -433,6 +444,24 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Number `function_node_id` first on the breadcrumb, as the function node
+    /// its far side runs as its processor once promoted out of its readers'
+    /// islands; the nodes of the islands feeding it are numbered after it.
+    pub(crate) fn number_the_function_node_its_far_side_runs_as_its_processor(
+        &self,
+        function_node_id: &str,
+        function_node_name: &str,
+    ) {
+        let breadcrumb_number = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
+        debug_assert_eq!(
+            breadcrumb_number,
+            crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR
+        );
+    }
+
     /// The function node its far side last noted a call under way to, read
     /// off the current spawn's board even after the far side died.
     pub(crate) fn function_node_call_its_far_side_has_under_way(
@@ -464,6 +493,54 @@ impl OutOfProcessLinkWiringEnvelope {
             call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
             function_node_calls_under_way: breadcrumb.function_node_calls_under_way,
         })
+    }
+
+    /// Start waiting on a new request to promote a function node out of this
+    /// far side's islands, forgetting how any earlier one ended.
+    pub(crate) fn await_a_function_node_promotion_out_of_its_islands(&self) {
+        *self
+            .function_node_promotion_out_of_its_islands
+            .outcome_once_settled
+            .lock() = None;
+    }
+
+    /// Say how the request to promote a function node out of this far side's
+    /// islands ended: `Err` names why the compile carrying it failed.
+    pub(crate) fn settle_the_function_node_promotion_out_of_its_islands(
+        &self,
+        outcome: std::result::Result<(), String>,
+    ) {
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        *promotion.outcome_once_settled.lock() = Some(outcome);
+        promotion.settled.notify_all();
+    }
+
+    /// How the awaited promotion out of this far side's islands ended, waiting
+    /// up to `longest_wait` and giving up early once `stop_waiting` says so;
+    /// `None` when it had not settled by then.
+    pub(crate) fn wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+        &self,
+        longest_wait: std::time::Duration,
+        stop_waiting: impl Fn() -> bool,
+    ) -> Option<std::result::Result<(), String>> {
+        const STOP_WAITING_POLL_INTERVAL: std::time::Duration =
+            std::time::Duration::from_millis(100);
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        let wait_ends_at = std::time::Instant::now() + longest_wait;
+        let mut outcome_once_settled = promotion.outcome_once_settled.lock();
+        loop {
+            if let Some(outcome) = outcome_once_settled.as_ref() {
+                return Some(outcome.clone());
+            }
+            let now = std::time::Instant::now();
+            if now >= wait_ends_at || stop_waiting() {
+                return None;
+            }
+            promotion.settled.wait_for(
+                &mut outcome_once_settled,
+                STOP_WAITING_POLL_INTERVAL.min(wait_ends_at - now),
+            );
+        }
     }
 
     /// Forget the function node island `link_id` carries, so no later setup

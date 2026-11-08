@@ -113,7 +113,7 @@ def feed_each_input_port_from_its_function_node_island(
                         node_index_by_node_id,
                         output_ports_by_node_id,
                     ),
-                    _config_values(compiled, node_id, island_node.get("config")),
+                    config_values_of_one_function_node(compiled, node_id, island_node.get("config")),
                     compiled.initial_state_values_for_one_node(node_id),
                     len(compiled.output_ports),
                 )
@@ -197,9 +197,10 @@ def _output_index(
     return output_ports.index(output_port)
 
 
-def _config_values(
+def config_values_of_one_function_node(
     compiled: FunctionNodeCompiledToItsEvaluateEntry, node_id: str, config: Any
 ) -> "list[float]":
+    """`node_id`'s config, as the f64s its evaluate entry takes, each field in its declared order."""
     config_values_by_field = dict(config) if isinstance(config, dict) else {}
     fields_it_does_not_declare = sorted(set(config_values_by_field) - set(compiled.config_fields))
     if fields_it_does_not_declare:

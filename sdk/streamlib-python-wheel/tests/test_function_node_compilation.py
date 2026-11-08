@@ -26,7 +26,15 @@ from tatolab.runtime._function_node_compilation import (
     compile_function_node_to_its_evaluate_entry,
     feed_each_input_port_from_its_function_node_island,
 )
+from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    the_processor_class_a_promoted_function_node_runs_as,
+)
+from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import State, Stateful, Time, node
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -398,3 +406,71 @@ def test_a_stateful_node_feeding_two_inputs_of_one_reader_is_refused_by_name():
             ],
             _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
         )
+
+
+class _InputsHandingOverControlValues:
+    """`ctx.inputs` handing each named port the control value set for it, once."""
+
+    def __init__(self) -> None:
+        self.control_value_by_port: "dict[str, float]" = {}
+
+    def read(self, port_name: str) -> "bytes | None":
+        if port_name not in self.control_value_by_port:
+            return None
+        return struct.pack("<d", self.control_value_by_port.pop(port_name))
+
+
+class _OutputsRecordingEachControlValueWritten:
+    """`ctx.outputs` recording each Channels block written."""
+
+    def __init__(self) -> None:
+        self.blocks_written: "list[tuple[str, list[list[float]], int, int]]" = []
+
+    def write_channels_block(
+        self, port_name: str, samples: Any, *, start_sample: int, sample_rate: int
+    ) -> None:
+        self.blocks_written.append((port_name, samples.tolist(), start_sample, sample_rate))
+
+
+class _ContextOfOneProcess:
+    def __init__(self) -> None:
+        self.inputs = _InputsHandingOverControlValues()
+        self.outputs = _OutputsRecordingEachControlValueWritten()
+
+
+def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_control_value():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        amplify, f"{__name__}:amplify", "amplify-1", data_plane
+    )
+    assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)] == ["x"]
+    assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
+        "result"
+    ]
+    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    ctx = _ContextOfOneProcess()
+
+    runner.process(ctx)
+    assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first value"
+
+    ctx.inputs.control_value_by_port["x"] = 2.0
+    runner.process(ctx)
+    runner.process(ctx)
+    assert ctx.outputs.blocks_written == [
+        ("result", [[6.0]], 0, 0),
+        ("result", [[6.0]], 1, 0),
+    ], "each run writes one f64 at rate 0, the input keeping its newest value between reads"
+
+
+def test_a_promoted_function_node_starts_from_its_pin_values():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        tally, f"{__name__}:tally", "tally-1", data_plane
+    )
+    runner = construct_processor_instance(runner_class, None, data_plane)
+    ctx = _ContextOfOneProcess()
+    ctx.inputs.control_value_by_port["x"] = 4.0
+
+    runner.process(ctx)
+
+    assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]

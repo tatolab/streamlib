@@ -147,6 +147,19 @@ pub trait RuntimeOperations: Send + Sync {
     /// when called from inside a tokio task.
     fn request_this_streams_shutdown(&self, reason: &str) -> Result<()>;
 
+    /// Ask that function node `function_node_id`, whose call crashed or stalled
+    /// the helper of `reader_id`, move with every function node downstream of
+    /// it out of that reader's islands into a helper process of its own.
+    ///
+    /// A request that never blocks: the graph-change listener compiles it, and
+    /// the reader's link wiring learns how the compile ended.
+    fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+        &self,
+        function_node_id: &ProcessorUniqueId,
+        reader_id: &ProcessorUniqueId,
+        reason: &str,
+    ) -> Result<()>;
+
     // =========================================================================
     // Introspection
     // =========================================================================

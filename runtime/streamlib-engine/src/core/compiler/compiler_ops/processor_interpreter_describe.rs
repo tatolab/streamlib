@@ -22,7 +22,8 @@ use super::processor_interpreter_spawn_host::{
     PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, StreamInterpreterExitAwaited,
-    processor_interpreter_bootstrap_command, spawn_host_for_processor_node,
+    processor_interpreter_bootstrap_command,
+    spawn_host_for_a_function_node_promoted_to_its_own_process, spawn_host_for_processor_node,
     spawn_standard_error_reader_keeping_its_tail, spawn_standard_output_reader_keeping_its_head,
     standard_error_tail_as_a_refusal_quotes_it, standard_output_head_as_a_refusal_quotes_it,
     wait_for_a_stream_interpreter_to_exit,
@@ -240,23 +241,38 @@ fn register_the_described_node_type(
         descriptor,
         how_a_python_node_of_the_type_runs,
     } = declaration;
-    let child_execution_config = match how_a_python_node_of_the_type_runs {
-        HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
-            execution_config
-        }
-        HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
-            return node_types_of_the_stream
-                .register_a_type_described_in_this_streams_processor_interpreter(
-                    descriptor,
-                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds,
-                );
-        }
-    };
     let processor_class_import_path = descriptor.processor_class_import_path.as_str().to_string();
     let descriptor_for_constructor = descriptor.clone();
     let stream_environment = stream_environment.clone();
     let lend_directory = Arc::new(lend_directory.to_path_buf());
     let the_stream_its_helpers_belong_to = the_stream_its_helpers_belong_to.clone();
+    let child_execution_config =
+        match how_a_python_node_of_the_type_runs {
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
+                execution_config
+            }
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+                return node_types_of_the_stream
+                    .register_a_type_described_in_this_streams_processor_interpreter(
+                        descriptor,
+                        HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                            processor_once_promoted_to_its_own_process: Box::new(move |node| {
+                                Ok(Box::new(
+                                    spawn_host_for_a_function_node_promoted_to_its_own_process(
+                                        &processor_class_import_path,
+                                        &descriptor_for_constructor,
+                                        node,
+                                        &stream_environment,
+                                        &lend_directory,
+                                        the_stream_its_helpers_belong_to.clone(),
+                                    )?,
+                                )
+                                    as Box<dyn DynGeneratedProcessor + Send>)
+                            }),
+                        },
+                    );
+            }
+        };
     node_types_of_the_stream.register_a_type_described_in_this_streams_processor_interpreter(
         descriptor,
         HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(move |node| {

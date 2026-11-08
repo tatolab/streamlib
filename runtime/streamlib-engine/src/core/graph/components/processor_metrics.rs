@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
 
-use super::JsonSerializableComponent;
+use super::{FunctionNodePromotionOutOfItsReadersIslands, JsonSerializableComponent};
 use crate::iceoryx2::{
     BagCountsByOutputPort, DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot,
@@ -26,6 +26,9 @@ pub struct ProcessorMetrics {
     /// What this processor's ports sent and lost, read live from wherever they
     /// count it.
     pub loss_counts: ProcessorLossCounts,
+    /// What moved this function node out of its readers' islands into a
+    /// process of its own; `None` for every node never moved.
+    pub promotion_out_of_its_readers_islands: Option<FunctionNodePromotionOutOfItsReadersIslands>,
 }
 
 /// Where a processor's loss counts are counted, and so where `graph` reads them.
@@ -162,6 +165,12 @@ impl JsonSerializableComponent for ProcessorMetrics {
         let Some(rendered_keys) = rendered.as_object_mut() else {
             return rendered;
         };
+        if let Some(promotion) = &self.promotion_out_of_its_readers_islands {
+            rendered_keys.insert(
+                "promoted_out_of_its_readers_islands".to_string(),
+                promotion.to_json(),
+            );
+        }
         for (key, counts_by_name) in [
             (
                 "discarded_samples_by_link",
