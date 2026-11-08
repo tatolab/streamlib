@@ -117,6 +117,27 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
+    /// This helper's input mailboxes; `None` before a link wired one.
+    pub(crate) fn input_mailboxes_of_this_helper(&self) -> Option<Arc<InputMailboxesInner>> {
+        self.input_mailboxes.get().cloned()
+    }
+
+    /// The loss-count board this helper notes its step callbacks on, once its
+    /// setup opened it.
+    pub(crate) fn loss_count_board_writer_of_this_helper(
+        &self,
+    ) -> Option<&HelperProcessLossCountBoardWriter> {
+        self.loss_count_board_writer.get().map(Arc::as_ref)
+    }
+
+    /// The wake on each publish of this helper's stream clock, once it listens
+    /// for them.
+    pub(crate) fn stream_clock_board_publish_listener_of_this_helper(
+        &self,
+    ) -> Option<&StreamClockBoardPublishListener> {
+        self.stream_clock_board_publish_listener.get()
+    }
+
     /// Record whether the runtime drives `process()` from this node's inputs,
     /// refusing it when an input is already lent to native code.
     pub(crate) fn note_whether_the_runtime_drives_process_from_inputs(

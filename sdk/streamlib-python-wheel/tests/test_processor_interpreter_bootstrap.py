@@ -574,7 +574,7 @@ def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_des
     ] == ["described_nodes:Ticker"]
     assert (
         "cannot describe hand_stamped_nodes:HandStamped: the class `HandStamped` carries no "
-        "`__tatolab_node_execution__`"
+        "`__tatolab_node_kind__`"
     ) in described.stderr
 
 
@@ -863,13 +863,3 @@ def test_importing_the_bootstrap_leaves_the_import_path_alone():
     assert importing.returncode == 0, importing.stderr
 
 
-def test_a_continuous_deadline_steps_one_interval_on_its_grid():
-    next_deadline = processor_interpreter_bootstrap.next_continuous_deadline_stream_ns
-    assert next_deadline(1_000, 100, 1_050) == 1_100
-    assert next_deadline(1_000, 100, 900) == 1_100
-
-
-def test_an_overrun_skips_to_the_next_deadline_after_now_on_the_same_grid():
-    next_deadline = processor_interpreter_bootstrap.next_continuous_deadline_stream_ns
-    assert next_deadline(1_000, 100, 1_350) == 1_400
-    assert next_deadline(1_000, 100, 1_400) == 1_500

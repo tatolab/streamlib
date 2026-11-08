@@ -31,12 +31,12 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "limited_access_view_of_runtime_context_for_helper_process",
-    "machine_nanoseconds_until_this_helpers_stream_clock_reaches",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
     "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
+    "run_the_scheduling_loop_of_this_helper",
 ]
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
@@ -65,12 +65,6 @@ def limited_access_view_of_runtime_context_for_helper_process(
 ) -> _stream_protocols.RuntimeContextLimitedAccess:
     """The limited-access view of the same node: same configuration, links and pause state."""
 
-def machine_nanoseconds_until_this_helpers_stream_clock_reaches(
-    stream_deadline_ns: int,
-) -> int:
-    """Machine nanoseconds until this helper's stream clock reaches stream time
-    `stream_deadline_ns`, as the clock runs now; zero or less once it has."""
-
 def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
 ) -> None:
@@ -86,6 +80,21 @@ def note_stop_request_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, stop_requested: bool
 ) -> None:
     """Record on a helper's context whether its parent asked the node to stop."""
+
+def run_the_scheduling_loop_of_this_helper(
+    *,
+    processor_interpreter: Any,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    lifecycle_command_arrival_fd: int,
+    execution_mode: str,
+    interval_ms: int,
+    paced_by_real_time: bool,
+    stream_clock_may_step: bool,
+    paused: bool,
+) -> None:
+    """Run the hosted processor on the engine's scheduling loop for
+    `execution_mode`, `"reactive"` or `"continuous"`, until a lifecycle command
+    stops it, raising what any callback into `processor_interpreter` raised."""
 
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:
