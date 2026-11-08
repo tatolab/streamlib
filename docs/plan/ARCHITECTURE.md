@@ -52,12 +52,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   queued-stream-actions — SHIPPED #3004, #3009; amended by stream-interface-and-routing-policy:
   `add` also takes a `@stream` function as a subgraph; amended by gateway-nodes: the builder's API is `add`/`connect`; `expose` goes; amended by project-and-assets: a load reads the project file and each stream asset's graph document, and no `stream.py` is read]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
-  manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
-  matching, cast-at-read, no versions at the code layer); scaffolding for app and
-  processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
+  manifest authoring; no boilerplate entry; messages fixed as five families, a port's
+  family compared at `connect`, with no schema registry and no versions at the code layer;
+  scaffolding for app and processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
-  — SHIPPED #1814; amended by strict-port-families: messages are five fixed families, a port's
-  family compared at `connect`, still with no versions and no schema registry]
+  — SHIPPED #1814; strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
@@ -475,7 +475,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes; amended by project-and-assets: a generator's output is stored as a fragment, a container in the document]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, strict-port-families, gateway-nodes)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -713,7 +713,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (§Graphics states the staged door). Across both, the block edge ends the write
   intent, a raise never suppresses, and no door publishes a torn frame.
   The wheel ships the protocol as one public composable piece any cast type composes
-  (`ClaimedSurfacePixelAccess`), over the unchanged claim seam — `VideoFrame` is itself
+  (`ClaimedSurfacePixelAccess`), over the unchanged claim seam — `ImageFrame` is itself
   built from it, which is the proof it holds no privileged position over any library or
   user cast type. The surface a type claims is the field it declares, defaulting to
   `surface_id` and never guessed: the wheel inspects message content no more than the engine
@@ -777,7 +777,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   complete without one. [one-runtime-per-machine]
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
   `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
-  `@node` with its `@node.input` and `@node.output`, the `StreamBuilder` and its references,
+  `@node` with its `Input` and `Output` port attributes and the five families, the
+  `StreamBuilder` and its references,
   the built-in node class with its config shape, and the data types; a stream is
   written, type-checked and
   compiled with no runtime installed. `tatolab.runtime` is the engine's native part — the
@@ -800,7 +801,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   depending on what its own modules import and never on the runtime. A module belongs in it
   exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
   `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
-  types (`AudioBlock`, `VideoFrame` and its colour types), the composable pieces (`ClaimedSurfacePixelAccess`,
+  types (`ImageFrame` and its colour types, `ArrayFrame`, and the read types' Protocols), the composable pieces (`ClaimedSurfacePixelAccess`,
   `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the `ModelInputTensor` family,
   `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
   `@node` registers nothing — it writes the class's declaration stamps — and the proof is the
@@ -868,14 +869,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The authoring names, with no alias. The object a `@stream` function is handed is
   a `StreamBuilder`, and the scaffold, the docs and every refusal model the parameter as
   `stream_builder`: `@stream def main(stream_builder: StreamBuilder)`; the decorator keeps
-  `@stream` and a stream stays the decorated function. A node declares its ports with
-  `@node.input` and `@node.output` — attributes of the `@node` decorator, so a node module
-  imports `node` alone for them and no name it imports shadows Python's builtin `input()`. A
-  Rust node's attribute macro keeps `input(…)` / `output(…)`, already the same word, and a node
-  reference keeps `input(name)` / `output(name)`. Rejected: `@incoming` / `@outgoing` for
+  `@stream` and a stream stays the decorated function. A node declares its ports as class
+  attributes, `Input(…)` and `Output(…)` (§Processor model), and no name it imports shadows
+  Python's builtin `input()`. A Rust node's attribute macro keeps `input(…)` / `output(…)`, and
+  a node reference keeps `input(name)` / `output(name)`. Rejected: `@incoming` / `@outgoing` for
   ports — vocabulary no Python dataflow or media framework uses; `@input_port` /
   `@output_port` — a word the declaring side alone would carry (owner, 2026-10-06). Owner,
-  2026-10-06. [authoring-names — SHIPPED #2682]
+  2026-10-06. [authoring-names — SHIPPED #2682; strict-port-families — SHIPPED #3203, #3241]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
@@ -992,49 +992,34 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, strict-port-families, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: subgraphs; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: subgraphs, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
 
-- **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
-  payload is bytes. The engine has no type layer and applies no encoding: ports carry no
-  type declaration, connect never inspects or compares types and never warns, no read
-  path examines a tag, and the sample's user header carries no schema ident. `write(port,
-  payload, timestamp_ns=, starts_group=)` and `read(port) -> PortPayloadBorrow` move bytes,
-  with `read(port, into=T)` calling `T.from_bytes`; msgpack is a helper the stream package ships,
-  `tatolab.stream.msgpack` — `pack`, `unpack`, and `MsgpackCast` and
-  `msgpack_typed_dict_cast`, giving a dataclass or a TypedDict its `from_bytes` — never an
-  encoding the engine or the runtime portion applies behind a call. A built-in writes bytes
-  in the encoding its port's catalog entry names: the camera's frame record stays a msgpack
-  record `VideoFrame` reads, and the encoders write the stack's media frame (§Media I/O).
-  The envelope carries the group flag (§Networking), which Python and Rust readers see alike
-  beside the stamp. Consuming is a cast at read time; a mismatch surfaces as a decode failure
-  at the consuming processor. One carve-out, and only one: declaring an audio window contract
-  **is** that port's opt-in to the engine reading its messages as `AudioBlock`, on the input's
-  own declared contract and never in the forwarding path, so the engine inspects a payload on
-  exactly the ports that asked it to. A link into a port with
-  no contract is unchanged in every respect — still pure plumbing, `connect` still
-  compares nothing, and the user header still carries no schema ident. Owner, 2026-10-16
-  and 2026-10-17. [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED
-  #2033; moq-relays — SHIPPED #2821, #2850; amended by strict-port-families: a link joins two
-  ports of one family, `connect` compares it, and msgpack leaves user code]
-  Rejected: an encoding applied inside `write` and `read` — it stood between an encoder's port
-  and a stock MoQ player (owner, 2026-10-16).
-- **DECIDED** — A port declares three things, plus an optional window contract on an
-  audio input and an optional catalog entry on an output, and nothing else: name,
-  description, and — on an input — delivery profile, beside which an audio input may declare
-  the window contract §Media I/O states; an output port carries its producer-written catalog
-  entry — a hang entry, the section and that section's own fields — documentation `connect`
-  never compares (§Networking, the catalog). Type
-  information belongs to the authoring language and never reaches the engine: in Python
-  the port method's return annotation is the declaration, read by humans and type
-  checkers only, with `ctx.inputs.read(port)` yielding the payload's bytes and
-  `read(port, into=T)` the opt-in strictness dial, casting the bytes through `T.from_bytes`
-  and raising at read; in Rust the read target's `Deserialize` impl is the validation,
-  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812; moq-relays —
-  SHIPPED #2821, #2840; amended by strict-port-families: a port also declares its family, and an
-  input the names it requires]
-  Rejected: a port declaring a shape or a convention name the engine compares — the 2026-09-10
-  ruling, whose reason (agents on a mesh reading dynamically coded nodes) no longer exists;
-  the entry is documentation, not a contract (owner, 2026-10-16).
+- **DECIDED** — A link joins an output port to an input port of the same family (below) and
+  carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
+  schema registry and no versions, and applies no encoding but one: a Records write hands the
+  runtime a dict, which it encodes. Each family's read and write build and read that family's
+  descriptor, so `read(self.video)` returns the family's type and `write(self.video_out, …)`
+  takes it. By name, `write(port, payload, timestamp_ns=, starts_group=)` copies any contiguous
+  buffer as a `Bytes` payload and `read(port)` returns a `PortPayloadBorrow`, with
+  `read(port, into=T)` calling `T.from_bytes`. The envelope carries the group flag
+  (§Networking), which Python and Rust readers see alike beside the stamp. One stage, and only
+  one, reads a payload on the way to a node: declaring an audio window contract on a Channels
+  input is that port's opt-in to the engine reading its Channels blocks, on the input's own
+  declared contract and never in the forwarding path. Owner, 2026-10-16, 2026-10-17 and
+  2026-11-03. [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED
+  #2033; moq-relays — SHIPPED #2821, #2850; strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+- **DECIDED** — A port declares its name (the attribute's name), its family with that
+  family's keys (below), a description, and on an input its delivery profile, its
+  `borrow_quota=`, what it requires (`requires=`, `requires_codec=`, `formats=`) and, on a
+  Channels input, the window contract §Media I/O states. An output port carries its
+  producer-written catalog entry — a hang entry, the section and that section's own fields —
+  documentation `connect` never compares (§Networking, the catalog). In Python the port
+  attribute types the read and the write; in Rust `#[processor(... input("video", family =
+  Image, ...))]` declares the family, the macro refuses a port without one, and the read
+  target's `Deserialize` impl validates a by-name cast. [schema-free-ports — SHIPPED #1816,
+  #1812; moq-relays — SHIPPED #2821, #2840; strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the message, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
@@ -1289,19 +1274,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   carries no validator, and how strict it is stays the author's choice of config class.
   On the wire, `stream_builder.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
-- **DECIDED** — Port rendering in the control plane is name, description, delivery
-  profile, direction, on an audio input that declared one its window contract, and on an
-  output that carries one its `catalog_entry`, in `graph` and `/api/registry` alike; no port
-  carries a type in `graph` or any snapshot. A port that declared nothing
+- **DECIDED** — Port rendering in the control plane is name, description, `family` (the
+  family with the keys the port declared), delivery profile, direction, on an audio input that
+  declared one its window contract, and on an output that carries one its `catalog_entry`, in
+  `graph` and `/api/registry` alike. A port that declared no window contract
   renders no `audio_window` key at all rather than a null. A `match_device` port renders
   the five values its device settled — machine-dependent because the device format is,
   which is truer than a static lie — and renders the sentinel itself while nothing has
   settled it. [schema-free-ports — SHIPPED #1816; audio-port-window-contract — SHIPPED
-  #2032, #2034; moq-relays — SHIPPED #2840; amended by strict-port-families: a port renders its
-  family and its declared or required names]
+  #2032, #2034; moq-relays — SHIPPED #2840; strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — A port carries one of five families, each one engine-owned memory layout:
-  **Image** — a GPU surface of a pixel format from a closed enum (`rgba8`, `rgba16f`, `r8`,
-  `nv12`, `p010`, …), its size and colour; **Array** — named attributes (`P`, `Cd`, `logits`),
+  **Image** — a GPU surface of a pixel format from the engine's texture formats
+  (`rgba8_unorm`, `rgba16_float`, …), its size and colour; **Array** — named attributes (`P`, `Cd`, `logits`),
   each a dtype and a shape, in a GPU pool slot or CPU shared memory, an unchanged attribute
   passed by reference — tensors, point clouds, detections, meshes; **Channels** — planar `f32`
   or `f64` samples `[channel][sample]` at a rate, with `start_sample` and channel names
@@ -1312,7 +1297,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   admitted only for a distinct memory layout, never for a new domain. A `@stream` subgraph is
   a container, never a family, and latest-value control is a transport detail of Channels or
   Records under `newest`. Built-ins never publish Records for data another family fits, and
-  the node catalog marks a Records port unchecked. Owner, 2026-11-03. [strict-port-families]
+  the node catalog marks a Records port unchecked. Owner, 2026-11-03. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
   Rejected: audio as its own family — Channels is the same layout (owner, 2026-11-03).
 - **DECIDED** — The families are the engine's foundation of primitives, as Holoscan's and
   TouchDesigner's are: a small, clearly defined set in place of a loose system or a
@@ -1321,17 +1307,107 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   attribute names, record keys and codec strings pass through unknown — and an input may
   require names (`requires=("rpm",)`), checked at `connect` against the output's declared
   names. The trade is accepted: a person or an agent converts between families explicitly,
-  with a node they place (`ChannelsToImage`, `ImageToArray`, a decoder), and no conversion is
+  with a node they place (`ChannelsToArray`, `ImageToArray`, a decoder), and no conversion is
   ever automatic or implied — the engine inserts none and never moves a payload between GPU
   and CPU on its own — so a slow path is always one somebody wrote and can see in the graph.
-  `ImageToArray` is zero-copy where the layouts match. Ports are class attributes carrying their family (`Input(Image,
-  delivery="newest")`, `Output(Channels, names=(…), rate=…)`), so pyright infers what a read
-  returns and a mistyped port fails at import. Owner, 2026-11-03. [strict-port-families]
+  Owner, 2026-11-03. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
   Rejected: capability negotiation between ports (GStreamer's caps), and converters the engine
   inserts (Holoscan's `auto_insert_converters`) — a link's path and its cost stop being visible
   to an author or an agent (owner, 2026-11-03).
-- **OPEN** — How a port's names and `requires=` are spelled beyond the shape above. Decided with
-  the change that builds the families. [strict-port-families]
+- **DECIDED** — A port is a class attribute, `Input(family, …)` or `Output(family, …)`, so
+  pyright infers what a read returns and a port without a family fails at import. The
+  attribute's name is the port's name, with no `name=` override. The family is one of `Image`,
+  `Array`, `Channels`, `Packets` or `Records`, imported from `tatolab.stream`. An input takes
+  `delivery=` ("newest" or "ordered", required), `borrow_quota=`, `requires=`,
+  `requires_codec=` (Packets), `formats=` (Image), `window=` (Channels) and `description=`; an
+  output takes `names=`, its family's own keys below, `catalog=` and `description=`. Owner,
+  2026-11-04 and 2026-11-06. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+- **DECIDED** — Names are strings, per family: channel names (Channels), attribute names
+  (Array) and record keys (Records); Image and Packets have none. An output states them as a
+  literal tuple (`names=("rpm", "torque")`) or reads them from its node's config
+  (`names=from_config("channel_names")`), which `connect` resolves once the node's config is
+  known. `requires=` is a tuple of strings, and `connect` refuses unless it is a subset of the
+  output's resolved names, naming each missing one; an output that states no names accepts no
+  `requires=`. A `from_config` list is resolved again on each live config update of its node,
+  and an update that drops a name a wired link requires is refused naming the link. A Packets
+  output states `codec=`, optional — a Packets port without one is a plain byte stream — and an
+  input may require it (`requires_codec=("h264",)`); one stating none takes any Packets output.
+  Owner, 2026-11-04 and 2026-11-06. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  Rejected: names fixed on the class only, which leaves an output whose channels come from
+  config unable to be required against; and a typed spec per name, which duplicates the
+  runtime descriptor (owner, 2026-11-04).
+- **DECIDED** — An Image input may state `formats=`, the pixel formats it reads, spelled as the
+  engine's texture format wire names (`rgba8_unorm`, `rgba16_float`, …) and refused at
+  declaration otherwise. `connect` refuses a link unless the output's and the input's sets
+  overlap, naming both ports and both sets; an input that states none reads any format. An
+  Image output's write refuses a frame whose format its `formats=` does not name. Owner,
+  2026-11-06. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  Rejected: formats on outputs only, refused per frame as a drop — the link fails silently
+  after it is made; and short names with a mapping onto the texture formats — a second
+  vocabulary to keep in step with the RHI (owner, 2026-11-06).
+- **DECIDED** — A Records output's declared names are keys every write carries: `write`
+  refuses a dict missing one, naming it and the port, so an input's `requires=` means the key
+  is always there. Keys beyond the declared names pass through. Owner, 2026-11-06.
+  [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+- **DECIDED** — Each family's keys and what a read returns. A write takes the family's object
+  and the runtime builds its descriptor.
+  - `Image`: `Output(Image, formats=("rgba8_unorm",))`. A read returns `ImageFrame`, the
+    borrowed GPU surface with `__dlpack__`, `.cpu()`, `.writable()`, size, format and colour; a
+    write takes a GPU surface the node acquired or read.
+  - `Array`: `Output(Array, names=(…), residency="gpu" | "cpu")`. A read returns `ArrayFrame`,
+    a mapping of name to a borrowed tensor (DLPack), each with its dtype and shape; a write
+    takes a mapping of name to a CPU array or a GPU surface. The payload starts with an
+    attribute table, one row per name: the name, dtype, shape, and either a byte offset into
+    the payload (CPU) or a GPU pool slot reference (GPU). An unchanged GPU attribute's row
+    re-points at its slot; CPU data is written each message.
+  - `Channels`: `Output(Channels, names=(…) | from_config(…), rate=… | from_config(…),
+    dtype="f32" | "f64")`. A read returns `ChannelsBlock`, planar `[channel][sample]` with
+    `start_sample` and the rate; a write takes a `[channel][sample]` array.
+  - `Packets`: `Output(Packets, codec="h264")`. A read returns `PacketsUnit`, borrowed bytes
+    with `pts`, `starts_group` (the keyframe) and `codec`.
+  - `Records`: `Output(Records, names=(…))`. A write takes a plain dict of at most 64 KiB
+    encoded, and a read returns a `dict`.
+  Owner, 2026-11-06. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  Rejected: one tensor per Array message, which drops the mapping of names (owner,
+  2026-11-06).
+- **DECIDED** — Each family has its own payload descriptor kind, each body `#[repr(C)]` with a
+  layout regression test: `ImageFrame` (2), `ChannelsBlock` (3), `PacketsUnit` (4),
+  `RecordsMessage` (5) and `ArrayFrame` (6), beside `Bytes` (0), which a by-name write carries,
+  and `GpuPoolSlotFrame` (1). An Image frame's body is the 40-byte slot reference, then `width:
+  u32`, `height: u32`, `format: u32` (the RHI texture format) and the H.273 colour four-tuple
+  (primaries, transfer, matrix, range) as four `u8` codes, and its payload is empty, so every
+  Image read is a fixed layout with no decode. A Channels body carries `start_sample`, the
+  rate, the channel and per-channel sample counts and the sample type, its payload the planar
+  samples; a Packets body carries the codec name; a Records body is zero, its payload the
+  runtime's msgpack encoding; an Array body carries the attribute table's row count. Stream
+  facts an Image frame does not carry — frame rate, content light level, mastering display —
+  belong on the port's catalog entry, updated through `set_catalog_entry`. Per-frame dynamic
+  HDR (HDR10+, Dolby Vision) is a later descriptor kind, whose metadata rides the sample's
+  payload bytes. Owner, 2026-11-06. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  Rejected: per-frame metadata as an encoded record in the payload — every Image read decodes
+  (owner, 2026-11-06).
+- **DECIDED** — `connect` resolves the output's family against its node's config, then
+  compares the families, then names, then codec, then formats, and refuses on the first
+  mismatch with an error naming both endpoints, both families, and what to place between them
+  (the conversion nodes below). The live graph's `apply_a_link` runs the check before the
+  channel exists. Every port has a family: the Python declaration and the Rust macro refuse a
+  port without one, and nothing in `connect` skips the check. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+- **DECIDED** — Six built-in Rust nodes convert between families, each one input and one
+  output: `ImageToArray`, which borrows an Image frame's own pool slot as one `[h, w, c]`
+  attribute with no copy where the layouts match (a linear `rgba8`, `rgba16f` or `r8` slot) and
+  makes one GPU copy where they do not, stated in the node's description; `ArrayToImage`, the
+  inverse, from a named `[h, w, 4]` attribute; `ChannelsToArray` and `ArrayToChannels`, over a
+  `[channels, samples]` attribute; and `ChannelsToRecords` and `RecordsToChannels`, latest-value
+  control for named values. Encoding and decoding stay the codec modules' job. Owner,
+  2026-11-03 and 2026-11-06. [strict-port-families — SHIPPED #3206, #3207, #3208]
 - **DECIDED** — The data plane is zero-copy. Every channel data service carries one
   `#[repr(C)]` user header, `DataChannelSampleUserHeader`: `sequence_number`,
   `messages_lost_upstream_before_this_one`, `timestamp_ns`, `payload_byte_len`, `flags`
@@ -1345,8 +1421,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pool's UUID), `slot`, `generation`, `timeline_value` and `image_layout`, the raw
   `VkImageLayout` the producer left the image in (0 for a buffer slot), with the rest zero; the
   layout travels in the descriptor, never through a surface-share request or a claim table
-  cell. Each family adds a kind and gives its layout the body, and a reader refuses a kind it
-  does not know, never guessing at it. Every `#[repr(C)]` value the data plane puts in shared
+  cell. Each family has its own kind and body (above), and a reader refuses a kind it does
+  not know, never guessing at it. Every `#[repr(C)]` value the data plane puts in shared
   memory — the header, the descriptor, each body, the claim table row — carries a layout
   regression test, and Python mirrors none of them: it reads them through the wheel.
   A read borrows. `read(port)` returns a `PortPayloadBorrow` owning the sample: the read-only
@@ -1365,8 +1441,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   channel subscriber borrows up to the service's creation depth plus the largest quota a port
   may state plus one, the sample being admitted, because iceoryx2 fixes the limit when the
   service is created; each link holds itself to its own depth and quota inside it. Owner,
-  2026-11-03; loan edges, owner, 2026-11-05. [strict-port-families; zero-copy-data-plane —
-  SHIPPED #3168, #3174, #3191]
+  2026-11-03; loan edges, owner, 2026-11-05. [strict-port-families — SHIPPED #3204;
+  zero-copy-data-plane — SHIPPED #3168, #3174, #3191]
   Rejected: publishing a loan while an export of it lives, and several open loans per port
   (owner, 2026-11-05).
 - **DECIDED** — A slow reader costs only itself. Each link has its own borrow quota, stated on
@@ -1434,9 +1510,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Measured on an RTX 3090 at 1080p: a frame's check-out to release fell from about 940 µs to
   36 µs. [linux-pool-slot-import-once — SHIPPED #3151; zero-copy-data-plane — SHIPPED
   #3174, #3191]
-- **DECIDED** — The families migrate the whole tree in the same work: every built-in port, every
-  cast type, the stream package, the scaffold and the first-party modules in `packages/`.
-  Records carries a node not yet converted. Owner, 2026-11-03. [strict-port-families]
+- **DECIDED** — Every port in the tree declares a family: every built-in, the test fixtures,
+  the stream package, the scaffold `tatolab new` writes and each first-party module in
+  `packages/`. A frame rides `ImageFrame` and audio `ChannelsBlock`, and no msgpack cast type
+  remains in user code. Owner, 2026-11-03. [strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
@@ -2429,10 +2507,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   no dial and no environment override; a platform with no arm lands on a refusing backend that
   lists nothing and refuses every open by name. `CameraSource` is platform-free above it and
   opens its stream at `setup()`, refusing there by name a named `device_id` that is not
-  attached and listing the ones that are. The published contract: a
-  `VideoFrame` message on port `video` whose `surface_id` names a pooled buffer, colour as the
-  H.273 four-tuple resolved through the one table in `core::color`, an undescribed axis still
-  an empty map. The V4L2 arm is `linux/v4l2_video_device_backend.rs`, with its EXPBUF/DMA-BUF
+  attached and listing the ones that are. The published contract: an
+  Image frame on port `video` naming a pooled buffer's slot, its colour the H.273 four-tuple
+  resolved through the one table in `core::color`, an undescribed axis code 2, unspecified. The V4L2 arm is `linux/v4l2_video_device_backend.rs`, with its EXPBUF/DMA-BUF
   probe, MMAP fallback and virtual-device skip list. The AVFoundation arm lists
   built-in cameras first, takes a camera's `uniqueID` as `device_id`, negotiates the most
   pixels within the `max_width`/`max_height` cap, then the highest frame rate, then
@@ -2442,13 +2519,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   dictionary is initialised once per process ahead of both a camera's device input and any
   VideoToolbox session, because its first initialisation races `AVCaptureDeviceInput`'s.
   [media-io-layering; macos-platform-floor — SHIPPED #2358, #2359]
-- **DECIDED** — A camera frame carries one capture instant on both of its stamps. The
-  seam's hand-off carries `capture_timestamp_ns`, resolved under one rule every arm shares
-  (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
-  `timestamp_ns` **and** passes the same value to `write_msgpack_with_timestamp` — never
-  the implicit write, whose `MediaClock::now()` stamps publication, and never the call swap
-  alone, which sets only the envelope. The encoder reads the payload's stamp; both name the
-  instant of capture on both floors. A device stamp is trusted only
+- **DECIDED** — A camera frame carries its capture instant as its stamp. The seam's hand-off
+  carries `capture_timestamp_ns`, resolved under one rule every arm shares
+  (`VideoCaptureInstantResolver`), and `CameraSource` writes the Image frame with that value
+  as its `timestamp_ns` — never the implicit write, whose `MediaClock::now()` stamps
+  publication. The encoder reads the frame's stamp, which names the instant of capture on both
+  floors. A device stamp is trusted only
   when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
   its timestamp flags, AVFoundation's sample presentation stamp converted from the session's
   synchronisation clock to host time; anything else falls back to the dequeue instant and is
@@ -2653,8 +2729,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   ticks cannot interleave if the timer is not running.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1990, #1991]
 - **DECIDED** — A/V sync is block-level join-by-timestamp on the one monotonic clock:
-  an `AudioBlock` carries its first sample's timestamp, rate, and sample count, so any
-  sample's instant is derivable and audio joins camera frames by timestamp alone. No
+  a Channels block carries its first sample's index and the rate, and its stamp the first
+  sample's instant, so any sample's instant is derivable and audio joins camera frames by timestamp alone. No
   sample-accurate cross-modal machinery exists.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988, #1990, #1991]
 - **DECIDED** — The device stamps the block and the engine never re-stamps it. A
@@ -2665,9 +2741,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `mHostTime` (the `mach_absolute_time` domain) minus the device and stream latency on the
   CoreAudio arm — and it is published
   through the timestamped write, never the implicit one, whose `MediaClock::now()`
-  would stamp the moment of publication rather than the instant of capture. Both the
-  message field and the user header therefore carry the same device-derived value, in the
-  same epoch a video frame's timestamp carries, which is the whole of block-level A/V
+  would stamp the moment of publication rather than the instant of capture. The block's
+  stamp therefore carries the device-derived value, in the same epoch a video frame's stamp
+  carries, which is the whole of block-level A/V
   sync: joining audio to camera frames is subtracting two integers.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991; macos-capability-parity —
   SHIPPED #2411]
@@ -2690,51 +2766,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the way `CameraSource` raises on a missing `/dev/video*`: a machine with no audio is a
   supported environment, a wrong device id is a wiring error.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989]
-- **DECIDED** — The audio data model is the `AudioBlock` message: samples ride the link
-  inline as msgpack bin, CPU-resident, interleaved, with sample rate, channel count,
-  dtype, and first-sample timestamp beside them. It is the wire contract and the field
-  names are the contract — the same shape `VideoFrame` states for video: an optional
-  cast over a self-describing msgpack named map, declared on no port, registered
-  nowhere, ignoring keys it does not read. The keys are `samples`, `sample_rate`,
-  `channels`, `sample_count`, `dtype`, `first_sample_timestamp_ns`. `dtype` is metadata
-  with `f32` the default and `i16` legal, and `samples` is little-endian — a wire
-  statement rather than an assumption, since it is the property a message decoded by a relay
-  reader, a CLI, or another language depends on. The sample count counts per-channel samples —
-  an interleaved block of `channels` channels carries `sample_count × channels`
-  scalars — so duration and the next block's expected timestamp derive from count and
-  rate alone. Audio touches no surface machinery — no surface ids, no claims, no
-  lifetime contract.
-  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
-- **DECIDED** — `samples` is msgpack `bin`, so the field is a byte buffer and `dtype`
-  says how to read it — never a typed vector. A `Vec<f32>` field would serialize as a
-  msgpack **array** — five bytes per sample, and a shape Python's own `bytes` → `bin`
-  path does not agree with. So the field carries interleaved little-endian scalars as
-  bytes, and one field spelling serves `f32` and `i16` alike. The wire-key test asserts
-  the binary type for both, which is the one test that can catch an array-for-`bin`
-  mistake. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
-- **DECIDED** — The Python cast is pure Python and composes nothing surface-shaped. It
-  lives beside `video_frame.py`, is read with `ctx.inputs.read("audio", into=AudioBlock)`,
-  and owes no `.pyi` entry — pyright checks it from source, as it does `VideoFrame`. It
-  must not compose the claimed-surface access class: that class demands a surface-id
-  field and takes claims in its constructor, and audio has no surface, no claim and no
-  lifetime contract. Its `samples` property maps the declared `dtype` to an explicit
-  little-endian numpy type, never the platform-native spelling — the wire is
-  little-endian by contract, not by luck — and returns a `frombuffer` view reshaped to
-  `(sample_count, channels)`, with numpy imported lazily so the wheel still declares no
-  numpy dependency. A payload whose length is not `sample_count × channels × itemsize`
-  is refused by name at the cast rather than reshaped into a plausible-looking wrong
-  answer. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
-- **DECIDED** — "Zero-copy" is a claim about the cast, and is stated as exactly that.
-  Between shared memory and `process()` the payload is copied four times — out of the
-  iceoryx2 sample, a header-strip memmove, the msgpack decode into an owned value, and
-  into a Python `bytes` — and audio removes none of them; they are the helper hop every
-  message pays. What the cast guarantees is that it adds no fifth: the numpy array is a view
-  over that `bytes`, and `torch.from_numpy` over it is a view again. At audio's sizes
-  this is the right trade and the reason audio touches no surface machinery at all — a
-  512-sample stereo `f32` block is 4 096 bytes against a 16 MiB per-link ceiling for a
-  helper-placed processor. No doc, test name, or log line may describe the path as
-  zero-copy from the device.
-  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+- **DECIDED** — Audio is the Channels family: a block is planar `[channel][sample]` `f32` or
+  `f64` samples, CPU-resident, its descriptor body carrying `start_sample`, the rate, the
+  channel and per-channel sample counts and the sample type, its stamp the first sample's
+  instant (§Processor model, the families). The per-channel sample count and the rate alone
+  give a block's duration and the next block's expected stamp. A read returns a
+  `ChannelsBlock` borrowed in the sample it arrived in: `numpy.from_dlpack(block)` is a
+  read-only `[channel][sample]` array over the sample with no copy, counted against its link's
+  borrow quota while it lives, and a `[channel][sample]` array is what a write takes. Audio
+  touches no surface machinery — no surface ids, no claims, no lifetime contract beyond the
+  borrow. [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988; strict-port-families — SHIPPED
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — An audio input port may declare a window contract — sample rate,
   channels, dtype, window size, hop — beside its delivery profile: the engine resamples,
   converts channels, and frames natively so `process()` receives exact-size timestamped
@@ -3123,7 +3165,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `application` (`"audio"`, `"voip"`, `"lowdelay"`; absent → `"audio"`). FEC and DTX off.
   [opus-mp4-recording-rung — SHIPPED #2125]
 - **DECIDED** — `OpusDecoder` is `reactive`/`high`, input `encoded_audio` (`ordered`,
-  declaring no window contract), output `audio` as `AudioBlock` messages: `f32`, `48000`, the
+  declaring no window contract), output `audio` as Channels blocks: `f32`, `48000`, the
   stream's channel count, stamp derived from the packet's, published through the
   timestamped write; one or two channels through `Decoder`, three to eight through
   `MSDecoder`. No config. It enters at any packet and trims `pre_skip` at entry so its
@@ -3169,10 +3211,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   OpusEncoder → OpusDecoder → CapturedAudioWaveformRecorder`, scored by
   `known_audio_signal.py` — tone identity and the DTMF timing grid intact within its own
   floor, a lossy codec's verdict being the analysis's, never a sample-exact match — with
-  no audio device in the path, so a failure here with the loopback green is the codec's. The
-  decoder's port is read as a track at the local relay with `tatolab-read-track`, a tool
-  outside the runtime (§Networking), by `verify_audio_channel.sh`.
-  [opus-mp4-recording-rung — SHIPPED #2126, #2128; moq-relays — SHIPPED #2860; amended by gateway-nodes: the decoder's port reaches `tatolab-read-track` through `MoqTrackSend` to a relay the check starts]
+  no audio device in the path, so a failure here with the loopback green is the codec's.
+  `verify_opus_roundtrip.sh` scores the waveform the recorder writes.
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; moq-relays — SHIPPED #2860]
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers: a held
   codec package is mined for its logic and deletes in the change that ships its block, and a
   codec proof example deletes into the engine-owned proof rig — its job becomes the rig's
@@ -3491,9 +3532,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `sampleRate`, `numberOfChannels`, `description` for a decoder's out-of-band setup, and on a
   data track `mode` (`snapshot` or `stream`) and `mime`. The node that owns the port writes its
   entry from its config and from what it learns at its first frame — an encoder its codec
-  string and coded extent — and replaces it while running; a built-in whose payload is a
-  msgpack record declares `binary`, `mode: snapshot`, `mime: application/msgpack`, and no
-  reader in the runtime consults a data track's `mode`. The
+  string and coded extent — and replaces it while running; a built-in's Records port declares
+  `binary`, `mode: snapshot`, `mime: application/msgpack`, and no reader in the runtime
+  consults a data track's `mode`. The
   publisher merges the entries of a stream's exposed ports into the broadcast's catalog track
   as text, one entry per track named `<node>/<port>` under its section, and `graph` renders
   each port's entry. Any reader may read a port's entry — a local node off its inbound link,
@@ -3508,7 +3549,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never the broadcast (owner, 2026-10-17).
 - **OPEN** — A decoded audio port playable by any MoQ player: intended, do not build until
   designed. Direction: a track fed by a decoded audio port carries an `audio` entry with the `pcm`
-  codec and raw interleaved little-endian f32 objects in place of its `AudioBlock` records.
+  codec and raw interleaved little-endian f32 objects in place of its Channels blocks.
   Owner, 2026-10-20. [relay-track-reading]
 - **DECIDED** — What differs between relays is the gateway's. `tatolab-moq` carries one gateway
   implementation per relay kind — a plain `moq-relay`, Cloudflare and moq.pro; Red5 waits on its cost — each holding what differs: the
@@ -3587,7 +3628,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   thumbnail for Image, shape and statistics or a point view for Array, a waveform for Channels,
   keyframes and bitrate with an on-demand decode for Packets, a table or a tree for Records — with
   no relay, encoder or exposure in between. A preview is on the machine only and changes no
-  stream's graph. Owner, 2026-11-03 and 2026-11-06. [strict-port-families; gateway-nodes]
+  stream's graph. Owner, 2026-11-03 and 2026-11-06. [gateway-nodes]
   Rejected: previews through the local relay — the preview page, `/watch` and an encode, two
   loopback hops and a decode for a picture on the same machine, and nothing for a family a MoQ
   player cannot draw (owner, 2026-11-06).
