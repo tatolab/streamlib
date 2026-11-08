@@ -432,11 +432,33 @@ pub struct GraphOnlyNodesAsDrawn {
     pub interface_as_drawn: GraphInterfaceAsDrawn,
 }
 
+/// A change to a node that a drawn link naming it by name blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeChangeADrawnLinkBlocks {
+    /// Taking the node out.
+    Removal,
+    /// Giving the node another name.
+    Rename,
+}
+
+impl NodeChangeADrawnLinkBlocks {
+    fn as_refused(self) -> &'static str {
+        match self {
+            Self::Removal => "removed",
+            Self::Rename => "renamed",
+        }
+    }
+}
+
 impl GraphOnlyNodesAsDrawn {
-    /// Refuse removing the node named `node_name` while a drawn link between it
+    /// Refuse `change` to the node named `node_name` while a drawn link between it
     /// and a variable or interface node names it, which would leave that link
     /// dangling in the graph `graph` renders.
-    pub fn refuse_removing_a_node_a_drawn_link_names(&self, node_name: &str) -> Result<()> {
+    pub fn refuse_a_node_change_a_drawn_link_names(
+        &self,
+        node_name: &str,
+        change: NodeChangeADrawnLinkBlocks,
+    ) -> Result<()> {
         let node_cast = cast_exposed_name_to_url_safe(node_name)?;
         let names_the_node = |end: &LinkPortRefOutput| {
             cast_exposed_name_to_url_safe(&end.node).is_ok_and(|end_cast| end_cast == node_cast)
@@ -454,10 +476,14 @@ impl GraphOnlyNodesAsDrawn {
         for link in links_drawn_to_a_graph_only_node {
             if names_the_node(&link.source) || names_the_node(&link.target) {
                 return Err(Error::GraphError(format!(
-                    "node `{node_name}` cannot be removed: the graph links `{}/{}` to `{}/{}`, \
+                    "node `{node_name}` cannot be {}: the graph links `{}/{}` to `{}/{}`, \
                      an end of which is a variable or interface node, and that link would \
                      name a node the graph no longer holds",
-                    link.source.node, link.source.port, link.target.node, link.target.port
+                    change.as_refused(),
+                    link.source.node,
+                    link.source.port,
+                    link.target.node,
+                    link.target.port
                 )));
             }
         }
@@ -1893,7 +1919,7 @@ mod tests {
             .expect("resolves");
         let graph_only_nodes = &resolution.graph_only_nodes_as_drawn;
         let refusal = graph_only_nodes
-            .refuse_removing_a_node_a_drawn_link_names("Source")
+            .refuse_a_node_change_a_drawn_link_names("Source", NodeChangeADrawnLinkBlocks::Removal)
             .expect_err("the GraphOutput's link names the source")
             .to_string();
         assert!(

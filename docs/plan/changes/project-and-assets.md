@@ -176,6 +176,13 @@ API's addressing, the processor model's load path, and adds the project as a sto
 - REMOVED: The graph compiled at the load
   `StreamRecord.graph`'s doc line; the field goes and the start loads the document.
 - REMOVED: list_project_streams
+- REMOVED: how_the_graph_reads_one_link
+  A graph tool reads a new link's state by its ends, never by a link id.
+- REMOVED: removed_name
+- REMOVED: disconnected_link_id
+  Every graph tool answers the transaction it applied.
+- REMOVED: refuse_removing_a_node_a_drawn_link_names
+  A drawn link blocks a rename as it blocks a removal.
 
 ## Decisions
 

@@ -47,11 +47,8 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use rmcp::{prompt_handler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use serde_json::Value;
 use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
-use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
     RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind, StreamActionState,
@@ -91,7 +88,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` and starts each stream — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its run the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a run takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Run again, a project replaces its streams under the same ids, keeping their display names. A run runs no project code and never fails for what a document holds: a stream whose graph document does not load, or whose load or start is refused, is listed failed with the reason in `failed_because` until a run of the fixed document replaces it or `start_stream` reads it again, and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. Every stream a run loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_project` ends it: closing the connection that carried the call unloads nothing. `stop_stream` queues the unload of a stream that records it stopped, `start_stream` queues a load of a stopped one and a retry of a failed one, and `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its stream's project queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. Every tool about one stream — `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `run_project` again starts it afresh. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every rename and move, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset` and changed with `import_asset`, `rename_asset`, `move_asset`, `delete_asset` and `set_asset_settings`, each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`, while the asset's bytes stay in the project's content store, `.tatolab/content`, and never enter history. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` and starts each stream — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its run the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a run takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Run again, a project replaces its streams under the same ids, keeping their display names. A run runs no project code and never fails for what a document holds: a stream whose graph document does not load, or whose load or start is refused, is listed failed with the reason in `failed_because` until a run of the fixed document replaces it or `start_stream` reads it again, and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. Every stream a run loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_project` ends it: closing the connection that carried the call unloads nothing. `stop_stream` queues the unload of a stream that records it stopped, `start_stream` queues a load of a stopped one and a retry of a failed one, and `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its stream's project queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. Every tool about one stream — the graph edits and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by UUID and name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its graph with `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node` and `set_studio_fields`, or several of them as one `transact`, each naming a node by its UUID, which `add_node` answers and `graph` lists as `id`, and each one transaction by its `author`, applied whole or refused whole in the runtime's own words: with `mode` `commit`, the default, it is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load; with `mode` `live`, applied to the running stream alone. `undo` reverses an author's latest transaction in a project as a new transaction and `redo` reapplies it, each reversing only that author's own. A config value `{\"asset\": \"<uuid>\"}` references an asset the project must hold, which cannot then be deleted. A Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for UUIDs and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `run_project` again starts it afresh. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every rename and move, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset` and changed with `import_asset`, `rename_asset`, `move_asset`, `delete_asset` and `set_asset_settings`, each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`, while the asset's bytes stay in the project's content store, `.tatolab/content`, and never enter history. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -175,7 +172,11 @@ impl LocalApiMcpServerHandler {
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
             viewers_this_connection_holds_open: Arc::default(),
             project_repositories_open_in_this_runtime: Arc::default(),
-            tool_router: Arc::new(Self::tool_router() + Self::project_asset_tool_router()),
+            tool_router: Arc::new(
+                Self::tool_router()
+                    + Self::project_asset_tool_router()
+                    + Self::stream_graph_tool_router(),
+            ),
             prompt_router: Arc::new(Self::prompt_router()),
         }
     }
@@ -273,63 +274,6 @@ struct LogsToolArguments {
         description = "The most records to return. Defaults to 256; a larger value than 4096 is clamped to it."
     )]
     count: Option<u32>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct AddNodeToolArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
-    #[serde(rename = "type")]
-    #[schemars(
-        description = "The node's class import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`."
-    )]
-    processor_class_import_path: String,
-    #[schemars(
-        description = "The node's configuration, as the keys its config schema declares. Omit for none."
-    )]
-    config: Option<Map<String, Value>>,
-    #[schemars(
-        description = "The node's name: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`), and refused when a node already has that name. Omit it to take the class's short name, cast, with the next free `-2`, `-3` … when one is taken. The name is the node's part of its ports' addresses."
-    )]
-    name: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct RemoveNodeToolArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
-    #[schemars(description = "A node's name, as `graph` or `add_node` reported it.")]
-    name: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ConnectToolArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
-    #[schemars(description = "The source node's name.")]
-    from_node: String,
-    #[schemars(description = "The source's output port name.")]
-    from_port: String,
-    #[schemars(description = "The destination node's name.")]
-    to_node: String,
-    #[schemars(description = "The destination's input port name.")]
-    to_port: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct DisconnectToolArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
-    #[schemars(description = "A link id `graph` or `connect` reported.")]
-    link_id: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -520,107 +464,6 @@ impl LocalApiMcpServerHandler {
                 records_no_longer_held,
             },
         )
-    }
-
-    #[tool(
-        description = "Add a node to the running graph by its class import path — the `type` string `graph` reports for every node and `streamlib://node-catalog` lists. A Python class is named `module:QualifiedClassName` and must be importable by the stream's own interpreter (a module in the stream's project, or a package installed in its venv): the runtime never imports it, and describes it in that interpreter the first time it is added; a built-in is named by the `type` an existing node of that kind shows. Returns the name the node received, which `connect` and `remove_node` take, once the engine has spawned it — a Python class in its own processor interpreter, which imports the module fresh, so edited code is picked up by every new add. The class's port declaration is read when it is first described and kept; to change a class's ports, add it under a new class name. Read `graph` to see its state and ports."
-    )]
-    async fn add_node(
-        &self,
-        Parameters(arguments): Parameters<AddNodeToolArguments>,
-    ) -> ToolCallAnswer {
-        let stream_operations = self.the_stream_a_tool_call_names("add_node", &arguments.stream)?;
-        let processor_class_import_path =
-            ProcessorClassImportPath::new(&arguments.processor_class_import_path)
-                .map_err(|e| format!("add_node `type`: {e}"))?;
-        // Absent is an empty object: a config struct deserializes from `{}`.
-        let config = Value::Object(arguments.config.unwrap_or_default());
-        let mut spec = ProcessorSpec::new(processor_class_import_path, config);
-        spec.display_name = arguments.name;
-
-        let added = stream_operations
-            .add_processor_async(spec)
-            .await
-            .map_err(|e| format!("add_node failed: {e}"))?;
-        Ok(json_text_tool_result(&json!({ "name": added.name })))
-    }
-
-    #[tool(
-        description = "Remove a node from the running graph by name, stopping it. Its links go with it."
-    )]
-    async fn remove_node(
-        &self,
-        Parameters(RemoveNodeToolArguments { stream, name }): Parameters<RemoveNodeToolArguments>,
-    ) -> ToolCallAnswer {
-        let stream_operations = self.the_stream_a_tool_call_names("remove_node", &stream)?;
-        let node = stream_operations
-            .the_node_named(&name)
-            .map_err(|e| format!("remove_node failed: {e}"))?;
-        stream_operations
-            .remove_processor_async(node.processor_id)
-            .await
-            .map_err(|e| format!("remove_node failed: {e}"))?;
-        Ok(json_text_tool_result(&json!({ "removed_name": node.name })))
-    }
-
-    #[tool(
-        description = "Link an output port to an input port in one loaded stream, and answer the new link's `link_id` and `state` — with `error_reason` when the link will carry nothing. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node."
-    )]
-    async fn connect(
-        &self,
-        Parameters(arguments): Parameters<ConnectToolArguments>,
-    ) -> ToolCallAnswer {
-        let ConnectToolArguments {
-            stream,
-            from_node,
-            from_port,
-            to_node,
-            to_port,
-        } = arguments;
-        fn connect_failed(refusal: impl std::fmt::Display) -> String {
-            format!("connect failed: {refusal}")
-        }
-        let stream_operations = self.the_stream_a_tool_call_names("connect", &stream)?;
-        let from = stream_operations
-            .the_node_named(&from_node)
-            .map(|node| OutputLinkPortRef::new(node.processor_id, from_port))
-            .map_err(connect_failed)?;
-        let to = stream_operations
-            .the_node_named(&to_node)
-            .map(|node| InputLinkPortRef::new(node.processor_id, to_port))
-            .map_err(connect_failed)?;
-        let link_id = stream_operations
-            .connect_async(from, to)
-            .await
-            .map_err(connect_failed)?;
-        let how_the_graph_reads_it =
-            how_the_graph_reads_one_link(&stream_operations, &link_id).await;
-        let mut answer = json!({
-            "link_id": link_id.as_str(),
-            "state": how_the_graph_reads_it.state,
-        });
-        if let Some(reason) = how_the_graph_reads_it.error_reason {
-            answer["error_reason"] = json!(reason);
-        }
-        Ok(json_text_tool_result(&answer))
-    }
-
-    #[tool(
-        description = "Remove a link from one loaded stream's running graph by the id `graph` or `connect` reported."
-    )]
-    async fn disconnect(
-        &self,
-        Parameters(DisconnectToolArguments { stream, link_id }): Parameters<
-            DisconnectToolArguments,
-        >,
-    ) -> ToolCallAnswer {
-        self.the_stream_a_tool_call_names("disconnect", &stream)?
-            .disconnect_async(LinkUniqueId::from(link_id.as_str()))
-            .await
-            .map_err(|e| format!("disconnect failed: {e}"))?;
-        Ok(json_text_tool_result(
-            &json!({ "disconnected_link_id": link_id }),
-        ))
     }
 
     #[tool(
@@ -1169,54 +1012,6 @@ impl ServerHandler for LocalApiMcpServerHandler {
     }
 }
 
-/// What `graph` says about a link just connected, beside its id.
-///
-/// A struct rather than a bare `Option<String>` so a second reading can join it
-/// without changing every call site.
-#[derive(Default)]
-struct HowTheGraphReadsOneLink {
-    state: Option<String>,
-    error_reason: Option<String>,
-}
-
-/// The state the new link reads, taken from the same `graph` a caller would
-/// read next.
-///
-/// Read after the connect rather than returned by it: `connect_async` hands
-/// back a link id, and everything else about the link is what `graph` renders.
-/// A render that fails leaves the state unknown rather than failing a connect
-/// that already took.
-async fn how_the_graph_reads_one_link(
-    stream_operations: &Arc<dyn RuntimeOperations>,
-    link_id: &LinkUniqueId,
-) -> HowTheGraphReadsOneLink {
-    let graph = match stream_operations.to_json_async().await {
-        Ok(graph) => graph,
-        Err(unreadable) => {
-            // Swallowing this would leave the caller a null state with nothing
-            // to act on, and the operator nothing to re-derive it from.
-            tracing::warn!(
-                "a link was connected and its stream's graph could not be read to say what \
-                 state it is in: {unreadable}"
-            );
-            return HowTheGraphReadsOneLink::default();
-        }
-    };
-    let Some(link) = graph["links"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|link| link["id"].as_str() == Some(link_id.as_str()))
-    else {
-        return HowTheGraphReadsOneLink::default();
-    };
-    let text_at = |key: &str| link[key].as_str().map(str::to_string);
-    HowTheGraphReadsOneLink {
-        state: text_at("state"),
-        error_reason: text_at("error_reason"),
-    }
-}
-
 // ============================================================================
 // Result content
 // ============================================================================
@@ -1278,6 +1073,8 @@ pub(crate) mod tests {
     use std::time::Duration;
 
     use super::*;
+    use serde_json::json;
+    use streamlib::sdk::descriptors::ProcessorClassImportPath;
 
     /// Stub runtime answering the observation ops without a live engine.
     ///
@@ -1346,6 +1143,13 @@ pub(crate) mod tests {
         "remove_node",
         "connect",
         "disconnect",
+        "set_node_config",
+        "set_pin_value",
+        "rename_node",
+        "set_studio_fields",
+        "transact",
+        "undo",
+        "redo",
         "run_project",
         "create_project",
         "describe_stream_action",
@@ -1375,6 +1179,10 @@ pub(crate) mod tests {
         "remove_node",
         "connect",
         "disconnect",
+        "set_node_config",
+        "set_pin_value",
+        "rename_node",
+        "set_studio_fields",
         "stop_stream",
         "start_stream",
         "rename_stream",
@@ -1778,42 +1586,81 @@ pub(crate) mod tests {
         }
     }
 
+    /// The operations the stub was handed live, in call order.
+    fn recorded_stream_graph_operations(
+        recorded: &crate::control_plane_stub_support::RecordedGraphMutations,
+    ) -> Vec<streamlib_project_repository::StreamGraphOperation> {
+        recorded.lock().clone()
+    }
+
+    const STUB_CAMERA_NODE_UUID: &str = "11111111-1111-4111-8111-111111111111";
+    const STUB_EFFECT_NODE_UUID: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// A stub whose graph holds a camera linked to an effect, each by its UUID.
+    fn a_stub_holding_a_camera_linked_to_an_effect() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        *runtime.exported_graph.lock() = json!({
+            "machine": crate::control_plane_stub_support::STUB_MACHINE_NAME,
+            "nodes": [
+                { "id": STUB_CAMERA_NODE_UUID, "name": "camera", "type": "tatolab.camera:Camera",
+                  "config": { "fps": 30 }, "pins": {}, "studio": { "position": [0, 0] } },
+                { "id": STUB_EFFECT_NODE_UUID, "name": "fx", "type": "nodes.fx:Fx",
+                  "config": {}, "pins": { "strength": 0.5 } },
+            ],
+            "links": [
+                { "id": "link-9", "source": { "node": "camera", "port": "video" },
+                  "target": { "node": "fx", "port": "video_in" }, "state": "pending" },
+            ],
+        });
+        runtime
+    }
+
     #[tokio::test]
-    async fn tools_call_add_node_reaches_the_runtime_op_with_the_spec() {
+    async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_name() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let body = tool_call_result(
-            runtime,
-            "add_node",
-            json!({
-                "stream": STUB_STREAM_ID,
-                "type": "processors.grayscale_effect:GrayscaleEffect",
-                "config": { "strength": 0.5 },
-                "name": "Gray"
-            }),
-        )
-        .await;
-        assert_eq!(body["isError"], false, "body={body}");
-        let text = body["content"][0]["text"].as_str().unwrap();
-        let stated: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(
-            stated,
-            json!({ "name": "gray" }),
-            "the result is the name the node received, which `connect` and `remove_node` take"
+        let stated = first_text_block_json(
+            &tool_call_result(
+                runtime,
+                "add_node",
+                json!({
+                    "stream": STUB_STREAM_ID,
+                    "type": "processors.grayscale_effect:GrayscaleEffect",
+                    "config": { "strength": 0.5 },
+                    "name": "Gray",
+                    "mode": "live",
+                }),
+            )
+            .await,
         );
-        let recorded = recorded.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec)] =
-            &recorded[..]
+
+        let [streamlib_project_repository::StreamGraphOperation::AddNode { node, links }] =
+            &recorded_stream_graph_operations(&recorded)[..]
         else {
-            panic!("add_node must reach exactly one add op, recorded {recorded:?}");
+            panic!(
+                "add_node reaches exactly one add, recorded {:?}",
+                recorded.lock()
+            );
         };
         assert_eq!(
-            spec.name.as_str(),
+            node.node_type,
             "processors.grayscale_effect:GrayscaleEffect"
         );
-        assert_eq!(spec.config["strength"], 0.5);
-        assert_eq!(spec.display_name.as_deref(), Some("Gray"));
+        assert_eq!(node.config, json!({ "strength": 0.5 }));
+        assert_eq!(node.name, "Gray");
+        assert!(links.is_empty());
+        assert_eq!(stated["mode"], "live");
+        assert_eq!(
+            stated["transaction"],
+            Value::Null,
+            "a live edit records nothing"
+        );
+        assert_eq!(
+            stated["added_nodes"],
+            json!([{ "stream": STUB_STREAM_ID, "node": node.id.to_string(), "name": "gray" }]),
+            "the answer is the UUID the runtime made and the name the engine cast"
+        );
     }
 
     /// What this locks is the door: an engine that refuses an add — a name
@@ -1832,7 +1679,8 @@ pub(crate) mod tests {
             json!({
                 "stream": STUB_STREAM_ID,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
-                "name": "gray"
+                "name": "gray",
+                "mode": "live",
             }),
         )
         .await;
@@ -1843,6 +1691,27 @@ pub(crate) mod tests {
             text.contains(refusal),
             "the refusal must reach the caller in the engine's own words: {text}"
         );
+    }
+
+    /// A committed edit is kept in the stream's graph document, so a stream no
+    /// project holds is refused, pointing at `live`, before anything is applied.
+    #[tokio::test]
+    async fn a_committed_edit_to_a_stream_of_no_project_is_refused_naming_live() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded = runtime.recorded_graph_mutations.clone();
+
+        let body = tool_call_result(
+            runtime,
+            "add_node",
+            json!({ "stream": STUB_STREAM_ID, "type": "nodes.fx:Fx" }),
+        )
+        .await;
+
+        let text = body["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], true, "{text}");
+        assert!(text.contains("belongs to no project"), "{text}");
+        assert!(text.contains("`live`"), "{text}");
+        assert!(recorded.lock().is_empty(), "nothing was applied");
     }
 
     /// The one setting [`AddNodeTestSourceTakingOneSetting`] takes.
@@ -1904,7 +1773,8 @@ pub(crate) mod tests {
                 "stream": "main",
                 "type": source_type.as_str(),
                 "name": "front",
-                "config": {"frame_widht": 640}
+                "config": {"frame_widht": 640},
+                "mode": "live",
             }),
         )
         .await;
@@ -1928,26 +1798,26 @@ pub(crate) mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let body = tool_call_result(
-            runtime,
-            "add_node",
-            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.moq:MoqTrackReceive" }),
-        )
-        .await;
-        let stated = first_text_block_json(&body);
+        let stated = first_text_block_json(
+            &tool_call_result(
+                runtime,
+                "add_node",
+                json!({ "stream": STUB_STREAM_ID, "type": "tatolab.moq:MoqTrackReceive", "mode": "live" }),
+            )
+            .await,
+        );
         assert_eq!(
-            stated["name"],
+            stated["added_nodes"][0]["name"],
             crate::control_plane_stub_support::STUB_ADDED_NODE_NAME,
             "an unnamed node is answered with the name the engine gave it"
         );
-        let recorded = recorded.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec)] =
-            &recorded[..]
+        let [streamlib_project_repository::StreamGraphOperation::AddNode { node, .. }] =
+            &recorded_stream_graph_operations(&recorded)[..]
         else {
-            panic!("expected one add op, recorded {recorded:?}");
+            panic!("expected one add, recorded {:?}", recorded.lock());
         };
-        assert_eq!(spec.config, json!({}));
-        assert_eq!(spec.display_name, None);
+        assert_eq!(node.config, json!({}));
+        assert_eq!(node.name, "");
     }
 
     /// Mental-revert: read unknown fields past and `display_name` is dropped,
@@ -1964,7 +1834,8 @@ pub(crate) mod tests {
             json!({
                 "stream": STUB_STREAM_ID,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
-                "display_name": "gray"
+                "display_name": "gray",
+                "mode": "live",
             }),
         )
         .await;
@@ -1975,363 +1846,290 @@ pub(crate) mod tests {
         assert!(recorded.lock().is_empty(), "nothing was added");
     }
 
-    /// The address `connect` hands the engine for a port on this node.
+    /// Each end is a node's UUID and a port name, handed to the engine as given.
     #[tokio::test]
-    async fn tools_call_connect_and_disconnect_reach_their_runtime_ops() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+    async fn tools_call_connect_and_disconnect_name_each_end_by_its_nodes_uuid() {
+        let runtime = a_stub_holding_a_camera_linked_to_an_effect();
         let recorded = runtime.recorded_graph_mutations.clone();
-
-        let connect_body = tool_call_result(
-            runtime.clone(),
-            "connect",
+        let link_onto = |target_port: &str| {
             json!({
-                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
-                "to_node": "fx", "to_port": "video_from_upstream"
-            }),
-        )
-        .await;
-        let stated = first_text_block_json(&connect_body);
-        assert_eq!(
-            stated["link_id"],
-            crate::control_plane_stub_support::STUB_CREATED_LINK_ID
+                "stream": STUB_STREAM_ID,
+                "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
+                "target": { "node": STUB_EFFECT_NODE_UUID, "port": target_port },
+                "mode": "live",
+            })
+        };
+
+        let connected = first_text_block_json(
+            &tool_call_result(runtime.clone(), "connect", link_onto("mask")).await,
+        );
+        let disconnected = first_text_block_json(
+            &tool_call_result(runtime, "disconnect", link_onto("video_in")).await,
         );
 
-        let disconnect_body = tool_call_result(
-            runtime,
-            "disconnect",
-            json!({ "stream": STUB_STREAM_ID, "link_id": "link-9" }),
-        )
-        .await;
-        assert_eq!(disconnect_body["isError"], false, "body={disconnect_body}");
-
-        let recorded = recorded.lock();
-        let [
-            crate::control_plane_stub_support::RecordedGraphMutation::Connect(from, to),
-            crate::control_plane_stub_support::RecordedGraphMutation::Disconnect(link_id),
-        ] = &recorded[..]
-        else {
-            panic!("expected a connect then a disconnect, recorded {recorded:?}");
+        let link_of = |target_port: &str| streamlib_project_repository::StreamGraphDocumentLink {
+            source: streamlib_project_repository::StreamGraphDocumentLinkEnd {
+                node: STUB_CAMERA_NODE_UUID.parse().unwrap(),
+                port: "video".to_owned(),
+            },
+            target: streamlib_project_repository::StreamGraphDocumentLinkEnd {
+                node: STUB_EFFECT_NODE_UUID.parse().unwrap(),
+                port: target_port.to_owned(),
+            },
         };
-        // Each end is the node the tool looked up by name.
-        assert_eq!(from.processor_id().as_str(), "camera-id");
-        assert_eq!(from.port_name(), "video");
-        assert_eq!(to.processor_id().as_str(), "fx-id");
-        assert_eq!(to.port_name(), "video_from_upstream");
-        assert_eq!(link_id.as_str(), "link-9");
-    }
-
-    /// Each end's node is looked up by its name cast, so a caller that typed a
-    /// name the way it reads still reaches the node `graph` lists; the port
-    /// names reach the engine as given, and the engine casts them.
-    #[tokio::test]
-    async fn tools_call_connect_resolves_each_ends_node_by_its_cast_name() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded = runtime.recorded_graph_mutations.clone();
-
-        let body = call_the_connect_tool(
-            runtime,
-            json!({
+        assert_eq!(
+            recorded_stream_graph_operations(&recorded),
+            [
+                streamlib_project_repository::StreamGraphOperation::Connect {
+                    link: link_of("mask")
+                },
+                streamlib_project_repository::StreamGraphOperation::Disconnect {
+                    link: link_of("video_in")
+                },
+            ]
+        );
+        assert_eq!(
+            connected["connected_links"],
+            json!([{
                 "stream": STUB_STREAM_ID,
-                "from_node": "Front Camera", "from_port": "Video",
-                "to_node": "Gray FX", "to_port": "video_from_upstream",
-            }),
-        )
-        .await;
-        assert_eq!(body["isError"], false, "body={body}");
-
-        let recorded = recorded.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::Connect(from, to)] =
-            &recorded[..]
-        else {
-            panic!("expected one connect op, recorded {recorded:?}");
-        };
-        assert_eq!(from.processor_id().as_str(), "front-camera-id");
-        assert_eq!(from.port_name(), "Video");
-        assert_eq!(to.processor_id().as_str(), "gray-fx-id");
-        assert_eq!(to.port_name(), "video_from_upstream");
+                "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
+                "target": { "node": STUB_EFFECT_NODE_UUID, "port": "mask" },
+            }]),
+            "the new link's state is read from the stream's own `graph`"
+        );
+        assert_eq!(disconnected["connected_links"], json!([]));
     }
 
-    /// Call `connect` with `arguments` and hand back the whole tool result.
-    async fn call_the_connect_tool(
-        runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
-        arguments: Value,
-    ) -> Value {
-        tool_call_result(runtime, "connect", arguments).await
-    }
-
-    /// Call `disconnect` with `arguments` and hand back the whole tool result.
-    async fn call_the_disconnect_tool(
-        runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
-        arguments: Value,
-    ) -> Value {
-        tool_call_result(runtime, "disconnect", arguments).await
-    }
-
-    /// Every end needs its node and its port, and a call missing one is
-    /// refused naming the field rather than wired against a guess.
+    /// A node is named by its UUID: a name, or a UUID the graph does not hold,
+    /// is refused naming it before anything reaches the runtime.
     #[tokio::test]
-    async fn tools_call_connect_refuses_an_end_missing_its_node_or_port_naming_the_field() {
-        for missing_field in ["from_node", "from_port", "to_node", "to_port"] {
-            let mut arguments = json!({
-                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
-                "to_node": "fx", "to_port": "video_from_upstream",
-            });
-            arguments
-                .as_object_mut()
-                .unwrap()
-                .remove(missing_field)
-                .expect("the field this case removes");
-            let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-            let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-            let body = call_the_connect_tool(runtime, arguments.clone()).await;
-
-            let text = body["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["isError"], true, "{arguments} gave {text}");
-            assert!(
-                text.contains(missing_field),
-                "{arguments} must be refused naming {missing_field}: {text}"
-            );
-            assert!(
-                recorded_calls.lock().is_empty(),
-                "a refused connect reaches no runtime op"
-            );
-        }
-    }
-
-    /// An end named by an argument `connect` does not take is refused naming
-    /// it — the id and display-name spellings included, which a caller holding
-    /// an older `graph` would still send.
-    #[tokio::test]
-    async fn tools_call_connect_refuses_an_argument_it_does_not_take_naming_it() {
-        for unknown_field in [
-            "from_processor_id",
-            "from_processor_display_name",
-            "to_processor_id",
-            "to_processor_display_name",
-        ] {
-            let mut arguments = json!({
-                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
-                "to_node": "fx", "to_port": "video_from_upstream",
-            });
-            arguments[unknown_field] = json!("camera");
-            let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-            let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-            let body = call_the_connect_tool(runtime, arguments.clone()).await;
-
-            let text = body["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["isError"], true, "{arguments} gave {text}");
-            assert!(
-                text.contains(unknown_field),
-                "{arguments} must be refused naming {unknown_field}: {text}"
-            );
-            assert!(
-                recorded_calls.lock().is_empty(),
-                "a refused connect reaches no runtime op"
-            );
-        }
-    }
-
-    /// A misspelled argument is refused rather than read past.
-    #[tokio::test]
-    async fn tools_call_connect_refuses_a_misspelled_argument_rather_than_reading_past_it() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        let body = call_the_connect_tool(
-            runtime,
-            json!({
-                "stream": STUB_STREAM_ID,
-                "from_node": "camera",
-                "from_port": "video",
-                "to_node": "fx",
-                "to_prot": "video",
-            }),
-        )
-        .await;
-
-        let text = body["content"][0]["text"].as_str().unwrap();
-        assert_eq!(body["isError"], true, "{text}");
-        assert!(text.contains("to_prot"), "{text}");
-        assert!(recorded_calls.lock().is_empty(), "nothing was wired");
-    }
-
-    /// Both ends are nodes on this node's own graph, so a node it does not
-    /// hold, at either end, is refused naming it before any runtime op is
-    /// reached.
-    #[tokio::test]
-    async fn tools_call_connect_refuses_a_node_this_node_does_not_hold_at_either_end() {
-        for arguments in [
-            json!({
-                "stream": STUB_STREAM_ID,
-                "from_node": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME,
-                "from_port": "video",
-                "to_node": "fx", "to_port": "video",
-            }),
-            json!({
-                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
-                "to_node": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME,
-                "to_port": "video",
-            }),
-        ] {
-            let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-            let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-            let body = call_the_connect_tool(runtime, arguments.clone()).await;
-
-            let text = body["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["isError"], true, "{arguments} gave {text}");
-            assert!(text.contains("connect failed"), "{text}");
-            assert!(
-                text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
-                "{text}"
-            );
-            assert!(recorded_calls.lock().is_empty(), "nothing was wired");
-        }
-    }
-
-    /// `disconnect` takes its stream and a `link_id` and nothing else: a
-    /// missing one, or any other argument, is refused naming it before any
-    /// runtime op is reached.
-    #[tokio::test]
-    async fn tools_call_disconnect_takes_its_stream_and_a_link_id_alone() {
-        for (arguments, what_the_refusal_must_name) in [
-            (json!({ "stream": STUB_STREAM_ID }), "link_id"),
-            (json!({ "link_id": "link-9" }), "stream"),
+    async fn a_graph_tool_naming_a_node_by_its_name_or_an_absent_uuid_is_refused_naming_it() {
+        let absent_node_uuid = "33333333-3333-4333-8333-333333333333";
+        for (tool_name, arguments, what_the_refusal_names) in [
             (
+                "remove_node",
+                json!({ "stream": STUB_STREAM_ID, "node": "fx", "mode": "live" }),
+                "`fx` is neither a node's UUID",
+            ),
+            (
+                "connect",
                 json!({
                     "stream": STUB_STREAM_ID,
-                    "link_id": "link-9",
-                    "machine": "studio-display",
+                    "source": { "node": "camera", "port": "video" },
+                    "target": { "node": STUB_EFFECT_NODE_UUID, "port": "video_in" },
+                    "mode": "live",
                 }),
-                "machine",
+                "`camera` is neither a node's UUID",
+            ),
+            (
+                "set_node_config",
+                json!({ "stream": STUB_STREAM_ID, "node": absent_node_uuid, "config": {}, "mode": "live" }),
+                absent_node_uuid,
             ),
         ] {
-            let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-            let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-            let body = call_the_disconnect_tool(runtime, arguments.clone()).await;
-
+            let runtime = a_stub_holding_a_camera_linked_to_an_effect();
+            let recorded = runtime.recorded_graph_mutations.clone();
+            let body = tool_call_result(runtime, tool_name, arguments.clone()).await;
             let text = body["content"][0]["text"].as_str().unwrap();
             assert_eq!(body["isError"], true, "{arguments} gave {text}");
-            assert!(
-                text.contains(what_the_refusal_must_name),
-                "{arguments} must be refused naming {what_the_refusal_must_name}: {text}"
-            );
-            assert!(recorded_calls.lock().is_empty());
+            assert!(text.contains(&format!("{tool_name} failed")), "{text}");
+            assert!(text.contains(what_the_refusal_names), "{text}");
+            assert!(recorded.lock().is_empty(), "nothing reached the runtime");
         }
     }
 
-    /// The result is the new link's id and how this node's own `graph` reads
-    /// it, so an agent learns whether its change took without a second call.
+    /// Each edit carries what its inverse needs, read from the graph as it was.
     #[tokio::test]
-    async fn tools_call_connect_states_the_link_id_and_the_links_state() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        *runtime.exported_graph.lock() = json!({
-            "machine": crate::control_plane_stub_support::STUB_MACHINE_NAME,
-            "links": [
-                { "id": "some-other-link", "state": "wired" },
-                { "id": crate::control_plane_stub_support::STUB_CREATED_LINK_ID,
-                  "state": "pending" },
-            ],
-        });
-
-        let body = call_the_connect_tool(
-            runtime,
-            json!({
-                "stream": STUB_STREAM_ID,
-                "from_node": "camerasource",
-                "from_port": "video",
-                "to_node": "fx",
-                "to_port": "video_from_upstream",
-            }),
-        )
-        .await;
-
-        let stated = first_text_block_json(&body);
-        assert_eq!(
-            stated["link_id"],
-            crate::control_plane_stub_support::STUB_CREATED_LINK_ID
-        );
-        assert_eq!(stated["state"], "pending");
-        assert_eq!(
-            stated.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["link_id", "state"]
-        );
-    }
-
-    #[tokio::test]
-    async fn tools_call_remove_node_resolves_the_name_and_reaches_the_runtime_op() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+    async fn each_node_edit_carries_what_the_node_held_before_it() {
+        let runtime = a_stub_holding_a_camera_linked_to_an_effect();
         let recorded = runtime.recorded_graph_mutations.clone();
-
-        let body = tool_call_result(
-            runtime,
-            "remove_node",
-            json!({ "stream": STUB_STREAM_ID, "name": "FX" }),
-        )
-        .await;
-        let stated = first_text_block_json(&body);
-        assert_eq!(
-            stated,
-            json!({ "removed_name": "fx" }),
-            "the result names the node as `graph` listed it"
-        );
-
-        let recorded = recorded.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::RemoveProcessor(id)] =
-            &recorded[..]
-        else {
-            panic!("expected one remove op, recorded {recorded:?}");
-        };
-        assert_eq!(
-            id.as_str(),
-            format!(
-                "fx{}",
-                crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
+        for (tool_name, arguments) in [
+            (
+                "set_node_config",
+                json!({ "node": STUB_CAMERA_NODE_UUID, "config": { "fps": 60 } }),
             ),
-            "the op is handed the id the runtime resolved the name to"
+            (
+                "set_pin_value",
+                json!({ "node": STUB_EFFECT_NODE_UUID, "input": "strength", "value": 0.9 }),
+            ),
+            (
+                "rename_node",
+                json!({ "node": STUB_EFFECT_NODE_UUID, "name": "glow" }),
+            ),
+            (
+                "set_studio_fields",
+                json!({ "node": STUB_CAMERA_NODE_UUID, "studio": { "position": [4, 2] } }),
+            ),
+            ("remove_node", json!({ "node": STUB_EFFECT_NODE_UUID })),
+        ] {
+            let mut arguments = arguments;
+            arguments["stream"] = json!(STUB_STREAM_ID);
+            arguments["mode"] = json!("live");
+            first_text_block_json(&tool_call_result(runtime.clone(), tool_name, arguments).await);
+        }
+
+        let camera: uuid::Uuid = STUB_CAMERA_NODE_UUID.parse().unwrap();
+        let effect: uuid::Uuid = STUB_EFFECT_NODE_UUID.parse().unwrap();
+        let recorded = recorded_stream_graph_operations(&recorded);
+        use streamlib_project_repository::StreamGraphOperation;
+        assert_eq!(
+            recorded[0],
+            StreamGraphOperation::SetNodeConfig {
+                node: camera,
+                from: json!({ "fps": 30 }),
+                to: json!({ "fps": 60 }),
+            }
+        );
+        assert_eq!(
+            recorded[1],
+            StreamGraphOperation::SetPinValue {
+                node: effect,
+                input: "strength".to_owned(),
+                from: Some(json!(0.5)),
+                to: Some(json!(0.9)),
+            }
+        );
+        assert_eq!(
+            recorded[2],
+            StreamGraphOperation::RenameNode {
+                node: effect,
+                from: "fx".to_owned(),
+                to: "glow".to_owned(),
+            }
+        );
+        assert_eq!(
+            recorded[3],
+            StreamGraphOperation::SetStudioFields {
+                node: camera,
+                from: json!({ "position": [0, 0] }).as_object().cloned().unwrap(),
+                to: json!({ "position": [4, 2] }).as_object().cloned().unwrap(),
+            }
+        );
+        let StreamGraphOperation::RemoveNode { node, links } = &recorded[4] else {
+            panic!("the last edit removes, recorded {recorded:?}");
+        };
+        assert_eq!(node.id, effect);
+        assert_eq!(
+            links.len(),
+            1,
+            "a removed node carries its links, so undo brings them back: {links:?}"
         );
     }
 
+    /// `transact` applies its operations in order, a later one naming a node an
+    /// earlier `add_node` adds by its `as`; one refused undoes what came before it.
     #[tokio::test]
-    async fn tools_call_remove_node_naming_an_absent_node_is_refused_naming_it() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+    async fn transact_names_an_added_node_by_its_as_and_reverses_itself_when_refused() {
+        let runtime = a_stub_holding_a_camera_linked_to_an_effect();
         let recorded = runtime.recorded_graph_mutations.clone();
 
+        let stated = first_text_block_json(
+            &tool_call_result(
+                runtime.clone(),
+                "transact",
+                json!({
+                    "mode": "live",
+                    "operations": [
+                        { "operation": "add_node", "stream": STUB_STREAM_ID,
+                          "type": "nodes.blur:Blur", "as": "blur" },
+                        { "operation": "connect", "stream": STUB_STREAM_ID,
+                          "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
+                          "target": { "node": "blur", "port": "video_in" } },
+                    ],
+                }),
+            )
+            .await,
+        );
+        let added = stated["added_nodes"][0]["node"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(stated["added_nodes"][0]["as"], "blur");
+        assert_eq!(stated["connected_links"][0]["target"]["node"], added);
+
+        recorded.lock().clear();
         let body = tool_call_result(
             runtime,
-            "remove_node",
+            "transact",
             json!({
-                "stream": STUB_STREAM_ID,
-                "name": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME
+                "mode": "live",
+                "operations": [
+                    { "operation": "rename_node", "stream": STUB_STREAM_ID,
+                      "node": STUB_EFFECT_NODE_UUID, "name": "glow" },
+                    { "operation": "remove_node", "stream": STUB_STREAM_ID,
+                      "node": "33333333-3333-4333-8333-333333333333" },
+                ],
             }),
         )
         .await;
         assert_eq!(body["isError"], true, "body={body}");
-        let text = body["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("remove_node failed"), "{text}");
-        assert!(
-            text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
-            "the refusal must name the node asked for: {text}"
+        use streamlib_project_repository::StreamGraphOperation;
+        let effect: uuid::Uuid = STUB_EFFECT_NODE_UUID.parse().unwrap();
+        assert_eq!(
+            recorded_stream_graph_operations(&recorded),
+            [
+                StreamGraphOperation::RenameNode {
+                    node: effect,
+                    from: "fx".to_owned(),
+                    to: "glow".to_owned()
+                },
+                StreamGraphOperation::RenameNode {
+                    node: effect,
+                    from: "glow".to_owned(),
+                    to: "fx".to_owned()
+                },
+            ],
+            "the refused transaction's applied rename is reversed on the running stream"
         );
-        assert!(recorded.lock().is_empty(), "nothing was removed");
     }
 
     #[tokio::test]
     async fn a_mutation_tool_with_malformed_arguments_is_a_tool_error_that_reaches_no_op() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded = runtime.recorded_graph_mutations.clone();
-
-        let body = tool_call_result(
-            runtime,
-            "connect",
-            json!({ "stream": STUB_STREAM_ID, "from_node": "camera" }),
-        )
-        .await;
-        assert_eq!(body["isError"], true, "body={body}");
-        assert!(
-            recorded.lock().is_empty(),
-            "a refused call must reach no runtime op"
-        );
+        for (tool_name, arguments, what_the_refusal_names) in [
+            (
+                "connect",
+                json!({ "stream": STUB_STREAM_ID, "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" } }),
+                "target",
+            ),
+            (
+                "connect",
+                json!({
+                    "stream": STUB_STREAM_ID,
+                    "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
+                    "target": { "node": STUB_EFFECT_NODE_UUID, "prot": "video_in" },
+                }),
+                "prot",
+            ),
+            (
+                "disconnect",
+                json!({ "stream": STUB_STREAM_ID, "link_id": "link-9" }),
+                "link_id",
+            ),
+            (
+                "remove_node",
+                json!({ "stream": STUB_STREAM_ID, "name": "fx" }),
+                "name",
+            ),
+            (
+                "transact",
+                json!({ "operations": [{ "operation": "split_node" }] }),
+                "split_node",
+            ),
+        ] {
+            let runtime = a_stub_holding_a_camera_linked_to_an_effect();
+            let recorded = runtime.recorded_graph_mutations.clone();
+            let body = tool_call_result(runtime, tool_name, arguments.clone()).await;
+            let text = body["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["isError"], true, "{arguments} gave {text}");
+            assert!(
+                text.contains(what_the_refusal_names),
+                "{arguments} gave {text}"
+            );
+            assert!(
+                recorded.lock().is_empty(),
+                "a refused call must reach no runtime op"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2961,11 +2759,12 @@ pub(crate) mod tests {
     }
 
     fn served_tool_names() -> Vec<String> {
-        LocalApiMcpServerHandler::tool_router()
-            .list_all()
-            .into_iter()
-            .map(|tool| tool.name.into_owned())
-            .collect()
+        (LocalApiMcpServerHandler::tool_router()
+            + LocalApiMcpServerHandler::stream_graph_tool_router())
+        .list_all()
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect()
     }
 
     #[tokio::test]
@@ -3296,7 +3095,10 @@ pub(crate) mod tests {
             text.contains(crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH),
             "{text}"
         );
-        assert!(text.contains("`to_port`: `video`"), "{text}");
+        assert!(
+            text.contains("`target`: that UUID and the port `video`"),
+            "{text}"
+        );
         assert!(
             text.contains(r#"{"name":"Desk \"cam\""}"#),
             "the camera name must reach the config as escaped JSON:\n{text}"
@@ -3390,7 +3192,7 @@ pub(crate) mod tests {
             ["add_node", "graph", "connect", "graph"]
         );
         assert!(
-            text.contains("`from_node`: `pattern`, `from_port`: `video`"),
+            text.contains(r#"`source`: `{"node": "PatternSourceId", "port": "video"}`"#),
             "{text}"
         );
     }
