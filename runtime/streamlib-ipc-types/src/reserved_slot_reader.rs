@@ -24,6 +24,9 @@ use crate::{
 /// the latest message and the channel overwrites what it fell behind on.
 pub const OUTPUT_PORT_VIEWER_RING_DEPTH: usize = 1;
 
+/// The most samples one viewer read takes off its ring before answering.
+pub const SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST: usize = 64;
+
 /// One message read off a channel's reserved slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageReadFromAReservedSlot {
@@ -75,7 +78,8 @@ impl<OneUnbrokenRun: Copy + PartialEq> LossTallyOfAReservedSlotReader<OneUnbroke
             )
             .saturating_add(channel_user_header.messages_lost_upstream_before_this_one);
         let Ok(payload) = channel_user_header.payload_within(sample_payload_area) else {
-            self.lost_ahead_of_the_next_message_read += 1;
+            self.lost_ahead_of_the_next_message_read =
+                self.lost_ahead_of_the_next_message_read.saturating_add(1);
             return None;
         };
         Some(MessageReadFromAReservedSlot {
@@ -201,12 +205,14 @@ impl OutputPortViewerReader {
 
     /// The latest message the port's node wrote since the read before, or
     /// `None` when it wrote nothing since. Its `lost_since_last_read` counts
-    /// every message written in between that the viewer did not read.
+    /// every message written in between that the viewer did not read. One read
+    /// takes at most [`SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST`] samples, so a
+    /// writer that never pauses cannot hold it.
     pub fn read_the_latest_message(
         &mut self,
     ) -> Result<Option<MessageReadFromAReservedSlot>, String> {
         let mut latest: Option<MessageReadFromAReservedSlot> = None;
-        loop {
+        for _ in 0..SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST {
             let sample = self.subscriber.receive().map_err(|receive_failure| {
                 format!("a viewer's subscriber failed to receive: {receive_failure:?}")
             })?;

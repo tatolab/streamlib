@@ -51,6 +51,7 @@ pub use port_family_payload_descriptor_bodies::*;
 pub use reserved_slot_reader::{
     LossTallyOfAReservedSlotReader, MessageReadFromAReservedSlot, OUTPUT_PORT_VIEWER_RING_DEPTH,
     OutputPortViewerReader, OutputPortViewerSubscribeRefusal,
+    SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST,
 };
 
 /// A claim table's rows in memory every interpreter handed the table maps:

@@ -242,7 +242,6 @@ mod tests {
     //! context a real start takes: the source node holds the processor
     //! instance a start leaves it with, and nothing compiles.
 
-    use std::path::Path;
     use std::time::{Duration, Instant};
 
     use serde_json::Value;
@@ -530,7 +529,7 @@ mod tests {
             .clone()
             .expect("Linux hands every viewer the surface-sharing socket");
         assert_eq!(
-            Path::new(&surface_share_address),
+            std::path::Path::new(&surface_share_address),
             camera._runner.surface_socket_path()
         );
         let mut reader = OutputPortViewerReader::subscribe(

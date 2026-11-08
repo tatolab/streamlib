@@ -51,9 +51,8 @@ impl std::error::Error for Iceoryx2DomainRefusal {}
 /// The iceoryx2 configuration of the domain named by `domain_root` and
 /// `prefix`, built from the library defaults, never from iceoryx2's lookup path.
 ///
-/// iceoryx2 keeps file-backed state under the root but names its POSIX shared
-/// memory from the prefix alone, so two domains are disjoint only when their
-/// prefixes differ too.
+/// Two domains with different roots never share a channel, even under one
+/// prefix.
 pub fn iceoryx2_config_for_domain(
     domain_root: &std::path::Path,
     prefix: &str,
