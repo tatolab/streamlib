@@ -8,12 +8,12 @@
 # against this wheel's own baseline.
 #
 # It is the engine's codec round trip (`e2e_fixture_psnr_test_pattern.sh`) with
-# the network in the local relay's place: the sender
+# the network in the codec rig's relay's place: the sender
 # (`TestPatternSource → H264Encoder → WhipPublisher`) and the receiver
 # (`WhepPlayer → H264Decoder`) share nothing on this machine. The receiver's
 # player port — the frames that crossed the network — is read the way any user
-# reads a port: `tatolab-read-track` at the local relay's loopback listener,
-# the rig's ffmpeg decodes the dump to PNGs, and `cargo xtask psnr bar-colors`
+# reads a track: the receiver sends it to a `moq-relay` the rig starts,
+# `tatolab-read-track` reads it there, the rig's ffmpeg decodes the dump to PNGs, and `cargo xtask psnr bar-colors`
 # measures each SMPTE bar's median colour and injects. The receiver's own
 # decode is proven by the count of frames its decoder wrote, read off `graph`.
 #
@@ -104,7 +104,9 @@ TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
 
-PLAYER_ENCODED_VIDEO_TRACK="player/encoded_video"
+# The broadcast and track `whip_whep_roundtrip_stream.py`'s receiver sends to.
+RECEIVER_BROADCAST="whip-whep-roundtrip-receiver.hang"
+PLAYER_ENCODED_VIDEO_TRACK="player_encoded_video"
 
 say() { echo "[webrtc-live] $*"; }
 cannot_run() { echo "[webrtc-live] SKIP: $*" >&2; exit 77; }
@@ -134,15 +136,16 @@ VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and tatolab-opus, and \`maturin develop\` this wheel into it"
 
-# The streams draw, capture, play and code video through the test pattern,
-# microphone, speaker and H.264 modules, built from this checkout into that venv
-# when it cannot import them.
-if ! "$VENV_PYTHON" -c 'import tatolab.microphone, tatolab.speaker, tatolab.h264, tatolab.testpattern' >/dev/null 2>&1; then
-    say "building tatolab-microphone, tatolab-speaker, tatolab-h264 and tatolab-testpattern into $PACKAGE_DIR/.venv"
+# The streams draw, capture, play, code and send video through the test
+# pattern, microphone, speaker, H.264 and MoQ gateway modules, built from this
+# checkout into that venv when it cannot import them.
+if ! "$VENV_PYTHON" -c 'import tatolab.microphone, tatolab.speaker, tatolab.h264, tatolab.testpattern, tatolab.moq' >/dev/null 2>&1; then
+    say "building tatolab-microphone, tatolab-speaker, tatolab-h264, tatolab-testpattern and tatolab-moq into $PACKAGE_DIR/.venv"
     VIRTUAL_ENV="$PACKAGE_DIR/.venv" uv pip install --quiet \
         "$REPO_ROOT/packages/tatolab-microphone" "$REPO_ROOT/packages/tatolab-speaker" \
-        "$REPO_ROOT/packages/streamlib-h264" "$REPO_ROOT/packages/tatolab-testpattern" >&2 \
-        || cannot_run "the audio, H.264 and test pattern modules did not build into $PACKAGE_DIR/.venv"
+        "$REPO_ROOT/packages/streamlib-h264" "$REPO_ROOT/packages/tatolab-testpattern" \
+        "$REPO_ROOT/packages/tatolab-moq" >&2 \
+        || cannot_run "the audio, H.264, test pattern and MoQ modules did not build into $PACKAGE_DIR/.venv"
 fi
 
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
@@ -210,6 +213,7 @@ refuse_a_credential_written_into_the_output_directory() {
 stop_everything_and_scan_for_credentials() {
     remove_the_fixture_projects
     stop_the_fixture_runtime
+    stop_the_fixture_relay
     rm -rf "$RUNTIME_STATE_HOME"
     stop_the_signal
     refuse_a_credential_written_into_the_output_directory
@@ -221,8 +225,9 @@ say "Endpoints:         <redacted — each URL carries the account's stream key>
 
 # ── Build the reader and the scorer ──────────────────────────────────
 cd "$REPO_ROOT" || fail "cannot enter $REPO_ROOT"
-say "Building tatolab-read-track + xtask (release)..."
+say "Building tatolab-read-track, moq-relay and xtask (release)..."
 require_tatolab_read_track
+require_the_fixture_relay
 cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1 \
     || { tail -40 "$OUTPUT_DIR/build.log" >&2; fail "xtask build failed"; }
 
@@ -269,7 +274,11 @@ else
 fi
 
 # ── Run ──────────────────────────────────────────────────────────────
+start_the_fixture_relay "$OUTPUT_DIR/relay.log" "$RUNTIME_STATE_HOME/relay" \
+    || fail "could not start the relay the receiver sends its player's track to"
+say "Relay:             $FIXTURE_RELAY_URL"
 if ! STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
+    STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
     RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         start_the_fixture_runtime "$LOG_FILE" "$RUNTIME_STATE_HOME"; then
     fail "could not start the runtime the streams run on"
@@ -326,11 +335,8 @@ wait_until_the_decoder_has_written 1 "$MEDIA_DEADLINE_SECONDS" || {
 }
 
 # ── The video arm: what came back off the endpoint ───────────────────
-MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" \
-    || fail "the runtime's loopback listing at $LOOPBACK_HTTP_LISTING_URL did not name the machine"
-RECEIVER_BROADCAST="$MACHINE_NAME/$RECEIVER_STREAM_ID.hang"
 say "Reading:           $PLAYER_ENCODED_VIDEO_TRACK of $RECEIVER_BROADCAST"
-if ! read_the_track_at_the_local_relay "$RECEIVER_BROADCAST" "$PLAYER_ENCODED_VIDEO_TRACK" \
+if ! read_the_track_at_the_fixture_relay "$RECEIVER_BROADCAST" "$PLAYER_ENCODED_VIDEO_TRACK" \
         "$OBJECT_COUNT" "$ENCODED_TRACK_DIR" 2> "$OUTPUT_DIR/read_track.log"; then
     cat "$OUTPUT_DIR/read_track.log" >&2
     tail -30 "$LOG_FILE" >&2
@@ -414,7 +420,7 @@ if [ "$BASELINE_CAPTURE" = "1" ]; then
         --baseline-note "Captured with: BASELINE_CAPTURE=1 whip_whep_roundtrip.sh <out>"
         --baseline-note "Codec: h264"
         --baseline-note "Source: TestPatternSource at its default 1280x720, published over WHIP and played back over WHEP."
-        --baseline-note "Measured from the receiver's WhepPlayer encoded track read at the local relay with tatolab-read-track and decoded by ffmpeg to RGB PNGs."
+        --baseline-note "Measured from the receiver's WhepPlayer encoded track read at the rig's relay with tatolab-read-track and decoded by ffmpeg to RGB PNGs."
     )
 fi
 

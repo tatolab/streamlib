@@ -137,9 +137,8 @@ mod built_in_node_type_tests {
         let built_ins = every_built_in_registered_on_this_floor();
 
         assert!(
-            built_ins.contains(
-                &port_family_conversion::ChannelsToArray::processor_class_import_path()
-            )
+            built_ins
+                .contains(&port_family_conversion::ChannelsToArray::processor_class_import_path())
         );
         let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
             .registered_processor_class_import_paths()

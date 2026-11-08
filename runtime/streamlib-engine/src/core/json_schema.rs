@@ -1294,7 +1294,8 @@ mod config_schema_rendering_tests {
     fn descriptor_carrying(config_schema: Option<serde_json::Value>) -> ProcessorDescriptor {
         let descriptor = ProcessorDescriptor::new(
             ProcessorClassShortName::new("ChannelsToArray").unwrap(),
-            ProcessorClassImportPath::new("streamlib_media_builtins::port_family_conversion").unwrap(),
+            ProcessorClassImportPath::new("streamlib_media_builtins::port_family_conversion")
+                .unwrap(),
             "a probe",
         );
         match config_schema {
