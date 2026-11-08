@@ -136,7 +136,8 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   to send it off the machine with gateway nodes. They do not mention `expose_port`.
 - **The scaffold** drops `H264Encoder` and `expose`. `TestPatternSource` → `HalftoneLensEffect`,
   with `BrightnessMeter` on a fan-out; the person sees the effect's output in Tato Studio's viewer.
-  `tatolab-h264` leaves the scaffold's dependencies.
+  `tatolab-h264` leaves the scaffold's dependencies. Superseded by `first-party-package-index`,
+  whose starter keeps the source alone.
 
 ## REMOVED
 

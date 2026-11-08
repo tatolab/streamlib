@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -475,7 +475,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes; amended by project-and-assets: a generator's output is stored as a fragment, a container in the document]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes, first-party-package-index)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -896,7 +896,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pip-published pack becomes that directory, the registry's owner and standards, a manager UI,
   and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes)
+## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes, first-party-package-index)
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -3684,7 +3684,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
   runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
