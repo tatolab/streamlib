@@ -39,6 +39,8 @@ reshapes #3216.
 - **No first-party module depends on another**: every `packages/*/pyproject.toml` depends on
   `tatolab-stream` by a minimum version, plus `numpy` for `tatolab-browser` and `tatolab-opus`.
   Today no first-party module reaches a project through another first-party module.
+- **Every `packages/` name is registered on PyPI** (checked 2026-11-08, `pypi.org/pypi/<name>/json`
+  answers 200 for all thirteen); `tatolab-ops`, not yet in `packages/`, is not.
 - **The scaffold** depends on `tatolab-stream`, `tatolab-h264`, `tatolab-testpattern` and `numpy`
   (`sdk/tatolab-stream/scaffold_template/pyproject.toml:5`), each floor raised to the runtime's
   version on render (`runtime/streamlib-engine/src/core/runtime/new_project_scaffold.rs:38-49`,
