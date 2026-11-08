@@ -223,3 +223,18 @@ def test_a_fragment_nested_deeper_than_a_graph_document_reads_is_refused_naming_
     assert "containers deep from the graph's root, and a graph document nests at most 126" in (
         message
     )
+
+
+@pytest.mark.parametrize("reserved_setting", ["name", "config"])
+def test_a_generator_promoting_a_keyword_add_takes_itself_is_refused(
+    reserved_setting: str,
+) -> None:
+    namespace: dict[str, Any] = {"__name__": "rig_streams"}
+    exec(f"def main(stream_builder, {reserved_setting}=None):\n    pass\n", namespace)
+
+    with pytest.raises(TypeError) as refusal:
+        graph_generator(namespace["main"])
+
+    assert f"promotes `{reserved_setting}`, which `stream_builder.add` takes itself" in str(
+        refusal.value
+    )

@@ -22,8 +22,8 @@ from tatolab.stream import (
     NodeReference,
     SetVariable,
     StreamBuilder,
-    compile_stream_to_graph,
-    stream,
+    run_graph_generator,
+    graph_generator,
 )
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
@@ -34,7 +34,7 @@ from tatolab.stream._node_declaration import (
 NODE_REFERENCE_SCHEMA_KEYWORD = "x-tatolab-node-reference"
 
 
-@stream
+@graph_generator
 def a_track_sent_through_a_variable_and_read_back(stream_builder: StreamBuilder) -> None:
     gateway = stream_builder.add(
         MoqGateway,
@@ -65,7 +65,7 @@ def nodes_by_type(graph: "dict[str, Any]") -> "dict[str, dict[str, Any]]":
 
 
 def test_each_node_is_named_by_its_import_path_in_the_module_and_names_others_by_reference():
-    nodes = nodes_by_type(compile_stream_to_graph(a_track_sent_through_a_variable_and_read_back))
+    nodes = nodes_by_type(run_graph_generator(a_track_sent_through_a_variable_and_read_back))
     gateway_name = nodes["tatolab.moq:MoqGateway"]["name"]
 
     assert nodes["tatolab.moq:MoqTrack"]["config"] == {

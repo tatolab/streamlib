@@ -118,6 +118,16 @@ fn flatten_one_level(
         Some(path_of_names) => format!("{path_of_names}{GRAPH_FRAGMENT_NODE_PATH_SEPARATOR}{name}"),
         None => name.to_string(),
     };
+    let mut node_name_by_cast: HashMap<String, &str> = HashMap::new();
+    for node in nodes {
+        let cast = cast_of(&node.name)?;
+        if node_name_by_cast.insert(cast.clone(), &node.name).is_some() {
+            return Err(Error::NodeNameTaken {
+                name: name_on_this_level(&node.name),
+                cast,
+            });
+        }
+    }
     let names_of_the_levels_running_nodes_cast: HashSet<String> = nodes
         .iter()
         .filter(|node| node.fragment.is_none())
@@ -383,9 +393,12 @@ impl GraphFragmentAsDrawn {
             {
                 interface_node.rendered_as_a_node()
             } else {
-                running_nodes_by_cast_name
+                let mut running = running_nodes_by_cast_name
                     .remove(&cast_or_as_written(&name_it_runs_under))
-                    .unwrap_or_else(|| rendered_as_stored(node))
+                    .unwrap_or_else(|| rendered_as_stored(node));
+                running.config = Some(node.config.clone());
+                running.config_checksum = compute_json_checksum(&node.config);
+                running
             };
             rendered.name = cast_or_as_written(&node.name);
             nodes.push(rendered);
@@ -402,9 +415,9 @@ impl GraphFragmentAsDrawn {
                     .iter()
                     .find(|running| {
                         running.source.node == source_runs_as
-                            && running.source.port == link.source.port
+                            && running.source.port == cast_or_as_written(&link.source.port)
                             && running.target.node == target_runs_as
-                            && running.target.port == link.target.port
+                            && running.target.port == cast_or_as_written(&link.target.port)
                     })
                     .cloned()
                     .unwrap_or_else(|| rendered_as_drawn(link));
@@ -468,6 +481,28 @@ impl GraphFragmentAsDrawn {
 }
 
 impl GraphFragmentsAsDrawn {
+    /// The path of names of the fragment holding the running node whose cast name is
+    /// `node_name_cast`, if a fragment holds it.
+    pub fn fragment_holding_the_running_node(&self, node_name_cast: &str) -> Option<&str> {
+        fn find_in<'drawn>(
+            fragments: &'drawn [GraphFragmentAsDrawn],
+            node_name_cast: &str,
+        ) -> Option<&'drawn str> {
+            for fragment in fragments {
+                if let Some(holder) = find_in(&fragment.fragments_it_holds, node_name_cast) {
+                    return Some(holder);
+                }
+                let mut names = HashSet::new();
+                fragment.running_node_names_cast(&mut names);
+                if names.contains(node_name_cast) {
+                    return Some(&fragment.path_of_names);
+                }
+            }
+            None
+        }
+        find_in(&self.fragments, node_name_cast)
+    }
+
     /// The path of names of every fragment at every level, cast: names no node of the stream
     /// may take while the fragment stands.
     pub fn fragment_names_flattened_and_cast(&self) -> HashSet<String> {
@@ -857,6 +892,10 @@ mod tests {
             ("blur", "tint")
         );
         assert_eq!(blur_into_tint.state, LinkStateOutput::Wired);
+        assert_eq!(
+            soft_holds.nodes[2].config,
+            Some(serde_json::json!({"reads_radius_of": {"node": "blur"}}))
+        );
         let outer_links: Vec<(&str, &str)> = render
             .links
             .iter()
@@ -878,6 +917,42 @@ mod tests {
                 .with_graph_fragments_flattened()
                 .unwrap()
                 .graph_the_runtime_runs
+        );
+    }
+
+    #[test]
+    fn two_fragments_of_one_name_on_one_level_are_refused_naming_it() {
+        let mut graph = a_camera_through_look_holding_soft_into_a_display();
+        let second_look = serde_json::json!({
+            "name": "Look", "type": "looks.generators:look",
+            "fragment": {"nodes": [], "links": []},
+        });
+        graph["nodes"].as_array_mut().unwrap().push(second_look);
+        let refusal = flattened(graph).expect_err("refused");
+        assert!(
+            matches!(&refusal, Error::NodeNameTaken { cast, .. } if cast == "look"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_node_inside_a_fragment_is_read_only_to_a_live_removal_or_rename() {
+        let flattening =
+            flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
+        let drawn = crate::core::graph_snapshot::GraphOnlyNodesAsDrawn {
+            fragments_as_drawn: flattening.fragments_as_drawn,
+            ..Default::default()
+        };
+        let refusal = drawn
+            .refuse_a_node_change_a_drawn_link_names(
+                "look/soft/blur",
+                crate::core::graph_snapshot::NodeChangeADrawnLinkBlocks::Removal,
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            refusal.contains("it is part of fragment `look/soft`, which its graph generator built"),
+            "{refusal}"
         );
     }
 }

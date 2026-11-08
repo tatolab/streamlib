@@ -91,6 +91,9 @@ _GRAPH_GENERATOR_TAKES_NO_ARGUMENTS = (
     "each parameter after the builder a setting the generator promotes."
 )
 
+# The keywords `StreamBuilder.add` reads itself, which no generator may promote.
+_KEYWORDS_ADD_TAKES_ITSELF = ("name", "config")
+
 # The generators running in this run, outermost first, by name and identity.
 _GRAPH_GENERATORS_RUNNING: contextvars.ContextVar[tuple[tuple[str, str], ...]] = (
     contextvars.ContextVar("_GRAPH_GENERATORS_RUNNING", default=())
@@ -197,6 +200,18 @@ def _the_function_unless_it_cannot_be_a_graph_generator(candidate: object) -> Fu
             f"`def {generator_function.__name__}(stream_builder: StreamBuilder, "
             f"radius: int = 4) -> None:`; `{module}:{qualname}` is "
             f"`{generator_function.__name__}{inspect.signature(generator_function)}`"
+        )
+    settings_add_takes_itself = [
+        parameter.name
+        for parameter in parameters[1:]
+        if parameter.name in _KEYWORDS_ADD_TAKES_ITSELF
+    ]
+    if settings_add_takes_itself:
+        raise TypeError(
+            f"graph generator `{module}:{qualname}` promotes "
+            f"{', '.join(f'`{name}`' for name in settings_add_takes_itself)}, which "
+            f"`stream_builder.add` takes itself — the fragment's name and a node's config — "
+            f"so no placement could set it. Give the setting another name."
         )
     return generator_function
 

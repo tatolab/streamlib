@@ -270,8 +270,8 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph document does not serialize: {e}")))
     }
 
-    /// Every node at every level, each under its path of names from the stream: the stream's
-    /// own, then each fragment's, depth first.
+    /// Every node at every level, each under its path of names from the stream, depth first:
+    /// a fragment's nodes come just before the fragment node itself.
     pub fn nodes_at_every_level(&self) -> Vec<(String, &GraphSnapshotNode)> {
         fn push_each_node_of_one_level<'graph>(
             nodes: &'graph [GraphSnapshotNode],
@@ -470,15 +470,26 @@ impl NodeChangeADrawnLinkBlocks {
 }
 
 impl GraphOnlyNodesAsDrawn {
-    /// Refuse `change` to the node named `node_name` while a drawn link between it
-    /// and a variable or interface node names it, which would leave that link
-    /// dangling in the graph `graph` renders.
+    /// Refuse `change` to the node named `node_name` while it is part of a fragment, or while a
+    /// drawn link between it and a fragment, a variable or an interface node names it, which
+    /// would leave that link dangling in the graph `graph` renders.
     pub fn refuse_a_node_change_a_drawn_link_names(
         &self,
         node_name: &str,
         change: NodeChangeADrawnLinkBlocks,
     ) -> Result<()> {
         let node_cast = cast_exposed_name_to_url_safe(node_name)?;
+        if let Some(fragment) = self
+            .fragments_as_drawn
+            .fragment_holding_the_running_node(&node_cast)
+        {
+            return Err(Error::GraphError(format!(
+                "node `{node_name}` cannot be {}: it is part of fragment `{fragment}`, which \
+                 its graph generator built and which is read-only; re-run the generator to \
+                 change it",
+                change.as_refused()
+            )));
+        }
         let names_the_node = |end: &LinkPortRefOutput| {
             cast_exposed_name_to_url_safe(&end.node).is_ok_and(|end_cast| end_cast == node_cast)
         };

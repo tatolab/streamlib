@@ -44,6 +44,8 @@ STREAM_ACTION_FOLLOW_POLL_SECONDS = 0.1
 RUNNING_NODE_STATE = "Running"
 #: The component an interface node carries what it declares under.
 GRAPH_INTERFACE_COMPONENT_KEY = "graph_interface"
+#: The component a variable node carries what it holds under.
+GRAPH_VARIABLE_COMPONENT_KEY = "graph_variable"
 #: The states a node passes through before its `setup` has run, as the engine renders them.
 NODE_STATES_BEFORE_SETUP_COMPLETED = ("Pending", "Idle")
 LINK_ERROR_STATE = "error"
@@ -292,7 +294,7 @@ class LocalApiClient:
 
 def node_states_at_every_level(nodes: "list[dict[str, Any]]", path_of_names: str) -> "dict[str, Any]":
     """Each running node's state under its path of names, inside every fragment `nodes` holds;
-    an interface node inside a fragment runs nothing and is left out."""
+    an interface or variable node inside a fragment runs nothing and is left out."""
     node_states: "dict[str, Any]" = {}
     for node in nodes:
         node_path = f"{path_of_names}{node['name']}"
@@ -300,7 +302,9 @@ def node_states_at_every_level(nodes: "list[dict[str, Any]]", path_of_names: str
         components = node.get("components", {})
         if isinstance(fragment, dict):
             node_states.update(node_states_at_every_level(fragment["nodes"], f"{node_path}/"))
-        elif path_of_names and GRAPH_INTERFACE_COMPONENT_KEY in components:
+        elif path_of_names and (
+            GRAPH_INTERFACE_COMPONENT_KEY in components or GRAPH_VARIABLE_COMPONENT_KEY in components
+        ):
             continue
         else:
             node_states[node_path] = components.get("state")
