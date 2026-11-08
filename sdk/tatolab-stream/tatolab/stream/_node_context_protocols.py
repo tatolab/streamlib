@@ -18,7 +18,7 @@ from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 if TYPE_CHECKING:
     from .clock import StreamClockReading
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
-    from .catalog import CatalogEntry
+    from .stream_facts import PortStreamFacts
     from ._message import Message
     from ._port_family_declaration import Input, Output
 
@@ -709,16 +709,15 @@ class LinkInputDataReader(Protocol):
         """Whether `port_name` has a message waiting."""
         ...
 
-    def inbound_link_catalog_entry(
+    def upstream_stream_facts(
         self, port_name: str, *, inbound_link: str | None = None
-    ) -> dict[str, Any] | None:
-        """The catalog entry the output port feeding `port_name` carries now.
+    ) -> PortStreamFacts | None:
+        """The stream facts the output port feeding `port_name` carries now.
 
-        `{"section": ..., "entry": {...}}` in hang's layout, or `None` when
-        nothing feeds the port or the upstream port carries no entry. A port fed
-        by more than one link names the one to read with `inbound_link`, the
-        name a read reports it under; without it, such a port raises naming its
-        links. The entry is documentation — nothing checks a payload against it.
+        `None` when nothing feeds the port or the upstream port states no
+        facts. A port fed by more than one link names the one to read with
+        `inbound_link`, the name a read reports it under; without it, such a
+        port raises naming its links. Nothing checks a payload against them.
         """
         ...
 
@@ -814,13 +813,12 @@ class LinkOutputDataWriter(Protocol):
         """
         ...
 
-    def set_catalog_entry(self, port_name: str, entry: CatalogEntry) -> None:
-        """Replace the catalog entry `port_name` carries — what `graph` renders
+    def set_stream_facts(self, port_name: str, stream_facts: PortStreamFacts) -> None:
+        """Replace the stream facts `port_name` carries — what `graph` renders
         under the port and what a downstream reader reads off its inbound link.
 
-        `entry` is one of `tatolab.stream.catalog`'s entries. One that hang's
-        catalog types do not read raises naming the port and the field, and
-        the port keeps the entry it had.
+        Facts of another family than the port's raise naming the port and both
+        families, and the port keeps the facts it had.
         """
         ...
 

@@ -12,9 +12,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, PortInfo, ProcessorNode,
 };
-use crate::core::processors::processor_instance_factory::{
-    refuse_catalog_entries_hang_does_not_read, refuse_port_names_not_cast_or_declared_twice,
-};
+use crate::core::processors::processor_instance_factory::refuse_port_names_not_cast_or_declared_twice;
 use crate::core::processors::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance,
 };
@@ -93,7 +91,6 @@ impl NodeTypesOneStreamResolves {
         how_its_nodes_run: HowANodeOfADescribedTypeRuns,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
-        refuse_catalog_entries_hang_does_not_read(&descriptor)?;
         let node_type = descriptor.processor_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {
             return Err(Error::Configuration(format!(
@@ -225,7 +222,7 @@ impl NodeTypesOneStreamResolves {
         };
         let mut instance = ProcessorInstance::new(constructor(node)?);
         instance.install_iceoryx2_resources()?;
-        instance.reach_the_catalog_entries_of(node);
+        instance.reach_the_stream_facts_of(node);
         Ok(instance)
     }
 
@@ -325,7 +322,6 @@ mod tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),

@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments; unbuilt: fragments, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -2423,7 +2423,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -3245,7 +3245,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3887,7 +3887,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension

@@ -24,11 +24,11 @@ pub mod opus_stream_layout;
 use crate::audio_window::{AudioSampleDtype, AudioWindowToEncode, DecodedAudioBlock};
 use crate::audio_window_to_encoded_packet_encoder::{
     AudioWindowToEncodedPacketEncoder, OpusEncoderApplication, OpusEncoderConfig,
-    OpusEncoderPortAudioEntry,
+    OpusEncoderPortStreamFacts,
 };
 use crate::encoded_packet_to_audio_block_decoder::{
     ArrivingEncodedAudioMessage, EncodedPacketToAudioBlockDecoder, OPUS_DECODER_PROCESSOR_NAME,
-    UpstreamCatalogEntry,
+    UpstreamPacketsStreamFacts,
 };
 use crate::opus_codec_refusal::OpusCodecNotice;
 
@@ -100,11 +100,13 @@ impl AudioWindowToEncodedPacketEncoderForPython {
         Ok(media_frame.map(|media_frame| PyBytes::new(python, &media_frame)))
     }
 
-    /// The catalog entry the last mint owes the output port, once.
-    fn take_audio_entry_owed_to_the_port(&mut self) -> Option<OpusEncoderPortAudioEntryForPython> {
+    /// The stream facts the last mint owes the output port, once.
+    fn take_stream_facts_owed_to_the_port(
+        &mut self,
+    ) -> Option<OpusEncoderPortStreamFactsForPython> {
         self.encoder
-            .take_audio_entry_owed_to_the_port()
-            .map(|audio_entry| OpusEncoderPortAudioEntryForPython { audio_entry })
+            .take_stream_facts_owed_to_the_port()
+            .map(|stream_facts| OpusEncoderPortStreamFactsForPython { stream_facts })
     }
 
     /// What the encoder did since the last call, for the node to log.
@@ -118,29 +120,29 @@ impl AudioWindowToEncodedPacketEncoderForPython {
     }
 }
 
-/// The audio catalog entry an encoder's output port carries for the instance
+/// The Packets stream facts an encoder's output port carries for the instance
 /// minted.
-#[pyclass(name = "OpusEncoderPortAudioEntry", frozen)]
-struct OpusEncoderPortAudioEntryForPython {
-    audio_entry: OpusEncoderPortAudioEntry,
+#[pyclass(name = "OpusEncoderPortStreamFacts", frozen)]
+struct OpusEncoderPortStreamFactsForPython {
+    stream_facts: OpusEncoderPortStreamFacts,
 }
 
 #[pymethods]
-impl OpusEncoderPortAudioEntryForPython {
+impl OpusEncoderPortStreamFactsForPython {
     #[getter]
-    fn number_of_channels(&self) -> u32 {
-        self.audio_entry.number_of_channels
+    fn channel_count(&self) -> u32 {
+        self.stream_facts.channel_count
     }
 
     #[getter]
     fn sample_rate(&self) -> u32 {
-        self.audio_entry.sample_rate
+        self.stream_facts.sample_rate
     }
 
-    /// The `OpusHead`, hex-encoded, as the entry's `description`.
+    /// The `OpusHead`, hex-encoded.
     #[getter]
-    fn hex_encoded_opus_identification_header(&self) -> &str {
-        &self.audio_entry.hex_encoded_opus_identification_header
+    fn codec_configuration_hex(&self) -> &str {
+        &self.stream_facts.codec_configuration_hex
     }
 }
 
@@ -161,16 +163,15 @@ impl EncodedPacketToAudioBlockDecoderForPython {
         }
     }
 
-    /// One arriving message decoded in the format the upstream port's catalog
-    /// entry names — `{"section": ..., "entry": {...}}` as
-    /// `inbound_link_catalog_entry` returns it — or `None` when it is
-    /// discarded or was all encoder priming.
+    /// One arriving message decoded in the format the upstream port's stream
+    /// facts name, in their wire form, or `None` when it is discarded or was
+    /// all encoder priming.
     #[pyo3(signature = (
         payload_bytes,
         timestamp_ns,
         starts_group,
         lost_since_last_read,
-        upstream_catalog_entry,
+        upstream_packets_stream_facts,
     ))]
     fn decode_one_arriving_message(
         &mut self,
@@ -178,10 +179,10 @@ impl EncodedPacketToAudioBlockDecoderForPython {
         timestamp_ns: i64,
         starts_group: bool,
         lost_since_last_read: u64,
-        upstream_catalog_entry: Option<&Bound<'_, PyDict>>,
+        upstream_packets_stream_facts: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Option<DecodedAudioBlockForPython>> {
-        let upstream_catalog_entry = upstream_catalog_entry
-            .map(upstream_catalog_entry_from_python)
+        let upstream_packets_stream_facts = upstream_packets_stream_facts
+            .map(upstream_packets_stream_facts_from_python)
             .transpose()?;
         let decoded = self.decoder.decode_one_arriving_message(
             &ArrivingEncodedAudioMessage {
@@ -190,7 +191,7 @@ impl EncodedPacketToAudioBlockDecoderForPython {
                 starts_group,
                 lost_since_last_read,
             },
-            upstream_catalog_entry.as_ref(),
+            upstream_packets_stream_facts.as_ref(),
         )?;
         Ok(decoded.map(|block| DecodedAudioBlockForPython { block }))
     }
@@ -211,44 +212,35 @@ impl EncodedPacketToAudioBlockDecoderForPython {
     }
 }
 
-/// The fields of hang's audio entry the decoder reads, refusing by name a
-/// document that is not one `inbound_link_catalog_entry` writes.
-fn upstream_catalog_entry_from_python(
-    catalog_entry: &Bound<'_, PyDict>,
-) -> PyResult<UpstreamCatalogEntry> {
+/// The Packets stream facts the decoder reads, from their wire form as
+/// `PacketsStreamFacts.to_wire()` writes it, refusing by name a field of the
+/// wrong type.
+fn upstream_packets_stream_facts_from_python(
+    stream_facts_wire: &Bound<'_, PyDict>,
+) -> PyResult<UpstreamPacketsStreamFacts> {
     let refused = |what: &str| {
         PyValueError::new_err(format!(
-            "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's catalog entry {what}"
+            "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's stream facts {what}"
         ))
     };
-    let section: String = catalog_entry
-        .get_item("section")?
-        .ok_or_else(|| refused("names no section"))?
-        .extract()
-        .map_err(|_| refused("names a section that is not a string"))?;
-    let fields = catalog_entry
-        .get_item("entry")?
-        .ok_or_else(|| refused("carries no `entry`"))?;
-    let fields = fields
-        .cast::<PyDict>()
-        .map_err(|_| refused("carries an `entry` that is not a mapping"))?;
     let optional_field = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-        Ok(fields.get_item(name)?.filter(|value| !value.is_none()))
+        Ok(stream_facts_wire
+            .get_item(name)?
+            .filter(|value| !value.is_none()))
     };
-    Ok(UpstreamCatalogEntry {
-        section,
-        codec: optional_field("codec")?
+    Ok(UpstreamPacketsStreamFacts {
+        rfc6381_codec: optional_field("rfc6381_codec")?
             .map(|codec| codec.extract())
             .transpose()
-            .map_err(|_| refused("names a `codec` that is not a string"))?,
-        number_of_channels: optional_field("numberOfChannels")?
+            .map_err(|_| refused("name an `rfc6381_codec` that is not a string"))?,
+        channel_count: optional_field("channel_count")?
             .map(|channels| channels.extract())
             .transpose()
-            .map_err(|_| refused("names a `numberOfChannels` that is not a count"))?,
-        description: optional_field("description")?
-            .map(|description| description.extract())
+            .map_err(|_| refused("name a `channel_count` that is not a count"))?,
+        codec_configuration_hex: optional_field("codec_configuration_hex")?
+            .map(|configuration| configuration.extract())
             .transpose()
-            .map_err(|_| refused("carries a `description` that is not a string"))?,
+            .map_err(|_| refused("carry a `codec_configuration_hex` that is not a string"))?,
     })
 }
 
@@ -289,7 +281,7 @@ impl DecodedAudioBlockForPython {
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<AudioWindowToEncodedPacketEncoderForPython>()?;
-    module.add_class::<OpusEncoderPortAudioEntryForPython>()?;
+    module.add_class::<OpusEncoderPortStreamFactsForPython>()?;
     module.add_class::<EncodedPacketToAudioBlockDecoderForPython>()?;
     module.add_class::<DecodedAudioBlockForPython>()?;
     Ok(())

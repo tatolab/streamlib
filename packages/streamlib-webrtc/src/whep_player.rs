@@ -75,11 +75,12 @@ impl WhepPlayerOutputPort {
     }
 }
 
-/// What one port's catalog entry states, taken from the stream itself.
+/// The Packets stream facts one port states, taken from the stream itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WhepPlayerCatalogEntry {
-    /// The codec string and coded extent the SPS carries; no `description`,
-    /// because the parameter sets ride inline in the access units.
+pub(crate) enum WhepPlayerPacketsStreamFacts {
+    /// The codec string and coded extent the SPS carries; no codec
+    /// configuration, because the parameter sets ride inline in the access
+    /// units.
     Video {
         codec: String,
         coded_width: u32,
@@ -93,32 +94,24 @@ pub(crate) enum WhepPlayerCatalogEntry {
     },
 }
 
-impl WhepPlayerCatalogEntry {
-    /// The catalog section the entry belongs to.
-    pub(crate) fn section(&self) -> &'static str {
-        match self {
-            Self::Video { .. } => "video",
-            Self::Audio { .. } => "audio",
-        }
-    }
-
-    /// The entry's fields as one JSON object, in hang's field names.
-    pub(crate) fn entry_json(&self) -> String {
+impl WhepPlayerPacketsStreamFacts {
+    /// The facts' fields as one JSON object, in `PacketsStreamFacts`' names.
+    pub(crate) fn stream_facts_json(&self) -> String {
         match self {
             Self::Video {
                 codec,
                 coded_width,
                 coded_height,
             } => format!(
-                "{{\"codec\":{},\"codedWidth\":{coded_width},\"codedHeight\":{coded_height}}}",
+                "{{\"rfc6381_codec\":{},\"coded_width\":{coded_width},\"coded_height\":{coded_height}}}",
                 json_string(codec)
             ),
             Self::Audio {
                 number_of_channels,
                 opus_identification_header_hex,
             } => format!(
-                "{{\"codec\":\"opus\",\"sampleRate\":{OPUS_RTP_SAMPLE_RATE_HZ},\
-                 \"numberOfChannels\":{number_of_channels},\"description\":{}}}",
+                "{{\"rfc6381_codec\":\"opus\",\"sample_rate\":{OPUS_RTP_SAMPLE_RATE_HZ},\
+                 \"channel_count\":{number_of_channels},\"codec_configuration_hex\":{}}}",
                 json_string(opus_identification_header_hex)
             ),
         }
@@ -152,7 +145,7 @@ pub(crate) struct MessageTheWhepPlayerWrites {
     /// Only a sync point opens a group on the video port; every Opus packet
     /// opens one.
     pub starts_group: bool,
-    pub catalog_entry: WhepPlayerCatalogEntry,
+    pub stream_facts: WhepPlayerPacketsStreamFacts,
 }
 
 impl MessageTheWhepPlayerWrites {
@@ -165,7 +158,7 @@ impl MessageTheWhepPlayerWrites {
                 media_frame: access_unit.media_frame_bytes()?,
                 timestamp_ns: access_unit.timestamp_ns,
                 starts_group: access_unit.is_sync_point,
-                catalog_entry: WhepPlayerCatalogEntry::Video {
+                stream_facts: WhepPlayerPacketsStreamFacts::Video {
                     codec: access_unit.sequence_parameter_set.avc1_codec_string(),
                     coded_width: access_unit.sequence_parameter_set.coded_width,
                     coded_height: access_unit.sequence_parameter_set.coded_height,
@@ -176,7 +169,7 @@ impl MessageTheWhepPlayerWrites {
                 media_frame: packet.media_frame_bytes()?,
                 timestamp_ns: packet.timestamp_ns,
                 starts_group: true,
-                catalog_entry: WhepPlayerCatalogEntry::Audio {
+                stream_facts: WhepPlayerPacketsStreamFacts::Audio {
                     number_of_channels: packet.channel_layout.channel_count(),
                     opus_identification_header_hex:
                         hex_encoded_opus_identification_header_for_rtp_stream(packet.channel_layout),
@@ -204,10 +197,10 @@ pub(crate) trait WhepPlayerOutputPorts {
         starts_group: bool,
     ) -> Result<(), String>;
 
-    fn set_catalog_entry(
+    fn set_stream_facts(
         &self,
         port: WhepPlayerOutputPort,
-        catalog_entry: &WhepPlayerCatalogEntry,
+        stream_facts: &WhepPlayerPacketsStreamFacts,
     ) -> Result<(), String>;
 
     fn log(&self, level: WhepPlayerLogLevel, message: &str);
@@ -278,7 +271,7 @@ impl WhepPlayerStopSignal {
 /// What a player has said about its ports so far, so it says each thing once.
 #[derive(Default)]
 struct WhatThePlayerStated {
-    catalog_entry_by_port: [Option<WhepPlayerCatalogEntry>; 2],
+    stream_facts_by_port: [Option<WhepPlayerPacketsStreamFacts>; 2],
     media_frames_written_by_port: [u64; 2],
     reported_an_oversized_media_frame: bool,
 }
@@ -385,19 +378,18 @@ fn write_one_message(
     stated: &mut WhatThePlayerStated,
 ) -> Result<(), String> {
     let port = message.port;
-    let entry_stated = &mut stated.catalog_entry_by_port[port.index()];
-    if entry_stated.as_ref() != Some(&message.catalog_entry) {
-        output_ports.set_catalog_entry(port, &message.catalog_entry)?;
+    let stream_facts_stated = &mut stated.stream_facts_by_port[port.index()];
+    if stream_facts_stated.as_ref() != Some(&message.stream_facts) {
+        output_ports.set_stream_facts(port, &message.stream_facts)?;
         output_ports.log(
             WhepPlayerLogLevel::Info,
             &format!(
-                "WhepPlayer: `{}` states {} {}",
+                "WhepPlayer: `{}` states stream facts {}",
                 port.port_name(),
-                message.catalog_entry.section(),
-                message.catalog_entry.entry_json()
+                message.stream_facts.stream_facts_json()
             ),
         );
-        *entry_stated = Some(message.catalog_entry.clone());
+        *stream_facts_stated = Some(message.stream_facts.clone());
     }
     if message.media_frame.len() > HELPER_LINK_PAYLOAD_CEILING_BYTES
         && !stated.reported_an_oversized_media_frame

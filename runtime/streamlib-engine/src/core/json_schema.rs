@@ -133,10 +133,14 @@ pub struct PortInfoOutput {
     /// port without one renders exactly what it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
-    /// Catalog entry this output port carries now, in hang's layout. Absent
-    /// from the rendering on a port that carries none.
+    /// The stream facts this output port carries now, tagged by family. Absent
+    /// from the rendering on a port that states none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    pub stream_facts: Option<crate::core::descriptors::PortStreamFacts>,
+    /// `false` on a Records port: its values are not checked against a type.
+    /// Absent on every other family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values_checked: Option<bool>,
     /// The port family this port declares and its family's keys. Absent from
     /// the rendering on a graph variable's value port, which keeps the family
     /// of the setter's source port.
@@ -430,10 +434,10 @@ pub struct PortDescriptorOutput {
     /// rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
-    /// Catalog entry declared by this output port, in hang's layout. Absent
-    /// from the rendering on a port that declares none.
+    /// `false` on a Records port: its values are not checked against a type.
+    /// Absent on every other family.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    pub values_checked: Option<bool>,
     /// The port family this port declares and its family's keys.
     pub family: crate::core::descriptors::PortFamilyDeclaration,
 }
@@ -481,7 +485,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
 impl ProcessorNodePortsOutput {
     /// This node's ports, with any `match_device` contract its own device
     /// stream has settled rendered as the five values it settled to, and each
-    /// output port's catalog entry as it carries it now.
+    /// output port's stream facts as it carries them now.
     ///
     /// A port declaring the sentinel renders it until its processor's `setup()`
     /// opens a device, and the resolved values from then on: machine-dependent
@@ -509,9 +513,9 @@ impl ProcessorNodePortsOutput {
                 .outputs
                 .iter()
                 .map(|port| PortInfoOutput {
-                    catalog_entry: node
-                        .catalog_entries_of_output_ports()
-                        .current_entry_of(&port.name),
+                    stream_facts: node
+                        .stream_facts_of_output_ports()
+                        .current_facts_of(&port.name),
                     ..PortInfoOutput::from(port)
                 })
                 .collect(),
@@ -544,6 +548,12 @@ impl PortInfoOutput {
     }
 }
 
+/// `Some(false)` for a Records port, whose values no type checks; `None`
+/// otherwise.
+fn values_checked_of(family: &crate::core::descriptors::PortFamilyDeclaration) -> Option<bool> {
+    (family.family == crate::core::descriptors::PortFamily::Records).then_some(false)
+}
+
 impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
     fn from(port: &crate::core::graph::PortInfo) -> Self {
         Self {
@@ -553,7 +563,8 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
-            catalog_entry: port.catalog_entry.clone(),
+            stream_facts: None,
+            values_checked: values_checked_of(&port.family),
             family: Some(port.family.clone()),
         }
     }
@@ -711,7 +722,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
-            catalog_entry: port.catalog_entry.clone(),
+            values_checked: values_checked_of(&port.family),
             family: port.family.clone(),
         }
     }
@@ -919,7 +930,6 @@ mod port_rendering_tests {
             delivery_profile: Some("newest".to_string()),
             borrow_quota: None,
             audio_window: None,
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -933,23 +943,17 @@ mod port_rendering_tests {
         assert_renders_exactly(&json, &PORT_INFO_KEYS);
     }
 
-    fn msgpack_snapshot_catalog_entry() -> crate::core::descriptors::CatalogEntry {
-        crate::core::descriptors::BinaryEntry {
-            mode: crate::core::descriptors::CatalogDataTrackMode::Snapshot,
-            mime: Some("application/msgpack".to_string()),
-        }
-        .into()
-    }
-
-    fn a_node_whose_output_declares(
-        catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    fn a_node_whose_output_is(
+        family: crate::core::descriptors::PortFamily,
+        config: Option<serde_json::Value>,
+        frame_rate: Option<crate::core::descriptors::ImageOutputPortFrameRate>,
     ) -> crate::core::graph::ProcessorNode {
         crate::core::graph::ProcessorNode::new(
             streamlib_processor_schema::ProcessorClassImportPath::new("tests.CameraSource")
                 .expect("a legal import path"),
             Some(crate::core::descriptors::NodeKind::Process),
             "CameraSource",
-            None,
+            config,
             Vec::new(),
             vec![crate::core::graph::PortInfo {
                 name: "video".to_string(),
@@ -958,10 +962,10 @@ mod port_rendering_tests {
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
-                catalog_entry,
-                family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-                    crate::core::descriptors::PortFamily::Image,
-                ),
+                family: crate::core::descriptors::PortFamilyDeclaration {
+                    frame_rate,
+                    ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
+                },
             }],
         )
     }
@@ -1032,19 +1036,22 @@ mod port_rendering_tests {
     }
 
     #[test]
-    fn an_output_port_renders_the_catalog_entry_it_declared_beside_the_four() {
-        let rendered = serde_json::to_value(ProcessorNodeOutput::from(
-            &a_node_whose_output_declares(Some(msgpack_snapshot_catalog_entry())),
-        ))
+    fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_facts() {
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_whose_output_is(
+            crate::core::descriptors::PortFamily::Image,
+            Some(serde_json::json!({"frames_per_second": 30})),
+            Some(
+                crate::core::descriptors::ImageOutputPortFrameRate::FromConfig {
+                    config_key: "frames_per_second".into(),
+                },
+            ),
+        )))
         .unwrap();
         let output = &rendered["ports"]["outputs"][0];
 
         assert_eq!(
-            output["catalog_entry"],
-            serde_json::json!({
-                "section": "binary",
-                "entry": {"mode": "snapshot", "mime": "application/msgpack"},
-            })
+            output["stream_facts"],
+            serde_json::json!({"family": "image", "frame_rate": {"numerator": 30, "denominator": 1}})
         );
         assert_renders_exactly(
             output,
@@ -1053,54 +1060,63 @@ mod port_rendering_tests {
                 "description",
                 "port_kind",
                 "delivery_profile",
-                "catalog_entry",
+                "stream_facts",
                 "family",
             ],
         );
     }
 
     #[test]
-    fn an_output_port_renders_the_entry_it_carries_now_rather_than_the_declared_one() {
-        let node = a_node_whose_output_declares(None);
-        let undeclared = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
-        assert_renders_exactly(&undeclared["ports"]["outputs"][0], &PORT_INFO_KEYS);
+    fn an_output_port_renders_the_facts_it_carries_now() {
+        let node =
+            a_node_whose_output_is(crate::core::descriptors::PortFamily::Packets, None, None);
+        let unstated = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+        assert_renders_exactly(&unstated["ports"]["outputs"][0], &PORT_INFO_KEYS);
 
-        node.catalog_entries_of_output_ports()
-            .replace_entry_of(
+        node.stream_facts_of_output_ports()
+            .replace_facts_of(
                 "video",
-                crate::core::descriptors::VideoEntry {
-                    codec: "avc1.64001f".to_string(),
+                crate::core::descriptors::PacketsStreamFacts {
+                    rfc6381_codec: Some("avc1.64001f".to_string()),
                     coded_width: Some(1280),
                     coded_height: Some(720),
-                    description: None,
+                    ..Default::default()
                 }
                 .into(),
             )
-            .expect("hang reads the entry");
+            .expect("a Packets port carries Packets facts");
         let replaced = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
         assert_eq!(
-            replaced["ports"]["outputs"][0]["catalog_entry"],
+            replaced["ports"]["outputs"][0]["stream_facts"],
             serde_json::json!({
-                "section": "video",
-                "entry": {"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720},
+                "family": "packets",
+                "rfc6381_codec": "avc1.64001f",
+                "coded_width": 1280,
+                "coded_height": 720,
             })
         );
     }
 
     #[test]
-    fn a_port_descriptor_renders_the_catalog_entry_it_declared() {
+    fn a_records_port_renders_its_values_unchecked_in_the_graph_and_the_registry() {
+        let node =
+            a_node_whose_output_is(crate::core::descriptors::PortFamily::Records, None, None);
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+        assert_eq!(
+            rendered["ports"]["outputs"][0]["values_checked"],
+            serde_json::json!(false)
+        );
+
         let declared = crate::core::PortDescriptor::new(
-            "video",
-            "Frames",
+            "detections",
+            "Detections",
             true,
             crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
+                crate::core::descriptors::PortFamily::Records,
             ),
-        )
-        .with_catalog_entry(msgpack_snapshot_catalog_entry());
+        );
         let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
-
-        assert_eq!(json["catalog_entry"]["section"], "binary");
+        assert_eq!(json["values_checked"], serde_json::json!(false));
         assert_renders_exactly(
             &json,
             &[
@@ -1108,7 +1124,7 @@ mod port_rendering_tests {
                 "description",
                 "required",
                 "delivery_profile",
-                "catalog_entry",
+                "values_checked",
                 "family",
             ],
         );
@@ -1125,7 +1141,6 @@ mod port_rendering_tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1175,7 +1190,6 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(declared_window_contract()),
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1217,7 +1231,6 @@ mod port_rendering_tests {
                     hop: 960,
                 },
             )),
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1247,7 +1260,6 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
-            catalog_entry: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1280,7 +1292,6 @@ mod port_rendering_tests {
                 delivery_profile: Some("ordered".to_string()),
                 borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
-                catalog_entry: None,
                 family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                     crate::core::descriptors::PortFamily::Image,
                 ),

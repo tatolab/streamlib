@@ -29,7 +29,7 @@ struct ObjectWritten {
 #[derive(Default)]
 struct WhatTheReceiveWrote {
     objects: Vec<ObjectWritten>,
-    catalog_entries: Vec<serde_json::Value>,
+    packets_stream_facts: Vec<serde_json::Value>,
     given_up_groups: u64,
 }
 
@@ -49,12 +49,15 @@ impl MoqReceivedTrackOutput for RecordedReceiveOutput {
         self.0.lock().unwrap().given_up_groups += given_up_group_count;
     }
 
-    fn set_catalog_entry(&mut self, section_and_entry: &serde_json::Value) {
+    fn set_packets_stream_facts_read_from_the_remote_catalog_entry(
+        &mut self,
+        packets_stream_facts: &serde_json::Value,
+    ) {
         self.0
             .lock()
             .unwrap()
-            .catalog_entries
-            .push(section_and_entry.clone());
+            .packets_stream_facts
+            .push(packets_stream_facts.clone());
     }
 
     fn stream_time_now_ns(&self) -> i64 {
@@ -204,7 +207,11 @@ fn a_track_written_by_a_send_reaches_a_receive_through_the_relay_in_group_order(
     );
 
     let received = received.lock().unwrap();
-    assert_eq!(received.catalog_entries.first(), Some(&catalog_entry));
+    assert!(
+        received.packets_stream_facts.is_empty(),
+        "a json track's entry states no Packets facts: {:?}",
+        received.packets_stream_facts
+    );
     let indices: Vec<u64> = received
         .objects
         .iter()

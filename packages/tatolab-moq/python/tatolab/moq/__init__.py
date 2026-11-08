@@ -186,7 +186,8 @@ class MoqTrackConfig:
     catalog: Annotated[
         "dict[str, Any] | None",
         "The track's catalog entry, `{\"section\": ..., \"entry\": {...}}` in hang's layout, "
-        "replacing the entry of the port feeding its send. Absent: that port's entry.",
+        "replacing the entry built from the stream facts of the port feeding its send. "
+        "Absent: the built entry.",
     ] = None
 
     def __post_init__(self) -> None:
@@ -215,8 +216,8 @@ class MoqTrackConfig:
         "Declares one outgoing track of a `MoqGateway`'s broadcast.\n\n"
         "A stream holds it as a graph variable, and one `MoqTrackSend` writes to it by "
         "reference; a second send naming the same track is refused at load. Its catalog "
-        "entry is `catalog` when set and the entry of the port feeding its send "
-        "otherwise. It has no ports."
+        "entry is `catalog` when set and otherwise the one built from the stream facts of "
+        "the port feeding its send. It has no ports."
     ),
 )
 class MoqTrack:
@@ -268,8 +269,9 @@ class MoqTrackSendConfig:
         "Payload bytes go to the relay as written, stamped with the message's own stamp; "
         "a message with `starts_group` set opens a new group at the relay, and the rest "
         "continue it. Under backpressure, or after a message reporting a loss, the rest "
-        "of the group is dropped and the next group starts clean. The entry of the port "
-        "feeding `content` is the track's catalog entry unless the track names its own. "
+        "of the group is dropped and the next group starts clean. The stream facts of "
+        "the port feeding `content` build the track's catalog entry unless the track names "
+        "its own. "
         "An Image carries no bytes off its machine: encode it first."
     ),
 )
@@ -300,10 +302,11 @@ class MoqTrackSend:
         if publisher is None:
             return
         while (message := ctx.inputs.read_message(SEND_CONTENT_INPUT_PORT)) is not None:
-            publisher.send_the_upstream_catalog_entry_when_it_changed(
-                ctx.inputs.inbound_link_catalog_entry(
-                    SEND_CONTENT_INPUT_PORT, inbound_link=message.inbound_link
-                )
+            upstream_stream_facts = ctx.inputs.upstream_stream_facts(
+                SEND_CONTENT_INPUT_PORT, inbound_link=message.inbound_link
+            )
+            publisher.send_the_upstream_stream_facts_when_they_changed(
+                None if upstream_stream_facts is None else upstream_stream_facts.to_wire()
             )
             publisher.send_message(
                 message.payload,

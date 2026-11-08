@@ -18,10 +18,9 @@ enum WhatThePortsRecorded {
         timestamp_ns: i64,
         starts_group: bool,
     },
-    Entry {
+    StreamFacts {
         port: WhepPlayerOutputPort,
-        section: &'static str,
-        entry_json: String,
+        stream_facts_json: String,
     },
 }
 
@@ -54,17 +53,16 @@ impl WhepPlayerOutputPorts for RecordedOutputPorts {
         Ok(())
     }
 
-    fn set_catalog_entry(
+    fn set_stream_facts(
         &self,
         port: WhepPlayerOutputPort,
-        catalog_entry: &WhepPlayerCatalogEntry,
+        stream_facts: &WhepPlayerPacketsStreamFacts,
     ) -> Result<(), String> {
         self.recorded
             .borrow_mut()
-            .push(WhatThePortsRecorded::Entry {
+            .push(WhatThePortsRecorded::StreamFacts {
                 port,
-                section: catalog_entry.section(),
-                entry_json: catalog_entry.entry_json(),
+                stream_facts_json: stream_facts.stream_facts_json(),
             });
         Ok(())
     }
@@ -162,7 +160,7 @@ fn access_unit(
         media_frame: vec![0x25, 0, 0, 0, 1, 0x65],
         timestamp_ns,
         starts_group,
-        catalog_entry: WhepPlayerCatalogEntry::Video {
+        stream_facts: WhepPlayerPacketsStreamFacts::Video {
             codec: "avc1.42e01f".to_string(),
             coded_width,
             coded_height: 192,
@@ -176,7 +174,7 @@ fn opus_packet(timestamp_ns: i64) -> MessageTheWhepPlayerWrites {
         media_frame: vec![0x25, 0x78, 1, 2, 3],
         timestamp_ns,
         starts_group: true,
-        catalog_entry: WhepPlayerCatalogEntry::Audio {
+        stream_facts: WhepPlayerPacketsStreamFacts::Audio {
             number_of_channels: 1,
             opus_identification_header_hex: "4f707573486561640101000080bb0000000000".to_string(),
         },
@@ -334,7 +332,7 @@ fn only_a_sync_point_opens_a_group_on_the_video_port_and_every_opus_packet_opens
                 starts_group,
                 ..
             } => Some((*port, *timestamp_ns, *starts_group)),
-            WhatThePortsRecorded::Entry { .. } => None,
+            WhatThePortsRecorded::StreamFacts { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -366,11 +364,10 @@ fn each_entry_is_stated_in_hangs_names_before_the_first_frame_and_again_only_on_
     play_until_stopped(&dialer, &output_ports, &stop_signal, &mut |_| {});
 
     let recorded = output_ports.recorded.borrow();
-    let video_entry = |coded_width: u32| WhatThePortsRecorded::Entry {
+    let video_stream_facts = |coded_width: u32| WhatThePortsRecorded::StreamFacts {
         port: WhepPlayerOutputPort::EncodedVideo,
-        section: "video",
-        entry_json: format!(
-            "{{\"codec\":\"avc1.42e01f\",\"codedWidth\":{coded_width},\"codedHeight\":192}}"
+        stream_facts_json: format!(
+            "{{\"rfc6381_codec\":\"avc1.42e01f\",\"coded_width\":{coded_width},\"coded_height\":192}}"
         ),
     };
     let write = |message: MessageTheWhepPlayerWrites| WhatThePortsRecorded::Write {
@@ -382,18 +379,17 @@ fn each_entry_is_stated_in_hangs_names_before_the_first_frame_and_again_only_on_
     assert_eq!(
         *recorded,
         vec![
-            video_entry(320),
+            video_stream_facts(320),
             write(access_unit(true, 1_000, 320)),
-            WhatThePortsRecorded::Entry {
+            WhatThePortsRecorded::StreamFacts {
                 port: WhepPlayerOutputPort::EncodedAudio,
-                section: "audio",
-                entry_json: "{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":1,\
-                             \"description\":\"4f707573486561640101000080bb0000000000\"}"
+                stream_facts_json: "{\"rfc6381_codec\":\"opus\",\"sample_rate\":48000,\"channel_count\":1,\
+                             \"codec_configuration_hex\":\"4f707573486561640101000080bb0000000000\"}"
                     .to_string(),
             },
             write(opus_packet(1_000)),
             write(access_unit(false, 2_000, 320)),
-            video_entry(640),
+            video_stream_facts(640),
             write(access_unit(true, 3_000, 640)),
         ]
     );
@@ -442,15 +438,15 @@ fn a_backoff_wait_ends_as_soon_as_the_stop_arrives() {
 }
 
 #[test]
-fn a_codec_string_with_a_quote_is_escaped_in_the_entry_json() {
-    let entry = WhepPlayerCatalogEntry::Video {
+fn a_codec_string_with_a_quote_is_escaped_in_the_stream_facts_json() {
+    let stream_facts = WhepPlayerPacketsStreamFacts::Video {
         codec: "avc1\"x".to_string(),
         coded_width: 1,
         coded_height: 1,
     };
     assert_eq!(
-        entry.entry_json(),
-        "{\"codec\":\"avc1\\\"x\",\"codedWidth\":1,\"codedHeight\":1}"
+        stream_facts.stream_facts_json(),
+        "{\"rfc6381_codec\":\"avc1\\\"x\",\"coded_width\":1,\"coded_height\":1}"
     );
 }
 

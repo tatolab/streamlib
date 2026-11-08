@@ -5,7 +5,7 @@
 //!
 //! RTP carries neither the codec's profile and level nor the extent, so the
 //! sequence parameter set is the only place a WHEP player can learn them for
-//! its port's catalog entry.
+//! its port's stream facts.
 
 use crate::error::{Result, WebRtcExtensionError};
 
@@ -17,16 +17,16 @@ pub(crate) struct SequenceParameterSet {
     /// reserved bits, as the SPS's second byte carries them.
     pub constraint_set_flags: u8,
     pub level_idc: u8,
-    /// Width before the conformance crop — the codec-aligned extent a catalog
-    /// entry's `codedWidth` means and `H264Encoder` writes.
+    /// Width before the conformance crop — the codec-aligned extent stream
+    /// facts' `coded_width` means and `H264Encoder` writes.
     pub coded_width: u32,
     /// Height before the conformance crop.
     pub coded_height: u32,
 }
 
 impl SequenceParameterSet {
-    /// The WebCodecs codec string hang's catalog spells this stream as —
-    /// `avc1.PPCCLL` in lowercase hex.
+    /// The RFC 6381 codec string this stream is spelled as — `avc1.PPCCLL`
+    /// in lowercase hex.
     pub(crate) fn avc1_codec_string(&self) -> String {
         format!(
             "avc1.{:02x}{:02x}{:02x}",
@@ -312,9 +312,9 @@ mod tests {
     };
 
     #[test]
-    fn the_extent_is_the_coded_one_a_catalog_entry_names() {
+    fn the_extent_is_the_coded_one_stream_facts_name() {
         // 320x180 displayed, coded at 320x192 with the bottom 12 rows cropped.
-        // The entry carries the coded extent, which is what `H264Encoder`
+        // The facts carry the coded extent, which is what `H264Encoder`
         // writes for the same stream.
         let parsed =
             parse_sequence_parameter_set(&constrained_baseline_320x180_sequence_parameter_set())

@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A helper's catalog-entry ops: replacing an output port's entry, and reading
-//! the entry of the output port feeding one of its inputs. Neither reads a
+//! A helper's stream-facts ops: replacing an output port's facts, and reading
+//! the facts of the output port feeding one of its inputs. Neither reads a
 //! payload.
 
 use std::sync::Arc;
@@ -11,48 +11,45 @@ use super::failure_the_node_reported_of_itself::FailureTheNodeReportedOfItself;
 use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
-    EscalateRequestReadInboundLinkCatalogEntry, EscalateRequestSetOutputPortCatalogEntry,
+    EscalateRequestReadInboundLinkStreamFacts, EscalateRequestSetOutputPortStreamFacts,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
-use crate::core::descriptors::CatalogEntry;
-use crate::core::output_port_catalog_entries::{
-    CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
+use crate::core::output_port_stream_facts::{
+    StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
 
 /// What the node a helper-placed processor runs for reaches beside the GPU: its
-/// own output ports' catalog entries, the upstream ones its inbound links
+/// own output ports' stream facts, the upstream ones its inbound links
 /// reach, the helper's leases on the runtime's shared native services, the
 /// failure the node reported of itself, and what its output links keep of its
 /// output frames.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
-    pub(crate) catalog_entries_of_its_output_ports: Arc<CatalogEntriesOfOutputPorts>,
-    pub(crate) upstream_catalog_entries_by_its_inbound_links:
-        Arc<UpstreamCatalogEntriesByInboundLink>,
+    pub(crate) stream_facts_of_its_output_ports: Arc<StreamFactsOfOutputPorts>,
+    pub(crate) upstream_stream_facts_by_its_inbound_links: Arc<UpstreamStreamFactsByInboundLink>,
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
     pub(crate) output_frames_kept_by_its_output_links:
         Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
 }
 
-/// Replace the entry the helper's output port carries.
-pub(super) fn handle_set_output_port_catalog_entry(
+/// Replace the stream facts the helper's output port carries.
+pub(super) fn handle_set_output_port_stream_facts(
     what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     rid: String,
-    request: EscalateRequestSetOutputPortCatalogEntry,
+    request: EscalateRequestSetOutputPortStreamFacts,
 ) -> EscalateResponse {
-    let EscalateRequestSetOutputPortCatalogEntry {
+    let EscalateRequestSetOutputPortStreamFacts {
         request_id: _,
         port,
-        section,
-        entry,
+        stream_facts,
     } = request;
     match what_the_node_reaches
-        .catalog_entries_of_its_output_ports
-        .replace_entry_of(&port, CatalogEntry { section, entry })
+        .stream_facts_of_its_output_ports
+        .replace_facts_of(&port, stream_facts)
     {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
@@ -65,25 +62,25 @@ pub(super) fn handle_set_output_port_catalog_entry(
     }
 }
 
-/// Answer with the current entry of the output port feeding the helper's input
+/// Answer with the current facts of the output port feeding the helper's input
 /// port, or with none.
-pub(super) fn handle_read_inbound_link_catalog_entry(
+pub(super) fn handle_read_inbound_link_stream_facts(
     what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
     rid: String,
-    request: EscalateRequestReadInboundLinkCatalogEntry,
+    request: EscalateRequestReadInboundLinkStreamFacts,
 ) -> EscalateResponse {
-    let EscalateRequestReadInboundLinkCatalogEntry {
+    let EscalateRequestReadInboundLinkStreamFacts {
         request_id: _,
         port,
         inbound_link,
     } = request;
     match what_the_node_reaches
-        .upstream_catalog_entries_by_its_inbound_links
-        .catalog_entry_of_inbound_link(&port, inbound_link.as_deref())
+        .upstream_stream_facts_by_its_inbound_links
+        .stream_facts_of_inbound_link(&port, inbound_link.as_deref())
     {
-        Ok(catalog_entry) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(stream_facts) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
-            catalog_entry,
+            stream_facts,
             ..Default::default()
         }),
         Err(refusal) => EscalateResponse::Err(EscalateResponseErr {
@@ -99,7 +96,7 @@ mod tests {
 
     use super::*;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
-    use crate::core::descriptors::CatalogSection;
+    use crate::core::descriptors::{PacketsStreamFacts, PortFamily, PortStreamFacts};
     use crate::core::graph::{PortInfo, PortKind};
     use crate::iceoryx2::InboundLinkName;
 
@@ -111,10 +108,7 @@ mod tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
-            catalog_entry: None,
-            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
         }
     }
 
@@ -125,59 +119,59 @@ mod tests {
         match serde_json::from_value::<EscalateRequest>(request)
             .expect("the request decodes from its wire form")
         {
-            EscalateRequest::SetOutputPortCatalogEntry(request) => {
-                handle_set_output_port_catalog_entry(
+            EscalateRequest::SetOutputPortStreamFacts(request) => {
+                handle_set_output_port_stream_facts(
                     what_the_node_reaches,
                     request.request_id.clone(),
                     request,
                 )
             }
-            EscalateRequest::ReadInboundLinkCatalogEntry(request) => {
-                handle_read_inbound_link_catalog_entry(
+            EscalateRequest::ReadInboundLinkStreamFacts(request) => {
+                handle_read_inbound_link_stream_facts(
                     what_the_node_reaches,
                     request.request_id.clone(),
                     request,
                 )
             }
-            other => panic!("not a catalog-entry op: {other:?}"),
+            other => panic!("not a stream-facts op: {other:?}"),
         }
     }
 
     #[test]
-    fn a_helpers_set_replaces_its_ports_entry_and_a_downstream_read_sees_it() {
-        let catalog_entries_of_the_writer = WhatTheNodeOfAHelperPlacedProcessorReaches {
-            catalog_entries_of_its_output_ports: Arc::new(
-                CatalogEntriesOfOutputPorts::as_declared_by(&[output_port_named("encoded_video")]),
-            ),
+    fn a_helpers_set_replaces_its_ports_facts_and_a_downstream_read_sees_them() {
+        let what_the_writer_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches {
+            stream_facts_of_its_output_ports: Arc::new(StreamFactsOfOutputPorts::as_declared_by(
+                &[output_port_named("encoded_video")],
+                None,
+            )),
             ..Default::default()
         };
-        let catalog_entries_of_the_reader = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
-        catalog_entries_of_the_reader
-            .upstream_catalog_entries_by_its_inbound_links
+        let what_the_reader_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
+        what_the_reader_reaches
+            .upstream_stream_facts_by_its_inbound_links
             .record_inbound_link(
                 "video_in",
                 &crate::core::graph::LinkUniqueId::from("link-1"),
                 InboundLinkName::from("encoder/encoded_video"),
                 "encoded_video",
-                Arc::clone(&catalog_entries_of_the_writer.catalog_entries_of_its_output_ports),
+                Arc::clone(&what_the_writer_reaches.stream_facts_of_its_output_ports),
             );
 
         let set = dispatched(
-            &catalog_entries_of_the_writer,
+            &what_the_writer_reaches,
             json!({
-                "op": "set_output_port_catalog_entry",
+                "op": "set_output_port_stream_facts",
                 "request_id": "set-1",
                 "port": "encoded_video",
-                "section": "video",
-                "entry": {"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720},
+                "stream_facts": {"family": "packets", "rfc6381_codec": "avc1.64001f", "coded_width": 1280, "coded_height": 720},
             }),
         );
         assert!(matches!(set, EscalateResponse::Ok(_)), "got {set:?}");
 
         let read = dispatched(
-            &catalog_entries_of_the_reader,
+            &what_the_reader_reaches,
             json!({
-                "op": "read_inbound_link_catalog_entry",
+                "op": "read_inbound_link_stream_facts",
                 "request_id": "read-1",
                 "port": "video_in",
             }),
@@ -186,45 +180,49 @@ mod tests {
             panic!("the read is answered ok; got {read:?}");
         };
         assert_eq!(
-            answer.catalog_entry,
-            Some(CatalogEntry {
-                section: CatalogSection::Video,
-                entry: json!({"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720}),
-            })
+            answer.stream_facts,
+            Some(PortStreamFacts::Packets(PacketsStreamFacts {
+                rfc6381_codec: Some("avc1.64001f".into()),
+                coded_width: Some(1280),
+                coded_height: Some(720),
+                ..PacketsStreamFacts::default()
+            }))
         );
     }
 
     #[test]
-    fn a_set_hang_does_not_read_is_refused_naming_the_port_and_the_field() {
-        let catalog_entries = WhatTheNodeOfAHelperPlacedProcessorReaches {
-            catalog_entries_of_its_output_ports: Arc::new(
-                CatalogEntriesOfOutputPorts::as_declared_by(&[output_port_named("frames")]),
-            ),
+    fn a_set_of_another_familys_facts_is_refused_naming_the_port_and_both_families() {
+        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches {
+            stream_facts_of_its_output_ports: Arc::new(StreamFactsOfOutputPorts::as_declared_by(
+                &[output_port_named("encoded")],
+                None,
+            )),
             ..Default::default()
         };
         let refused = dispatched(
-            &catalog_entries,
+            &what_the_node_reaches,
             json!({
-                "op": "set_output_port_catalog_entry",
+                "op": "set_output_port_stream_facts",
                 "request_id": "set-2",
-                "port": "frames",
-                "section": "binary",
-                "entry": {"mime": "application/msgpack"},
+                "port": "encoded",
+                "stream_facts": {"family": "image", "frame_rate": {"numerator": 30, "denominator": 1}},
             }),
         );
         let EscalateResponse::Err(refusal) = refused else {
-            panic!("an entry hang does not read is refused; got {refused:?}");
+            panic!("another family's facts are refused; got {refused:?}");
         };
         assert_eq!(refusal.request_id, "set-2");
         assert!(
-            refusal.message.contains("frames") && refusal.message.contains("mode"),
+            refusal.message.contains("encoded")
+                && refusal.message.contains("Packets")
+                && refusal.message.contains("Image"),
             "got {}",
             refusal.message
         );
         assert_eq!(
-            catalog_entries
-                .catalog_entries_of_its_output_ports
-                .current_entry_of("frames"),
+            what_the_node_reaches
+                .stream_facts_of_its_output_ports
+                .current_facts_of("encoded"),
             None
         );
     }

@@ -31,7 +31,7 @@ const PROTOCOL: &str = "WHIP";
 pub(crate) struct PublishedMediaSet {
     pub video: bool,
     pub audio: bool,
-    /// The channel count the audio track's catalog entry names, when one arrived before
+    /// The channel count the audio track's stream facts name, when they arrived before
     /// the connect. Absent leaves the sender's hint at stereo, which RFC 7587
     /// §3.1.1 makes a hint and not a promise.
     pub audio_channels: Option<u32>,

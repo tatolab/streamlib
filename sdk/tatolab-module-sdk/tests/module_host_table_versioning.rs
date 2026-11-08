@@ -143,14 +143,14 @@ unsafe extern "C" fn write(
     MODULE_HOST_TABLE_STATUS_OK
 }
 
-unsafe extern "C" fn refuse_every_catalog_entry(
+unsafe extern "C" fn refuse_every_stream_facts(
     _node_host: *mut c_void,
     _port: ModuleHostTablePortHandle,
-    _section: ModuleHostTableUtf8,
-    _entry_json: ModuleHostTableUtf8,
+    _family: ModuleHostTableUtf8,
+    _stream_facts_json: ModuleHostTableUtf8,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
-    unsafe { (*error_message).write("the entry does not parse") };
+    unsafe { (*error_message).write("the facts are another family's") };
     MODULE_HOST_TABLE_STATUS_REFUSED
 }
 
@@ -954,7 +954,7 @@ fn v1_12_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
         node_host_release: release,
         output_port_open: open_port_named_lent,
         output_port_write: write,
-        output_port_set_catalog_entry: refuse_every_catalog_entry,
+        output_port_set_stream_facts: refuse_every_stream_facts,
         input_port_open: open_port_named_lent,
         input_port_read: read_one_message_then_empty,
         input_message_release: count_a_released_read,
@@ -1360,14 +1360,14 @@ fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
         "output_port_open: port \"never lent\" was not lent"
     );
 
-    let entry_refusal = module_host
+    let stream_facts_refusal = module_host
         .open_output_port("lent")
         .unwrap()
-        .set_catalog_entry("video", "{}")
+        .set_stream_facts("image", "{}")
         .unwrap_err();
     assert_eq!(
-        entry_refusal.to_string(),
-        "output_port_set_catalog_entry: the entry does not parse"
+        stream_facts_refusal.to_string(),
+        "output_port_set_stream_facts: the facts are another family's"
     );
 }
 

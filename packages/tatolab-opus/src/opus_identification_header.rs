@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The Opus identification header (`OpusHead`, RFC 7845 §5.1): what an Opus
-//! port's catalog entry carries hex-encoded in `description`, so a decoder
+//! port's stream facts carry hex-encoded as `codec_configuration_hex`, so a decoder
 //! learns the channel count and the encoder's lookahead before the first
 //! packet.
 //!
@@ -111,7 +111,7 @@ impl std::fmt::Display for OpusIdentificationHeaderRefusal {
 
 impl OpusIdentificationHeader {
     /// The `OpusHead` an encoder of `channels` with this lookahead emits,
-    /// hex-encoded as a catalog entry's `description`.
+    /// hex-encoded as stream facts' `codec_configuration_hex`.
     pub fn hex_encoded_for_encoder(
         channels: u32,
         pre_skip: u32,

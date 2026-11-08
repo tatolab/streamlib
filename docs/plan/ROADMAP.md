@@ -51,6 +51,9 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
   with no relay in between, reading the port's channel and importing an Image surface
   zero-copy (decided 2026-11-07). It does not wait
   on #3213, so it may run beside it.
+- [`changes/typed-stream-facts.md`](changes/typed-stream-facts.md): #3284, a port's stream facts
+  as typed family fields and hang out of the engine, lands with #3215 so viewers and Properties
+  show them; its second ticket, the Packets unit without hang's container, may run beside it.
 
 - Landed: #3213 (PRs #3244 and #3245). #3215's read path landed (PRs #3248 to #3252, #3255
   and #3286) and Tato Studio's per-family views landed in tatolab-app #166; left are stream

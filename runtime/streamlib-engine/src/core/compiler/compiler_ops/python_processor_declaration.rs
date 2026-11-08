@@ -10,13 +10,12 @@
 
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, CatalogEntry, FunctionNodeLanguage, NodeKind,
-    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling, refuse_audio_window_beside_a_skipping_delivery_profile,
+    AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeKind, PortDescriptor,
+    PortFamilyDeclaration, PortFamilyDeclarationDirection, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
-use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
 use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 
@@ -109,8 +108,6 @@ impl PythonProcessorDeclaration {
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
-        refuse_catalog_entries_hang_does_not_read(&descriptor)
-            .map_err(|refusal| refusal.to_string())?;
 
         Ok(Self {
             descriptor,
@@ -350,13 +347,6 @@ fn read_port_descriptors(
             )?;
             port = port.with_audio_window_contract(contract);
         }
-        if let Some(catalog_entry) = declaration
-            .get("catalog_entry")
-            .filter(|declared| !declared.is_null())
-        {
-            let catalog_entry = read_catalog_entry(catalog_entry, &port.name)?;
-            port = port.with_catalog_entry(catalog_entry);
-        }
         ports.push(port);
     }
     Ok(ports)
@@ -379,16 +369,6 @@ fn read_port_family_declaration(
         Some(refusal) => Err(refusal),
         None => Ok(declaration),
     }
-}
-
-/// Read one `catalog_entry` declaration off a described port. Whether hang
-/// reads it, and whether its port may carry one, is the registration check's.
-fn read_catalog_entry(
-    catalog_entry: &serde_json::Value,
-    port_name: &str,
-) -> std::result::Result<CatalogEntry, String> {
-    serde_json::from_value::<CatalogEntry>(catalog_entry.clone())
-        .map_err(|refusal| format!("port {port_name:?}: catalog entry {refusal}"))
 }
 
 /// Read one `audio_window` declaration off a described port.
@@ -662,6 +642,12 @@ mod tests {
         })
     }
 
+    fn described_node_type_with_output_ports(output_ports: serde_json::Value) -> serde_json::Value {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["output_ports"] = output_ports;
+        described
+    }
+
     fn read(described_node_type: &serde_json::Value) -> Result<PythonProcessorDeclaration, String> {
         PythonProcessorDeclaration::read_from_described_node_type(
             described_node_type,
@@ -698,17 +684,6 @@ mod tests {
         .as_object()
         .cloned()
         .expect("an object")
-    }
-
-    /// A described node type whose one output port carries `catalog_entry`.
-    fn described_with_output_catalog_entry(catalog_entry: serde_json::Value) -> serde_json::Value {
-        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
-        described["output_ports"] = serde_json::json!([{
-            "name": "levels", "family": {"family": "channels"},
-            "description": "",
-            "catalog_entry": catalog_entry,
-        }]);
-        described
     }
 
     #[test]
@@ -829,41 +804,6 @@ mod tests {
     }
 
     #[test]
-    fn an_output_ports_catalog_entry_reads_into_its_descriptor() {
-        let declaration = read(&described_with_output_catalog_entry(serde_json::json!({
-            "section": "json",
-            "entry": {"mode": "stream"},
-        })))
-        .unwrap_or_else(|refusal| panic!("an entry hang reads is accepted: {refusal}"));
-
-        assert_eq!(
-            declaration.descriptor.outputs[0].catalog_entry,
-            Some(CatalogEntry {
-                section: crate::core::descriptors::CatalogSection::Json,
-                entry: serde_json::json!({"mode": "stream"}),
-            })
-        );
-    }
-
-    #[test]
-    fn a_catalog_entry_hang_does_not_read_is_refused_naming_the_port_and_the_field() {
-        let refusal = refusal_of(&described_with_output_catalog_entry(serde_json::json!({
-            "section": "binary",
-            "entry": {"mime": "application/msgpack"},
-        })));
-        assert!(
-            refusal.contains("levels") && refusal.contains("mode"),
-            "the refusal must name the port and hang's missing field; got {refusal}"
-        );
-
-        let unknown_section = refusal_of(&described_with_output_catalog_entry(serde_json::json!({
-            "section": "media",
-            "entry": {},
-        })));
-        assert!(unknown_section.contains("levels"), "got {unknown_section}");
-    }
-
-    #[test]
     fn a_ports_family_reads_into_its_descriptor_and_a_key_its_family_does_not_take_is_refused() {
         let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
             "name": "signals",
@@ -878,6 +818,21 @@ mod tests {
             crate::core::descriptors::PortFamily::Channels
         );
         assert_eq!(family.requires, vec!["rpm".to_string()]);
+
+        let camera = read(&described_node_type_with_output_ports(serde_json::json!([{
+            "name": "video",
+            "description": "",
+            "family": {"family": "image", "frame_rate": {"from_config": {"config_key": "frames_per_second"}}},
+        }])))
+        .unwrap_or_else(|refusal| panic!("an Image output declaring its frame rate reads: {refusal}"));
+        assert_eq!(
+            camera.descriptor.outputs[0].family.frame_rate,
+            Some(
+                crate::core::descriptors::ImageOutputPortFrameRate::FromConfig {
+                    config_key: "frames_per_second".into()
+                }
+            )
+        );
 
         let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
             "name": "video",
@@ -923,20 +878,6 @@ mod tests {
         }])));
         assert!(
             refusal.contains("\"frames\"") && refusal.contains("borrow_quota"),
-            "got {refusal}"
-        );
-    }
-
-    #[test]
-    fn a_catalog_entry_on_an_input_port_is_refused_naming_the_port() {
-        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-            "name": "audio", "family": {"family": "channels"},
-            "description": "",
-            "delivery_profile": "ordered",
-            "catalog_entry": {"section": "json", "entry": {"mode": "stream"}},
-        }])));
-        assert!(
-            refusal.contains("input port `audio`") && refusal.contains("only an output port"),
             "got {refusal}"
         );
     }

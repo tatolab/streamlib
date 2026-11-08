@@ -6,7 +6,7 @@
 
 use parking_lot::Mutex;
 
-use super::port_catalog_entry::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestFailTheNode;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseOk;

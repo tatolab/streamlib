@@ -30,7 +30,7 @@ mod helper_log_record;
 mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
-mod port_catalog_entry;
+mod port_stream_facts;
 mod ray_tracing;
 pub(crate) mod shared_native_service_lease;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -41,7 +41,7 @@ mod surface_copy;
 mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
-pub(crate) use self::port_catalog_entry::WhatTheNodeOfAHelperPlacedProcessorReaches;
+pub(crate) use self::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
@@ -79,7 +79,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
-        EscalateRequest::ReadInboundLinkCatalogEntry(p) => Some(&p.request_id),
+        EscalateRequest::ReadInboundLinkStreamFacts(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
@@ -92,13 +92,13 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RegisterRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
-        EscalateRequest::SetOutputPortCatalogEntry(p) => Some(&p.request_id),
+        EscalateRequest::SetOutputPortStreamFacts(p) => Some(&p.request_id),
         EscalateRequest::FailTheNode(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
 
-/// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a catalog-entry,
+/// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a stream-facts,
 /// node failure or shared native service lease op — against what the helper's node reaches. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
@@ -144,15 +144,11 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
         }
-        EscalateRequest::SetOutputPortCatalogEntry(req) => {
-            Some(port_catalog_entry::handle_set_output_port_catalog_entry(
-                what_the_node_reaches,
-                rid,
-                req,
-            ))
-        }
-        EscalateRequest::ReadInboundLinkCatalogEntry(req) => {
-            Some(port_catalog_entry::handle_read_inbound_link_catalog_entry(
+        EscalateRequest::SetOutputPortStreamFacts(req) => Some(
+            port_stream_facts::handle_set_output_port_stream_facts(what_the_node_reaches, rid, req),
+        ),
+        EscalateRequest::ReadInboundLinkStreamFacts(req) => {
+            Some(port_stream_facts::handle_read_inbound_link_stream_facts(
                 what_the_node_reaches,
                 rid,
                 req,

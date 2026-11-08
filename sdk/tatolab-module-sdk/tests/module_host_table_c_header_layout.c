@@ -71,7 +71,7 @@ _Static_assert(offsetof(ModuleHostTable, node_host_retain) == POINTER_SLOT(1), "
 _Static_assert(offsetof(ModuleHostTable, node_host_release) == POINTER_SLOT(2), "ModuleHostTable.node_host_release");
 _Static_assert(offsetof(ModuleHostTable, output_port_open) == POINTER_SLOT(3), "ModuleHostTable.output_port_open");
 _Static_assert(offsetof(ModuleHostTable, output_port_write) == POINTER_SLOT(4), "ModuleHostTable.output_port_write");
-_Static_assert(offsetof(ModuleHostTable, output_port_set_catalog_entry) == POINTER_SLOT(5), "ModuleHostTable.output_port_set_catalog_entry");
+_Static_assert(offsetof(ModuleHostTable, output_port_set_stream_facts) == POINTER_SLOT(5), "ModuleHostTable.output_port_set_stream_facts");
 _Static_assert(offsetof(ModuleHostTable, input_port_open) == POINTER_SLOT(6), "ModuleHostTable.input_port_open");
 _Static_assert(offsetof(ModuleHostTable, input_port_read) == POINTER_SLOT(7), "ModuleHostTable.input_port_read");
 _Static_assert(offsetof(ModuleHostTable, input_message_release) == POINTER_SLOT(8), "ModuleHostTable.input_message_release");

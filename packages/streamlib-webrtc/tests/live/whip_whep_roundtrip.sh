@@ -325,7 +325,7 @@ wait_until_the_decoder_has_written() {
 
 # The WHIP offer/answer, the endpoint making the live input available, the WHEP
 # subscribe and the first IDR all sit between the streams coming up and the
-# first decoded frame. The player states its port's catalog entry from the
+# first decoded frame. The player states its port's stream facts from the
 # stream it receives, so its track is read only once a frame has come back.
 say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..."
 RECEIVER_DECODED_FRAMES=0

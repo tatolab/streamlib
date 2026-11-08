@@ -42,7 +42,7 @@ unsafe extern "C" fn refuse_write(
 ) -> i32 {
     -1
 }
-unsafe extern "C" fn refuse_entry(
+unsafe extern "C" fn refuse_stream_facts(
     _: *mut c_void,
     _: tatolab_module_sdk::module_host_table_abi::ModuleHostTablePortHandle,
     _: ModuleHostTableUtf8,
@@ -330,7 +330,7 @@ fn leaked_table_of_minor(abi_minor: u32) -> NonNull<c_void> {
         node_host_release: do_nothing,
         output_port_open: refuse_open,
         output_port_write: refuse_write,
-        output_port_set_catalog_entry: refuse_entry,
+        output_port_set_stream_facts: refuse_stream_facts,
         input_port_open: refuse_open,
         input_port_read: refuse_read,
         input_message_release: release_nothing,
