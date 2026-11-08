@@ -451,18 +451,22 @@ def render_cross_floor_warning_block(report: CrossFloorCheckReport, app_director
     return "\n".join(lines) + "\n"
 
 
+CROSS_FLOOR_CHECK_MODULE_RUN_USAGE = (
+    "usage: python -m tatolab.stream._cross_floor_check <project-directory>\n"
+)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Print the warning block of the project directory `argv` names on standard error.
 
     The runtime runs this as a load reads the project. Advisory, so a defect in the check
     itself is reported and never fails the run.
     """
+    # The runtime logs each line of standard error into the project's log.
+    warning_channel_to_the_runtime = sys.stderr  # streamlib:lint-logging:allow-line
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) != 1:
-        print(
-            "usage: python -m tatolab.stream._cross_floor_check <project-directory>",
-            file=sys.stderr,
-        )
+        warning_channel_to_the_runtime.write(CROSS_FLOOR_CHECK_MODULE_RUN_USAGE)
         return 2
     project_directory = Path(arguments[0])
     try:
@@ -473,7 +477,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cross_floor_warning_block = (
             f"tatolab: the cross-floor check could not run: {cross_floor_check_failure!r}\n"
         )
-    print(cross_floor_warning_block, end="", file=sys.stderr, flush=True)
+    warning_channel_to_the_runtime.write(cross_floor_warning_block)
+    warning_channel_to_the_runtime.flush()
     return 0
 
 
