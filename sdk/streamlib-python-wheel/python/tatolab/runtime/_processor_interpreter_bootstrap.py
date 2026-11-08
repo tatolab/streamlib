@@ -177,6 +177,7 @@ from tatolab.runtime._function_node_pool import (
     the_processor_class_the_function_node_pool_runs_as,
 )
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs,
     the_processor_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._processor_hosting import (
@@ -1466,10 +1467,17 @@ class HelperProcessLifecycle:
             return
         self._set_up_succeeded = True
         ready: "dict[str, Any]" = {"rpc": "ready"}
+        function_nodes_ran_compiled = (
+            ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(
+                self._processor_class
+            )
+        )
         if self._function_node_islands_it_reads is not None:
-            ready["function_nodes_ran_compiled"] = (
+            function_nodes_ran_compiled.update(
                 self._function_node_islands_it_reads.ran_compiled_by_node_id
             )
+        if function_nodes_ran_compiled:
+            ready["function_nodes_ran_compiled"] = function_nodes_ran_compiled
         self._bridge.send(ready)
 
     def _run(self, command: "dict[str, Any]") -> None:

@@ -30,6 +30,7 @@ from tatolab.runtime._function_node_compilation import (
     prepare_function_node_to_evaluate,
 )
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs,
     the_processor_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._processor_hosting import construct_processor_instance
@@ -899,6 +900,26 @@ class _InputsHandingOverControlValuesAndRecords(_InputsHandingOverControlValues)
         if isinstance(port_name, str):
             return super().read(port_name)
         return self.record_by_port.pop(port_name.port_name, None)
+
+
+def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compiled():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    compiled = the_processor_class_a_promoted_function_node_runs_as(
+        amplify, f"{__name__}:amplify", "amplify-1", data_plane
+    )
+    run_as_python = the_processor_class_a_promoted_function_node_runs_as(
+        label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
+    )
+
+    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(compiled) == {
+        "amplify-1": True
+    }
+    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(
+        run_as_python
+    ) == {"label-1": False}
+    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(Phase) == {}, (
+        "a class that runs no promoted function node reports none"
+    )
 
 
 def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
