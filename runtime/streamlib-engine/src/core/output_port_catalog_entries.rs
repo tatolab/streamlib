@@ -17,7 +17,6 @@ use parking_lot::{Mutex, RwLock};
 use crate::core::descriptors::{CatalogEntry, CatalogSection};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
-use crate::core::pubsub::OutputPortExposureChange;
 use crate::iceoryx2::InboundLinkName;
 
 /// The key under which hang's catalog lists a section's tracks by name:
@@ -91,8 +90,7 @@ impl CatalogEntriesOfOutputPorts {
     }
 
     /// Replace `output_port`'s entry, refusing a port the node does not declare
-    /// and an entry hang does not read. A different entry is said on
-    /// [`topics::OUTPUT_PORT_EXPOSURE`](crate::core::pubsub::topics::OUTPUT_PORT_EXPOSURE).
+    /// and an entry hang does not read.
     pub fn replace_entry_of(&self, output_port: &str, catalog_entry: CatalogEntry) -> Result<()> {
         let output_port = cast_exposed_name_to_url_safe(output_port)?;
         refuse_a_catalog_entry_hang_does_not_read(&output_port, &catalog_entry)?;
@@ -108,15 +106,7 @@ impl CatalogEntriesOfOutputPorts {
                 listed_or_none(&declared_output_ports)
             )));
         };
-        if current_entry.as_ref() == Some(&catalog_entry) {
-            return Ok(());
-        }
         *current_entry = Some(catalog_entry);
-        drop(current_entry_by_output_port);
-        OutputPortExposureChange::CatalogEntryReplaced {
-            port_name: output_port.into_owned(),
-        }
-        .publish();
         Ok(())
     }
 }

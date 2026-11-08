@@ -57,19 +57,6 @@ impl TemporaryRuntimeUnit {
         runtime_unit
     }
 
-    /// The unit [`Self::with_its_lend`] makes, with the staged `moq-relay`
-    /// in `bin/` beside `tatolabd`.
-    pub fn with_its_lend_and_the_local_relay() -> Self {
-        let runtime_unit = Self::with_its_lend();
-        let local_relay = runtime_unit.tatolabd.with_file_name("moq-relay");
-        let staged_local_relay = the_staged_local_relay_executable();
-        if std::fs::hard_link(&staged_local_relay, &local_relay).is_err() {
-            std::fs::copy(&staged_local_relay, &local_relay)
-                .expect("the local relay is copied into bin/");
-        }
-        runtime_unit
-    }
-
     /// The directory holding `bin/` and the lend.
     pub fn runtime_unit_root(&self) -> &Path {
         self.runtime_unit_root.path()
@@ -97,60 +84,6 @@ impl TemporaryRuntimeUnit {
             runtime_unit_root,
             tatolabd,
         }
-    }
-}
-
-/// The variable naming a `moq-relay` other than the staged one.
-pub const LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_LOCAL_RELAY_EXECUTABLE";
-
-/// The `moq-relay` a test unit carries: the variable's, else the one
-/// `cargo xtask stage-local-relay` built.
-pub fn the_staged_local_relay_executable() -> PathBuf {
-    let relay_executable = std::env::var_os(LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/local-relay/bin/moq-relay")
-        });
-    assert!(
-        relay_executable.is_file(),
-        "no moq-relay at {}: run `cargo xtask stage-local-relay`, or name one in \
-         {LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE}",
-        relay_executable.display()
-    );
-    relay_executable
-}
-
-/// The two ports a test's local relay binds, free when chosen, so test
-/// runtimes side by side never share one.
-#[derive(Debug, Clone, Copy)]
-pub struct LocalRelayPortsOfATest {
-    pub loopback: u16,
-    pub every_interface: u16,
-}
-
-impl LocalRelayPortsOfATest {
-    pub fn free_now() -> Self {
-        Self {
-            loopback: a_port_free_for_udp_and_tcp_on("127.0.0.1"),
-            every_interface: a_port_free_for_udp_and_tcp_on("[::]"),
-        }
-    }
-
-    /// `tatolabd_command` told to bind these ports.
-    pub fn given_to(self, tatolabd_command: &mut Command) {
-        use streamlib_runtime_client_contract::machine_directories_test_root::{
-            TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE,
-            TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE,
-        };
-        tatolabd_command
-            .env(
-                TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE,
-                self.loopback.to_string(),
-            )
-            .env(
-                TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE,
-                self.every_interface.to_string(),
-            );
     }
 }
 
@@ -226,11 +159,6 @@ impl TatolabTestMachineRoot {
     /// The runtime directory a test build resolves: `<root>/run/`.
     pub fn runtime_directory(&self) -> PathBuf {
         self.path().join("run")
-    }
-
-    /// `<run>/relays/<relay_id>/`, one local relay instance's own directory.
-    pub fn local_relay_instance_directory(&self, relay_id: &str) -> PathBuf {
-        self.runtime_directory().join("relays").join(relay_id)
     }
 
     /// The local API's fixed socket in the runtime directory.
@@ -318,17 +246,13 @@ impl TatolabTestMachineRoot {
     }
 }
 
-/// The node [`a_native_only_stream_graph`] holds.
-pub const NATIVE_ONLY_STREAM_NODE_NAME: &str = "relaytrack";
-
-/// A stream of one native relay track source.
+/// A stream of one native numbered message writer.
 pub fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
     serde_json::json!({
         "stream": stream_id,
         "nodes": [{
-            "name": NATIVE_ONLY_STREAM_NODE_NAME,
-            "type": "tatolab.stream:RelayTrackSource",
-            "config": {"broadcast": "desk/native-only.hang", "track": "pattern/video"},
+            "name": "numbers",
+            "type": "tatolabd::numbered_message_writer_test_node::NumberedMessageWriterTestNode",
         }],
     })
 }
@@ -397,7 +321,6 @@ pub fn a_stream_record(
         stopped,
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,
-        exposure_rulings: Vec::new(),
         pending_stream_actions: Vec::new(),
     }
 }
@@ -661,29 +584,6 @@ impl LocalApiToolCallAnswer {
         assert!(!self.is_error, "the tool failed: {}", self.text);
         serde_json::from_str(&self.text).expect("the tool's text block is JSON")
     }
-}
-
-/// Every relay `list_relays` lists on `machine_root`'s runtime.
-pub fn the_relays_listed(machine_root: &TatolabTestMachineRoot) -> serde_json::Value {
-    call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_relays",
-        serde_json::json!({}),
-    )
-    .json()
-}
-
-/// `relay_id`'s entry in `listing`.
-pub fn the_relay_listed<'listing>(
-    listing: &'listing serde_json::Value,
-    relay_id: &str,
-) -> &'listing serde_json::Value {
-    listing["relays"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|relay| relay["relay_id"] == relay_id)
-        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))
 }
 
 /// Every file under `directory`, read as text.

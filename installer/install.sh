@@ -108,9 +108,8 @@ refuse_a_machine_with_no_runtime_build() {
 
 # What a runtime unit must carry, one per line.
 required_members_of_a_unit() {
-	printf '%s\n' bin/tatolabd bin/tatolab bin/moq-relay bin/uv lib/tatolab/lend \
+	printf '%s\n' bin/tatolabd bin/tatolab bin/uv lib/tatolab/lend \
 		lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json \
-		lib/tatolab/watch/index.html \
 		"$STREAMLIB_COMMIT_FILE_NAME"
 }
 

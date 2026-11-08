@@ -104,9 +104,8 @@ pub mod processor_interpreter {
         BROWSER_HOST_EXECUTABLE_FILE_NAME, BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
         BUNDLED_ICD_MANIFEST_FILE_NAME, LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
         LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
-        WATCH_PAGE_DIRECTORY_NAME, app_bundle_contents_directory_holding_the_executable_directory,
+        app_bundle_contents_directory_holding_the_executable_directory,
         browser_host_executable_beside_the_lend, bundled_vulkan_driver_directory_in_the_lend,
         lend_directory_in_the_app_bundle_contents, lend_directory_in_the_runtime_unit,
-        watch_page_directory_beside_the_lend,
     };
 }

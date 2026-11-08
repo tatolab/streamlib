@@ -20,11 +20,13 @@ dependencies = [
     "tatolab-compositor",
     # The camera node the camera, cast-claim and device-exchange fixtures add.
     "tatolab-camera",
-    # The video codec nodes the codec, relay and scaffold fixtures add.
+    # The video codec nodes the codec and wiring fixtures add.
     "tatolab-h264",
     "tatolab-h265",
     # The Opus nodes the codec and wiring fixtures add.
     "tatolab-opus",
+    # The gateway nodes the relay fixture's streams send and read through.
+    "tatolab-moq",
     # The test pattern most fixture streams start from.
     "tatolab-testpattern",
     # The virtual camera the camera tests present.
@@ -64,6 +66,7 @@ tatolab-camera = { path = "../../packages/tatolab-camera" }
 tatolab-h264 = { path = "../../packages/streamlib-h264" }
 tatolab-h265 = { path = "../../packages/streamlib-h265" }
 tatolab-opus = { path = "../../packages/tatolab-opus" }
+tatolab-moq = { path = "../../packages/tatolab-moq" }
 tatolab-testpattern = { path = "../../packages/tatolab-testpattern" }
 tatolab-virtualcamera = { path = "../../packages/tatolab-virtualcamera" }
 

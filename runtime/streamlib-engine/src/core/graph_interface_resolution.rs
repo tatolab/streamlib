@@ -237,23 +237,12 @@ impl GraphSnapshot {
             });
         }
 
-        for exposed in &self.exposed {
-            if direction_of_each_interface_node_by_cast.contains_key(&cast_of(&exposed.node)?) {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}`, an interface node's port; an interface node \
-                     declares a port and has none to expose",
-                    exposed.node, exposed.port
-                )));
-            }
-        }
-
         Ok(GraphSnapshotWithInterfaceResolved {
             graph_the_runtime_runs: GraphSnapshot {
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: runtime_nodes,
                 links: runtime_links,
-                exposed: self.exposed.clone(),
             },
             interface_as_drawn: GraphInterfaceAsDrawn {
                 interface_nodes,

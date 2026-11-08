@@ -8,7 +8,6 @@ mod data_structure;
 mod edges;
 mod graph_readiness;
 mod nodes;
-mod output_port_exposure;
 mod port_family_link_checks;
 mod processor_state_ecs_component;
 mod traits;
@@ -31,10 +30,6 @@ pub(crate) use data_structure::{
     port_names_listed_for_a_refusal,
 };
 pub use graph_readiness::ObservableGraphReadiness;
-pub use output_port_exposure::{
-    OutputPortExposureLevel, OutputPortReaderLocation, OutputPortReaderOutsideItsStream,
-    output_port_exposure_allows_the_reader,
-};
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     refuse_a_link_between_ports_whose_families_do_not_match,

@@ -12,7 +12,6 @@ process. The graph
 from __future__ import annotations
 
 import copy
-import enum
 import inspect
 import math
 from collections.abc import Callable, Mapping
@@ -35,7 +34,6 @@ from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 from ._port_family_declaration import PortFamily
 
 __all__ = [
-    "Exposure",
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
@@ -46,15 +44,6 @@ __all__ = [
     "is_stream_function",
     "stream",
 ]
-
-
-class Exposure(enum.Enum):
-    """How far outside its stream an exposed output port may be read."""
-
-    PRIVATE = "private"
-    """Read by any other stream, and any code, on this machine."""
-    PUBLIC = "public"
-    """Read off this machine as well."""
 
 
 _StreamFunction = TypeVar("_StreamFunction", bound="Callable[[StreamBuilder], object]")
@@ -235,7 +224,7 @@ class NodeInputPortReference:
 
 @dataclass(frozen=True, slots=True)
 class NodeReference:
-    """A node `StreamBuilder.add` recorded, under the cast name links and exposures name it by."""
+    """A node `StreamBuilder.add` recorded, under the cast name links name it by."""
 
     name: str
 
@@ -273,13 +262,12 @@ class _RecordedNode:
 
 
 class StreamBuilder:
-    """The builder a `@stream` function adds, links and exposes nodes on; it runs nothing."""
+    """The builder a `@stream` function adds and links nodes on; it runs nothing."""
 
     def __init__(self, name: str) -> None:
         self._name = _cast_name(name, "stream name")
         self._recorded_nodes_by_name: dict[str, _RecordedNode] = {}
         self._recorded_links: list[dict[str, dict[str, str]]] = []
-        self._exposed_output_ports: dict[tuple[str, str], Exposure] = {}
         self._stream_clock: StreamClock | None = None
 
     @property
@@ -346,8 +334,9 @@ class StreamBuilder:
             raise TypeError(
                 f"connect's source must name an output port of a node this stream "
                 f"added: `stream_builder.add(...).output(port_name)`. A link's ends are "
-                f"both in this stream; read another stream's port, on this machine or "
-                f"another, through a `RelayTrackSource` node this stream adds. Got {source!r}."
+                f"both in this stream; read another stream's track at a relay, on this "
+                f"machine or another, through a `MoqTrackReceive` node this stream adds. "
+                f"Got {source!r}."
             )
         if not isinstance(destination, NodeInputPortReference):
             raise TypeError(
@@ -360,29 +349,6 @@ class StreamBuilder:
                 "target": self._link_end(destination),
             }
         )
-
-    def expose(
-        self, output: NodeOutputPortReference, level: Exposure = Exposure.PRIVATE
-    ) -> None:
-        """Let `output` be read outside this stream: on this machine, or off it too at `PUBLIC`."""
-        if not isinstance(output, NodeOutputPortReference):
-            raise TypeError(
-                f"expose takes an output port of a node this stream added — "
-                f"`stream_builder.add(...).output(port_name)`. Got {output!r}."
-            )
-        if not isinstance(level, Exposure):
-            raise TypeError(
-                f"expose takes its level as a member of `Exposure` — `Exposure.PRIVATE` "
-                f"or `Exposure.PUBLIC`, imported from `tatolab.stream`. Got {level!r}."
-            )
-        self._refuse_a_node_this_stream_does_not_hold(output.node_name)
-        exposed_output_port = (output.node_name, output.port_name)
-        if exposed_output_port in self._exposed_output_ports:
-            raise ValueError(
-                f"stream `{self._name}` already exposes port `{output.port_name}` of node "
-                f"`{output.node_name}`; an output is exposed once"
-            )
-        self._exposed_output_ports[exposed_output_port] = level
 
     def run_on_clock(self, stream_clock: StreamClock) -> None:
         """Run this stream on `stream_clock` instead of real time; called at most once."""
@@ -459,10 +425,6 @@ class StreamBuilder:
                 for recorded_node in self._recorded_nodes_by_name.values()
             ],
             "links": copy.deepcopy(self._recorded_links),
-            "exposed": [
-                {"node": node_name, "port": port_name, "level": level.value}
-                for (node_name, port_name), level in self._exposed_output_ports.items()
-            ],
         }
 
 

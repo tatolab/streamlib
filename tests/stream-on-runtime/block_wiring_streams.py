@@ -35,7 +35,7 @@ def microphone_through_the_opus_round_trip_into_a_speaker(stream_builder: Stream
     stream_builder.connect(decoder.output("audio"), speaker.input("audio"))
 
 
-def _add_a_codec_round_trip_exposing_the_decoded_port(
+def _add_a_codec_round_trip(
     stream_builder: StreamBuilder,
     encoder_class: "type[H264Encoder] | type[H265Encoder]",
     decoder_class: "type[H264Decoder] | type[H265Decoder]",
@@ -45,14 +45,13 @@ def _add_a_codec_round_trip_exposing_the_decoded_port(
     decoder = stream_builder.add(decoder_class)
     stream_builder.connect(pattern.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream_builder.expose(decoder.output("video"))
 
 
 @stream
-def h264_round_trip_exposing_the_decoded_port(stream_builder: StreamBuilder) -> None:
-    _add_a_codec_round_trip_exposing_the_decoded_port(stream_builder, H264Encoder, H264Decoder)
+def h264_round_trip(stream_builder: StreamBuilder) -> None:
+    _add_a_codec_round_trip(stream_builder, H264Encoder, H264Decoder)
 
 
 @stream
-def h265_round_trip_exposing_the_decoded_port(stream_builder: StreamBuilder) -> None:
-    _add_a_codec_round_trip_exposing_the_decoded_port(stream_builder, H265Encoder, H265Decoder)
+def h265_round_trip(stream_builder: StreamBuilder) -> None:
+    _add_a_codec_round_trip(stream_builder, H265Encoder, H265Decoder)

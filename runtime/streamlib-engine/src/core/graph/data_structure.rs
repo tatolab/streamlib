@@ -13,9 +13,8 @@ use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
-use crate::core::graph::{ExposedOutputPortsComponent, GraphNodeWithComponents};
 use crate::core::json_schema::{
-    ExposedOutputPortOutput, GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
+    GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
 };
 
 /// Graph state.
@@ -219,20 +218,6 @@ impl Graph {
                 .map(|link| LinkOutput::of_a_link(link, &node_names))
                 .collect(),
             references: Vec::new(),
-            exposed: self
-                .digraph
-                .node_weights()
-                .flat_map(|node| {
-                    node.get::<ExposedOutputPortsComponent>()
-                        .into_iter()
-                        .flat_map(ExposedOutputPortsComponent::exposed_ports_and_their_levels)
-                        .map(|(port, level)| ExposedOutputPortOutput {
-                            node: node.display_name.clone(),
-                            port: port.to_string(),
-                            level,
-                        })
-                })
-                .collect(),
             machine,
         }
     }

@@ -3,7 +3,7 @@
 
 //! Hosting the machine's streams: the engine built over the state directory,
 //! the previous run's crash counted against the recorded streams, the local
-//! API served at its fixed socket, the local relay joined, every recorded
+//! API served at its fixed socket, every recorded
 //! stream neither stopped nor failed re-loaded, the run until a machine shutdown is
 //! requested and every stream has ended, and a teardown that drops the engine
 //! — or leaves it beneath the threads a stream abandoned.
@@ -23,21 +23,10 @@ use streamlib::sdk::runtime::{
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
-use streamlib_relay_adapter_cloudflare::CloudflareRelayAdapterInstanceMaker;
-use streamlib_relay_adapter_local::LocalRelayAdapterInstanceMaker;
-use streamlib_relay_adapter_moqpro::MoqProRelayAdapterInstanceMaker;
-use streamlib_relay_adapter_sdk::{MachineName, RelayAdapterInstanceMaker};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
-use crate::exposed_port_publisher::start_the_exposed_port_publisher;
-use crate::local_relay_adapter_of_this_runtime::the_local_relay_adapter_of_this_runtime;
 use crate::loopback_http_listener_of_this_runtime::serve_the_loopback_http_listener_of_this_runtime;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
-use crate::relay_instances_of_this_runtime::{
-    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY, RelayInstancesOfThisRuntime,
-};
-use crate::relay_instances_record::RelayInstancesRecordFile;
-use crate::relay_secret_store::the_relay_secret_store_of_this_machine;
 
 /// How long the end of the run waits for a stream action the local API began —
 /// a load the machine shutdown is giving up — to hand the engine back. Each
@@ -151,35 +140,13 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
     let mut loopback_http_listener = None;
-    let mut relay_instances = None;
-    let mut exposed_port_publisher = None;
-    let mut dial_credential_renewal = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
-            let joined_relay_instances = Arc::new(join_every_relay_instance_of_this_runtime(
-                &engine,
-                tatolab_state_directory,
-            ));
-            relay_instances = Some(Arc::clone(&joined_relay_instances));
-            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(
-                &engine,
-                joined_relay_instances.clone(),
-            )?);
+            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
             loopback_http_listener = serve_the_loopback_http_listener_of_this_runtime(
                 &engine,
-                &lend_directory,
                 loopback_http_listener_bound_by_the_machine_runtime_lock,
             );
-            exposed_port_publisher = start_the_exposed_port_publisher(
-                &engine,
-                joined_relay_instances.relays_the_publisher_dials(),
-            );
-            dial_credential_renewal = Some(engine.tokio_handle().spawn(
-                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
-                    Arc::downgrade(&joined_relay_instances),
-                    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
-                ),
-            ));
             log_the_reloads_queued_at_the_start(
                 &engine.queue_the_reload_of_every_project_at_the_start(),
             );
@@ -189,10 +156,6 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             // First, so no call reaches a stream as it ends.
             drop(local_api_served_for_the_engine.take());
             drop(loopback_http_listener.take());
-            drop(exposed_port_publisher.take());
-            if let Some(dial_credential_renewal) = dial_credential_renewal.take() {
-                dial_credential_renewal.abort();
-            }
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.
             if !engine.wait_until_this_reference_alone_holds_the_engine(
@@ -212,11 +175,6 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 &mut streams_loaded_at_or_after_the_machine_shutdown_request,
                 every_stream_ended_during_the_wait.streams_seen_during_the_wait,
             );
-            // Once every stream has ended, inside the run's shutdown.
-            if let Some(relay_instances) = relay_instances.take() {
-                relay_instances.leave_every_relay();
-                tracing::info!("every relay is left");
-            }
             if streams_loaded_at_or_after_the_machine_shutdown_request
                 .iter()
                 .any(|stream| stream_teardown_abandoned_by_its_watchdog(stream).is_some())
@@ -245,50 +203,6 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         write_refusal_to_standard_error(&refusal);
     }
     ExitCode::from(exit_status)
-}
-
-/// The relay adapters compiled into this runtime: the local relay's,
-/// Cloudflare's and moq.pro's. A test build adds the secret-holding test
-/// relay's adapter.
-fn relay_adapter_makers_of_this_runtime(
-    local_relay_adapter_maker: LocalRelayAdapterInstanceMaker,
-    machine_name: &MachineName,
-) -> Vec<Box<dyn RelayAdapterInstanceMaker>> {
-    #[cfg_attr(
-        not(feature = "machine-directories-under-a-test-root"),
-        expect(unused_mut, reason = "a test build adds an adapter")
-    )]
-    let mut relay_adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> = vec![
-        Box::new(local_relay_adapter_maker),
-        Box::new(CloudflareRelayAdapterInstanceMaker),
-        Box::new(MoqProRelayAdapterInstanceMaker::for_the_machine(
-            machine_name.clone(),
-        )),
-    ];
-    #[cfg(feature = "machine-directories-under-a-test-root")]
-    relay_adapter_makers.push(Box::new(
-        crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,
-    ));
-    relay_adapter_makers
-}
-
-/// Every relay instance this runtime holds, each joined: the local relay's
-/// two built in, then each `relays.json` records.
-fn join_every_relay_instance_of_this_runtime(
-    engine: &Runner,
-    tatolab_state_directory: &TatolabStateDirectory,
-) -> RelayInstancesOfThisRuntime {
-    RelayInstancesOfThisRuntime::join_every_relay_instance(
-        relay_adapter_makers_of_this_runtime(
-            the_local_relay_adapter_of_this_runtime(engine),
-            engine.machine_name(),
-        ),
-        RelayInstancesRecordFile::at(tatolab_state_directory.relay_instances_record_path()),
-        the_relay_secret_store_of_this_machine(
-            tatolab_state_directory.relay_secrets_fallback_file_path(),
-        ),
-        engine.machine_name().clone(),
-    )
 }
 
 fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise) {
@@ -465,99 +379,6 @@ fn tear_the_engine_down(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-
-    /// The value of the attribute `attribute_name` on the root `<svg>`.
-    fn root_svg_attribute<'svg>(
-        svg_document: &'svg str,
-        attribute_name: &str,
-    ) -> Option<&'svg str> {
-        let root_element = &svg_document[svg_document.find("<svg")?..];
-        let root_element = &root_element[..root_element.find('>')?];
-        let attribute_prefix = format!("{attribute_name}=\"");
-        let value_start = root_element
-            .match_indices(&attribute_prefix)
-            .find(|(at, _)| root_element[..*at].ends_with(char::is_whitespace))?
-            .0
-            + attribute_prefix.len();
-        let value = &root_element[value_start..];
-        Some(&value[..value.find('"')?])
-    }
-
-    /// The width and height an `<img>` gives the SVG before any CSS: its root
-    /// `width` and `height` when it has both, its `viewBox`'s otherwise.
-    fn intrinsic_width_and_height_of_the_svg_in_an_img(svg_document: &str) -> (f64, f64) {
-        let length = |attribute_value: &str| {
-            attribute_value
-                .trim_end_matches(char::is_alphabetic)
-                .parse::<f64>()
-                .unwrap()
-        };
-        if let (Some(width), Some(height)) = (
-            root_svg_attribute(svg_document, "width"),
-            root_svg_attribute(svg_document, "height"),
-        ) {
-            return (length(width), length(height));
-        }
-        let view_box_numbers = root_svg_attribute(svg_document, "viewBox")
-            .unwrap()
-            .split(|separator: char| separator.is_whitespace() || separator == ',')
-            .filter(|number| !number.is_empty())
-            .map(|number| number.parse::<f64>().unwrap())
-            .collect::<Vec<_>>();
-        (view_box_numbers[2], view_box_numbers[3])
-    }
-
-    #[test]
-    fn an_svgs_size_in_an_img_is_its_width_and_height_before_its_view_box() {
-        assert_eq!(
-            intrinsic_width_and_height_of_the_svg_in_an_img(
-                r#"<svg stroke-width="9" width="66" height="30" viewBox="0 0 82 82"/>"#
-            ),
-            (66.0, 30.0)
-        );
-        assert_eq!(
-            intrinsic_width_and_height_of_the_svg_in_an_img(
-                "<!DOCTYPE svg>\n<svg width=\"420pt\"\n height=\"420pt\" viewBox=\"-51 -51 522 300\">"
-            ),
-            (420.0, 420.0)
-        );
-        assert_eq!(
-            intrinsic_width_and_height_of_the_svg_in_an_img(
-                r#"<svg viewBox="0,0,1024,1024"><svg width="1" height="2"/></svg>"#
-            ),
-            (1024.0, 1024.0)
-        );
-    }
-
-    #[test]
-    fn every_relay_adapters_display_icon_is_square_in_an_img() {
-        let relay_adapter_makers = relay_adapter_makers_of_this_runtime(
-            LocalRelayAdapterInstanceMaker::running_no_local_relay("a test".to_string()),
-            &MachineName::from_a_hostname("desk").unwrap(),
-        );
-        for relay_adapter_maker in relay_adapter_makers {
-            let catalog_entry = relay_adapter_maker.catalog_entry();
-            let svg_document = BASE64_STANDARD
-                .decode(
-                    catalog_entry
-                        .display_icon_data_uri
-                        .strip_prefix("data:image/svg+xml;base64,")
-                        .unwrap(),
-                )
-                .unwrap();
-            let (width, height) = intrinsic_width_and_height_of_the_svg_in_an_img(
-                std::str::from_utf8(&svg_document).unwrap(),
-            );
-            assert_eq!(
-                width, height,
-                "`{}`'s icon is not square",
-                catalog_entry.kind
-            );
-        }
-    }
-
     #[test]
     fn a_clean_run_and_a_dropped_engine_write_nothing() {
         assert!(

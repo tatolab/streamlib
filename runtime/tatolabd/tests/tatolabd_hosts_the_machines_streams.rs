@@ -14,10 +14,10 @@
 mod common;
 
 use common::{
-    NATIVE_ONLY_STREAM_NODE_NAME, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    a_native_only_stream_graph, a_stream_record, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_mode_of,
-    the_reloads_queued_at_the_start, the_stream_action_once_ended,
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
+    a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
+    the_local_apis_answer_to_get, the_mode_of, the_reloads_queued_at_the_start,
+    the_stream_action_once_ended,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -307,9 +307,9 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     runtime.interrupt_and_expect_a_clean_exit();
 }
 
-/// A recorded stream's record round-trips through the runtime: the owner's
-/// ruling it records is written owner-only, read again by the next runtime
-/// on the machine, and `remove_project` forgets it.
+/// A recorded stream's record round-trips through the runtime: it stays
+/// owner-only through a runtime, is read again by the next runtime on the
+/// machine, and `remove_project` forgets it.
 #[test]
 fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -335,27 +335,13 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let mut first_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
     );
-    let exposed = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "expose_port",
-        serde_json::json!({"stream": parked_stream_id, "node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private"}),
-    )
-    .json();
     first_runtime.interrupt_and_expect_a_clean_exit();
 
-    assert_eq!(
-        exposed,
-        serde_json::json!({"stream": parked_stream_id, "node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private", "recorded": true})
-    );
     assert_eq!(the_mode_of(&record_path), 0o600);
     let recorded = machine_root
         .current_stream_record_of(&parked_stream_id)
         .expect("the record stays");
     assert!(recorded.stopped);
-    assert_eq!(
-        serde_json::to_value(&recorded.exposure_rulings).unwrap(),
-        serde_json::json!([{"node": NATIVE_ONLY_STREAM_NODE_NAME, "port": "track", "level": "private"}])
-    );
 
     let mut second_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),

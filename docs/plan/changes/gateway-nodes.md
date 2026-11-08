@@ -146,7 +146,6 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - REMOVED: runtime/streamlib-engine/src/core/runtime/reserved_slot_forwarder.rs
 - REMOVED: runtime/streamlib-engine/src/core/runtime/loaded_stream_output_port_exposure.rs
 - REMOVED: runtime/streamlib-engine/src/core/graph/components/exposed_output_ports_component.rs
-- REMOVED: runtime/streamlib-engine/src/core/graph/components/source_side_held_open_for_a_reader_outside_its_stream.rs
 - REMOVED: class Exposure
 - REMOVED: def expose
 - REMOVED: ExposePortLevel
@@ -176,10 +175,16 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - REMOVED: xtask/src/watch_page_third_party_notices.rs
 - REMOVED: watch_page_directory_beside_the_lend
 - REMOVED: runtime/streamlib-media-builtins/src/relay_track_source.rs
-- REMOVED: RelayTrackSource
+- REMOVED: RelayTrackSourceConfig
   Continuation: the receive node's name in prose, the generated class and the MCP instructions
   all go; `tatolab.stream:RelayTrackSource` in a graph is refused naming
-  `tatolab.moq:MoqTrackReceive` and `tatolab-moq`, the refusal every former built-in gets.
+  `tatolab.moq:MoqTrackReceive` and `tatolab-moq`, the refusal every former built-in gets, so
+  the bare name stays in `BUILT_INS_MOVED_TO_MODULES` and the bullet names its config class.
+- REMOVED: relay_track_source
+- REMOVED: runtime/streamlib-engine/tests/fixtures/hosted_relays_roundtrip.sh
+  Continuation: the hosted-relay proof drove the publisher and the relay verbs, both removed.
+  `source_side_held_open_for_a_reader_outside_its_stream.rs` stays: the viewer read path holds
+  a port's source side open through it.
 
 ## Decisions
 

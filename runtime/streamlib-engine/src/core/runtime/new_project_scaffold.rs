@@ -39,10 +39,6 @@ const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"tatolab-str
 /// a project depending on an older `tatolab-stream` is refused by the runtime that created it.
 const PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-stream>=0.54.2\"";
 
-/// The template's `tatolab-h264` requirement, raised on render to this runtime's own version, which
-/// the module is released at.
-const PYPROJECT_TOML_TATOLAB_H264_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-h264>=0.68.13\"";
-
 /// The template's `tatolab-testpattern` requirement, raised on render to this runtime's own
 /// version, which the module is released at.
 const PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER: &str =
@@ -77,10 +73,6 @@ pub(crate) fn render_scaffold_template_files(
         .replace(
             PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER,
             &format!("\"tatolab-stream>={}\"", env!("CARGO_PKG_VERSION")),
-        )
-        .replace(
-            PYPROJECT_TOML_TATOLAB_H264_REQUIREMENT_PLACEHOLDER,
-            &format!("\"tatolab-h264>={}\"", env!("CARGO_PKG_VERSION")),
         )
         .replace(
             PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER,
@@ -298,11 +290,10 @@ mod tests {
         assert!(
             rendered_files[4].rendered_contents.contains(&format!(
                 "dependencies = [\"tatolab-stream>={runtime_version}\", \
-                 \"tatolab-h264>={runtime_version}\", \
                  \"tatolab-testpattern>={runtime_version}\", \"numpy>=2.1\"]",
                 runtime_version = env!("CARGO_PKG_VERSION")
             )),
-            "a new project floors tatolab-stream, tatolab-h264 and tatolab-testpattern at the \
+            "a new project floors tatolab-stream and tatolab-testpattern at the \
              version of the runtime that created it"
         );
         assert!(
@@ -313,22 +304,24 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_stream_encodes_the_test_pattern_publicly_and_opens_no_window() {
+    fn the_sample_stream_runs_the_test_pattern_through_the_effect_and_opens_no_window() {
         let rendered_stream_py = &render_scaffold_template_files("probe-app")[0].rendered_contents;
         for present in [
             "stream_builder.add(TestPatternSource)",
-            "stream_builder.add(H264Encoder)",
-            "stream_builder.expose(encoder.output(\"encoded_video\"), Exposure.PUBLIC)",
+            "stream_builder.add(HalftoneLensEffect)",
+            "stream_builder.add(BrightnessMeter)",
         ] {
             assert!(
                 rendered_stream_py.contains(present),
                 "the sample stream lacks {present}:\n{rendered_stream_py}"
             );
         }
-        assert!(
-            !rendered_stream_py.contains("DisplayWindow"),
-            "{rendered_stream_py}"
-        );
+        for absent in ["DisplayWindow", "H264Encoder", "expose"] {
+            assert!(
+                !rendered_stream_py.contains(absent),
+                "the sample stream holds {absent}:\n{rendered_stream_py}"
+            );
+        }
     }
 
     #[test]

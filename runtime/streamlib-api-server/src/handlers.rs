@@ -27,7 +27,6 @@ use streamlib::sdk::json_schema::{
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
-use streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -38,9 +37,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
 };
 
-use crate::state::{
-    ApiDoc, AppState, ErrorResponse, OptionalStreamSelectionQuery, RelayAdapterCatalogResponse,
-};
+use crate::state::{ApiDoc, AppState, ErrorResponse, OptionalStreamSelectionQuery};
 
 // ============================================================================
 // Router Construction
@@ -52,7 +49,6 @@ fn control_plane_rest_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-        .routes(routes!(get_relay_adapters))
 }
 
 /// The OpenAPI document for the REST surface, built from the same route
@@ -79,7 +75,6 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// upgraded.
 pub(crate) fn build_router(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
     local_api_stopping_token: CancellationToken,
 ) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -88,14 +83,12 @@ pub(crate) fn build_router(
 
     let local_api_mcp_server_handler = crate::mcp::LocalApiMcpServerHandler::new(
         Arc::clone(&operations_on_the_loaded_streams),
-        Arc::clone(&relay_instances),
         local_api_stopping_token.clone(),
     );
     let local_api_mcp_service =
         crate::mcp::local_api_mcp_streamable_http_service(local_api_mcp_server_handler.clone());
     let state = AppState {
         operations_on_the_loaded_streams,
-        relay_instances,
         openapi,
     };
 
@@ -333,21 +326,6 @@ pub(crate) async fn get_registry(
     }
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/relay-adapters",
-    tag = "relays",
-    responses(
-        (status = 200, description = "Every relay adapter compiled into the runtime: its kind, as `add_relay` takes it, the name people read it by, the provider's logo as an inline `data:` URI, what it joins, and its settings, each with its name, its field type, whether it is secret, whether it is required, its doc and its default", body = RelayAdapterCatalogResponse)
-    )
-)]
-pub(crate) async fn get_relay_adapters(State(state): State<AppState>) -> Response {
-    Json(RelayAdapterCatalogResponse::of(
-        state.relay_instances.as_ref(),
-    ))
-    .into_response()
-}
-
 /// One stream's node catalog, rendered as `/api/registry` and the MCP node
 /// catalog resource both serve it.
 pub(crate) fn node_catalog_response(node_catalog: &[ProcessorDescriptor]) -> RegistryResponse {
@@ -496,11 +474,7 @@ pub(crate) mod router_surface_tests {
     ];
 
     fn control_plane_router_over(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(
-            Arc::new(runtime),
-            crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
-            CancellationToken::new(),
-        )
+        build_router(Arc::new(runtime), CancellationToken::new())
     }
 
     /// A default stub runtime, for tests that build the router themselves.
@@ -861,7 +835,6 @@ pub(crate) mod router_surface_tests {
             [
                 ("/api/graph", "get"),
                 ("/api/registry", "get"),
-                ("/api/relay-adapters", "get"),
                 ("/health", "get"),
             ]
             .map(|(path, method)| (path.to_owned(), method.to_owned()))

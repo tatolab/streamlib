@@ -26,8 +26,8 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 // =============================================================================
 
 /// Response from the `/api/graph` endpoint: the graph's spec — `stream`, `clock`,
-/// `nodes[].name` / `type` / `config`, `links[].source` / `target` and
-/// `exposed` — with the live keys beside it, so it loads back as a
+/// `nodes[].name` / `type` / `config` and `links[].source` / `target` — with
+/// the live keys beside it, so it loads back as a
 /// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
@@ -45,10 +45,6 @@ pub struct GraphResponse {
     /// key, read back from the configs; absent when the graph holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ConfigNodeReferenceEdgeOutput>,
-    /// The output ports the stream exposes. Always present; empty when it
-    /// exposes none.
-    #[serde(default)]
-    pub exposed: Vec<ExposedOutputPortOutput>,
     /// The name of the machine the stream runs on, the first part of
     /// `<machine>/<stream id>/<node>/<port>`.
     pub machine: String,
@@ -203,24 +199,6 @@ pub struct ConfigNodeReferenceEdgeOutput {
     pub config_key: String,
     /// The name of the node the reference names.
     pub referenced_node: String,
-}
-
-/// One output port a stream exposes, named by its node's name, at its level.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ExposedOutputPortOutput {
-    /// The name of the node that owns the port.
-    pub node: String,
-    /// The output port's own name on that node.
-    pub port: String,
-    /// How far outside its stream the port may be read: `private` or
-    /// `public`. A graph written before exposure had levels carries none, and
-    /// reads as `private`, which is what its exposure meant.
-    #[serde(default = "an_exposure_written_without_a_level_is_private")]
-    pub level: crate::core::graph::OutputPortExposureLevel,
-}
-
-fn an_exposure_written_without_a_level_is_private() -> crate::core::graph::OutputPortExposureLevel {
-    crate::core::graph::OutputPortExposureLevel::Private
 }
 
 /// Every node's name by its processor id, for rendering the ends a graph
@@ -1258,7 +1236,7 @@ mod graph_response_top_level_key_rendering_tests {
             serde_json::to_value(Graph::new().to_graph_response(MACHINE_NAME.to_string())).unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "exposed", "machine"]);
+        assert_eq!(keys, ["nodes", "links", "machine"]);
 
         let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
         let mut declared: Vec<&String> = schema["properties"]
@@ -1269,15 +1247,7 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            [
-                "clock",
-                "exposed",
-                "links",
-                "machine",
-                "nodes",
-                "references",
-                "stream"
-            ]
+            ["clock", "links", "machine", "nodes", "references", "stream"]
         );
     }
 
@@ -1323,8 +1293,9 @@ mod config_schema_rendering_tests {
 
     fn descriptor_carrying(config_schema: Option<serde_json::Value>) -> ProcessorDescriptor {
         let descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new("RelayTrackSource").unwrap(),
-            ProcessorClassImportPath::new("streamlib_media_builtins::relay_track_source").unwrap(),
+            ProcessorClassShortName::new("ChannelsToArray").unwrap(),
+            ProcessorClassImportPath::new("streamlib_media_builtins::port_family_conversion")
+                .unwrap(),
             "a probe",
         );
         match config_schema {

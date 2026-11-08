@@ -4,9 +4,9 @@
 //! The stream tools over a real engine: a stream run over a `/mcp/stdio`
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
-//! `stop_stream`, `start_stream`, `remove_project`, `rename_stream` and
-//! `expose_port` act by stream id on an engine recording its streams in a
-//! temporary state directory, and `open_viewer` opens only over `/mcp/stdio`.
+//! `stop_stream`, `start_stream`, `remove_project` and `rename_stream` act by
+//! stream id on an engine recording its streams in a temporary state
+//! directory, and `open_viewer` opens only over `/mcp/stdio`.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
@@ -24,14 +24,13 @@ use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
-    OutputPortExposureOutcome, RunProjectRequest, Runner, RuntimeOperations, StreamActionQueued,
-    StreamEnvironment, StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
-    StreamRecordsInTheStateDirectory, StreamRenameOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream, RunProjectRequest,
+    Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment, StreamListing,
+    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
+    StreamRenameOutcome,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -54,7 +53,7 @@ fn register_the_stream_tools_test_source_once() {
 }
 
 /// The graph a stream function named `stream_id` compiles to: one
-/// [`StreamToolsTestSource`] named `source`, exposing nothing.
+/// [`StreamToolsTestSource`] named `source`.
 fn the_graph_of_a_function_named(stream_id: &str) -> Value {
     json!({
         "stream": stream_id,
@@ -64,7 +63,6 @@ fn the_graph_of_a_function_named(stream_id: &str) -> Value {
             "config": {},
         }],
         "links": [],
-        "exposed": [],
     })
 }
 
@@ -398,12 +396,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.ids_of_the_loaded_streams()
     }
-    fn every_loaded_stream_and_the_output_ports_it_exposes(
-        &self,
-    ) -> Vec<streamlib::sdk::runtime::LoadedStreamAndTheOutputPortsItExposes> {
-        self.engine
-            .every_loaded_stream_and_the_output_ports_it_exposes()
-    }
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
         let stream_id = request
             .project_directory
@@ -465,21 +457,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     }
     fn list_streams(&self) -> Vec<StreamListing> {
         OperationsOnTheStreamsLoadedInThisRuntime::list_streams(self.engine.as_ref())
-    }
-    fn expose_port(
-        &self,
-        stream_id: &str,
-        node: &str,
-        port: &str,
-        level: OutputPortExposureLevel,
-    ) -> Result<OutputPortExposureOutcome> {
-        OperationsOnTheStreamsLoadedInThisRuntime::expose_port(
-            self.engine.as_ref(),
-            stream_id,
-            node,
-            port,
-            level,
-        )
     }
     fn set_stream_clock_scale(
         &self,
@@ -671,7 +648,7 @@ async fn logs_reads_a_projects_records_by_stream_paged_by_its_cursor() {
 }
 
 // ============================================================================
-// list, stop, start, remove and expose against an engine recording its streams
+// list, stop, start and remove against an engine recording its streams
 // ============================================================================
 
 /// `list_streams` lists each stream by its id with its display name and
@@ -732,77 +709,6 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
             "{refusal}"
         );
     }
-}
-
-/// `expose_port` changes a loaded stream's port live, recording nothing for
-/// one its host loaded, and records the owner's ruling on a stopped stream once
-/// its recorded graph holds the node.
-#[tokio::test(flavor = "multi_thread")]
-async fn expose_port_changes_a_loaded_port_live_and_records_a_stopped_streams_ruling() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
-    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
-    let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
-
-    let live_exposed = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "expose_port",
-            json!({ "stream": live, "node": "source", "port": "video", "level": "public" }),
-        )
-        .await,
-    )
-    .expect("the live port is made public");
-    assert_eq!(
-        live_exposed,
-        json!({ "stream": live, "node": "source", "port": "video", "level": "public", "recorded": false })
-    );
-    let live_graph = first_text_block_json(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "graph",
-            json!({ "stream": live }),
-        )
-        .await,
-    );
-    assert_eq!(
-        live_graph["exposed"],
-        json!([{ "node": "source", "port": "video", "level": "public" }]),
-        "`graph` shows the new level at once: {live_graph}"
-    );
-
-    let recorded = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "expose_port",
-            json!({ "stream": parked, "node": "source", "port": "video", "level": "internal" }),
-        )
-        .await,
-    )
-    .expect("the stopped stream's ruling is recorded");
-    assert_eq!(recorded["recorded"], true);
-    let parked_record = engine
-        .current_record_of(&parked)
-        .expect("the parked record");
-    assert_eq!(parked_record.exposure_rulings.len(), 1);
-    assert_eq!(
-        parked_record.exposure_rulings[0].level,
-        OutputPortExposureLevel::Internal
-    );
-
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "expose_port",
-            json!({ "stream": parked, "node": "nowhere", "port": "video", "level": "private" }),
-        )
-        .await,
-    )
-    .expect_err("a node the recorded graph lacks is refused");
-    assert!(
-        refusal.contains("nowhere") && refusal.contains("source"),
-        "{refusal}"
-    );
 }
 
 /// `open_viewer` is refused over `POST /mcp`, whose connection ends with its

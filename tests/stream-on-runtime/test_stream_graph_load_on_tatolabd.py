@@ -54,7 +54,7 @@ from stream_runs_on_tatolabd import (
     stream_id_of_a_hand_written_graph,
     stream_id_of_a_one_stream_project,
 )
-from tatolab.stream import RelayTrackSource, _built_in_nodes
+from tatolab.stream import _built_in_nodes
 from tatolab.stream._built_in_node import BuiltInNode
 
 #: The H.264 encoder module's node type, which the suite venv installs.
@@ -72,7 +72,6 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
 
 # The keys a built-in's config cannot leave out; every other built-in loads with none.
 CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
-    RelayTrackSource: {"broadcast": "desk/camera-rig.hang", "track": "camerasource/video"},
     _built_in_nodes.ArrayToChannels: {"channel_names": ["left", "right"], "sample_rate": 48_000},
     _built_in_nodes.ChannelsToRecords: {"channel_names": ["level"]},
     _built_in_nodes.RecordsToChannels: {"channel_names": ["level"], "sample_rate": 48_000},
@@ -92,7 +91,7 @@ RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDrive
 
 
 def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder") -> "dict[str, Any]":
-    """A test pattern into an H.264 encoder, exposing the pattern's output."""
+    """A test pattern into an H.264 encoder."""
     return {
         "stream": stream_function_name,
         "nodes": [
@@ -109,13 +108,12 @@ def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder"
                 "target": {"node": "h264encoder", "port": "video"},
             }
         ],
-        "exposed": [{"node": "testpatternsource", "port": "video"}],
     }
 
 
 def empty_graph() -> "dict[str, Any]":
     """What a stream whose function adds nothing compiles to."""
-    return {"stream": "main", "nodes": [], "links": [], "exposed": []}
+    return {"stream": "main", "nodes": [], "links": []}
 
 
 def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
@@ -285,7 +283,6 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
                     "target": {"node": "h264encoder", "port": "video"},
                 },
             ],
-            "exposed": [{"node": "loadedframerelay", "port": "video_to_downstream"}],
         }
     )
 
@@ -395,8 +392,8 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
                 "nodes": [
                     {
                         "name": "pattern",
-                        "type": RelayTrackSource.type,
-                        "config": {"broadcast": "desk/pattern.hang", "track": "pattern/video", "widht": 640},
+                        "type": _built_in_nodes.ChannelsToRecords.type,
+                        "config": {"channel_names": ["level"], "widht": 640},
                     }
                 ],
             }
@@ -404,7 +401,7 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
     )
 
     assert "node `pattern`" in refusal
-    assert "`tatolab.stream:RelayTrackSource`" in refusal
+    assert "`tatolab.stream:ChannelsToRecords`" in refusal
     assert "`widht`" in refusal
 
 
@@ -473,7 +470,7 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
     ],
     ids=["machine", "stream", "machine-and-stream"],
 )
-def test_a_link_end_naming_a_stream_or_a_machine_is_refused_by_load_naming_relay_track_source(
+def test_a_link_end_naming_a_stream_or_a_machine_is_refused_by_load_naming_the_track_receive(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     end: str,
     keys_naming_a_port_outside_the_stream: "dict[str, str]",
@@ -489,8 +486,8 @@ def test_a_link_end_naming_a_stream_or_a_machine_is_refused_by_load_naming_relay
     assert f"the {end} end of the link" in refusal, refusal
     assert what_the_refusal_names in refusal, refusal
     assert (
-        "a link's ends are both in this stream; read another stream's port, on this machine "
-        "or another, through a `RelayTrackSource` node"
+        "a link's ends are both in this stream; read another stream's track at a relay, on "
+        "this machine or another, through a `MoqTrackReceive` node"
     ) in refusal, refusal
 
 

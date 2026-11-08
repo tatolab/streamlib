@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The tables `streams` and `relays` print.
+//! The table `streams` prints.
 
 /// `table_rows` one line each, every column but the last padded to its widest cell and two
 /// spaces apart.

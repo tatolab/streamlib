@@ -21,7 +21,7 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-# The MoQ client, pinned exactly as `RelayTrackSource` and the publisher pin it.
+# The MoQ client, pinned exactly as `tatolab-moq` pins it.
 moq-net = { version = "=0.3.15" }
 moq-tokio = { version = "=0.19.28" }
 moq-json = { version = "=0.5.13" }
@@ -29,7 +29,7 @@ moq-json = { version = "=0.5.13" }
 url = "2"
 # The broadcast's catalog, and the legacy container a media track's objects open with.
 hang = { version = "=0.21.16" }
-# The one relay-track reader, which the relay source node shares.
+# The one relay-track reader, which `MoqTrackReceive` shares.
 streamlib-relay-track-reader = { path = "../streamlib-relay-track-reader" }
 
 [dev-dependencies]

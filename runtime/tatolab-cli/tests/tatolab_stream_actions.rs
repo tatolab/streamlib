@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab run`, `stop`, `start`, `rm`, `rename`, `streams`, `expose` and `clock` run as a user runs
+//! `tatolab run`, `stop`, `start`, `rm`, `rename`, `streams` and `clock` run as a user runs
 //! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
 //! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
@@ -401,44 +401,6 @@ fn streams_says_so_when_the_runtime_holds_none() {
 }
 
 #[test]
-fn expose_sends_private_public_or_internal_by_its_flag() {
-    for (level_flags, wire_level) in [
-        (&[][..], "private"),
-        (&["--public"][..], "public"),
-        (&["--remove"][..], "internal"),
-    ] {
-        let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-            "expose_port",
-            StubToolAnswer::tool_result(
-                &json!({
-                    "stream": "cam",
-                    "node": "effect",
-                    "port": "video",
-                    "level": wire_level,
-                    "recorded": true,
-                })
-                .to_string(),
-            ),
-        );
-
-        let printed = printed_by_a_successful(
-            &isolated_machine_directories,
-            &[&["expose", "cam", "effect", "video"], level_flags].concat(),
-        );
-
-        assert_eq!(
-            printed,
-            format!("cam/effect/video is {wire_level} (recorded; it holds across restarts)\n")
-        );
-        assert_eq!(
-            stub_local_api_server.recorded_arguments_of("expose_port"),
-            [json!({"stream": "cam", "node": "effect", "port": "video", "level": wire_level})],
-            "{level_flags:?}"
-        );
-    }
-}
-
-#[test]
 fn clock_sends_the_scale_and_says_the_stream_runs_at_it() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "set_stream_clock_scale",
@@ -496,57 +458,6 @@ fn a_scale_the_runtime_refused_exits_one_in_its_own_words() {
     assert_eq!(
         standard_error_text(&refused),
         format!("error: set_stream_clock_scale failed: {refusal}\n")
-    );
-    assert_eq!(standard_output_text(&refused), "");
-}
-
-#[test]
-fn an_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
-    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "expose_port",
-        StubToolAnswer::tool_result(
-            &json!({
-                "stream": "cam",
-                "node": "effect",
-                "port": "video",
-                "level": "public",
-                "recorded": false,
-                "not_recorded_because": "the record /state/streams/cam.json cannot be written",
-            })
-            .to_string(),
-        ),
-    );
-
-    let finished =
-        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "--public"]);
-
-    assert_eq!(finished.status.code(), Some(0), "the level changed live");
-    assert_eq!(
-        standard_output_text(&finished),
-        "cam/effect/video is public (live only: not recorded)\n"
-    );
-    assert_eq!(
-        standard_error_text(&finished),
-        "warning: cam/effect/video changed live but was not recorded as the owner's ruling, so a \
-         restart of the runtime puts back the level it had: the record \
-         /state/streams/cam.json cannot be written\n"
-    );
-}
-
-#[test]
-fn a_restriction_the_runtime_refused_for_its_record_exits_one_printing_nothing_on_stdout() {
-    let refusal = "the port `effect/video` of the stream `cam` was not restricted to \
-                   internal, and is still public: the owner's ruling could not be recorded";
-    let (isolated_machine_directories, _stub_local_api_server) =
-        a_runtime_answering("expose_port", StubToolAnswer::tool_failure(refusal));
-
-    let refused =
-        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "--remove"]);
-
-    assert_eq!(refused.status.code(), Some(1));
-    assert_eq!(
-        standard_error_text(&refused),
-        format!("error: expose_port failed: {refusal}\n")
     );
     assert_eq!(standard_output_text(&refused), "");
 }
@@ -624,7 +535,7 @@ fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
 }
 
 /// In a project directory one stream was loaded from, every verb naming a stream acts on it
-/// without naming it — `expose` with its two positionals.
+/// without naming it.
 #[test]
 fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_none_is_named() {
     let project_directory = tempfile::tempdir().unwrap();
@@ -647,15 +558,6 @@ fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_n
             "rename_stream",
             json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}).to_string(),
             json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}),
-        ),
-        (
-            &["expose", "effect", "video"][..],
-            "expose_port",
-            json!({"stream": "hello-main-3f2a9c", "node": "effect", "port": "video",
-                   "level": "private", "recorded": true})
-            .to_string(),
-            json!({"stream": "hello-main-3f2a9c", "node": "effect", "port": "video",
-                   "level": "private"}),
         ),
     ] {
         let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
@@ -762,34 +664,5 @@ fn rename_shows_a_named_stream_under_the_display_name_as_given() {
     assert_eq!(
         stub_local_api_server.recorded_arguments_of("rename_stream"),
         [json!({"stream": "cam", "display_name": "  Desk cam ✨"})]
-    );
-}
-
-#[test]
-fn expose_takes_the_stream_as_its_first_of_three_positionals_and_refuses_four() {
-    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "expose_port",
-        StubToolAnswer::tool_result(
-            &json!({"stream": "cam", "node": "effect", "port": "video", "level": "public",
-                    "recorded": true})
-            .to_string(),
-        ),
-    );
-
-    printed_by_a_successful(
-        &isolated_machine_directories,
-        &["expose", "Camera", "effect", "video", "--public"],
-    );
-    let refused =
-        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "extra"]);
-
-    assert_eq!(
-        stub_local_api_server.recorded_arguments_of("expose_port"),
-        [json!({"stream": "cam", "node": "effect", "port": "video", "level": "public"})]
-    );
-    assert_eq!(
-        refused.status.code(),
-        Some(2),
-        "clap refuses a fourth positional"
     );
 }

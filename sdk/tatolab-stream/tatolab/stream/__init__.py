@@ -3,7 +3,7 @@
 
 """What a stream or node module imports.
 
-A stream is a `@stream` function that adds, links and exposes nodes on a
+A stream is a `@stream` function that adds and links nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
 declares its execution with `@node` and its ports as `Input` and `Output` class
 attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
@@ -37,8 +37,6 @@ from ._built_in_nodes import ImageToArray as ImageToArray
 from ._built_in_nodes import ImageToArrayConfig as ImageToArrayConfig
 from ._built_in_nodes import RecordsToChannels as RecordsToChannels
 from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
-from ._built_in_nodes import RelayTrackSource as RelayTrackSource
-from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
 from ._gpu_protocols import ComputeKernel as ComputeKernel
 from ._gpu_protocols import GpuContextFullAccess as GpuContextFullAccess
@@ -94,7 +92,6 @@ from ._graph_variable_nodes import GetVariable as GetVariable
 from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
 from ._graph_variable_nodes import SetVariable as SetVariable
 from ._graph_variable_nodes import SetVariableConfig as SetVariableConfig
-from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
@@ -164,7 +161,6 @@ __all__ = [
     "ColorInfo",
     "ComputeKernel",
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
-    "Exposure",
     "GetVariable",
     "GetVariableConfig",
     "GraphInput",
@@ -221,8 +217,6 @@ __all__ = [
     "Records",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
-    "RelayTrackSource",
-    "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "ScaledStreamClock",

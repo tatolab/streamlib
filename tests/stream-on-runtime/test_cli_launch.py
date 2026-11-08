@@ -124,14 +124,6 @@ MINIMUM_METER_REPORTS = 5
 MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
 SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
 SCAFFOLDED_EFFECT_NODE_NAME = "halftonelenseffect"
-SCAFFOLDED_ENCODER_NODE_NAME = "h264encoder"
-SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
-# What the scaffold's encoder module logs on a device with no H.264 encoder,
-# the software device among them: a named refusal, while the stream stays loaded.
-SCAFFOLDED_ENCODER_REFUSAL = re.compile(r"H264Encoder: .*; every frame is discarded")
-# The encoder's own record of its first access unit. `graph` counts a port's
-# writes only once something reads it, and nothing subscribes to the track here.
-SCAFFOLDED_ENCODER_FIRST_FRAME_ENCODED = "H264Encoder: first frame encoded"
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
 # How long a loaded stream's source has to write its first bag on `video`.
@@ -601,8 +593,8 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 
     Run exactly as scaffolded:
     `new` has the runtime write the scaffold, compile its `@stream` and load
-    the graph it builds, so the graph the local API renders carries the stream's name and
-    the exposure it declared. A listed stream alone proves almost nothing here:
+    the graph it builds, so the graph the local API renders carries the stream's name
+    and the nodes it added. A listed stream alone proves almost nothing here:
     it is listed whether or not `process()` ever succeeds, so the assertions
     that carry this test are the ones on the run's own records. `process()
     failed` catches an effect that raises every frame; the count of frames
@@ -620,18 +612,10 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     assert live_graph["stream"] == stream_id, (
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
-    assert live_graph["exposed"] == [
-        {
-            "node": SCAFFOLDED_ENCODER_NODE_NAME,
-            "port": SCAFFOLDED_ENCODER_OUTPUT_PORT,
-            "level": "public",
-        }
-    ], f"the runtime must render the exposure the stream declared; graph was {live_graph}"
     assert {graph_node["name"] for graph_node in live_graph["nodes"]} == {
         "testpatternsource",
         SCAFFOLDED_EFFECT_NODE_NAME,
         "brightnessmeter",
-        SCAFFOLDED_ENCODER_NODE_NAME,
     }
 
     # Long enough for the source to have driven many frames through the effect.
@@ -643,13 +627,6 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     stream_output = the_first_streams_output(tatolabd, stream_id)
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
-    )
-    assert (
-        SCAFFOLDED_ENCODER_FIRST_FRAME_ENCODED in stream_output
-        or SCAFFOLDED_ENCODER_REFUSAL.search(stream_output) is not None
-    ), (
-        f"the scaffolded encoder neither encoded an access unit nor refused by name; standard "
-        f"error ended:\n{tatolabd.recent_stderr()}"
     )
     meter_reports = len(SCAFFOLDED_METER_REPORT.findall(stream_output))
     assert meter_reports >= MINIMUM_METER_REPORTS, (
@@ -933,13 +910,13 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import RelayTrackSource, StreamBuilder, stream\n"
+                "from tatolab.stream import ChannelsToRecords, StreamBuilder, stream\n"
                 "\n"
                 "\n"
                 "@stream\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
                 "    stream_builder.add(\n"
-                '        RelayTrackSource, config={"broadcast": 7, "track": "pattern/video"}\n'
+                '        ChannelsToRecords, config={"channel_names": 7}\n'
                 "    )\n"
             )
         }
@@ -955,8 +932,8 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
         f"an engine-side failure must not arrive as a launcher traceback; it was:\n{failed_because}"
     )
     assert failed_stream_id == stream_id_of_the_project(app_directory)
-    assert "`tatolab.stream:RelayTrackSource`" in failed_because, failed_because
-    assert "broadcast: invalid type" in failed_because, failed_because
+    assert "`tatolab.stream:ChannelsToRecords`" in failed_because, failed_because
+    assert "channel_names: invalid type" in failed_because, failed_because
     assert ENGINE_STARTED_LOG_LINE not in tatolabd.stderr_text
     [listed] = tatolabd.local_api_client().list_streams()
     assert (listed["stream"], listed["state"]) == (failed_stream_id, "failed"), listed

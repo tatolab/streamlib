@@ -11,9 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::LoadedStreamInThisRuntime;
-use super::exposed_output_port_subscription::{
-    ExposedOutputPortSourceWiring, the_source_wiring_its_answer_says,
-};
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
@@ -23,12 +20,43 @@ use crate::core::graph::{
     Graph, OutputLinkPortRef, ProcessorNode, ProcessorUniqueId, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
+use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
 
 /// How often an open asks whether a helper source has answered.
 const HOW_OFTEN_AN_OPEN_ASKS_FOR_A_HELPERS_ANSWER: Duration = Duration::from_millis(10);
+
+/// Whether the source of a viewed port has opened its end of the channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceWiringOfAViewedOutputPort {
+    /// The source publishes on the channel.
+    Wired,
+    /// The source's helper process has not yet said whether it opened its port.
+    AwaitingItsHelpersAnswer,
+    /// The source's helper process could not open its port, and said why.
+    RefusedByItsHelper { reason: String },
+}
+
+/// What a helper source's answer, or its absence for a source with nothing to
+/// answer, says of the port's wiring.
+fn the_source_wiring_its_answer_says(
+    wire_reply: Option<&OutOfProcessLinkWireReply>,
+) -> SourceWiringOfAViewedOutputPort {
+    let Some(wire_reply) = wire_reply else {
+        return SourceWiringOfAViewedOutputPort::Wired;
+    };
+    match wire_reply.the_far_sides_answer() {
+        None => SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer,
+        Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => {
+            SourceWiringOfAViewedOutputPort::Wired
+        }
+        Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
+            SourceWiringOfAViewedOutputPort::RefusedByItsHelper { reason }
+        }
+    }
+}
 
 /// What a viewer needs to read an output port's channel from its own process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +154,7 @@ impl OutputPortViewerHeldOpen {
         &self.hand_off
     }
 
-    fn source_wiring(&self) -> ExposedOutputPortSourceWiring {
+    fn source_wiring(&self) -> SourceWiringOfAViewedOutputPort {
         the_source_wiring_its_answer_says(
             self.source_side
                 .wire_reply_awaited_from_the_source
@@ -209,11 +237,11 @@ impl LoadedStreamInThisRuntime {
         let gave_up_at = tokio::time::Instant::now() + A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN;
         let refusal = loop {
             match viewer_held_open.source_wiring() {
-                ExposedOutputPortSourceWiring::Wired => return Ok(viewer_held_open),
-                ExposedOutputPortSourceWiring::RefusedByItsHelper { reason } => {
+                SourceWiringOfAViewedOutputPort::Wired => return Ok(viewer_held_open),
+                SourceWiringOfAViewedOutputPort::RefusedByItsHelper { reason } => {
                     break format!("its helper process could not open the port: {reason}");
                 }
-                ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer
+                SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer
                     if tokio::time::Instant::now() >= gave_up_at =>
                 {
                     break format!(
@@ -221,7 +249,7 @@ impl LoadedStreamInThisRuntime {
                         A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN.as_secs()
                     );
                 }
-                ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer => {
+                SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer => {
                     tokio::time::sleep(HOW_OFTEN_AN_OPEN_ASKS_FOR_A_HELPERS_ANSWER).await
                 }
             }
@@ -292,6 +320,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use serde_json::Value;
+    use serial_test::serial;
 
     use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 
@@ -395,9 +424,8 @@ mod tests {
         }
     }
 
-    fn the_links_and_exposures_of(stream: &LoadedStreamInThisRuntime) -> (Value, Value) {
-        let graph = stream.to_json().unwrap();
-        (graph["links"].clone(), graph["exposed"].clone())
+    fn the_links_of(stream: &LoadedStreamInThisRuntime) -> Value {
+        stream.to_json().unwrap()["links"].clone()
     }
 
     fn the_next_message_read(reader: &mut OutputPortViewerReader) -> MessageReadFromAReservedSlot {
@@ -415,9 +443,10 @@ mod tests {
     /// the port's node writes from its own iceoryx2 node, and the graph keeps
     /// no trace of it.
     #[test]
+    #[serial]
     fn a_viewer_reads_an_unlinked_port_without_changing_the_graph() {
         let camera = ARunningCameraWithNoLinks::load();
-        let graph_before = the_links_and_exposures_of(&camera.stream);
+        let graph_before = the_links_of(&camera.stream);
         assert!(!camera.camera_output.has_channel_publisher("out1"));
 
         let viewer = camera
@@ -433,7 +462,7 @@ mod tests {
             ),
             ("a", &camera.camera_id, "camera", "out1")
         );
-        assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
+        assert_eq!(the_links_of(&camera.stream), graph_before);
 
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
@@ -458,13 +487,14 @@ mod tests {
             !camera.camera_output.has_channel_publisher("out1"),
             "the port's channel goes with its viewer"
         );
-        assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
+        assert_eq!(the_links_of(&camera.stream), graph_before);
     }
 
     /// A viewer names its node by id, so a name or an id the stream does not
     /// hold is refused, listing each node's id beside its name, and a port the
     /// node lacks is refused listing the ports it has.
     #[test]
+    #[serial]
     fn a_viewer_of_a_node_id_or_port_the_stream_does_not_hold_is_refused() {
         let camera = ARunningCameraWithNoLinks::load();
 
@@ -496,6 +526,7 @@ mod tests {
     /// A viewer that fell behind reads the latest message and counts every one
     /// written since its read before, and never holds the writer back.
     #[test]
+    #[serial]
     fn a_viewer_that_fell_behind_reads_the_latest_message_and_counts_what_it_skipped() {
         let camera = ARunningCameraWithNoLinks::load();
         let viewer = camera.open_a_viewer("out1").unwrap();
@@ -530,6 +561,7 @@ mod tests {
     /// exports OPAQUE_FD memory; skips where none comes up.
     #[cfg(target_os = "linux")]
     #[test]
+    #[serial]
     fn a_viewer_imports_the_pool_slot_an_image_message_names_from_its_hand_off() {
         use streamlib_consumer_rhi::ConsumerVulkanDevice;
         use streamlib_gpu_frame_import_client::GpuPoolFrameImporterOfAViewer;

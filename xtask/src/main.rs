@@ -31,10 +31,7 @@ pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
-pub mod stage_local_relay;
 pub mod stage_runtime_unit_uv;
-pub mod stage_watch_page;
-pub mod watch_page_third_party_notices;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/`. `lint_logging` walks these by name rather
@@ -334,20 +331,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--check",
             ],
         ),
-        // The relay the local adapter's and `tatolabd`'s tests start.
-        (
-            "the local relay staged",
-            "cargo",
-            &[
-                "run",
-                "--locked",
-                "-q",
-                "-p",
-                "xtask",
-                "--",
-                "stage-local-relay",
-            ],
-        ),
         // The selection is `.config/nextest.toml`'s `ci` profile, which `ci.yml`
         // runs over the same build: one list, read by both.
         (
@@ -387,14 +370,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-python-wheel",
                 "-p",
                 "tatolab-module-sdk",
-                "-p",
-                "streamlib-relay-adapter-sdk",
-                "-p",
-                "streamlib-relay-adapter-local",
-                "-p",
-                "streamlib-relay-adapter-cloudflare",
-                "-p",
-                "streamlib-relay-adapter-moqpro",
                 "-p",
                 "tatolab-read-track",
                 "-p",
@@ -578,8 +553,7 @@ enum Commands {
     /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
     /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
     /// outside the surfaces the plan permits it on: log record `host_ts` and
-    /// `source_ts`, log file naming, and the local relay's certificate
-    /// validity. Monotonic is the
+    /// `source_ts` and log file naming. Monotonic is the
     /// only legal clock on the data plane — a wall-clock value and a media
     /// timestamp share a unit and are different quantities, so subtracting
     /// across them is always a bug. There is no per-line pragma: widening the
@@ -648,9 +622,7 @@ enum Commands {
     /// processor interpreter puts first on `PYTHONPATH` — and `wheel/`. Builds
     /// `sdk/streamlib-python-wheel` as a wheel with the pinned maturin into
     /// `wheel/`, replaces the lend with that wheel's contents, then builds
-    /// `tatolabd` and `tatolab` and copies them, and the local relay
-    /// `stage-local-relay` builds, into `bin/`, and stages the preview page
-    /// `stage-watch-page` builds into `lib/tatolab/watch/`. It first stages the
+    /// `tatolabd` and `tatolab` and copies them into `bin/`. It first stages the
     /// platform's bundled Vulkan driver, so `_vulkan_driver/` lands beside
     /// `_engine`. The one build of the runtime unit for developers, CI and the
     /// installer; it installs and publishes nothing.
@@ -671,25 +643,12 @@ enum Commands {
         machine_directories_under_a_test_root: bool,
     },
 
-    /// Build the machine's local relay, `moq-relay`, from its pinned crate
-    /// with that crate's own lockfile into `target/local-relay/bin/`. It is no
-    /// workspace member; `build-runtime` copies it into the unit's `bin/`, and
-    /// the tests that start a local relay read it from there. A second run
-    /// with the same pin builds nothing. See [`stage_local_relay`].
-    StageLocalRelay,
-
     /// Download uv's release archive for this host at its pinned version,
     /// check its pinned sha256, and unpack `uv` into
     /// `target/runtime-unit-uv/`; `build-runtime` copies it into the unit's
     /// `bin/`. A second run whose archive still matches downloads nothing.
     /// See [`stage_runtime_unit_uv`].
     StageRuntimeUnitUv,
-
-    /// Build the preview page from `runtime/tatolab-watch/` with the bun its
-    /// `package.json` pins and the dependencies its `bun.lock` pins, into the
-    /// runtime unit's `lib/tatolab/watch/`, which `build-runtime` also stages.
-    /// See [`stage_watch_page`].
-    StageWatchPage,
 
     /// Build the browser host and its CEF subprocess from
     /// `packages/tatolab-browser`'s own lockfile against the CEF distribution
@@ -808,13 +767,9 @@ fn main() -> Result<()> {
                 machine_directories_under_a_test_root,
             ),
         )?,
-        Commands::StageLocalRelay => {
-            stage_local_relay::stage_the_local_relay(&workspace_root()?)?;
-        }
         Commands::StageRuntimeUnitUv => {
             stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;
         }
-        Commands::StageWatchPage => stage_watch_page::stage_the_watch_page(&workspace_root()?)?,
         Commands::StageBrowserHost => {
             stage_browser_host::stage_the_browser_host(&workspace_root()?)?;
         }

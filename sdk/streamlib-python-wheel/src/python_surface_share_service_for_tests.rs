@@ -330,8 +330,12 @@ impl SurfaceShareUnderTest {
                 )
                 .expect("a shared event's send right")
             };
-        let iosurface = create_private_iosurface_for_a_gpu_image(width, height, 4)
-            .expect("a private IOSurface");
+        let iosurface = create_private_iosurface_for_a_gpu_image(
+            width,
+            height,
+            streamlib::sdk::rhi::TextureFormat::Rgba8Unorm,
+        )
+        .expect("a private IOSurface");
         let (response, _no_reply_ports) = self
             .publisher_connection
             .send_request_with_ports(

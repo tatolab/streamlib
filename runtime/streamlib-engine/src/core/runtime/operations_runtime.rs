@@ -625,19 +625,6 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
-    fn subscribe_to_an_exposed_output_port(
-        &self,
-        node_name: String,
-        port_name: String,
-    ) -> BoxFuture<'_, Result<crate::core::runtime::ExposedOutputPortSubscription>> {
-        self.in_this_streams_log_route(async move {
-            self.subscribe_to_an_exposed_output_port_reading_its_reserved_slot(
-                &node_name, &port_name,
-            )
-            .await
-        })
-    }
-
     fn open_a_viewer_of_an_output_port(
         &self,
         node_id: ProcessorUniqueId,

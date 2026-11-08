@@ -3,7 +3,7 @@
 # Tatolab
 
 **Turn anything into a live stream.**<br>
-Wire cameras, models and your own code into a stream. Expose an output, and apps, agents and your other machines read it by URL.
+Wire cameras, models and your own code into a stream. Send an output to a MoQ relay, and apps, agents and your other machines read it there.
 
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
@@ -39,9 +39,8 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
   one when an edit fails to compile.
 
 > **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
-> from a checkout of this repository for now. One runtime per machine runs every stream on it. An
-> exposed output is read by the streams and agents on its own machine today; reading it from your
-> other machines is not built yet. See [what ships today](#what-ships-today).
+> from a checkout of this repository for now. One runtime per machine runs every stream on it. See
+> [what ships today](#what-ships-today).
 
 > **License.** Source-available under [BUSL-1.1](LICENSE), converting to Apache 2.0 on January 1,
 > 2029. Building nodes, applications and products on Tatolab is free, commercial use included. Selling,
@@ -136,18 +135,13 @@ cargo xtask build-runtime --release              # omit --release for a debug bu
 export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 ```
 
-That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`,
-`bin/moq-relay` — the machine's local relay, which `tatolabd` runs as two children, one on
-loopback port 4443 and one on every interface at 4445 — `lib/tatolab/lend/`, the runtime's own
-Python half (`tatolab.runtime`) that each Python node's interpreter borrows, and `lib/tatolab/watch/`,
-the preview page `tatolabd` serves at `http://127.0.0.1:4446/watch/<machine>/<stream>`. Keep
-`bin/tatolabd` beside `lib/` and `bin/moq-relay`: `tatolabd` finds all three relative to its own
-executable.
+That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab` and
+`lib/tatolab/lend/`, the runtime's own Python half (`tatolab.runtime`) that each Python node's
+interpreter borrows. Keep `bin/tatolabd` beside `lib/`: `tatolabd` finds the lend relative to its
+own executable.
 
 The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` (it runs the
-pinned maturin through `uvx`), the [bun](https://bun.sh) `runtime/tatolab-watch/package.json` pins
-in its `packageManager` field (it bundles the preview page, and refuses any other bun), plus a
-native toolchain. On Debian or Ubuntu that is:
+pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
 
 ```bash
 sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc python3-dev cmake ninja-build
@@ -199,8 +193,7 @@ begun unloading runs to the end.
 `stream.py` is wiring and nothing else:
 
 ```python
-from tatolab.h264 import H264Encoder
-from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.stream import StreamBuilder, stream
 from tatolab.testpattern import TestPatternSource
 
 from nodes.brightness_meter import BrightnessMeter
@@ -209,31 +202,31 @@ from nodes.halftone_lens_effect import HalftoneLensEffect
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """The sample animation through the lens, encoded and shared; brightness logged each second."""
+    """The sample animation through the lens; its brightness logged each second."""
     # Point it at your camera: `stream_builder.add(CameraSource)`, imported
-    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the same `video` port.
+    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the
+    # same `video` port.
     source = stream_builder.add(TestPatternSource)
     effect = stream_builder.add(HalftoneLensEffect)
     meter = stream_builder.add(BrightnessMeter)
-    encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
     stream_builder.connect(
         effect.output("video_to_downstream"), meter.input("video_from_upstream")
     )
-    stream_builder.connect(effect.output("video_to_downstream"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PUBLIC)
 ```
 
-The effect's output has two readers: the meter measures each frame, and the encoder turns it into
-H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser plays, on this machine
-or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
-pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s `CameraSource`, as the comment says,
-to run your camera through the same effect. A node's `config` class — `TestPatternSourceConfig`,
-`OpusEncoderConfig` — is typed, so a type checker catches a misspelled key. `expose` without a level
-makes an output private, readable by other streams and code on this machine.
+The meter reads the effect's output and logs its brightness each second; open that output in
+Tato Studio's viewer to watch it. `add` names each node after its class, lowercased
+(`halftonelenseffect`), unless you pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s
+`CameraSource`, as the comment says, to run your camera through the same effect. A node's `config`
+class — `TestPatternSourceConfig`, `OpusEncoderConfig` — is typed, so a type checker catches a
+misspelled key.
 
-Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
-which subscribes to the port's track at the relay; a link's two ends are always in one stream.
+To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
+(`pip install tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
+declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another
+stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
+gateway on the same relay; a link's two ends are always in one stream.
 
 Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one shader function, with a lens that
 drifts around the frame and turns what it covers into dots:
@@ -363,13 +356,7 @@ tatolab start [STREAM]
 tatolab rm [--dir DIR]
 tatolab cancel ACTION
 tatolab rename [STREAM] DISPLAY_NAME
-tatolab expose [STREAM] NODE PORT [--public | --remove]
 tatolab clock [STREAM] --scale SCALE
-
-tatolab relays
-tatolab relay add ADAPTER [--settings-file PATH]
-tatolab relay set RELAY_ID [KEY=VALUE ...] [--secret FIELD (--from-file PATH | --from-stdin)]
-tatolab relay rm RELAY_ID
 
 tatolab graph [--stream STREAM]
 tatolab logs [--dir DIR] [--stream STREAM] [--action ID] [-f | --follow] [--processor ID]
@@ -408,7 +395,7 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in `stop`, `start`, `rename`, `expose`, `clock` and `logs --stream`, is a stream id,
+- **`STREAM`**, in `stop`, `start`, `rename`, `clock` and `logs --stream`, is a stream id,
   or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
@@ -428,21 +415,11 @@ tatolab enable-virtual-camera [--print]
 - **`rename`** shows a stream under another display name — any text, never part of
   its address. The stream's record holds it, across the runtime's restarts and the project's
   loads.
-- **`expose`** sets how far one output port is readable, live: private (readable by this machine's
-  other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
-  its stream). A reader the new level no longer allows is cut at once. The level is recorded and
-  wins over what the stream function exposes, across restarts.
 - **`clock`** runs a started stream's scaled clock at another `--scale`, live: stream time carries
   on from where it stands, and every node's time, write stamps and continuous pace follow it. A
   stream on the real or a stepped clock is refused, as is a scale above 1. The stream's next load
   runs the clock its stream function names.
-- **`relays`** lists the relays the runtime joins — the local relay's two listeners and each one
-  added — with each one's adapter, connection state and settings, and each secret setting as set
-  or unset, never its value. **`relay add`** joins a relay through an adapter, from a JSON file of
-  its settings; **`relay set`** replaces settings, or reads one secret from a file or stdin, never
-  an argument; **`relay rm`** leaves a relay and forgets its secrets. A secret is kept in the OS
-  secret store, never in `relays.json`.
-- **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
+- **`graph`** prints every loaded stream's nodes, ports and links as JSON, with each
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
   trailing mDNS `.local`, cast to lowercase URL-safe.
@@ -473,29 +450,24 @@ Unix socket only your user can open — so control is reachable only on that mac
 ```console
 $ tatolab graph | jq -r .machine
 desk
-
-$ curl -s http://127.0.0.1:4446/
-{"machine":"desk","streams":[{"stream":"hello-main-3f2a9c","display_name":"main","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
 ```
 
 `graph` shows every node's state and counters, so it says whether data is moving; `logs` reads
-what every node logged, Rust and Python alike. What a port carries is read the way anyone reads it:
-an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the
-machine's local relay, which answers on this machine at `http://127.0.0.1:4443`.
-`http://127.0.0.1:4446/watch` lists the loaded streams by display name and id, and
-`http://127.0.0.1:4446/watch/desk/hello-main-3f2a9c` plays the stream's video in a browser, and
-any MoQ client reads its tracks — this repository's `tatolab-read-track` writes a track's objects
-to files:
+what every node logged, Rust and Python alike. To watch a node's output, open it in Tato Studio's
+viewer, which reads the port on this machine with no copy. To read what a port carries from
+anywhere else, send it to a relay with the `tatolab.moq` gateway nodes: encode it, link the
+encoder into a `MoqTrackSend`, and the track is `<track>` of the broadcast `<broadcast>.hang` that
+the stream's `MoqGateway` publishes. Any MoQ client reads it there — this repository's
+`tatolab-read-track` writes a track's objects to files:
 
 ```console
-$ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/hello-main-3f2a9c.hang h264encoder/encoded_video --count 30 --out frames/
+$ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk.hang camera --count 30 --out frames/
 ```
 
 An `H264Encoder`'s track files, concatenated, are an H.264 stream any decoder plays; an
-`H265Encoder`'s are an HEVC one. A port that is not exposed is internal to its stream: `tatolab
-expose hello-main-3f2a9c <node> <port>` makes it a track on this machine. A raw frame's port carries a GPU
-surface's id, which means nothing outside the runtime, so to see a mid-graph frame, connect an
-encoder to it and expose the encoder.
+`H265Encoder`'s are an HEVC one. A raw frame's port carries a GPU surface's id, which means nothing
+outside the runtime, so to send a mid-graph frame, connect an encoder to it and send the encoder's
+output.
 
 <details>
 <summary><b>The same operations speak MCP, so an agent can do this itself</b></summary>
@@ -519,8 +491,9 @@ and the folder of its own log — to observe; `add_node`, `connect`, `disconnect
 answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_project_streams`; `stop_stream`, `start_stream`, `remove_project`,
-`rename_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
-`add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
+`rename_stream`, `set_stream_clock_scale` and `list_streams` to manage the streams the runtime
+holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
+machine, naming the node by the `id` `graph` lists. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as
@@ -546,7 +519,7 @@ machine's lock, so a second `tatolabd` is refused naming the first one's user, p
 and serves its local socket at a fixed path. It keeps its state in
 `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
 Support/Tatolab/` on macOS: a record of each stream it runs — its graph, project, interpreter,
-whether it is stopped, and the levels `expose` set — and its own log. At each start it loads every
+and whether it is stopped — and its own log. At each start it loads every
 recorded stream that is neither stopped nor failed.
 
 `tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, then runs
@@ -603,9 +576,9 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** one built-in: `RelayTrackSource`, the node that reads a relay's track, ships
-inside the runtime as transport. Every media node is a package, and anything else is a package
-or a node you write.
+**It costs you** no media node in the runtime: its built-ins only reshape data between families
+(`ChannelsToRecords`, `ImageToArray` and the like). Every media node is a package, the MoQ gateway
+nodes (`tatolab-moq`) among them, and anything else is a package or a node you write.
 
 </details>
 
@@ -731,7 +704,7 @@ model-input tensor kernel, and the stream clock every node reads as `ctx.time`.
 
 A stream's venv runs CPython 3.12 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
 
-Not built yet: the macOS app, serving an exposed port off the machine, and Windows.
+Not built yet: the macOS app and Windows.
 
 ## Troubleshooting
 

@@ -832,45 +832,6 @@ mod mutation_persistence {
         assert!(!graph.traversal().v(id.as_str()).exists());
     }
 
-    /// A node's exposures live on the node, so dropping it — what a live
-    /// removal's commit does — takes them out of `graph`, and the level the
-    /// publisher reads without the lock reads internal.
-    #[test]
-    fn a_dropped_node_takes_its_exposures_with_it() {
-        use crate::core::graph::{ExposedOutputPortsComponent, OutputPortExposureLevel};
-
-        let mut graph = test_graph();
-        let id = graph
-            .traversal_mut()
-            .add_v(MockProcessor::Processor::node(Default::default()))
-            .expect("the node is named")
-            .first()
-            .expect("should create processor")
-            .id
-            .to_string();
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let level_now = exposed_ports
-            .level_now_of("video")
-            .expect("a private port has a level to read");
-        graph
-            .traversal_mut()
-            .v(id.as_str())
-            .first_mut()
-            .expect("the node is in the graph")
-            .insert_component_without_rendering_it(exposed_ports);
-        assert_eq!(
-            graph.to_graph_response("rig".into()).exposed.len(),
-            1,
-            "the exposure renders while its node is there"
-        );
-
-        graph.traversal_mut().v(id.as_str()).drop();
-
-        assert!(graph.to_graph_response("rig".into()).exposed.is_empty());
-        assert_eq!(level_now.read(), OutputPortExposureLevel::Internal);
-    }
-
     #[test]
     fn test_drop_removes_link() {
         let mut graph = test_graph();

@@ -59,17 +59,6 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
     }
 }
 
-#[test]
-fn public_beside_remove_is_a_usage_error() {
-    let refused = run_tatolab_reading_no_runtime_directory(&[
-        "expose", "camera", "effect", "video", "--public", "--remove",
-    ]);
-
-    assert_eq!(refused.status.code(), Some(2));
-    let usage_error = standard_error_text(&refused);
-    assert!(usage_error.contains("cannot be used with"), "{usage_error}");
-}
-
 #[cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
 mod against_an_isolated_machine {
     use super::common::isolated_machine_directories::IsolatedMachineDirectories;
@@ -95,7 +84,6 @@ mod against_an_isolated_machine {
             &["start", "camera"][..],
             &["rm", "--dir", project_directory][..],
             &["streams"][..],
-            &["expose", "camera", "effect", "video"][..],
             &["graph"][..],
             &["graph", "--stream", "camera"][..],
             &["logs", "--stream", "camera"][..],

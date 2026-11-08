@@ -6,7 +6,7 @@ Match your symptom, read the doc, then verify its claims against current code an
 
 | symptom / trigger | read |
 |---|---|
-| Reading the pixels a camera produced, or validating a camera change end-to-end on the vivid / v4l2loopback virtual camera — the camera through the scaffold's encoder, its track read at the local relay and decoded | `.claude/skills/verify-live/SKILL.md` (§ Reading pixels, § Naming the camera) |
+| Reading the pixels a camera produced, or validating a camera change end-to-end on the vivid / v4l2loopback virtual camera — the camera through an encoder and the gateway nodes, its track read at the relay and decoded | `.claude/skills/verify-live/SKILL.md` (§ Reading pixels, § Naming the camera) |
 | Headless NVIDIA Vulkan in a container reports `ERROR_INCOMPATIBLE_DRIVER` / "Found no drivers" while `nvidia-smi`/CUDA work (missing GLVND/EGL dispatch); or userspace audio (PipeWire/ALSA/cpal) with no sound hardware in a container | `docs/learnings/headless-nvidia-vulkan-container.md` |
 | Importing a DMA-BUF as a GL render target on NVIDIA fails (`GL_INVALID_OPERATION` 0x0502 / `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` 0x8CD6); need the DRM-modifier `external_only` probe to pick a tiled (render-target-capable) modifier | `docs/learnings/nvidia-egl-dmabuf-render-target.md` |
 | Intermittent fake OOM on an OPAQUE_FD allocation after a camera-path change, only on real UVC hardware — a FAILED cross-device DMA-BUF import probe perturbs NVIDIA's per-handle-type accounting (vivid/loopback never reproduce) | `docs/learnings/nvidia-opaque-fd-after-swapchain.md` |

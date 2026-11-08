@@ -43,12 +43,9 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository" }
 uuid = "1.11"
-# The machine's relay instances the relay tools drive, and the relay-adapter catalog.
-streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk", features = ["utoipa"] }
 
-# `trace` for every request's span; `fs` serves the preview page's files on the loopback listener.
-tower-http = { version = "0.6", features = ["trace", "fs"] }
-# Hands one `/watch` request to the preview page's file service.
+# `trace` for every request's span.
+tower-http = { version = "0.6", features = ["trace"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 

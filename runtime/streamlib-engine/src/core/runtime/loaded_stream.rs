@@ -284,7 +284,6 @@ impl LoadedStreamInThisRuntime {
                 shutdown_escalation: shutdown_escalation.clone(),
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
-                this_stream: this_stream.clone(),
                 capture_device_access_prompting,
             }),
             processor_interpreter_launch_record: Arc::new(
@@ -1357,8 +1356,8 @@ impl LoadedStreamInThisRuntime {
     /// Load `graph` into this stream, which is not in the stream table yet:
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
-    /// resolves, each node added under its name, each link connected by name,
-    /// and each exposure put at its level in the stream's live exposure map.
+    /// resolves, each node added under its name, and each link connected by
+    /// name.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -1430,10 +1429,6 @@ impl LoadedStreamInThisRuntime {
             })?;
         }
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
-
-        for exposed in &graph.exposed {
-            self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;
-        }
         Ok(())
     }
 }

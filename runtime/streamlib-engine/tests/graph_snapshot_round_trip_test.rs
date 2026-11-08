@@ -158,7 +158,6 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
         rendered_second["nodes"][0]["id"], rendered_first["nodes"][0]["id"],
         "ids are live keys a load mints anew"
     );
-    assert_eq!(rendered_second["exposed"], serde_json::json!([]));
     assert_eq!(
         rendered_second["stream"], "built-in-code",
         "a stream built in code renders its own name, and a load of it keeps that name"
@@ -166,50 +165,19 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
 }
 
 #[test]
-#[serial]
-fn a_loaded_stream_renders_its_name_and_its_exposures_at_their_levels_and_round_trips_them() {
-    let camera = register_test_type("ExposedCamera", "_unused_in", "video");
+fn a_graph_carrying_exposed_is_refused_naming_the_keys_a_graph_has() {
+    let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+        "stream": "main",
+        "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
+        "exposed": [{"node": "camera", "port": "video"}]
+    }))
+    .expect_err("a graph carries no exposure")
+    .to_string();
 
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let stream = load(
-        &runner,
-        project_directory.path(),
-        serde_json::json!({
-            "stream": "main",
-            "nodes": [
-                {"name": "Front Camera", "type": camera.as_str(), "config": {}},
-                {"name": "Back Camera", "type": camera.as_str(), "config": {}}
-            ],
-            "exposed": [
-                {"node": "front-camera", "port": "Video"},
-                {"node": "back-camera", "port": "video", "level": "public"}
-            ]
-        }),
-    )
-    .expect("the graph loads");
-    let rendered = the_graph_document_of(&stream);
-
-    assert_eq!(rendered["stream"], "main");
-    assert_eq!(
-        rendered["exposed"],
-        serde_json::json!([
-            {"node": "front-camera", "port": "video", "level": "private"},
-            {"node": "back-camera", "port": "video", "level": "public"}
-        ]),
-        "an exposure renders its level, and one written with no level renders as private"
-    );
-
-    let reloading_runner = Runner::new().unwrap();
-    let reloaded = load(
-        &reloading_runner,
-        project_directory.path(),
-        rendered.clone(),
-    )
-    .expect("the render loads");
-    assert_eq!(
-        the_spec_in(the_graph_document_of(&reloaded)),
-        the_spec_in(rendered)
+    assert!(refusal.contains("the key `exposed`"), "{refusal}");
+    assert!(
+        refusal.contains("`stream`, `clock`, `nodes` and `links`"),
+        "{refusal}"
     );
 }
 
@@ -383,35 +351,6 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
     assert!(runner.ids_of_the_loaded_streams().is_empty());
 }
 
-#[test]
-#[serial]
-fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
-    let camera = register_test_type("InputExposingCamera", "frames_in", "video");
-
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({
-                "stream": "main",
-                "nodes": [{"name": "camera", "type": camera.as_str()}],
-                "exposed": [{"node": "camera", "port": "frames_in"}]
-            }),
-        ),
-        "only an output port is exposed",
-    )
-    .to_string();
-
-    assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
-    assert!(refusal.contains("video"), "{refusal}");
-    assert!(
-        runner.ids_of_the_loaded_streams().is_empty(),
-        "a refused graph adds no stream"
-    );
-}
-
 /// A link naming a port its node does not have, in that direction, is
 /// refused before any node is added.
 #[test]
@@ -444,33 +383,6 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
         "{refusal}"
     );
     assert!(runner.ids_of_the_loaded_streams().is_empty());
-}
-
-#[test]
-#[serial]
-fn an_exposure_named_twice_is_refused() {
-    let camera = register_test_type("TwiceExposedCamera", "_unused_in", "video");
-
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({
-                "stream": "main",
-                "nodes": [{"name": "camera", "type": camera.as_str()}],
-                "exposed": [
-                    {"node": "camera", "port": "video"},
-                    {"node": "Camera", "port": "Video"}
-                ]
-            }),
-        ),
-        "one port is exposed once",
-    )
-    .to_string();
-
-    assert!(refusal.contains("twice"), "{refusal}");
 }
 
 /// A node whose type never resolved renders under the requested import path

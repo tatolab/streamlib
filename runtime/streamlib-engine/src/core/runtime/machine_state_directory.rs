@@ -3,9 +3,7 @@
 
 //! The streams a runtime records in its state directory: one record per
 //! stream, named by its id and written whole or not at all, changed only
-//! through one read-edit-write at a time, the stream actions queued on it, and
-//! the owner's exposure rulings each record carries, split around the stream's
-//! load.
+//! through one read-edit-write at a time, and the stream actions queued on it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,24 +17,26 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
 use super::{StreamEnvironment, StreamListingState, StreamLocation};
-use crate::core::graph::{
-    OutputPortExposureLevel, cast_exposed_name_to_url_safe, is_in_exposed_name_cast_form,
-};
+use crate::core::graph::is_in_exposed_name_cast_form;
 use crate::core::{Error, Result};
 
 /// The schema version of a stream record this runtime writes and reads.
-pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 4;
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 5;
 
 /// The schema version whose records hold no pending stream actions; a record
-/// of it reads as current, holding none.
+/// of it reads as current, holding none and with its exposure dropped.
 const STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION: u32 = 3;
+
+/// The schema version whose records hold the owner's exposure rulings and a
+/// graph's `exposed` ports; a record of it reads as current with both dropped.
+const STREAM_RECORD_SCHEMA_VERSION_HOLDING_OUTPUT_PORT_EXPOSURE: u32 = 4;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
 /// One stream, as its runtime re-loads it: its id and location, its display
 /// name, the graph compiled at its load, the interpreter its processors start
-/// in, whether it was stopped or has failed, and the owner's exposure rulings.
+/// in, and whether it was stopped or has failed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
@@ -62,9 +62,6 @@ pub struct StreamRecord {
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
     pub runtime_crashes_in_a_row_implicating_it: u32,
-    /// The owner's exposure rulings, each overriding the level the stream
-    /// function gave its port.
-    pub exposure_rulings: Vec<OwnerExposureRuling>,
     /// The stop, remove and start actions queued on the stream and not yet
     /// finished, in queue order; each is finalised only by its own action.
     #[serde(default)]
@@ -114,7 +111,6 @@ impl StreamRecord {
             stopped: false,
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
-            exposure_rulings: Vec::new(),
             pending_stream_actions: Vec::new(),
         }
     }
@@ -222,19 +218,11 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the display name, the owner's rulings and the pending actions,
+    /// disk: the display name and the pending actions,
     /// none of which a load changes.
     pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
         self.display_name = current.display_name.clone();
-        self.exposure_rulings = current.exposure_rulings.clone();
         self.pending_stream_actions = current.pending_stream_actions.clone();
-    }
-
-    /// Record `ruling`, replacing an earlier ruling on the same port.
-    pub fn record_the_owners_exposure_ruling(&mut self, ruling: OwnerExposureRuling) {
-        self.exposure_rulings
-            .retain(|recorded| !recorded.names_the_same_port_as(&ruling));
-        self.exposure_rulings.push(ruling);
     }
 }
 
@@ -273,10 +261,6 @@ impl StreamRecordOfAnEarlierRuntime {
 
 /// One file of the state directory's `streams/`, read.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "read once per stream file when listing; boxing buys nothing"
-)]
 pub enum StreamRecordAsRead {
     /// A record this runtime writes.
     Current(StreamRecord),
@@ -294,190 +278,19 @@ impl StreamRecordAsRead {
     }
 }
 
-/// The owner's decision on how far one output port of a stream may be
-/// read, which wins over the level the stream function gave it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerExposureRuling {
-    /// The node the port belongs to, as the owner named it.
-    pub node: String,
-    /// The output port, as the owner named it.
-    pub port: String,
-    /// The level the owner set.
-    pub level: OutputPortExposureLevel,
-}
-
-impl OwnerExposureRuling {
-    /// Whether `other` rules on the same port, the names compared cast.
-    pub fn names_the_same_port_as(&self, other: &OwnerExposureRuling) -> bool {
-        self.names_the_port(&other.node, &other.port)
-    }
-
-    /// Whether this ruling's port is output port `port` of node `node`, the
-    /// names compared cast; a name that casts to nothing is compared as
-    /// spelled.
-    pub fn names_the_port(&self, node: &str, port: &str) -> bool {
-        CastPortOfAnOwnerExposureRuling::of(self).is_the_port(node, port)
-    }
-}
-
-/// An owner's ruling's node and port, cast once to be compared against many
-/// ports.
-enum CastPortOfAnOwnerExposureRuling<'ruling> {
-    /// Both names cast.
-    Cast { node: String, port: String },
-    /// A name casts to nothing, so both are compared as spelled.
-    AsSpelled {
-        node: &'ruling str,
-        port: &'ruling str,
-    },
-}
-
-impl<'ruling> CastPortOfAnOwnerExposureRuling<'ruling> {
-    fn of(ruling: &'ruling OwnerExposureRuling) -> Self {
-        match (
-            cast_exposed_name_to_url_safe(&ruling.node),
-            cast_exposed_name_to_url_safe(&ruling.port),
-        ) {
-            (Ok(node), Ok(port)) => Self::Cast {
-                node: node.into_owned(),
-                port: port.into_owned(),
-            },
-            _ => Self::AsSpelled {
-                node: &ruling.node,
-                port: &ruling.port,
-            },
-        }
-    }
-
-    fn is_the_port(&self, node: &str, port: &str) -> bool {
-        match self {
-            Self::Cast {
-                node: ruling_node,
-                port: ruling_port,
-            } => match (
-                cast_exposed_name_to_url_safe(node),
-                cast_exposed_name_to_url_safe(port),
-            ) {
-                (Ok(node), Ok(port)) => node == *ruling_node && port == *ruling_port,
-                _ => false,
-            },
-            Self::AsSpelled {
-                node: ruling_node,
-                port: ruling_port,
-            } => node == *ruling_node && port == *ruling_port,
-        }
-    }
-}
-
-/// The owner's rulings on one stream, split around its load: the graph the
-/// stream loads from, and the rulings its load applies once it has the nodes'
-/// ports.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct OwnerExposureRulingsSplitAroundTheLoad {
-    /// The graph with every ruling applied that makes a port internal or rules
-    /// on a port the stream function exposes, so a restriction holds before
-    /// the stream admits any reader.
-    pub(crate) graph_with_the_rulings_that_hold_before_the_load: serde_json::Value,
-    /// The `private` and `public` rulings on ports the stream function left
-    /// internal, which the graph cannot show exist; each is applied to the
-    /// loaded stream, and skipped when its port is not there.
-    pub(crate) rulings_applied_once_loaded: Vec<OwnerExposureRuling>,
-}
-
-/// Split `rulings` around the load of `graph_json`: an `internal` ruling, and
-/// one on a port the function's own `exposed` names, is applied to the graph;
-/// a ruling that opens a port the function left internal waits for the load.
-pub(crate) fn the_owners_exposure_rulings_split_around_the_load(
-    graph_json: &serde_json::Value,
-    rulings: &[OwnerExposureRuling],
-) -> OwnerExposureRulingsSplitAroundTheLoad {
-    let (rulings_before_the_load, rulings_applied_once_loaded): (Vec<_>, Vec<_>) =
-        rulings.iter().cloned().partition(|ruling| {
-            ruling.level == OutputPortExposureLevel::Internal
-                || the_function_exposes_the_port_of(graph_json, ruling)
-        });
-    OwnerExposureRulingsSplitAroundTheLoad {
-        graph_with_the_rulings_that_hold_before_the_load:
-            graph_with_the_owners_exposure_rulings_applied(graph_json, &rulings_before_the_load),
-        rulings_applied_once_loaded,
-    }
-}
-
-/// Whether the function's own `exposed` in `graph_json` names the port
-/// `ruling` rules on.
-fn the_function_exposes_the_port_of(
-    graph_json: &serde_json::Value,
-    ruling: &OwnerExposureRuling,
-) -> bool {
-    let ruled_port = CastPortOfAnOwnerExposureRuling::of(ruling);
-    graph_json
-        .get("exposed")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|exposed| {
-            exposed
-                .iter()
-                .any(|entry| the_exposed_entry_is_the_port(entry, &ruled_port))
-        })
-}
-
-/// Whether one entry of a graph's `exposed` names `ruled_port`.
-fn the_exposed_entry_is_the_port(
-    exposed_entry: &serde_json::Value,
-    ruled_port: &CastPortOfAnOwnerExposureRuling<'_>,
-) -> bool {
-    let named = |key: &str| {
-        exposed_entry
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
+/// Drop the owner's exposure rulings and the stored graph's `exposed` ports
+/// from a record a runtime that exposed output ports wrote.
+fn drop_the_output_port_exposure_an_earlier_record_holds(record_document: &mut serde_json::Value) {
+    let Some(record_fields) = record_document.as_object_mut() else {
+        return;
     };
-    ruled_port.is_the_port(named("node"), named("port"))
-}
-
-/// `graph_json` with each of `rulings` applied to the entries of its
-/// `exposed` that name the ruling's port: an `internal` ruling removes them, a
-/// `private` or `public` one takes the place of the first. A ruling on a port
-/// `exposed` does not name changes nothing.
-fn graph_with_the_owners_exposure_rulings_applied(
-    graph_json: &serde_json::Value,
-    rulings: &[OwnerExposureRuling],
-) -> serde_json::Value {
-    let mut ruled_graph = graph_json.clone();
-    let Some(exposed) = ruled_graph
-        .get_mut("exposed")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return ruled_graph;
-    };
-    for ruling in rulings {
-        let ruled_port = CastPortOfAnOwnerExposureRuling::of(ruling);
-        let mut first_entry_of_the_port = None;
-        let mut position = 0;
-        exposed.retain(|entry| {
-            let is_the_port = the_exposed_entry_is_the_port(entry, &ruled_port);
-            if is_the_port && first_entry_of_the_port.is_none() {
-                first_entry_of_the_port = Some(position);
-            }
-            if !is_the_port {
-                position += 1;
-            }
-            !is_the_port
-        });
-        if let Some(position) = first_entry_of_the_port
-            && ruling.level != OutputPortExposureLevel::Internal
-        {
-            exposed.insert(
-                position,
-                serde_json::json!({
-                    "node": ruling.node,
-                    "port": ruling.port,
-                    "level": ruling.level,
-                }),
-            );
-        }
+    record_fields.remove("exposure_rulings");
+    if let Some(graph_fields) = record_fields
+        .get_mut("graph")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        graph_fields.remove("exposed");
     }
-    ruled_graph
 }
 
 /// A stream record that could not be read, by the path it sits at.
@@ -741,7 +554,7 @@ fn read_a_stream_record(
         path: record_path.to_path_buf(),
         reason,
     };
-    let record_document: serde_json::Value = serde_json::from_slice(record_bytes)
+    let mut record_document: serde_json::Value = serde_json::from_slice(record_bytes)
         .map_err(|not_json| failure(format!("it is not JSON: {not_json}")))?;
     let record_file_stem = record_path
         .file_stem()
@@ -752,10 +565,14 @@ fn read_a_stream_record(
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
     {
+        Some(version) if version == current_version => {}
         Some(version)
-            if version == current_version
+            if version
+                == u64::from(STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION)
                 || version
-                    == u64::from(STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION) => {
+                    == u64::from(STREAM_RECORD_SCHEMA_VERSION_HOLDING_OUTPUT_PORT_EXPOSURE) =>
+        {
+            drop_the_output_port_exposure_an_earlier_record_holds(&mut record_document);
         }
         Some(earlier_version) if earlier_version < current_version => {
             return Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(
@@ -826,7 +643,6 @@ mod tests {
                 "stream": function,
                 "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
                 "links": [],
-                "exposed": [{"node": "camera", "port": "video", "level": "private"}],
             }),
         )
     }
@@ -844,14 +660,6 @@ mod tests {
         file_names
     }
 
-    fn a_ruling(node: &str, port: &str, level: OutputPortExposureLevel) -> OwnerExposureRuling {
-        OwnerExposureRuling {
-            node: node.to_string(),
-            port: port.to_string(),
-            level,
-        }
-    }
-
     #[test]
     fn a_written_record_reads_back_whole_from_a_file_named_after_its_stream_id() {
         let state_directory = tempfile::tempdir().unwrap();
@@ -860,11 +668,6 @@ mod tests {
                 .unwrap();
         let mut record = a_record_of("camera-app", "preview");
         record.stopped = true;
-        record.record_the_owners_exposure_ruling(a_ruling(
-            "camera",
-            "video",
-            OutputPortExposureLevel::Internal,
-        ));
         let stream_id = record.location.stream_id();
         assert_eq!(record.stream_id, stream_id);
 
@@ -881,39 +684,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_schema_3_record_holding_a_graph_reads_it_as_present() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let record = a_record_of("camera-app", "preview");
-        let schema_3_file = serde_json::json!({
-            "schema_version": 3,
+    fn a_record_file_of_schema(
+        schema_version: u32,
+        record: &StreamRecord,
+        stored_graph: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": schema_version,
             "stream_id": record.stream_id,
             "location": record.location,
             "display_name": "preview",
             "interpreter": record.interpreter,
-            "graph": {
-                "stream": "preview",
-                "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
-                "links": [],
-                "exposed": [{"node": "camera", "port": "video", "level": "private"}],
-            },
+            "graph": stored_graph,
             "stopped": false,
             "failed_because": null,
             "runtime_crashes_in_a_row_implicating_it": 0,
-            "exposure_rulings": [],
-        });
+            "exposure_rulings": [{"node": "camera", "port": "video", "level": "public"}],
+        })
+    }
+
+    #[test]
+    fn a_schema_3_or_4_record_reads_as_current_with_its_output_port_exposure_dropped() {
+        for schema_version in [3, 4] {
+            let state_directory = tempfile::tempdir().unwrap();
+            let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+            let record = a_record_of("camera-app", "preview");
+            let mut stored_graph = record.graph.clone().unwrap();
+            stored_graph["exposed"] =
+                serde_json::json!([{"node": "camera", "port": "video", "level": "private"}]);
+            std::fs::write(
+                state_directory
+                    .path()
+                    .join(format!("{}.json", record.stream_id)),
+                serde_json::to_vec(&a_record_file_of_schema(
+                    schema_version,
+                    &record,
+                    stored_graph,
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+
+            let read = records.read(&record.stream_id).unwrap();
+
+            assert_eq!(read, Some(current(record)), "schema {schema_version}");
+        }
+    }
+
+    #[test]
+    fn a_current_record_holding_exposure_rulings_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
         std::fs::write(
             state_directory
                 .path()
                 .join(format!("{}.json", record.stream_id)),
-            serde_json::to_vec(&schema_3_file).unwrap(),
+            serde_json::to_vec(&a_record_file_of_schema(
+                STREAM_RECORD_SCHEMA_VERSION,
+                &record,
+                record.graph.clone().unwrap(),
+            ))
+            .unwrap(),
         )
         .unwrap();
 
-        let read = records.read(&record.stream_id).unwrap();
+        let refusal = records.read(&record.stream_id).unwrap_err().to_string();
 
-        assert_eq!(read, Some(current(record)));
+        assert!(refusal.contains("exposure_rulings"), "{refusal}");
     }
 
     #[test]
@@ -955,12 +793,12 @@ mod tests {
     }
 
     #[test]
-    fn a_record_holds_its_id_location_and_display_name_under_schema_4() {
+    fn a_record_holds_its_id_location_and_display_name_under_the_current_schema() {
         let record = a_record_of("camera-app", "preview");
 
         let written = serde_json::to_value(&record).unwrap();
 
-        assert_eq!(written["schema_version"], 4);
+        assert_eq!(written["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
         assert_eq!(written["pending_stream_actions"], serde_json::json!([]));
         assert_eq!(written["stream_id"], record.location.stream_id());
         assert_eq!(
@@ -1020,7 +858,7 @@ mod tests {
         records.write(&camera).unwrap();
         std::fs::write(directory.join("b-malformed.json"), b"{ not json").unwrap();
         let mut later_schema = serde_json::to_value(a_record_of("c-later", "main")).unwrap();
-        later_schema["schema_version"] = serde_json::json!(5);
+        later_schema["schema_version"] = serde_json::json!(STREAM_RECORD_SCHEMA_VERSION + 1);
         later_schema["crashed_at"] = serde_json::json!("2026-10-10T00:00:00Z");
         std::fs::write(
             directory.join("c-later.json"),
@@ -1039,11 +877,18 @@ mod tests {
         assert!(malformed.reason.contains("not JSON"), "{malformed}");
         let later = every_record[2].as_ref().unwrap_err();
         assert_eq!(later.path, directory.join("c-later.json"));
-        assert!(later.reason.contains("schema version 5"), "{later}");
+        assert!(
+            later.reason.contains(&format!(
+                "schema version {}",
+                STREAM_RECORD_SCHEMA_VERSION + 1
+            )),
+            "{later}"
+        );
     }
 
     #[test]
-    fn a_schema_3_record_reads_as_holding_no_pending_action_and_is_rewritten_under_schema_4() {
+    fn a_schema_3_record_reads_as_holding_no_pending_action_and_is_rewritten_under_the_current_schema()
+     {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
         let record = a_record_of("camera-app", "preview");
@@ -1072,7 +917,7 @@ mod tests {
             &std::fs::read(records.record_path_of(&record.stream_id).unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(rewritten["schema_version"], 4);
+        assert_eq!(rewritten["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
         assert_eq!(rewritten["display_name"], "Desk");
     }
 
@@ -1317,137 +1162,6 @@ mod tests {
         assert!(
             refusal.contains(&not_a_directory.display().to_string()),
             "{refusal}"
-        );
-    }
-
-    fn a_graph_exposing(exposed: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
-            "stream": "main",
-            "nodes": [
-                {"name": "Camera", "type": "tatolab.testpattern:TestPatternSource"},
-                {"name": "display", "type": "tatolab.stream:DisplaySink"}
-            ],
-            "links": [],
-            "exposed": exposed,
-        })
-    }
-
-    #[test]
-    fn a_ruling_on_a_port_the_function_exposes_takes_its_entrys_place_before_the_load() {
-        let graph = a_graph_exposing(serde_json::json!([
-            {"node": "camera", "port": "video", "level": "private"},
-            {"node": "display", "port": "frames", "level": "private"}
-        ]));
-
-        let split = the_owners_exposure_rulings_split_around_the_load(
-            &graph,
-            &[a_ruling("Camera", "Video", OutputPortExposureLevel::Public)],
-        );
-
-        assert_eq!(
-            split.graph_with_the_rulings_that_hold_before_the_load["exposed"],
-            serde_json::json!([
-                {"node": "Camera", "port": "Video", "level": "public"},
-                {"node": "display", "port": "frames", "level": "private"}
-            ])
-        );
-        assert_eq!(
-            split.graph_with_the_rulings_that_hold_before_the_load["nodes"], graph["nodes"],
-            "nothing but `exposed` moves"
-        );
-        assert!(split.rulings_applied_once_loaded.is_empty());
-    }
-
-    #[test]
-    fn a_ruling_opening_a_port_the_function_left_internal_waits_for_the_load() {
-        let graph = a_graph_exposing(serde_json::json!([
-            {"node": "camera", "port": "video", "level": "private"}
-        ]));
-        let mut graph_with_no_exposed_key = graph.clone();
-        graph_with_no_exposed_key
-            .as_object_mut()
-            .unwrap()
-            .remove("exposed");
-        let rulings = [
-            a_ruling("camera", "preview", OutputPortExposureLevel::Private),
-            a_ruling("camera", "renamed-port", OutputPortExposureLevel::Public),
-            a_ruling("microphone", "audio", OutputPortExposureLevel::Public),
-        ];
-
-        for graph in [graph, graph_with_no_exposed_key] {
-            let split = the_owners_exposure_rulings_split_around_the_load(&graph, &rulings);
-
-            assert_eq!(
-                split.graph_with_the_rulings_that_hold_before_the_load, graph,
-                "no port the graph cannot show exists is written into the graph that loads"
-            );
-            assert_eq!(split.rulings_applied_once_loaded, rulings);
-        }
-    }
-
-    #[test]
-    fn an_internal_ruling_removes_the_ports_entry_before_the_load_and_changes_nothing_else() {
-        let graph = a_graph_exposing(serde_json::json!([
-            {"node": "camera", "port": "video", "level": "public"}
-        ]));
-
-        let split = the_owners_exposure_rulings_split_around_the_load(
-            &graph,
-            &[
-                a_ruling("camera", "video", OutputPortExposureLevel::Internal),
-                a_ruling("camera", "preview", OutputPortExposureLevel::Internal),
-                a_ruling("microphone", "audio", OutputPortExposureLevel::Internal),
-            ],
-        );
-
-        assert_eq!(
-            split.graph_with_the_rulings_that_hold_before_the_load,
-            a_graph_exposing(serde_json::json!([]))
-        );
-        assert!(split.rulings_applied_once_loaded.is_empty());
-    }
-
-    #[test]
-    fn a_later_ruling_on_a_port_replaces_the_earlier_one_whatever_its_spelling() {
-        let mut record = a_record_of("camera-app", "preview");
-        record.record_the_owners_exposure_ruling(a_ruling(
-            "camera",
-            "video",
-            OutputPortExposureLevel::Public,
-        ));
-        record.record_the_owners_exposure_ruling(a_ruling(
-            "camera",
-            "preview",
-            OutputPortExposureLevel::Private,
-        ));
-        record.record_the_owners_exposure_ruling(a_ruling(
-            "Camera",
-            "Video",
-            OutputPortExposureLevel::Internal,
-        ));
-
-        assert_eq!(
-            record.exposure_rulings,
-            [
-                a_ruling("camera", "preview", OutputPortExposureLevel::Private),
-                a_ruling("Camera", "Video", OutputPortExposureLevel::Internal),
-            ]
-        );
-        let split = the_owners_exposure_rulings_split_around_the_load(
-            record.graph.as_ref().unwrap(),
-            &record.exposure_rulings,
-        );
-        assert_eq!(
-            split.graph_with_the_rulings_that_hold_before_the_load["exposed"],
-            serde_json::json!([])
-        );
-        assert_eq!(
-            split.rulings_applied_once_loaded,
-            [a_ruling(
-                "camera",
-                "preview",
-                OutputPortExposureLevel::Private
-            )]
         );
     }
 }
