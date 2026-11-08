@@ -362,3 +362,27 @@ class ReportsTheLfoValueOfEachStepSink:
                     "steps": [[step, value] for step, value in sorted(self.value_read_at_each_step.items())],
                 },
             )
+
+
+#: How many counts a sink of a counter several readers read reads before it reports them.
+COUNTS_READ_IN_ORDER_BEFORE_REPORTING = 20
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountsItReadInOrderSink:
+    """Reads every count written on `count`, in order, and reports the first
+    `COUNTS_READ_IN_ORDER_BEFORE_REPORTING` with its own pid."""
+
+    def __init__(self) -> None:
+        self.counts_read: "list[float]" = []
+
+    count = Input(Channels, delivery="ordered")
+
+    def process(self, ctx) -> None:
+        while len(self.counts_read) < COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+            block = ctx.inputs.read(self.count)
+            if block is None:
+                return
+            self.counts_read.append(float(numpy.from_dlpack(block)[0][0]))
+            if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+                report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})

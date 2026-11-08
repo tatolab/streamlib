@@ -1,14 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Promotion on crash: a function node whose call crashed or stalled its
-//! reader's helper moves out of that reader's islands into a helper process of
+//! Moving a function node out of its readers' islands into a helper process of
 //! its own, with every function node downstream of it, so no node left inline
-//! reads one that moved.
+//! reads one that moved: on a crash or stall of its reader's helper, and when
+//! the compile finds a stateful one that more than one reader would evaluate.
 
 use std::collections::{BTreeSet, HashSet};
 
-use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
+use super::function_node_island::{
+    runs_inside_the_read_of_each_node_it_feeds, the_state_fields_of_a_function_node,
+};
 use crate::core::ProcessorUniqueId;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -21,6 +23,153 @@ use crate::core::graph::{
 /// How often a promoted function node's helper runs it when the reader it
 /// crashed has no frame interval of its own.
 pub(crate) const PROMOTED_FUNCTION_NODE_INTERVAL_MS_FOR_A_READER_WITH_NONE: u32 = 10;
+
+/// How often the helper of a stateful function node that several readers read
+/// evaluates it.
+pub(crate) const STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS: u32 = 10;
+
+/// Move each stateful function node that more than one reader would evaluate,
+/// with every function node downstream of it, out of the islands into a helper
+/// process of its own, so its state has one copy and every reader reads the one
+/// value it evaluates.
+///
+/// Refused by name, changing nothing, when one of those readers or the node
+/// itself is already running, since a running reader is not re-islanded in
+/// this release.
+pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+    graph: &mut Graph,
+    processors_to_add: &[ProcessorUniqueId],
+    processors_to_remove: &[ProcessorUniqueId],
+) -> Result<()> {
+    let mut moved_out_of_the_islands: HashSet<ProcessorUniqueId> = HashSet::new();
+    loop {
+        let runs_inline = |node_id: &ProcessorUniqueId| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
+                && !moved_out_of_the_islands.contains(node_id)
+                && !processors_to_remove.contains(node_id)
+        };
+        let mut stateful_function_nodes_inline: Vec<ProcessorUniqueId> = graph
+            .traversal()
+            .v(())
+            .ids()
+            .into_iter()
+            .filter(|node_id| runs_inline(node_id))
+            .filter(|node_id| {
+                graph.traversal().v(node_id).first().is_some_and(|node| {
+                    !the_state_fields_of_a_function_node(graph, &node.processor_type).is_empty()
+                })
+            })
+            .collect();
+        stateful_function_nodes_inline.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        let read_by_several_readers =
+            stateful_function_nodes_inline
+                .into_iter()
+                .find_map(|node_id| {
+                    let readers =
+                        the_readers_evaluating(graph, &node_id, &runs_inline, processors_to_remove);
+                    (readers.len() > 1).then_some((node_id, readers))
+                });
+        let Some((stateful_function_node, readers)) = read_by_several_readers else {
+            break;
+        };
+        let stateful_function_node_name = the_name_in_the_graph_of(graph, &stateful_function_node);
+        let running: BTreeSet<String> = readers
+            .iter()
+            .chain(std::iter::once(&stateful_function_node))
+            .filter(|node_id| !processors_to_add.contains(*node_id))
+            .map(|node_id| the_name_in_the_graph_of(graph, node_id))
+            .collect();
+        if !running.is_empty() {
+            return Err(Error::InvalidGraph(format!(
+                "stateful function node `{stateful_function_node_name}` would be read by {} \
+                 readers, so it runs once in a helper process of its own, and {} already \
+                 running; a running reader is not re-islanded in this release. To fix: stop \
+                 the stream and start it with the edit",
+                readers.len(),
+                running
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    + if running.len() == 1 { " is" } else { " are" }
+            )));
+        }
+        let moved = the_function_nodes_downstream_of(graph, &stateful_function_node, &runs_inline);
+        if let Some(not_added) = moved
+            .iter()
+            .find(|node_id| !processors_to_add.contains(*node_id))
+        {
+            return Err(Error::InvalidGraph(format!(
+                "stateful function node `{stateful_function_node_name}` would be read by {} \
+                 readers, so it runs once in a helper process of its own with every function \
+                 node downstream of it, and `{}` is already running inside a reader; a \
+                 running reader is not re-islanded in this release. To fix: stop the stream \
+                 and start it with the edit",
+                readers.len(),
+                the_name_in_the_graph_of(graph, not_added)
+            )));
+        }
+        moved_out_of_the_islands.extend(moved);
+    }
+    for moved_id in the_promoted_nodes_in_a_stable_order(&moved_out_of_the_islands) {
+        if let Some(node) = graph.traversal_mut().v(&moved_id).first_mut() {
+            node.insert_component_without_rendering_it(
+                FunctionNodePromotedToItsOwnProcessComponent {
+                    process_execution: ProcessExecution::Continuous {
+                        interval_ms: STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS,
+                    },
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The nodes outside any island whose read evaluates `function_node`, through
+/// the function nodes `runs_inline` keeps downstream of it.
+fn the_readers_evaluating(
+    graph: &Graph,
+    function_node: &ProcessorUniqueId,
+    runs_inline: &dyn Fn(&ProcessorUniqueId) -> bool,
+    processors_to_remove: &[ProcessorUniqueId],
+) -> BTreeSet<ProcessorUniqueId> {
+    let mut readers = BTreeSet::new();
+    for downstream in the_function_nodes_downstream_of(graph, function_node, runs_inline) {
+        for link in graph.traversal().e(()).iter() {
+            let destination = link.to_port().processor_id();
+            if link.source().processor_id() == &downstream
+                && !runs_inline(destination)
+                && !processors_to_remove.contains(destination)
+            {
+                readers.insert(destination.clone());
+            }
+        }
+    }
+    readers
+}
+
+/// `function_node` and every function node `runs_inline` keeps that its
+/// outputs reach.
+fn the_function_nodes_downstream_of(
+    graph: &Graph,
+    function_node: &ProcessorUniqueId,
+    runs_inline: &dyn Fn(&ProcessorUniqueId) -> bool,
+) -> HashSet<ProcessorUniqueId> {
+    let mut reached = HashSet::new();
+    let mut to_follow = vec![function_node.clone()];
+    while let Some(following) = to_follow.pop() {
+        if !reached.insert(following.clone()) {
+            continue;
+        }
+        for link in graph.traversal().e(()).iter() {
+            let destination = link.to_port().processor_id();
+            if link.source().processor_id() == &following && runs_inline(destination) {
+                to_follow.push(destination.clone());
+            }
+        }
+    }
+    reached
+}
 
 /// What a promotion adds to the compile that carries it.
 #[derive(Debug, Default)]
@@ -196,22 +345,9 @@ fn the_function_nodes_from(
     graph: &Graph,
     function_node: &ProcessorUniqueId,
 ) -> HashSet<ProcessorUniqueId> {
-    let mut reached = HashSet::new();
-    let mut to_follow = vec![function_node.clone()];
-    while let Some(following) = to_follow.pop() {
-        if !reached.insert(following.clone()) {
-            continue;
-        }
-        for link in graph.traversal().e(()).iter() {
-            let destination = link.to_port().processor_id();
-            if link.source().processor_id() == &following
-                && runs_inside_the_read_of_each_node_it_feeds(graph, destination)
-            {
-                to_follow.push(destination.clone());
-            }
-        }
-    }
-    reached
+    the_function_nodes_downstream_of(graph, function_node, &|node_id| {
+        runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
+    })
 }
 
 fn the_promoted_nodes_in_a_stable_order(
@@ -228,8 +364,9 @@ mod tests {
 
     use super::*;
     use crate::core::compiler::compiler_ops::function_node_island::tests::{
-        a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup_driven_in,
-        add_a_node, link, reader_setup_command_ports,
+        a_function_node_type, a_graph_resolving_these_function_node_types,
+        a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup,
+        a_helper_reader_before_its_setup_driven_in, add_a_node, link, reader_setup_command_ports,
     };
     use crate::core::compiler::compiler_ops::function_node_island::{
         HowALinkIsWired, how_a_link_is_wired,
@@ -599,5 +736,166 @@ mod tests {
                 "{metrics}"
             );
         }
+    }
+
+    /// A graph resolving `lfo`, `remap` and `mix` with no state, and `counter`
+    /// and `second_counter`, which carry one.
+    fn a_graph_resolving_two_stateful_function_node_types() -> Graph {
+        let stateful = |import_path| {
+            let mut descriptor = a_function_node_type(import_path, &[], &["result"]);
+            descriptor.function_node_state_fields = vec!["calls".to_string()];
+            descriptor
+        };
+        a_graph_resolving_these_function_node_types([
+            a_function_node_type("test_ops:lfo", &[], &["result"]),
+            a_function_node_type("test_ops:remap", &["x"], &["result"]),
+            a_function_node_type("test_ops:mix", &["a", "b"], &["result"]),
+            stateful("test_ops:counter"),
+            stateful("test_ops:second_counter"),
+        ])
+    }
+
+    fn every_node_of(graph: &Graph) -> Vec<ProcessorUniqueId> {
+        graph.traversal().v(()).ids()
+    }
+
+    #[test]
+    fn a_stateful_node_two_readers_read_moves_out_of_the_islands_with_what_it_feeds() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let first_reader = a_helper_reader_before_its_setup(&mut graph);
+        let second_reader = a_helper_reader_before_its_setup(&mut graph);
+        let counter_into_the_first_reader =
+            link(&mut graph, (&counter, "result"), (&first_reader, "in1"));
+        link(&mut graph, (&counter, "result"), (&remap, "x"));
+        link(&mut graph, (&remap, "result"), (&second_reader, "in1"));
+        let added = every_node_of(&graph);
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &added,
+            &[],
+        )
+        .unwrap();
+
+        for moved in [&counter, &remap] {
+            assert_eq!(
+                the_process_execution_promoted_to(&graph, moved),
+                Some(ProcessExecution::Continuous {
+                    interval_ms: STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS
+                })
+            );
+        }
+        assert_eq!(
+            how_a_link_is_wired(&graph, &counter_into_the_first_reader).unwrap(),
+            HowALinkIsWired::ThroughAChannel
+        );
+    }
+
+    #[test]
+    fn a_stateful_node_one_reader_reads_and_a_stateless_one_two_read_stay_inline() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let counters_reader = a_helper_reader_before_its_setup(&mut graph);
+        let first_lfo_reader = a_helper_reader_before_its_setup(&mut graph);
+        let second_lfo_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&counter, "result"), (&counters_reader, "in1"));
+        link(&mut graph, (&lfo, "result"), (&first_lfo_reader, "in1"));
+        link(&mut graph, (&lfo, "result"), (&second_lfo_reader, "in1"));
+        let added = every_node_of(&graph);
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &added,
+            &[],
+        )
+        .unwrap();
+
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &counter));
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &lfo));
+    }
+
+    #[test]
+    fn a_reader_removed_in_the_same_compile_does_not_count_as_one_of_its_readers() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let kept_reader = a_helper_reader_before_its_setup(&mut graph);
+        let removed_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&counter, "result"), (&kept_reader, "in1"));
+        link(&mut graph, (&counter, "result"), (&removed_reader, "in1"));
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &[counter.clone(), kept_reader],
+            &[removed_reader],
+        )
+        .unwrap();
+
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &counter));
+    }
+
+    #[test]
+    fn a_stateful_node_that_reads_a_moved_one_beside_another_reader_moves_too() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let second_counter = add_a_node(&mut graph, "test_ops:second_counter", JsonValue::Null);
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let mix_reader = a_helper_reader_before_its_setup(&mut graph);
+        let counter_reader = a_helper_reader_before_its_setup(&mut graph);
+        let second_counter_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&counter, "result"), (&mix, "a"));
+        link(&mut graph, (&second_counter, "result"), (&mix, "b"));
+        link(&mut graph, (&mix, "result"), (&mix_reader, "in1"));
+        link(&mut graph, (&counter, "result"), (&counter_reader, "in1"));
+        link(
+            &mut graph,
+            (&second_counter, "result"),
+            (&second_counter_reader, "in1"),
+        );
+        let added = every_node_of(&graph);
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &added,
+            &[],
+        )
+        .unwrap();
+
+        for moved in [&counter, &mix, &second_counter] {
+            assert!(
+                !runs_inside_the_read_of_each_node_it_feeds(&graph, moved),
+                "`mix` moved with `counter`, so `second_counter` is read by `mix`'s helper and \
+                 its own reader"
+            );
+        }
+    }
+
+    #[test]
+    fn a_second_reader_of_a_stateful_node_a_running_reader_evaluates_is_refused_naming_it() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let running_reader = a_helper_reader_before_its_setup(&mut graph);
+        let new_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&counter, "result"), (&running_reader, "in1"));
+        link(&mut graph, (&counter, "result"), (&new_reader, "in1"));
+        let running_reader_name = the_name_in_the_graph_of(&graph, &running_reader);
+
+        let refusal =
+            place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+                &mut graph,
+                &[counter.clone(), new_reader],
+                &[],
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            refusal.contains(&format!("`{running_reader_name}` is already running")),
+            "{refusal}"
+        );
+        assert!(refusal.contains("re-islanded"), "{refusal}");
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &counter));
     }
 }

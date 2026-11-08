@@ -610,12 +610,19 @@ pub(crate) mod tests {
 
     /// A graph resolving `lfo`, `remap` and `mix`, three function node types.
     pub(crate) fn a_graph_resolving_three_function_node_types() -> Graph {
-        let node_types = NodeTypesOneStreamResolves::new();
-        for descriptor in [
+        a_graph_resolving_these_function_node_types([
             a_function_node_type("test_ops:lfo", &[], &["result"]),
             a_function_node_type("test_ops:remap", &["x"], &["result"]),
             a_function_node_type("test_ops:mix", &["a", "b"], &["result"]),
-        ] {
+        ])
+    }
+
+    /// A graph resolving each of `function_node_types`.
+    pub(crate) fn a_graph_resolving_these_function_node_types(
+        function_node_types: impl IntoIterator<Item = ProcessorDescriptor>,
+    ) -> Graph {
+        let node_types = NodeTypesOneStreamResolves::new();
+        for descriptor in function_node_types {
             node_types
                 .register_a_type_described_in_this_streams_processor_interpreter(
                     descriptor,
