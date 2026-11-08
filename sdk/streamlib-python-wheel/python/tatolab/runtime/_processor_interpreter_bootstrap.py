@@ -169,7 +169,7 @@ from tatolab.runtime._engine import (
     run_the_scheduling_loop_of_this_helper,
 )
 from tatolab.runtime._function_node_compilation import (
-    FunctionNodeCompiledToItsEvaluateEntry,
+    FunctionNodeIslandsFedToTheirPorts,
     feed_each_input_port_from_its_function_node_island,
 )
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
@@ -1306,9 +1306,7 @@ class HelperProcessLifecycle:
         self._paused = False
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
-        self._function_nodes_compiled_for_the_islands_it_reads: (
-            "list[FunctionNodeCompiledToItsEvaluateEntry]"
-        ) = []
+        self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1420,7 +1418,7 @@ class HelperProcessLifecycle:
             wire_link_data_access(self._link_data_access, port_wiring)
             function_node_islands = port_wiring.get("islands") or []
             if function_node_islands:
-                self._function_nodes_compiled_for_the_islands_it_reads = (
+                self._function_node_islands_it_reads = (
                     feed_each_input_port_from_its_function_node_island(
                         self._link_data_access, function_node_islands, load_processor_class
                     )
@@ -1457,7 +1455,12 @@ class HelperProcessLifecycle:
             )
             return
         self._set_up_succeeded = True
-        self._bridge.send({"rpc": "ready"})
+        ready: "dict[str, Any]" = {"rpc": "ready"}
+        if self._function_node_islands_it_reads is not None:
+            ready["function_nodes_ran_compiled"] = (
+                self._function_node_islands_it_reads.ran_compiled_by_node_id
+            )
+        self._bridge.send(ready)
 
     def _run(self, command: "dict[str, Any]") -> None:
         if self._hosted is None:

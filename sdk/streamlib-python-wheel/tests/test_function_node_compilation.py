@@ -21,10 +21,13 @@ import pytest
 
 from tatolab.runtime import _engine
 from tatolab.runtime._function_node_compilation import (
+    FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
+    FunctionNodeRunAsPythonInItsReader,
     compile_function_node_to_its_evaluate_entry,
     feed_each_input_port_from_its_function_node_island,
+    prepare_function_node_to_evaluate,
 )
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     the_processor_class_a_promoted_function_node_runs_as,
@@ -322,12 +325,13 @@ def an_island_of_lfo_then_remap_feeding(input_port: str) -> "dict[str, Any]":
 def test_an_island_feeds_its_port_one_f64_sample_evaluated_at_the_read():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["brightness"], [])
-    compiled_for_the_island = feed_each_input_port_from_its_function_node_island(
+    fed = feed_each_input_port_from_its_function_node_island(
         data_plane,
         [an_island_of_lfo_then_remap_feeding("brightness")],
         _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
     )
-    assert len(compiled_for_the_island) == 2
+    assert len(fed.function_node_types_kept_alive) == 2
+    assert fed.ran_compiled_by_node_id == {"lfo-1": True, "remap-1": True}
     assert data_plane.input_port_has_data("brightness")
 
     payload = data_plane.read_from_input_port("brightness")
@@ -611,3 +615,236 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
         "`tally` hands the Rust node 3, which it weights by its config's 4 and moves by its "
         "`bias` pin's 0.25"
     )
+
+
+@node.function
+def measure_its_own_spelling(x: float = 2.0) -> float:
+    return float(len(f"{x:.1f}"))
+
+
+@node.function
+def label_the_level(level: float = 0.75) -> dict:
+    return {"label": "high" if level > 0.5 else "low"}
+
+
+@node.function
+def count_the_label_letters(record: dict) -> int:
+    return len(record["label"])
+
+
+@dataclass(frozen=True)
+class LabelsSeen:
+    labels: str = ""
+
+
+@node.function
+def remember_each_call_by_a_letter(
+    letter_count: float = 1.0, *, previous: State[LabelsSeen]
+) -> Stateful[float, LabelsSeen]:
+    labels = previous.labels + "x" * int(letter_count)
+    return float(len(labels)), LabelsSeen(labels)
+
+
+@dataclass(frozen=True)
+class CallsSoFar:
+    calls: int = 0
+
+
+@node.function
+def count_calls_by_spelling_them(step: float = 1.0, *, previous: State[CallsSoFar]) -> Stateful[int, CallsSoFar]:
+    calls = previous.calls + int(step) + len(repr(object())) * 0
+    return calls, CallsSoFar(calls)
+
+
+@node.function
+def refuse_a_negative_spelling(x: float) -> float:
+    if x < 0.0:
+        raise ValueError(f"{x!r} is negative")
+    return float(len(repr(x)))
+
+
+@node.function
+def take_an_optional_level(level: "float | None" = None) -> float:
+    return 0.0 if level is None else level
+
+
+def run_as_python(function_node: Any) -> FunctionNodeRunAsPythonInItsReader:
+    prepared = prepare_function_node_to_evaluate(function_node, f"{__name__}:{function_node.__qualname__}")
+    assert isinstance(prepared, FunctionNodeRunAsPythonInItsReader), prepared
+    return prepared
+
+
+_FUNCTION_NODES_RUN_AS_PYTHON_BY_IMPORT_PATH = {
+    f"{__name__}:{function_node.__qualname__}": function_node
+    for function_node in (measure_its_own_spelling, label_the_level, count_the_label_letters, remap)
+}
+
+
+def test_a_body_that_does_not_compile_runs_as_python_saying_why():
+    prepared = run_as_python(build_an_object)
+    assert "body does not compile" in prepared.why_it_does_not_compile
+    assert prepared.input_ports == ("x",)
+    assert prepared.ports_carrying_records == frozenset()
+
+
+def test_a_body_taking_or_giving_a_dict_runs_as_python():
+    assert run_as_python(label_the_level).ports_carrying_records == frozenset({"result"})
+    assert run_as_python(count_the_label_letters).ports_carrying_records == frozenset({"record"})
+
+
+def test_a_signature_neither_compiled_nor_python_carries_is_refused_by_name():
+    with pytest.raises(FunctionNodeDoesNotCompile, match="`level` is optional"):
+        prepare_function_node_to_evaluate(take_an_optional_level, f"{__name__}:take_an_optional_level")
+
+
+def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
+    assert FunctionNodeBodyRunAsPython(run_as_python(measure_its_own_spelling), "m", None).evaluate(
+        [12.0], 0
+    ) == [4.0]
+    assert FunctionNodeBodyRunAsPython(run_as_python(label_the_level), "l", None).evaluate([0.25], 0) == [
+        {"label": "low"}
+    ]
+    letters = FunctionNodeBodyRunAsPython(run_as_python(count_the_label_letters), "c", None).evaluate(
+        [{"label": "high"}], 0
+    )
+    assert letters == [4.0] and isinstance(letters[0], float)
+
+
+def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():
+    remembering = FunctionNodeBodyRunAsPython(run_as_python(remember_each_call_by_a_letter), "r", None)
+    assert remembering.evaluate([1.0], 0) == [1.0]
+    assert remembering.evaluate([2.0], 1) == [3.0]
+    assert run_as_python(remember_each_call_by_a_letter).initial_state_values == (), (
+        "a state record holding a string is not carried as f64s on the board"
+    )
+
+
+def test_a_body_run_as_python_with_a_state_of_numbers_carries_it_as_f64s_and_resumes_from_them():
+    prepared = run_as_python(count_calls_by_spelling_them)
+    assert prepared.initial_state_values == (0.0,)
+    counting = FunctionNodeBodyRunAsPython(prepared, "counter", None)
+    counting.resume_from_state_values([41.0])
+    assert counting.evaluate([1.0], 0) == [42.0]
+    assert counting.state_values() == [42.0]
+
+
+def test_a_body_run_as_python_that_raises_keeps_its_state():
+    refusing = FunctionNodeBodyRunAsPython(run_as_python(refuse_a_negative_spelling), "refuses", None)
+    with pytest.raises(ValueError, match="is negative"):
+        refusing.evaluate([-1.0], 0)
+    assert refusing.evaluate([1.5], 0) == [3.0]
+
+
+def an_island_of_label_then_count_feeding(input_port: str, output_node: str) -> "dict[str, Any]":
+    return {
+        "input_port": input_port,
+        "link_id": f"L-{input_port}",
+        "output": {"node": output_node, "port": "result"},
+        "nodes": [
+            {
+                "node": "label-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:label_the_level",
+                "config": None,
+                "links_into": [],
+            },
+            {
+                "node": "count-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:count_the_label_letters",
+                "config": None,
+                "links_into": [{"port": "record", "from": {"node": "label-1", "port": "result"}}],
+            },
+        ],
+    }
+
+
+def test_an_island_runs_a_body_that_does_not_compile_as_python_inside_the_read():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["spelled"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_one_node("spelled", f"{__name__}:measure_its_own_spelling", None, "spelling-1")],
+        _FUNCTION_NODES_RUN_AS_PYTHON_BY_IMPORT_PATH.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"spelling-1": False}
+    payload = data_plane.read_from_input_port("spelled")
+    assert payload is not None
+    assert struct.unpack("<d", bytes(payload)) == (3.0,)
+
+
+def test_a_dict_passes_between_nodes_run_as_python_and_reaches_its_port_as_a_records_message():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["letters", "label"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [
+            an_island_of_label_then_count_feeding("letters", "count-1"),
+            an_island_of_label_then_count_feeding("label", "label-1"),
+        ],
+        _FUNCTION_NODES_RUN_AS_PYTHON_BY_IMPORT_PATH.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"label-1": False, "count-1": False}
+
+    letters = data_plane.read_from_input_port("letters")
+    assert letters is not None
+    assert struct.unpack("<d", bytes(letters)) == (4.0,)
+    label = data_plane.read_from_input_port("label")
+    assert label is not None
+    assert bytes(label) == b"\x81\xa5label\xa4high", "one msgpack map, as a Records message carries it"
+
+
+class _OutputsRecordingEachWrite(_OutputsRecordingEachControlValueWritten):
+    """`ctx.outputs` recording each Channels block, and each Records write by its port."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records_written: "list[tuple[str, object]]" = []
+
+    def write(self, port: Any, payload: Any) -> None:
+        self.records_written.append((port.port_name, payload))
+
+
+class _InputsHandingOverControlValuesAndRecords(_InputsHandingOverControlValues):
+    """`ctx.inputs` handing each port the control value or record set for it, once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.record_by_port: "dict[str, dict[str, Any]]" = {}
+
+    def read(self, port_name: Any) -> Any:
+        if isinstance(port_name, str):
+            return super().read(port_name)
+        return self.record_by_port.pop(port_name.port_name, None)
+
+
+def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    labelling = construct_processor_instance(
+        the_processor_class_a_promoted_function_node_runs_as(
+            label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
+        ),
+        None,
+        data_plane,
+    )
+    ctx = _ContextOfOneProcess()
+    ctx.outputs = _OutputsRecordingEachWrite()
+    labelling.process(ctx)
+    assert ctx.outputs.records_written == [("result", {"label": "high"})], (
+        "the input keeps its pin value until one arrives"
+    )
+
+    counting = construct_processor_instance(
+        the_processor_class_a_promoted_function_node_runs_as(
+            count_the_label_letters, f"{__name__}:count_the_label_letters", "count-1", data_plane
+        ),
+        None,
+        data_plane,
+    )
+    ctx = _ContextOfOneProcess()
+    ctx.inputs = _InputsHandingOverControlValuesAndRecords()
+    counting.process(ctx)
+    assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first record"
+    ctx.inputs.record_by_port["record"] = {"label": "low"}
+    counting.process(ctx)
+    assert ctx.outputs.blocks_written == [("result", [[3.0]], 0, 0)]

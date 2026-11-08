@@ -9,6 +9,7 @@ of it is a processor interpreter's, describing a class or running one. With
 own pid and its parent's there — the witness that `tatolabd` never imported it.
 """
 
+import ctypes
 import dataclasses
 import json
 import os
@@ -386,3 +387,45 @@ class ReportsTheCountsItReadInOrderSink:
             self.counts_read.append(float(numpy.from_dlpack(block)[0][0]))
             if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
                 report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})
+
+
+#: How many records of a function node run as Python a sink reads before it reports them.
+RECORDS_READS_BEFORE_REPORTING = 10
+
+
+@node.function
+def LabelsTheLevel(level: float = 0.75) -> dict:  # noqa: N802
+    """Names the level it is handed: a body taking a number and giving a `dict`, which runs as Python."""
+    return {"label": "high" if level > 0.5 else "low", "spelled": f"{level:.2f}"}
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheRecordsItReadSink:
+    """Reads the record a function node island feeds `label`, and reports its
+    first records with its own pid."""
+
+    def __init__(self) -> None:
+        self.records_read: "list[dict]" = []
+        self.reported_its_start = False
+
+    label = Input(Records, delivery="newest")
+
+    def process(self, ctx) -> None:
+        if not self.reported_its_start:
+            self.reported_its_start = True
+            report("RECORDS_SINK_STARTED", {"pid": os.getpid()})
+        if len(self.records_read) >= RECORDS_READS_BEFORE_REPORTING:
+            return
+        record = ctx.inputs.read(self.label)
+        if record is None:
+            return
+        self.records_read.append(record)
+        if len(self.records_read) == RECORDS_READS_BEFORE_REPORTING:
+            report("RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+
+
+@node.function
+def CrashesItsHelper(start: float = 1.0) -> float:  # noqa: N802
+    """Reads address zero, which no compiled body can do, so it runs as Python and takes its helper down with SIGSEGV."""
+    ctypes.string_at(0)
+    return start

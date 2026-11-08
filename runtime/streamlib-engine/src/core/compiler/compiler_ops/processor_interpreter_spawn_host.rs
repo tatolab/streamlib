@@ -548,7 +548,13 @@ impl ProcessorInterpreterSpawnHostProcessor {
         };
 
         match lifecycle_reply_tag(&reply) {
-            Some("ready") => Ok(()),
+            Some("ready") => {
+                self.link_wiring
+                    .note_how_its_far_side_ran_its_function_nodes(
+                        reply.get("function_nodes_ran_compiled"),
+                    );
+                Ok(())
+            }
             _ => {
                 let reported = reported_reason(&reply).to_string();
                 // A helper that refused its own setup is never run and never

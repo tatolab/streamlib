@@ -27,6 +27,8 @@ from helper_placement_processors import (
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
+    function_node_run_as_python_into_python_records_sink,
+    function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
@@ -361,6 +363,79 @@ def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reade
     assert not tatolabd.marker_payloads("FUNCTION_NODE_VALUES_READ"), (
         f"no value reaches the reader while the node spins:\n{tatolabd.recent_stderr()}"
     )
+
+
+def test_a_function_node_that_does_not_compile_runs_as_python_inside_the_read_of_the_class_it_feeds(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`LabelsTheLevel -> <Python class>` starts exactly one helper, the class's.
+
+    `LabelsTheLevel` gives a `dict`, which no compiled body carries, so it
+    runs as Python inside the class's helper, called at each of its reads: the
+    class reads the dict it gave as a Records message, no process was started
+    for it, and `graph` shows it ran uncompiled.
+    """
+    tatolabd = start_tatolabd_running_stream(function_node_run_as_python_into_python_records_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    records_read = tatolabd.await_marker("RECORDS_READ")
+    sink_pid = records_read["sink_pid"]
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert helper_pids == [sink_pid], (
+        f"a stream of one function node and one Python class started {helper_pids}; only the "
+        f"class gets a process:\n{tatolabd.recent_stderr()}"
+    )
+    assert records_read["records"] == [{"label": "high", "spelled": "0.75"}] * 10, (
+        f"the class reads the dict the node gave at its pin's 0.75: {records_read['records']}"
+    )
+    nodes_by_name = {node["name"]: node for node in graph["nodes"]}
+    assert nodes_by_name["labeller"]["components"]["ran_compiled"] is False, nodes_by_name["labeller"]
+
+
+def test_a_function_node_run_as_python_that_crashes_its_reader_moves_out_of_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A call run as Python that crashes its reader's helper moves the node out of the reader.
+
+    The call's breadcrumb is noted on the helper's board as a compiled call's
+    is, so the engine names the node the helper died in. Before the reader's
+    next helper starts, the node moves into a helper process of its own, which
+    `graph` shows under its `metrics`; once there, its crash is its own
+    helper's, and the reader keeps running through it.
+
+    Fail-without-fix: a call run as Python with no breadcrumb leaves the death
+    unattributed, so the reader's every new helper calls the node and dies.
+    """
+    tatolabd = start_tatolabd_running_stream(function_node_run_as_python_that_crashes_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED")["pid"]
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    restarted_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED", occurrence=2)["pid"]
+    tatolabd.await_stderr_containing("[crasher] its helper process (pid=")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    sink_starts = len(tatolabd.marker_payloads("FUNCTION_NODE_SINK_STARTED"))
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert restarted_helper_pid != first_helper_pid, (
+        f"the crashed helper is replaced by a new process:\n{tatolabd.recent_stderr()}"
+    )
+    assert sink_starts == 2, (
+        f"the reader's helper started {sink_starts} times; once the node moved out, its crash "
+        f"no longer ends the reader's helper:\n{tatolabd.recent_stderr()}"
+    )
+    crasher = next(node for node in graph["nodes"] if node["name"] == "crasher")
+    promotion = crasher["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert promotion["after_crashing_the_helper_of"] == "sink", promotion
+    assert "function node `crasher` crashed its helper process during its call" in promotion["reason"], (
+        promotion
+    )
+    assert crasher["components"]["ran_compiled"] is False, crasher
 
 
 def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a_restart(

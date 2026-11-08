@@ -12,7 +12,9 @@ from helper_placement_processors import (
     STEPPED_LFO_STEP_MS,
     STEPPED_LFO_STEPS_REPORTED,
     CountsItsOwnCalls,
+    CrashesItsHelper,
     DiesAbruptlyProbe,
+    LabelsTheLevel,
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
@@ -21,6 +23,7 @@ from helper_placement_processors import (
     ReportsTheFunctionNodeValuesItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
+    ReportsTheRecordsItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
@@ -127,6 +130,22 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
     spinner = stream_builder.add(SpinsForever, name="spinner")
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(spinner.output("result"), sink.input("brightness"))
+
+
+@stream
+def function_node_run_as_python_into_python_records_sink(stream_builder: StreamBuilder) -> None:
+    """A function node giving a `dict`, which runs as Python, read by a Python class as Records."""
+    labeller = stream_builder.add(LabelsTheLevel, name="labeller")
+    sink = stream_builder.add(ReportsTheRecordsItReadSink, name="sink")
+    stream_builder.connect(labeller.output("result"), sink.input("label"))
+
+
+@stream
+def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node run as Python whose call takes its reader's helper down."""
+    crasher = stream_builder.add(CrashesItsHelper, name="crasher")
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(crasher.output("result"), sink.input("brightness"))
 
 
 @stream

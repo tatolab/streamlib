@@ -9,6 +9,9 @@ same fields, so the body constructs and reads them unchanged. A wrapper with the
 evaluate entry's C signature unpacks the f64 values the island hands it into the
 body's parameters and packs its outputs and new state back. The body is cached
 on disk by Numba; the wrapper is compiled at each load.
+
+A body that does not compile, or that takes or gives a `dict`, runs as Python in
+its reader's interpreter, called at the read with the interpreter's lock held.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import types
 import typing
 from typing import Any, Callable, Optional
 
-from tatolab.stream import NodeLinkDataAccess
+from tatolab.stream import NodeLinkDataAccess, log
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     FunctionNode,
@@ -39,6 +42,9 @@ from tatolab.runtime._engine import (
 
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
+
+# The value types a body run as Python takes and gives: the scalars, and a `dict` as Records.
+_VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = ("float", "int", "bool", "records")
 
 # The largest integer magnitude an f64 holds exactly.
 _LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY = 2**53
@@ -69,18 +75,51 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     compiled_wrapper_kept_alive: Any
 
 
+@dataclasses.dataclass(frozen=True)
+class FunctionNodeRunAsPythonInItsReader:
+    """A function node type whose body runs as Python in its reader's interpreter, and why it does not compile."""
+
+    body: Callable[..., Any]
+    function_signature: "dict[str, Any]"
+    input_ports: "tuple[str, ...]"
+    pin_defaults_by_input_port: "dict[str, float]"
+    output_ports: "tuple[str, ...]"
+    ports_carrying_records: "frozenset[str]"
+    config_class: Optional[type]
+    state_record_class: Optional[type]
+    state_value_types: "dict[str, str]"
+    initial_state_values: "tuple[float, ...]"
+    is_stateful: bool
+    why_it_does_not_compile: str
+
+
+FunctionNodeReadyToEvaluate = typing.Union[
+    FunctionNodeCompiledToItsEvaluateEntry, FunctionNodeRunAsPythonInItsReader
+]
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionNodeIslandsFedToTheirPorts:
+    """What feeding a helper's islands prepared, kept for as long as the ports are read, and how each node runs."""
+
+    function_node_types_kept_alive: "list[FunctionNodeReadyToEvaluate]"
+    ran_compiled_by_node_id: "dict[str, bool]"
+
+
 def feed_each_input_port_from_its_function_node_island(
     link_data_access: NodeLinkDataAccess,
     islands: "list[dict[str, Any]]",
     load_function_node: Callable[[str], Any],
-) -> "list[FunctionNodeCompiledToItsEvaluateEntry]":
-    """Compile every function node the setup command's `islands` carry and feed each to its port.
+) -> FunctionNodeIslandsFedToTheirPorts:
+    """Prepare every function node the setup command's `islands` carry and feed each to its port.
 
-    Answers what was compiled, which the caller keeps for as long as the ports
-    are read: the native evaluator calls into it.
+    A node is compiled when its body compiles, and run as Python otherwise.
+    The caller keeps what was prepared for as long as the ports are read: the
+    native evaluator calls into it.
     """
-    compiled_by_import_path: "dict[str, FunctionNodeCompiledToItsEvaluateEntry]" = {}
+    prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
     input_port_of_the_island_holding_each_stateful_node: "dict[str, str]" = {}
+    ran_compiled_by_node_id: "dict[str, bool]" = {}
     for island in islands:
         function_nodes_handed_over: "list[Any]" = []
         node_index_by_node_id: "dict[str, int]" = {}
@@ -88,36 +127,42 @@ def feed_each_input_port_from_its_function_node_island(
         for island_node in island["nodes"]:
             node_id = island_node["node"]
             import_path = island_node["import_path"]
-            if import_path not in compiled_by_import_path:
-                compiled_by_import_path[import_path] = compile_function_node_to_its_evaluate_entry(
+            if import_path not in prepared_by_import_path:
+                prepared_by_import_path[import_path] = prepare_function_node_to_evaluate(
                     load_function_node(import_path), import_path
                 )
-            compiled = compiled_by_import_path[import_path]
-            if compiled.is_stateful:
+            prepared = prepared_by_import_path[import_path]
+            if prepared.is_stateful:
                 _refuse_a_stateful_node_two_islands_hold(
                     node_id,
                     island["input_port"],
                     input_port_of_the_island_holding_each_stateful_node,
                 )
+            called_through, config_values = how_one_function_node_is_called(
+                prepared, node_id, island_node.get("config")
+            )
             function_nodes_handed_over.append(
                 (
                     node_id,
                     island_node["breadcrumb_number"],
-                    compiled.evaluate_entry_address,
+                    called_through,
                     _where_each_input_takes_its_value(
-                        compiled,
+                        prepared,
                         node_id,
                         island_node["links_into"],
                         node_index_by_node_id,
                         output_ports_by_node_id,
                     ),
-                    config_values_of_one_function_node(compiled, node_id, island_node.get("config")),
-                    list(compiled.initial_state_values),
-                    len(compiled.output_ports),
+                    config_values,
+                    list(prepared.initial_state_values),
+                    len(prepared.output_ports),
                 )
             )
+            ran_compiled_by_node_id[node_id] = isinstance(
+                prepared, FunctionNodeCompiledToItsEvaluateEntry
+            )
             node_index_by_node_id[node_id] = len(node_index_by_node_id)
-            output_ports_by_node_id[node_id] = compiled.output_ports
+            output_ports_by_node_id[node_id] = prepared.output_ports
         island_output = island["output"]
         feed_an_input_port_from_a_function_node_island(
             link_data_access=link_data_access,
@@ -128,7 +173,249 @@ def feed_each_input_port_from_its_function_node_island(
                 _output_index(output_ports_by_node_id, island_output["node"], island_output["port"]),
             ),
         )
-    return list(compiled_by_import_path.values())
+    return FunctionNodeIslandsFedToTheirPorts(
+        function_node_types_kept_alive=list(prepared_by_import_path.values()),
+        ran_compiled_by_node_id=ran_compiled_by_node_id,
+    )
+
+
+def how_one_function_node_is_called(
+    prepared: FunctionNodeReadyToEvaluate, node_id: str, config: Any
+) -> "tuple[Any, list[float]]":
+    """What the native evaluator calls `node_id` through, and the config values it hands the call.
+
+    A compiled node is called through its entry's address with its config as
+    f64s; a node run as Python through an object holding its config and state.
+    """
+    if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
+        return prepared.evaluate_entry_address, config_values_of_one_function_node(
+            prepared, node_id, config
+        )
+    return FunctionNodeBodyRunAsPython(prepared, node_id, config), []
+
+
+def prepare_function_node_to_evaluate(function_node: Any, import_path: str) -> FunctionNodeReadyToEvaluate:
+    """`function_node` compiled to its evaluate entry, or ready to run as Python when its body does not compile.
+
+    What neither path carries is refused by name.
+    """
+    if isinstance(function_node, RustFunctionNode):
+        return _the_evaluate_entry_a_rust_function_node_exports(function_node, import_path)
+    run_as_python = function_node_run_as_python_in_its_reader(function_node, import_path, "")
+    try:
+        return compile_function_node_to_its_evaluate_entry(function_node, import_path)
+    except FunctionNodeDoesNotCompile as does_not_compile:
+        log.info(
+            f"{import_path} runs as Python in its reader's interpreter, since it does not "
+            f"compile: {does_not_compile}"
+        )
+        return dataclasses.replace(run_as_python, why_it_does_not_compile=str(does_not_compile))
+
+
+def function_node_run_as_python_in_its_reader(
+    function_node: Any, import_path: str, why_it_does_not_compile: str
+) -> FunctionNodeRunAsPythonInItsReader:
+    """`function_node` ready to run as Python, refusing by name a signature a body run as Python cannot carry."""
+    if not isinstance(function_node, FunctionNode):
+        raise FunctionNodeDoesNotCompile(
+            f"{import_path} names {function_node!r}, which is not a `@node.function` function"
+        )
+    function_signature: "dict[str, Any]" = getattr(
+        function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
+    )
+    body: Callable[..., Any] = function_node.__wrapped__
+    annotations = typing.get_type_hints(body)
+    for each_port in (*function_signature["inputs"], *function_signature["outputs"]):
+        if each_port["value_type"] not in _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES:
+            raise FunctionNodeDoesNotCompile(
+                f"{import_path}'s port `{each_port['port']}` is {each_port['value_type']}, and a "
+                f"function node carries numbers, bools and dicts in this release. To fix: make "
+                f"it `float`, `int`, `bool` or `dict`."
+            )
+    for each_input in function_signature["inputs"]:
+        if each_input["optional"]:
+            raise FunctionNodeDoesNotCompile(
+                f"{import_path}'s input `{each_input['parameter']}` is optional, and a function "
+                f"node takes a value on every input in this release. To fix: give it a default."
+            )
+    state_parameter: Optional[str] = function_signature["state_parameter"]
+    state_record_class: Optional[type] = (
+        None if state_parameter is None else typing.get_args(annotations[state_parameter])[0]
+    )
+    state_value_types = _scalar_field_value_types_or_none(state_record_class) or {}
+    return FunctionNodeRunAsPythonInItsReader(
+        body=body,
+        function_signature=function_signature,
+        input_ports=tuple(each_input["port"] for each_input in function_signature["inputs"]),
+        pin_defaults_by_input_port=_pin_defaults_by_input_port(import_path, function_signature),
+        output_ports=tuple(each_output["port"] for each_output in function_signature["outputs"]),
+        ports_carrying_records=frozenset(
+            each_port["port"]
+            for each_port in (*function_signature["inputs"], *function_signature["outputs"])
+            if each_port["value_type"] == "records"
+        ),
+        config_class=getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None),
+        state_record_class=state_record_class,
+        state_value_types=state_value_types,
+        initial_state_values=(
+            _initial_state_values(import_path, state_record_class, state_value_types)
+            if state_value_types
+            else ()
+        ),
+        is_stateful=state_record_class is not None,
+        why_it_does_not_compile=why_it_does_not_compile,
+    )
+
+
+class FunctionNodeBodyRunAsPython:
+    """One function node's body, run as Python with its config and state; the native evaluator calls `evaluate`."""
+
+    def __init__(
+        self, run_as_python: FunctionNodeRunAsPythonInItsReader, node_id: str, config: Any
+    ) -> None:
+        self._run_as_python = run_as_python
+        self._node_id = node_id
+        self._config = _config_record_of_one_function_node(run_as_python, node_id, config)
+        state_record_class = run_as_python.state_record_class
+        self._state = state_record_class() if state_record_class is not None else None
+        signature = run_as_python.function_signature
+        self._value_type_by_input_parameter = {
+            each_input["parameter"]: each_input["value_type"] for each_input in signature["inputs"]
+        }
+        self._input_parameters = list(self._value_type_by_input_parameter)
+
+    def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
+        """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
+
+        A number or bool output is answered as a `float`, a `dict` as given.
+        The new state is kept only once every output is answered.
+        """
+        signature = self._run_as_python.function_signature
+        arguments: "dict[str, Any]" = {}
+        for parameter_name, input_value in zip(self._input_parameters, input_values):
+            arguments[parameter_name] = self._the_input_the_body_takes(
+                parameter_name, self._value_type_by_input_parameter[parameter_name], input_value
+            )
+        if signature["time_parameter"] is not None:
+            arguments[signature["time_parameter"]] = now_ns
+        if signature["state_parameter"] is not None:
+            arguments[signature["state_parameter"]] = self._state
+        if signature["config_parameter"] is not None:
+            arguments[signature["config_parameter"]] = self._config
+        returned = self._run_as_python.body(**arguments)
+        if signature["state_parameter"] is not None:
+            output, new_state = returned
+        else:
+            output, new_state = returned, self._state
+        outputs = signature["outputs"]
+        output_values = [
+            output if each_output["field"] is None else getattr(output, each_output["field"])
+            for each_output in outputs
+        ]
+        answered = [
+            self._the_output_the_evaluator_takes(each_output, output_value)
+            for each_output, output_value in zip(outputs, output_values)
+        ]
+        self._state = new_state
+        return answered
+
+    def state_values(self) -> "list[float]":
+        """The node's state as the f64s its stream carries, one per field of a state record of numbers and bools."""
+        return [
+            _exactly_as_f64(getattr(self._state, field), f"function node `{self._node_id}`'s state `{field}`")
+            for field in self._run_as_python.state_value_types
+        ]
+
+    def resume_from_state_values(self, state_values: "list[float]") -> None:
+        """Resume from the state its stream carries, as `state_values` gives it."""
+        state_record_class = self._run_as_python.state_record_class
+        assert state_record_class is not None
+        self._state = state_record_class(
+            **{
+                field: _python_value_of_an_f64(state_value, value_type)
+                for (field, value_type), state_value in zip(
+                    self._run_as_python.state_value_types.items(), state_values
+                )
+            }
+        )
+
+    def _the_input_the_body_takes(self, parameter_name: str, value_type: str, input_value: Any) -> Any:
+        if value_type == "records":
+            if not isinstance(input_value, dict):
+                raise TypeError(
+                    f"function node `{self._node_id}`'s input `{parameter_name}` takes a dict, "
+                    f"and was handed {type(input_value).__name__}"
+                )
+            return input_value
+        return _python_value_of_an_f64(float(input_value), value_type)
+
+    def _the_output_the_evaluator_takes(self, each_output: "dict[str, Any]", output_value: Any) -> Any:
+        what_it_is = f"function node `{self._node_id}`'s output `{each_output['port']}`"
+        if each_output["value_type"] == "records":
+            if not isinstance(output_value, dict):
+                raise TypeError(f"{what_it_is} is a dict, and the body gave {type(output_value).__name__}")
+            return output_value
+        if not isinstance(output_value, (bool, int, float)):
+            raise TypeError(
+                f"{what_it_is} is {each_output['value_type']}, and the body gave "
+                f"{type(output_value).__name__}"
+            )
+        return _exactly_as_f64(output_value, what_it_is)
+
+
+def _config_record_of_one_function_node(
+    run_as_python: FunctionNodeRunAsPythonInItsReader, node_id: str, config: Any
+) -> Any:
+    config_class = run_as_python.config_class
+    if config_class is None:
+        return None
+    config_values_by_field = dict(config) if isinstance(config, dict) else {}
+    declared_fields = [field.name for field in dataclasses.fields(config_class)]
+    fields_it_does_not_declare = sorted(set(config_values_by_field) - set(declared_fields))
+    if fields_it_does_not_declare:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}`'s config sets {', '.join(fields_it_does_not_declare)}, "
+            f"which its config class does not declare; its fields are "
+            f"{', '.join(declared_fields) or 'none'}"
+        )
+    try:
+        return config_class(**config_values_by_field)
+    except TypeError as config_refused:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}`'s config does not build its config class: {config_refused}"
+        ) from config_refused
+
+
+def _pin_defaults_by_input_port(import_path: str, function_signature: "dict[str, Any]") -> "dict[str, float]":
+    return {
+        each_input["port"]: _exactly_as_f64(
+            each_input["default"], f"{import_path}'s input `{each_input['parameter']}` default"
+        )
+        for each_input in function_signature["inputs"]
+        if each_input.get("default") is not None
+    }
+
+
+def _python_value_of_an_f64(value: float, value_type: str) -> Any:
+    if value_type == "int":
+        return int(value)
+    if value_type == "bool":
+        return value != 0.0
+    return value
+
+
+def _scalar_field_value_types_or_none(record_class: Optional[type]) -> "Optional[dict[str, str]]":
+    """Each field's value type when every field of `record_class` is a number or a bool, else `None`."""
+    if record_class is None:
+        return None
+    field_annotations = typing.get_type_hints(record_class)
+    value_types: "dict[str, str]" = {}
+    for field in dataclasses.fields(record_class):
+        value_type = _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES.get(field_annotations[field.name])
+        if value_type is None:
+            return None
+        value_types[field.name] = value_type
+    return value_types
 
 
 def _refuse_a_stateful_node_two_islands_hold(
@@ -149,7 +436,7 @@ def _refuse_a_stateful_node_two_islands_hold(
 
 
 def _where_each_input_takes_its_value(
-    compiled: FunctionNodeCompiledToItsEvaluateEntry,
+    prepared: FunctionNodeReadyToEvaluate,
     node_id: str,
     links_into: "list[dict[str, Any]]",
     node_index_by_node_id: "dict[str, int]",
@@ -157,7 +444,7 @@ def _where_each_input_takes_its_value(
 ) -> "list[tuple[Optional[tuple[int, int]], float]]":
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], float]]" = []
-    for input_port in compiled.input_ports:
+    for input_port in prepared.input_ports:
         linked_from = linked_from_by_input_port.get(input_port)
         if linked_from is not None:
             source_node_id = linked_from["node"]
@@ -170,9 +457,9 @@ def _where_each_input_takes_its_value(
                     0.0,
                 )
             )
-        elif input_port in compiled.pin_defaults_by_input_port:
+        elif input_port in prepared.pin_defaults_by_input_port:
             where_each_input_takes_its_value.append(
-                (None, compiled.pin_defaults_by_input_port[input_port])
+                (None, prepared.pin_defaults_by_input_port[input_port])
             )
         else:
             raise FunctionNodeDoesNotCompile(
@@ -277,13 +564,12 @@ def compile_function_node_to_its_evaluate_entry(
     }
     try:
         import numba
-        from numba.core.errors import NumbaError
         from numba.np.numpy_support import carray
     except ImportError as numba_missing:
         raise FunctionNodeDoesNotCompile(
-            f"{import_path} is a function node, and Numba, which compiles it, is not installed "
-            f"in this stream's environment. To fix: install `numba`, or `tatolab-ops`, which "
-            f"depends on it."
+            f"{import_path} is a function node, and Numba, which compiles function nodes, is "
+            f"not installed in this stream's environment. To compile it: install `numba`, or "
+            f"`tatolab-ops`, which depends on it."
         ) from numba_missing
 
     constructor_by_dataclass = {
@@ -317,23 +603,19 @@ def compile_function_node_to_its_evaluate_entry(
         compiled_wrapper = numba.cfunc(evaluate_entry_signature, error_model="numpy")(
             wrapper_globals["evaluate"]
         )
-    except NumbaError as does_not_compile:
+    except Exception as does_not_compile:
+        # Numba refuses a body through `NumbaError` and through exceptions of
+        # its own outside it, such as `UnsupportedBytecodeError`.
         raise FunctionNodeDoesNotCompile(
-            f"{import_path}'s body does not compile to native code, and a function node that "
-            f"does not compile is not run in this release. Numba said: {does_not_compile}"
+            f"{import_path}'s body does not compile to native code. Numba said: "
+            f"{type(does_not_compile).__name__}: {does_not_compile}"
         ) from does_not_compile
 
     evaluate_entry_address = compiled_wrapper.address
     if evaluate_entry_address is None:
         raise FunctionNodeDoesNotCompile(f"{import_path} compiled to no evaluate entry address")
 
-    pin_defaults_by_input_port = {
-        each_input["port"]: _exactly_as_f64(
-            each_input["default"], f"{import_path}'s input `{each_input['parameter']}` default"
-        )
-        for each_input in function_signature["inputs"]
-        if each_input.get("default") is not None
-    }
+    pin_defaults_by_input_port = _pin_defaults_by_input_port(import_path, function_signature)
     config_fields = dataclasses.fields(config_class) if config_class is not None else ()
     config_field_defaults = {
         field.name: _exactly_as_f64(field.default, f"{import_path}'s config `{field.name}` default")

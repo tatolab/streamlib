@@ -498,6 +498,21 @@ impl InputMailboxesInner {
             );
     }
 
+    /// The function node the island feeding `port` runs as Python, which a
+    /// read without the Python interpreter's lock cannot call; `None` when no
+    /// island feeds `port` or its every node runs as native code.
+    pub fn the_function_node_run_as_python_by_the_island_feeding(
+        &self,
+        port: &str,
+    ) -> Option<String> {
+        self.function_node_island_feeding(port)
+            .and_then(|island_port| {
+                island_port
+                    .the_first_function_node_it_runs_as_python()
+                    .map(str::to_string)
+            })
+    }
+
     fn function_node_island_feeding(
         &self,
         port: &str,
@@ -1789,6 +1804,7 @@ mod tests {
     use crate::iceoryx2::channel_sample_test_support::TestChannelSample;
     use crate::iceoryx2::{
         FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+        FunctionNodeIslandOutputValue,
     };
 
     struct IslandAnsweringOneHalf;
@@ -1798,10 +1814,56 @@ mod tests {
             &self,
         ) -> Result<FunctionNodeIslandOutputForOneRead> {
             Ok(FunctionNodeIslandOutputForOneRead {
-                value: 0.5,
+                value: FunctionNodeIslandOutputValue::ControlValue(0.5),
                 evaluated_at_ns: 0,
             })
         }
+
+        fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+            None
+        }
+    }
+
+    struct IslandRunningOneNodeAsPython;
+
+    impl FunctionNodeIslandEvaluatedAtEachRead for IslandRunningOneNodeAsPython {
+        fn evaluate_the_island_output_for_this_read(
+            &self,
+        ) -> Result<FunctionNodeIslandOutputForOneRead> {
+            Ok(FunctionNodeIslandOutputForOneRead {
+                value: FunctionNodeIslandOutputValue::ControlValue(0.5),
+                evaluated_at_ns: 0,
+            })
+        }
+
+        fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+            Some("tally")
+        }
+    }
+
+    #[test]
+    fn the_function_node_an_island_runs_as_python_is_named_by_the_port_it_feeds() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandAnsweringOneHalf),
+        );
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "count",
+            Arc::new(IslandRunningOneNodeAsPython),
+        );
+        assert_eq!(
+            mailboxes.the_function_node_run_as_python_by_the_island_feeding("brightness"),
+            None
+        );
+        assert_eq!(
+            mailboxes.the_function_node_run_as_python_by_the_island_feeding("count"),
+            Some("tally".to_string())
+        );
+        assert_eq!(
+            mailboxes.the_function_node_run_as_python_by_the_island_feeding("unfed"),
+            None
+        );
     }
 
     #[test]
