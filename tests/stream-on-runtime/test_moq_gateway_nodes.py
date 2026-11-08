@@ -29,11 +29,10 @@ FIRST_RECORD_BUDGET_SECONDS = 60.0
 def test_a_records_port_sent_through_a_gateway_reads_back_in_order_at_the_relay(
     start_tatolabd_running_stream: Callable[..., TatolabdUnderTest],
     fixture_moq_relay_url: str,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tatolabd = start_tatolabd_running_stream(
-        counting_records_sent_to_the_relay_and_read_back,
-        extra_environment={FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE: fixture_moq_relay_url},
-    )
+    monkeypatch.setenv(FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE, fixture_moq_relay_url)
+    tatolabd = start_tatolabd_running_stream(counting_records_sent_to_the_relay_and_read_back)
     tatolabd.stream_runs[-1].await_loaded()
 
     first_count = tatolabd.await_marker(
