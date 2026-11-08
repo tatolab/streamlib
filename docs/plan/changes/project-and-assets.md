@@ -212,23 +212,23 @@ releases and variants, pushing content to cloud storage beside an Artifacts remo
 Blocked on roadmap step 4 (#3214), because `exposed` leaves the spec
 keys and the record there.
 
-1. **A project is a repository of assets.** The project file, history in `.tatolab/history.git`
+1. **#3256 — A project is a repository of assets.** The project file, history in `.tatolab/history.git`
    through the carried Git engine with a commit per transaction, sidecars with UUIDs, the content
    store, the asset verbs over the local API and MCP, and the change feed. Proof includes stock
    `git clone` of the history.
-2. **A stream is a graph asset.** The graph document with runtime-generated node UUIDs, every load
+2. **#3257 — A stream is a graph asset.** The graph document with runtime-generated node UUIDs, every load
    reading stream assets, the scaffold writing a project, the stream id from UUIDs, `graph`
    rendering `id` as a spec key. Carries the `stream.py` REMOVED bullets. Waits on 1.
-3. **Graph edits are transactions.** The graph operations and `transact`, commit or live, undo
+3. **#3258 — Graph edits are transactions.** The graph operations and `transact`, commit or live, undo
    and redo per author, every tool addressing by UUID, asset references as reference edges. Waits
    on 2.
-4. **A `@graph_generator` function becomes a frozen fragment.** `import_graph_generator`, the
+4. **#3259 — A `@graph_generator` function becomes a frozen fragment.** `import_graph_generator`, the
    decorator replacing `@stream`, the fragment
    in the document and in `graph`, UUIDs kept by name across a re-run, `dev` refreshing fragments.
    Carries the compile-entry REMOVED bullets. Waits on 2.
-5. **Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
+5. **#3260 — Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
    use of its assets, `update_dependency` and `fork_asset`. Waits on 2.
-6. **A project's node types and generators, listed without running code** (#3152, rewritten):
+6. **#3152 — A project's node types and generators, listed without running code** (rewritten):
    each `@node` class, function and shader node and `@graph_generator` in a project and its
    dependencies, read from source, over the local API and MCP. Waits on 1.
 

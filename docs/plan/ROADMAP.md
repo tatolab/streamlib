@@ -70,6 +70,9 @@ asset, every asset and node gets a runtime-generated UUID, every change is a tra
 another project's assets are linked dependencies. No `stream.py`. It waits on step 4, because
 `exposed` leaves the spec keys and the stream record there.
 
+Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (transactions),
+#3259 (generators as fragments), #3260 (linked dependencies) and #3152 (the project read).
+
 ## 6. New capability: lightweight nodes, then shaders
 
 Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
@@ -90,5 +93,5 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
    Python class reads. It is required, not optional.
 
 Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
-transaction ticket, so live edits and pin values are built once, as transactions. Nothing in steps
+transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps
 1 to 5 waits on this step.
