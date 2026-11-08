@@ -8,6 +8,7 @@ mod project_asset;
 mod project_content_store;
 mod project_file;
 mod project_history_repository;
+mod project_repositories_open_in_this_runtime;
 mod project_repository;
 mod project_repository_refusal;
 mod project_transaction;
@@ -24,6 +25,9 @@ pub use project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjec
 pub use project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
     ProjectHistoryCommit, ProjectHistoryRepository,
+};
+pub use project_repositories_open_in_this_runtime::{
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
 };
 pub use project_repository::{GRAPH_DOCUMENT_FILE_SUFFIX, ProjectRepository};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
