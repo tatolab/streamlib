@@ -284,6 +284,42 @@ pub(crate) fn project_files_ending_with(
     Ok(found)
 }
 
+/// Every file of the project that its history records, project-relative and sorted: each
+/// regular file outside a hidden folder, a folder a project scan skips and a Python virtual
+/// environment (a folder holding `pyvenv.cfg`), leaving out asset sidecars, which the history
+/// takes from the assets it records, and symbolic links, whose target is no file of the project.
+#[cfg(feature = "history")]
+pub(crate) fn project_files_the_history_records(
+    project_directory: &Path,
+) -> Result<Vec<String>, ProjectRepositoryRefusal> {
+    let mut found = Vec::new();
+    let mut directories_to_read = vec![(project_directory.to_path_buf(), String::new())];
+    while let Some((directory, relative_directory)) = directories_to_read.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = if relative_directory.is_empty() {
+                name.clone()
+            } else {
+                format!("{relative_directory}/{name}")
+            };
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                let is_recorded_folder = !name.starts_with('.')
+                    && !DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&name.as_str())
+                    && !entry.path().join("pyvenv.cfg").exists();
+                if is_recorded_folder {
+                    directories_to_read.push((entry.path(), relative));
+                }
+            } else if file_type.is_file() && !name.ends_with(ASSET_SIDECAR_FILE_SUFFIX) {
+                found.push(relative);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

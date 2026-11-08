@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -12,6 +12,7 @@ use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
     ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
+    project_files_the_history_records,
 };
 use crate::project_content_store::{ProjectContentStore, content_sha256_of};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
@@ -600,28 +601,33 @@ impl ProjectRepository {
         self.project_directory.join(path.sidecar_path())
     }
 
+    /// The whole project as its history records it with `assets`: every file the project's
+    /// scan records, an asset whose bytes the content store holds as its sidecar alone.
     fn tracked_files(
         &self,
         assets: &BTreeMap<Uuid, ProjectAsset>,
     ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        let content_store_asset_paths: BTreeSet<&str> = assets
+            .values()
+            .filter(|asset| asset.kind != ProjectAssetKind::Stream)
+            .map(|asset| asset.path.as_str())
+            .collect();
         let mut tracked_files = BTreeMap::new();
+        for project_file in project_files_the_history_records(&self.project_directory)? {
+            if content_store_asset_paths.contains(project_file.as_str()) {
+                continue;
+            }
+            let bytes = std::fs::read(self.project_directory.join(&project_file))?;
+            tracked_files.insert(project_file, bytes);
+        }
         tracked_files.insert(
             PROJECT_FILE_NAME.to_owned(),
             self.project_file.canonical_bytes()?,
         );
         for asset in assets.values() {
-            if asset.kind == ProjectAssetKind::Stream {
-                tracked_files.insert(
-                    asset.path.to_string(),
-                    std::fs::read(asset.path.on_disk_under(&self.project_directory))?,
-                );
-            } else {
+            if asset.kind != ProjectAssetKind::Stream {
                 tracked_files.insert(asset.path.sidecar_path(), asset.sidecar_bytes()?);
             }
-        }
-        for graph_document in self.graph_documents_beside(assets)? {
-            let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
-            tracked_files.insert(graph_document, bytes);
         }
         Ok(tracked_files)
     }

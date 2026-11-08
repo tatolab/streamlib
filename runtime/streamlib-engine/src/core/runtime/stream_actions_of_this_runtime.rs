@@ -39,6 +39,7 @@ use super::{
     StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordReadFailure,
     StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
 };
+use crate::core::compiler::compiler_ops::cross_floor_check_in_the_projects_interpreter::warn_of_what_binds_the_project_to_one_floor;
 use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::names_listed_for_a_refusal;
@@ -180,8 +181,22 @@ fn the_graph_a_stream_document_holds(
         .map_err(|why| why_it_holds_no_graph(format!("names no stream asset: {why}")))?;
     let document_text = std::str::from_utf8(bytes)
         .map_err(|not_utf8| why_it_holds_no_graph(format!("is not UTF-8: {not_utf8}")))?;
-    GraphSnapshot::from_json_str(document_text)
-        .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))
+    let graph = GraphSnapshot::from_json_str(document_text)
+        .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))?;
+    let nodes_holding_no_uuid: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.id.is_none())
+        .map(|node| format!("`{}`", node.name))
+        .collect();
+    if !nodes_holding_no_uuid.is_empty() {
+        return Err(why_it_holds_no_graph(format!(
+            "holds no UUID as the `id` of {}; the runtime writes every node's UUID, so a node \
+             without one was written outside the runtime",
+            nodes_holding_no_uuid.join(", ")
+        )));
+    }
+    Ok(graph)
 }
 
 /// The graph the document of `record`'s stream asset holds as it is on disk now, or why
@@ -670,15 +685,28 @@ impl Runner {
             project_directory: project.project_directory.clone(),
             interpreter: the_projects_venv_interpreter(&project_directory),
         };
-        if let Err(venv_not_made) =
-            self.make_the_projects_venv(&project.project_directory, is_interrupted)
-        {
-            let failed_because = match venv_not_made {
-                ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
-                ProjectVenvNotMade::Failed { failed_because } => failed_because,
-            };
-            for stream_asset in &mut stream_assets {
-                stream_asset.graph_or_why_none = Err(failed_because.clone());
+        match self.make_the_projects_venv(&project.project_directory, is_interrupted) {
+            Ok(()) => {
+                if let Some(lend_directory) = self
+                    .engine_resources_shared_by_every_stream
+                    .processor_interpreter_lend_directory
+                    .get()
+                {
+                    warn_of_what_binds_the_project_to_one_floor(
+                        &stream_environment,
+                        lend_directory,
+                        is_interrupted,
+                    );
+                }
+            }
+            Err(venv_not_made) => {
+                let failed_because = match venv_not_made {
+                    ProjectVenvNotMade::Refused(refusal) => return Err(refusal),
+                    ProjectVenvNotMade::Failed { failed_because } => failed_because,
+                };
+                for stream_asset in &mut stream_assets {
+                    stream_asset.graph_or_why_none = Err(failed_because.clone());
+                }
             }
         }
 
@@ -3413,7 +3441,8 @@ mod tests {
         }
 
         /// Write `graph` as the graph document of the stream its `stream` names, holding that
-        /// stream's asset UUID.
+        /// stream's asset UUID and, as the runtime writes one, a UUID for each node holding
+        /// none, the same one for a node of one name in every write.
         fn write_the_graph_document(&self, graph: serde_json::Value) {
             let stream_name = graph
                 .get("stream")
@@ -3421,7 +3450,18 @@ mod tests {
                 .unwrap_or("main")
                 .to_string();
             let mut document = graph;
-            document["asset"] = serde_json::json!(self.stream_asset_of(&stream_name));
+            let stream_asset = self.stream_asset_of(&stream_name);
+            if let Some(nodes) = document["nodes"].as_array_mut() {
+                for node in nodes {
+                    if node.get("id").is_none() {
+                        let node_name = node["name"].as_str().unwrap_or_default().to_string();
+                        node["id"] = serde_json::json!(
+                            Uuid::new_v5(&stream_asset, node_name.as_bytes()).to_string()
+                        );
+                    }
+                }
+            }
+            document["asset"] = serde_json::json!(stream_asset);
             self.write_the_graph_document_bytes(&stream_name, &document.to_string());
         }
 
@@ -3869,6 +3909,29 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].state, StreamListingState::Failed);
         assert_eq!(listed[0].failed_because.as_deref(), Some(failed_because));
+    }
+
+    #[test]
+    #[serial]
+    fn a_graph_document_holding_a_node_with_no_uuid_is_recorded_failed_naming_the_node() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        let mut graph = the_graph_of_a_stream_named("camera");
+        graph["nodes"][0]["id"] = serde_json::json!("not-a-uuid");
+        project.write_the_graph_document(graph);
+
+        let run = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("a node with no UUID fails its stream, not the run");
+
+        let (_, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because
+                .contains("`streams/camera.graph.json` holds no UUID as the `id` of `source`"),
+            "{failed_because}"
+        );
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
 
     #[test]

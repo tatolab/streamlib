@@ -331,7 +331,8 @@ pub fn the_stream_id_of_the_stream(project_directory: &Path, stream_name: &str) 
 }
 
 /// The record of a recorded stream: the stream `stream_name` of the project at
-/// `project_directory`, whose graph document holding `graph` it writes, under
+/// `project_directory`, whose graph document holding `graph` it writes, a UUID given to each
+/// node holding none as the runtime gives one, under
 /// `interpreter`, keyed by the stream id its location computes to.
 pub fn a_stream_record(
     stream_name: &str,
@@ -342,6 +343,16 @@ pub fn a_stream_record(
 ) -> StreamRecord {
     let location = the_location_of_the_stream(project_directory, stream_name);
     let mut graph_document = graph;
+    if let Some(nodes) = graph_document["nodes"].as_array_mut() {
+        for node in nodes {
+            if node.get("id").is_none() {
+                let node_name = node["name"].as_str().unwrap_or_default().to_string();
+                node["id"] = serde_json::json!(
+                    uuid::Uuid::new_v5(&location.stream_asset, node_name.as_bytes()).to_string()
+                );
+            }
+        }
+    }
     graph_document["asset"] = serde_json::json!(location.stream_asset);
     let streams_directory = project_directory.join("streams");
     std::fs::create_dir_all(&streams_directory).expect("the streams directory");
