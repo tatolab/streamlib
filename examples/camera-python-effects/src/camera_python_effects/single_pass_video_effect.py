@@ -6,9 +6,9 @@
 The shape both full-frame effects in this stream share: build the kernel once
 in `setup()` where the capability is Full, then per frame take a colour target
 from the output ring, draw the incoming frame into it, and publish the target's
-surface id. A subclass supplies its fragment shader and packs its own push
+texture. A subclass supplies its fragment shader and packs its own push
 constants; everything else — ports, kernel construction, the ring, the draw,
-the record — is here so each effect module is only its effect.
+the write — is here so each effect module is only its effect.
 """
 
 from __future__ import annotations
@@ -16,11 +16,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
-    node,
 )
 
 from .elapsed_seconds_since_first_process import ElapsedSecondsSinceFirstProcess
@@ -35,7 +38,7 @@ __all__ = ["SinglePassVideoEffect"]
 # The input port and the name the fragment shader samples the frame at.
 VIDEO_FROM_UPSTREAM = "video_from_upstream"
 
-SHARED_VERTEX_SHADER_FILE_NAME = "fullscreen_triangle.vert"
+SHARED_VERTEX_SHADER_FILE_NAME = "fullscreen_triangle_vertex.slang"
 
 _CLASS_ATTRIBUTES_EVERY_EFFECT_DECLARES = {
     "fragment_shader_file_name": str,
@@ -66,11 +69,8 @@ class SinglePassVideoEffect(ABC):
                 f"`push_constants_for(self, frame, elapsed_seconds) -> bytes`"
             )
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest", description="The frame to draw the effect over")
+    video_to_downstream = Output(Image, description="The same frame through the effect")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
@@ -87,7 +87,7 @@ class SinglePassVideoEffect(ABC):
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_upstream)
         if frame is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
@@ -103,17 +103,11 @@ class SinglePassVideoEffect(ABC):
             push_constants=self.push_constants_for(frame, elapsed_seconds),
         )
         ctx.outputs.write(
-            "video_to_downstream",
-            VideoFrame(
-                surface_id=color_target.surface_id,
-                width=frame.width,
-                height=frame.height,
-                timestamp_ns=frame.timestamp_ns,
-                color_info=frame.color_info,
-            ).to_bytes(),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(color_target, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
 
     @abstractmethod
-    def push_constants_for(self, frame: VideoFrame, elapsed_seconds: float) -> bytes:
+    def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
         """This effect's push-constant block for one frame, packed as its shader declares it."""

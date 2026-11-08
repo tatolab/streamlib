@@ -8,10 +8,11 @@ from __future__ import annotations
 from importlib import resources
 
 import numpy
-from tatolab.stream import GpuSurfaceHandle
+from tatolab.stream import ColorInfo, GpuSurfaceHandle
 
 __all__ = [
     "COLOR_TARGET_TEXTURE_USAGE",
+    "HOST_DRAWN_FRAME_COLOUR",
     "SAMPLED_ONLY_TEXTURE_USAGE",
     "TEXTURE_FORMAT",
     "copy_host_pixels_into_ring_texture",
@@ -28,9 +29,12 @@ COLOR_TARGET_TEXTURE_USAGE = ["render_attachment", "texture_binding"]
 # A texture written through a CPU door or the engine's copy rather than a pass.
 SAMPLED_ONLY_TEXTURE_USAGE = ["texture_binding"]
 
+# What a frame skia or ModernGL drew on the host holds: display-referred sRGB.
+HOST_DRAWN_FRAME_COLOUR = ColorInfo(primaries="bt709", transfer="srgb", range="full")
+
 
 def read_shader_source(shader_file_name: str) -> str:
-    """The GLSL shipped beside this package, as the engine's compiler takes it."""
+    """The Slang shipped beside this package, as the runtime's compiler takes it."""
     return (
         resources.files(__package__)
         .joinpath("shaders", shader_file_name)

@@ -32,26 +32,26 @@ from camera_python_effects.nodes.cyberpunk_glitch import (
     GLITCH_PUSH_CONSTANT_SIZE,
 )
 
-from .glsl_push_constant_block import push_constant_block_size_of
+from .slang_push_constant_block import push_constant_block_size_of
 
 # The floor Vulkan guarantees for a push-constant range.
 GUARANTEED_PUSH_CONSTANT_BYTES = 128
 
 EVERY_PUSH_CONSTANT_CONTRACT = [
     pytest.param(
-        "cyberpunk_glitch.frag",
+        "cyberpunk_glitch_fragment.slang",
         GLITCH_PUSH_CONSTANT_FORMAT,
         GLITCH_PUSH_CONSTANT_SIZE,
         id="cyberpunk_glitch",
     ),
     pytest.param(
-        "crt_film_grain.frag",
+        "crt_film_grain_fragment.slang",
         CRT_PUSH_CONSTANT_FORMAT,
         CRT_PUSH_CONSTANT_SIZE,
         id="crt_film_grain",
     ),
     pytest.param(
-        "breaking_news_composite.frag",
+        "breaking_news_composite_fragment.slang",
         COMPOSITE_PUSH_CONSTANT_FORMAT,
         COMPOSITE_PUSH_CONSTANT_SIZE,
         id="breaking_news_composite",
@@ -101,7 +101,8 @@ def test_the_payload_is_a_multiple_of_four_bytes(
 
 def test_the_block_reader_refuses_a_layout_it_cannot_compute() -> None:
     """The reader guessing would make every test above vacuous."""
-    with pytest.raises(ValueError, match="no std430 layout known"):
+    with pytest.raises(ValueError, match="no push-constant layout known"):
         push_constant_block_size_of(
-            "layout(push_constant, std430) uniform Block { mat4 unsupported; };"
+            "struct Block { float4x4 unsupported; };\n"
+            "[[vk::push_constant]] ConstantBuffer<Block> pc;"
         )
