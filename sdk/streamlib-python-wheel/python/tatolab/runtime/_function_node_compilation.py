@@ -17,6 +17,7 @@ its reader's interpreter, called at the read with the interpreter's lock held.
 from __future__ import annotations
 
 import collections
+import copy
 import dataclasses
 import inspect
 import types
@@ -283,6 +284,11 @@ class FunctionNodeBodyRunAsPython:
             each_input["parameter"]: each_input["value_type"] for each_input in signature["inputs"]
         }
         self._input_parameters = list(self._value_type_by_input_parameter)
+        self._positional_only_parameters = [
+            parameter.name
+            for parameter in inspect.signature(run_as_python.body).parameters.values()
+            if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+        ]
 
     def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
@@ -299,10 +305,13 @@ class FunctionNodeBodyRunAsPython:
         if signature["time_parameter"] is not None:
             arguments[signature["time_parameter"]] = now_ns
         if signature["state_parameter"] is not None:
-            arguments[signature["state_parameter"]] = self._state
+            arguments[signature["state_parameter"]] = copy.deepcopy(self._state)
         if signature["config_parameter"] is not None:
             arguments[signature["config_parameter"]] = self._config
-        returned = self._run_as_python.body(**arguments)
+        positional_arguments = [
+            arguments.pop(parameter_name) for parameter_name in self._positional_only_parameters
+        ]
+        returned = self._run_as_python.body(*positional_arguments, **arguments)
         if signature["state_parameter"] is not None:
             output, new_state = returned
         else:
@@ -316,13 +325,17 @@ class FunctionNodeBodyRunAsPython:
             self._the_output_the_evaluator_takes(each_output, output_value)
             for each_output, output_value in zip(outputs, output_values)
         ]
+        self._the_state_values_of(new_state)
         self._state = new_state
         return answered
 
     def state_values(self) -> "list[float]":
         """The node's state as the f64s its stream carries, one per field of a state record of numbers and bools."""
+        return self._the_state_values_of(self._state)
+
+    def _the_state_values_of(self, state: Any) -> "list[float]":
         return [
-            _exactly_as_f64(getattr(self._state, field), f"function node `{self._node_id}`'s state `{field}`")
+            _exactly_as_f64(getattr(state, field), f"function node `{self._node_id}`'s state `{field}`")
             for field in self._run_as_python.state_value_types
         ]
 
@@ -346,7 +359,7 @@ class FunctionNodeBodyRunAsPython:
                     f"function node `{self._node_id}`'s input `{parameter_name}` takes a dict, "
                     f"and was handed {type(input_value).__name__}"
                 )
-            return input_value
+            return copy.deepcopy(input_value)
         return _python_value_of_an_f64(float(input_value), value_type)
 
     def _the_output_the_evaluator_takes(self, each_output: "dict[str, Any]", output_value: Any) -> Any:
@@ -366,10 +379,15 @@ class FunctionNodeBodyRunAsPython:
 def _config_record_of_one_function_node(
     run_as_python: FunctionNodeRunAsPythonInItsReader, node_id: str, config: Any
 ) -> Any:
+    config_values_by_field = dict(config) if isinstance(config, dict) else {}
     config_class = run_as_python.config_class
     if config_class is None:
+        if config_values_by_field:
+            raise FunctionNodeDoesNotCompile(
+                f"function node `{node_id}`'s config sets "
+                f"{', '.join(sorted(config_values_by_field))}, and it takes no config"
+            )
         return None
-    config_values_by_field = dict(config) if isinstance(config, dict) else {}
     declared_fields = [field.name for field in dataclasses.fields(config_class)]
     fields_it_does_not_declare = sorted(set(config_values_by_field) - set(declared_fields))
     if fields_it_does_not_declare:
@@ -379,11 +397,28 @@ def _config_record_of_one_function_node(
             f"{', '.join(declared_fields) or 'none'}"
         )
     try:
-        return config_class(**config_values_by_field)
+        return _a_dataclass_built_from_its_fields(config_class, config_values_by_field)
     except TypeError as config_refused:
         raise FunctionNodeDoesNotCompile(
             f"function node `{node_id}`'s config does not build its config class: {config_refused}"
         ) from config_refused
+
+
+def _a_dataclass_built_from_its_fields(dataclass_type: type, values_by_field: "dict[str, Any]") -> Any:
+    try:
+        field_types: "dict[str, Any]" = typing.get_type_hints(dataclass_type)
+    except NameError:
+        field_types = {field.name: field.type for field in dataclasses.fields(dataclass_type)}
+    return dataclass_type(
+        **{
+            field: (
+                _a_dataclass_built_from_its_fields(field_types[field], value)
+                if isinstance(value, dict) and dataclasses.is_dataclass(field_types.get(field))
+                else value
+            )
+            for field, value in values_by_field.items()
+        }
+    )
 
 
 def _pin_defaults_by_input_port(import_path: str, function_signature: "dict[str, Any]") -> "dict[str, float]":

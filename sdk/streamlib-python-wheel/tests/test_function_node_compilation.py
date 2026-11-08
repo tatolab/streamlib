@@ -735,6 +735,89 @@ def test_a_body_run_as_python_that_raises_keeps_its_state():
     assert refusing.evaluate([1.5], 0) == [3.0]
 
 
+@node.function
+def spell_a_positional_level(level: float = 0.75, /) -> float:
+    return level + len(repr(object())) * 0
+
+
+@node.function
+def take_the_label_out(record: dict) -> int:
+    return len(record.pop("label"))
+
+
+@dataclass
+class LabelsKept:
+    labels: list = field(default_factory=list)
+
+
+@node.function
+def keep_a_label_unless_negative(x: float = 1.0, *, previous: State[LabelsKept]) -> Stateful[int, LabelsKept]:
+    previous.labels.append(repr(x))
+    if x < 0.0:
+        raise ValueError(f"{x!r} is negative")
+    return len(previous.labels), previous
+
+
+@node.function
+def jump_the_count_past_an_f64(step: float = 1.0, *, previous: State[CallsSoFar]) -> Stateful[float, CallsSoFar]:
+    return step + len(repr(object())) * 0, CallsSoFar(previous.calls + 2**53 + 1)
+
+
+@dataclass(frozen=True)
+class LabelPolicy:
+    prefix: str = ""
+
+
+@dataclass(frozen=True)
+class LabelConfig:
+    policy: LabelPolicy = field(default_factory=LabelPolicy)
+
+
+@node.function
+def label_with_a_prefix(level: float = 0.5, *, config: LabelConfig) -> dict:
+    return {"label": f"{config.policy.prefix}{level}"}
+
+
+def test_a_body_run_as_python_takes_a_positional_only_input_positionally():
+    assert FunctionNodeBodyRunAsPython(run_as_python(spell_a_positional_level), "p", None).evaluate(
+        [0.25], 0
+    ) == [0.25]
+
+
+def test_a_body_run_as_python_that_changes_its_dict_input_leaves_the_one_it_was_handed():
+    record = {"label": "high"}
+    taking = FunctionNodeBodyRunAsPython(run_as_python(take_the_label_out), "t", None)
+    assert taking.evaluate([record], 0) == [4.0]
+    assert record == {"label": "high"}, "a sibling reading the same dict still finds its label"
+
+
+def test_a_body_run_as_python_that_changes_its_state_and_raises_keeps_the_state_it_had():
+    keeping = FunctionNodeBodyRunAsPython(run_as_python(keep_a_label_unless_negative), "k", None)
+    assert keeping.evaluate([1.0], 0) == [1.0]
+    with pytest.raises(ValueError, match="is negative"):
+        keeping.evaluate([-1.0], 1)
+    assert keeping.evaluate([2.0], 2) == [2.0], "the call that raised appended nothing it kept"
+
+
+def test_a_body_run_as_python_keeps_no_state_its_stream_cannot_carry():
+    jumping = FunctionNodeBodyRunAsPython(run_as_python(jump_the_count_past_an_f64), "counter", None)
+    with pytest.raises(FunctionNodeDoesNotCompile, match="`counter`'s state `calls`"):
+        jumping.evaluate([1.0], 0)
+    assert jumping.state_values() == [0.0]
+
+
+def test_a_body_run_as_python_that_takes_no_config_refuses_one_naming_its_fields():
+    with pytest.raises(FunctionNodeDoesNotCompile, match="`m`'s config sets rate, and it takes no config"):
+        FunctionNodeBodyRunAsPython(run_as_python(measure_its_own_spelling), "m", {"rate": 1})
+
+
+def test_a_body_run_as_python_reads_a_nested_dataclass_of_its_config():
+    labelling = FunctionNodeBodyRunAsPython(
+        run_as_python(label_with_a_prefix), "l", {"policy": {"prefix": "at "}}
+    )
+    assert labelling.evaluate([0.5], 0) == [{"label": "at 0.5"}]
+
+
 def an_island_of_label_then_count_feeding(input_port: str, output_node: str) -> "dict[str, Any]":
     return {
         "input_port": input_port,
