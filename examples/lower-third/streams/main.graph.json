@@ -1,0 +1,105 @@
+{
+  "asset": "258a1d5f-314a-45e2-a2f9-c96186815864",
+  "links": [
+    {
+      "source": {
+        "node": "9a2ee2a2-a79a-48e9-898c-f1adb4a188a0",
+        "port": "lower_third_to_page"
+      },
+      "target": {
+        "node": "b5b82154-7559-4988-b38b-5d81e7b41157",
+        "port": "data"
+      }
+    },
+    {
+      "source": {
+        "node": "23f53615-9e59-4438-b89c-3ffb7384bbe2",
+        "port": "video"
+      },
+      "target": {
+        "node": "0490bf78-9f52-4959-ad93-c02afbc3e661",
+        "port": "layer_0"
+      }
+    },
+    {
+      "source": {
+        "node": "b5b82154-7559-4988-b38b-5d81e7b41157",
+        "port": "video"
+      },
+      "target": {
+        "node": "0490bf78-9f52-4959-ad93-c02afbc3e661",
+        "port": "layer_1"
+      }
+    },
+    {
+      "source": {
+        "node": "d160909f-7e7b-45b1-9bf7-dfef70c02ec6",
+        "port": "video"
+      },
+      "target": {
+        "node": "0490bf78-9f52-4959-ad93-c02afbc3e661",
+        "port": "layer_2"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "23f53615-9e59-4438-b89c-3ffb7384bbe2",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {
+        "frame_rate": 60,
+        "height": 220,
+        "transparent_background": true,
+        "url": "templates/lower_third.html",
+        "width": 1280
+      },
+      "id": "b5b82154-7559-4988-b38b-5d81e7b41157",
+      "name": "browsersource",
+      "type": "tatolab.browser:BrowserSource"
+    },
+    {
+      "config": {},
+      "id": "9a2ee2a2-a79a-48e9-898c-f1adb4a188a0",
+      "name": "lowerthirdrundown",
+      "type": "lower_third.nodes.lower_third_rundown:LowerThirdRundown"
+    },
+    {
+      "config": {
+        "frame_rate": 60,
+        "height": 200,
+        "riv_path": "templates/station_bug.riv",
+        "width": 200
+      },
+      "id": "d160909f-7e7b-45b1-9bf7-dfef70c02ec6",
+      "name": "rivesource",
+      "type": "tatolab.rive:RiveSource"
+    },
+    {
+      "config": {
+        "height": 1080,
+        "layers": [
+          {},
+          {
+            "x": 64,
+            "y": 796
+          },
+          {
+            "x": 1656,
+            "y": 64
+          }
+        ],
+        "width": 1920
+      },
+      "id": "0490bf78-9f52-4959-ad93-c02afbc3e661",
+      "name": "alphaovercompositor",
+      "type": "tatolab.compositor:AlphaOverCompositor"
+    }
+  ]
+}

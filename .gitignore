@@ -80,6 +80,10 @@ yarn-debug.log*
 yarn-error.log*
 examples/camera-display/no_window_camera.log
 
+# What the runtime keeps in each example and sample project: its history and content store.
+examples/*/.tatolab/
+packages/*/streams/*/.tatolab/
+
 # Example assets (user-specific) — README is tracked, the GLB / image
 # files referenced by the macOS path are not redistributable.
 examples/camera-python-display/assets/*

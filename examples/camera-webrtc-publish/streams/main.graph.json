@@ -1,0 +1,77 @@
+{
+  "asset": "1420521a-5ce3-49e7-b38a-cd248e517ea0",
+  "links": [
+    {
+      "source": {
+        "node": "f4dbf39b-121f-456a-ad2f-17ff9b628a92",
+        "port": "video"
+      },
+      "target": {
+        "node": "44bdb0c6-251d-4fd5-83a3-968fe94a7eb8",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "44bdb0c6-251d-4fd5-83a3-968fe94a7eb8",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "5d28baeb-ea3f-46a0-92a6-44d13e2b4c19",
+        "port": "tracks"
+      }
+    },
+    {
+      "source": {
+        "node": "6cab9510-91cf-4371-ad84-f68f8d72fd2a",
+        "port": "audio"
+      },
+      "target": {
+        "node": "89c6d4f1-4e6b-417a-a9f2-e4e93bf5f4a8",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "89c6d4f1-4e6b-417a-a9f2-e4e93bf5f4a8",
+        "port": "encoded_audio"
+      },
+      "target": {
+        "node": "5d28baeb-ea3f-46a0-92a6-44d13e2b4c19",
+        "port": "tracks"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {},
+      "id": "f4dbf39b-121f-456a-ad2f-17ff9b628a92",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {},
+      "id": "44bdb0c6-251d-4fd5-83a3-968fe94a7eb8",
+      "name": "h264encoder",
+      "type": "tatolab.h264:H264Encoder"
+    },
+    {
+      "config": {},
+      "id": "6cab9510-91cf-4371-ad84-f68f8d72fd2a",
+      "name": "microphonesource",
+      "type": "tatolab.microphone:MicrophoneSource"
+    },
+    {
+      "config": {},
+      "id": "89c6d4f1-4e6b-417a-a9f2-e4e93bf5f4a8",
+      "name": "opusencoder",
+      "type": "tatolab.opus:OpusEncoder"
+    },
+    {
+      "config": {},
+      "id": "5d28baeb-ea3f-46a0-92a6-44d13e2b4c19",
+      "name": "whippublisher",
+      "type": "nodes.whip_publisher_to_the_runtime_environments_endpoint:WhipPublisherToTheRuntimeEnvironmentsEndpoint"
+    }
+  ]
+}

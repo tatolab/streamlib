@@ -1,0 +1,67 @@
+{
+  "asset": "8510c480-c0ec-407e-bef9-d18581695d93",
+  "links": [
+    {
+      "source": {
+        "node": "d011f6e5-a692-4745-b718-990fe6d365d2",
+        "port": "video"
+      },
+      "target": {
+        "node": "26da8196-10ba-4e63-ac2c-f3070909ab2e",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "d011f6e5-a692-4745-b718-990fe6d365d2",
+        "port": "video"
+      },
+      "target": {
+        "node": "95fbd17b-011a-41fd-9e08-7764f6eb76a7",
+        "port": "video_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "95fbd17b-011a-41fd-9e08-7764f6eb76a7",
+        "port": "video_to_downstream"
+      },
+      "target": {
+        "node": "6ebff331-7290-4aae-bd52-b24ef7135967",
+        "port": "video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {},
+      "id": "d011f6e5-a692-4745-b718-990fe6d365d2",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {},
+      "id": "95fbd17b-011a-41fd-9e08-7764f6eb76a7",
+      "name": "invertingeffect",
+      "type": "nodes.inverting_effect:InvertingEffect"
+    },
+    {
+      "config": {
+        "door": "auto",
+        "name": "Tatolab Camera"
+      },
+      "id": "26da8196-10ba-4e63-ac2c-f3070909ab2e",
+      "name": "passthrough-virtual-camera",
+      "type": "tatolab.virtualcamera:VirtualCameraSink"
+    },
+    {
+      "config": {
+        "door": "auto",
+        "name": "Tatolab Camera Inverted"
+      },
+      "id": "6ebff331-7290-4aae-bd52-b24ef7135967",
+      "name": "inverted-virtual-camera",
+      "type": "tatolab.virtualcamera:VirtualCameraSink"
+    }
+  ]
+}

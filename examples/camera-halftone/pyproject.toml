@@ -2,8 +2,7 @@
 name = "camera-halftone"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.3", "tatolab-camera", "tatolab-h264"]
+dependencies = ["tatolab-stream>=0.54.3", "tatolab-camera"]
 
 [tool.uv.sources]
 tatolab-camera = { path = "../../packages/tatolab-camera", editable = true }
-tatolab-h264 = { path = "../../packages/streamlib-h264", editable = true }

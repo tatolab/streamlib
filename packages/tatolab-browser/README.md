@@ -29,7 +29,9 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   continuity and how long a `data` message takes to reach the page's paint.
 
 Config: `url`, `width`, `height`, `frame_rate` (1 to 60), `transparent_background`,
-`audio_sample_rate`, `output_pool_rotation_depth`.
+`audio_sample_rate`, `output_pool_rotation_depth`. A `url` with no scheme is a page
+file inside the project, relative to the project directory, and opens as its
+`file://` URL.
 
 Linux only for now. Frames cross the CPU once per paint; zero-copy is next.
 
@@ -63,7 +65,7 @@ cd streams/browser-source
 tatolab dev
 ```
 
-A `file://` page loads classic scripts only: Chromium refuses module scripts
+A file page loads classic scripts only: Chromium refuses module scripts
 from a file URL, so a library shipped only as ES modules (three.js r160 and
 later) needs a classic build, inlined modules, or the page served over http.
 

@@ -1,0 +1,102 @@
+{
+  "asset": "345bb7c2-bc08-4981-ade2-f4e37cfc8deb",
+  "links": [
+    {
+      "source": {
+        "node": "826ee497-bbf3-4e87-ac63-27a4b740c99c",
+        "port": "video"
+      },
+      "target": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "video_in_0"
+      }
+    },
+    {
+      "source": {
+        "node": "21312b73-7488-40cc-a3db-86ecfa2e32c4",
+        "port": "audio"
+      },
+      "target": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "audio_in_0"
+      }
+    },
+    {
+      "source": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "video"
+      },
+      "target": {
+        "node": "70df0e99-82af-4838-a321-79fa887dbb24",
+        "port": "video_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "audio"
+      },
+      "target": {
+        "node": "70df0e99-82af-4838-a321-79fa887dbb24",
+        "port": "audio_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "events"
+      },
+      "target": {
+        "node": "70df0e99-82af-4838-a321-79fa887dbb24",
+        "port": "events_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "70df0e99-82af-4838-a321-79fa887dbb24",
+        "port": "data_to_browser"
+      },
+      "target": {
+        "node": "69f34481-fe29-4237-9ae0-79457734e242",
+        "port": "data"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "826ee497-bbf3-4e87-ac63-27a4b740c99c",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {},
+      "id": "21312b73-7488-40cc-a3db-86ecfa2e32c4",
+      "name": "microphonesource",
+      "type": "tatolab.microphone:MicrophoneSource"
+    },
+    {
+      "config": {
+        "frame_rate": 30,
+        "height": 1080,
+        "transparent_background": false,
+        "url": "page_mixing_inputs.html",
+        "width": 1920
+      },
+      "id": "69f34481-fe29-4237-9ae0-79457734e242",
+      "name": "browsersource",
+      "type": "tatolab.browser:BrowserSource"
+    },
+    {
+      "config": {
+        "frames_between_reports": 300
+      },
+      "id": "70df0e99-82af-4838-a321-79fa887dbb24",
+      "name": "browsersourceoutputprobe",
+      "type": "tatolab.browser:BrowserSourceOutputProbe"
+    }
+  ]
+}

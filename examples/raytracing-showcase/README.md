@@ -22,25 +22,11 @@ per frame in `process()`:
 | `RayTracedSceneRenderer` | ray tracing | traces it, with shadow and reflection rays |
 | `SplitScreenCompositor` | compute | cuts the two halves together and labels them |
 
-`stream.py` wires them and shares what they draw:
+`streams/main.graph.json` links both renderers into the compositor, each
+renderer at the same `width` and `height`.
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    rasterizer = stream_builder.add(RasterizedSceneRenderer, config=frame_extent)
-    ray_tracer = stream_builder.add(RayTracedSceneRenderer, config=frame_extent)
-    compositor = stream_builder.add(SplitScreenCompositor, config={...})
-    split_screen_encoder = stream_builder.add(H264Encoder, name="split-screen-encoder")
-    ...
-    stream_builder.expose(
-        split_screen_encoder.output("encoded_video"), Exposure.PRIVATE
-    )
-```
-
-**The runtime opens no windows.** What a stream shows, it exposes: the cut goes
-through an `H264Encoder` from the `tatolab-h264` module, whose `encoded_video` is exposed as
-a track at this machine's local relay, which a browser plays and any MoQ client
-reads.
+**The runtime opens no windows.** The cut is the compositor's
+`split_screen_frame_to_downstream`, seen in Tato Studio's viewer.
 
 No handle string, fence, timeline or slot number ever reaches Python. The
 object is the handle — and so is an acceleration structure:
@@ -130,7 +116,7 @@ alike.
 
 This is also the one place the stream builds a shader out of its own config:
 the kernel source is a function of `left_label` and `right_label`, not a module
-constant, so changing `LEFT_LABEL` in `stream.py` changes the GLSL the runtime
+constant, so changing `splitscreencompositor`'s `left_label` changes the GLSL the runtime
 compiles at `setup()`. It is why the project depends on nothing but
 `tatolab-stream`.
 
@@ -205,31 +191,21 @@ pair — about a quarter of a degree of orbit, a pixel or two.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
-builds `tatolab-h264` from this checkout, as an editable path dependency
-(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project, so
-the build needs a Rust toolchain. The runtime itself is not on pip.
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — and
+needs nothing built. The runtime itself is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
-Then open the stream in a browser:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-The watch page lists every video track of the broadcast and plays the one you
-pick. `http://127.0.0.1:4446/` lists this machine's name and every stream's
-exposed ports.
+Then watch `splitscreencompositor`'s `split_screen_frame_to_downstream` in Tato
+Studio's viewer.
 
 ## Editing it
 
@@ -246,7 +222,7 @@ while `tatolab dev` runs and the stream loads again with it.
   lengthens the shadows; changing its rate changes how fast they sweep.
 - **What the floor reflects** is `FLOOR_MIRROR_STRENGTH`. Set it to `0.0` and
   the two halves differ only by their shadows.
-- **The labels** are `LEFT_LABEL` / `RIGHT_LABEL` in `stream.py`. The font
+- **The labels** are `splitscreencompositor`'s `left_label` / `right_label`. The font
   covers A-Z, 0-9, space, hyphen and full stop, and a character it has no glyph
   for is refused by name rather than drawn as a blank — so a typo says so
   instead of leaving a hole.
@@ -258,47 +234,25 @@ is built, so the refusal lands at `setup()`, before a single frame.
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-A node is named after its class, lowercased — `rasterizedscenerenderer`,
-`raytracedscenerenderer`, `splitscreencompositor` — unless `add` passes
-`name=`, as it does for the encoder. An exposed port is the track
-`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
-local relay, so any MoQ client reads it; this repository's `tatolab-read-track`
-writes a track's objects to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    split-screen-encoder/encoded_video --count 30 --out /tmp/split-screen
-```
-
-Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
-order are an H.264 stream ffmpeg plays. Reading twice, several seconds apart, is
-how you check the light is really orbiting rather than the picture being static.
-
-The renderers' and the compositor's own frame ports are internal to the stream.
-`tatolab expose main raytracedscenerenderer ray_traced_frame_to_downstream`
-makes one a track too, but each of its objects is a frame's record, not its
-picture: the surface id names engine-owned GPU memory, which means nothing
-outside the runtime. To watch one half on its own, add an `H264Encoder` in
-`stream.py`, connect `ray_traced_frame_to_downstream` or
-`rasterized_frame_to_downstream` to its `video`, and expose its `encoded_video`
-beside the cut's — the watch page then offers both.
+The nodes are `rasterizedscenerenderer`, `raytracedscenerenderer` and
+`splitscreencompositor`.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `FRAME_WIDTH` / `FRAME_HEIGHT` | top of `stream.py` | The extent both halves render at, and so the extent of the cut. |
-| `SPLIT_FRACTION` | top of `stream.py` | Where the cut falls; 0.0 is all ray traced, 1.0 all rasterized. |
-| `LEFT_LABEL` / `RIGHT_LABEL` | top of `stream.py` | The text over each half; generated into the compositor's kernel at `setup()`. |
-| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares an encoder's track off this machine, at every relay the runtime has joined. |
+| `width` / `height` | `rasterizedscenerenderer`, `raytracedscenerenderer` | The extent both halves render at, and so the extent of the cut. Keep the two equal. |
+| `split_fraction` | `splitscreencompositor` | Where the cut falls; 0.0 is all ray traced, 1.0 all rasterized. |
+| `left_label` / `right_label` | `splitscreencompositor` | The text over each half; generated into the compositor's kernel at `setup()`. |
