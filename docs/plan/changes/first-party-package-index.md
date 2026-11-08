@@ -38,7 +38,7 @@ reshapes #3216.
   (`reusable-distributions.yml:778-796`). The index needs no new credential.
 - **No first-party module depends on another**: every `packages/*/pyproject.toml` depends on
   `tatolab-stream` by a minimum version, plus `numpy` for `tatolab-browser` and `tatolab-opus`.
-  A pin on a project's direct dependencies covers the whole resolution.
+  Today no first-party module reaches a project through another first-party module.
 - **The scaffold** depends on `tatolab-stream`, `tatolab-h264`, `tatolab-testpattern` and `numpy`
   (`sdk/tatolab-stream/scaffold_template/pyproject.toml:5`), each floor raised to the runtime's
   version on render (`runtime/streamlib-engine/src/core/runtime/new_project_scaffold.rs:38-49`,
@@ -60,32 +60,34 @@ reshapes #3216.
 
 - **Tatolab's package index.** A static PEP 503 simple index on `get-tatolab-com`:
   `simple/index.html` lists every project, `simple/<normalized name>/index.html` lists every wheel
-  of that project with its `#sha256=` fragment and `data-requires-python`, and each wheel lives at
-  `packages/<normalized name>/<wheel file name>` with its PEP 658 `.metadata` file beside it, so
-  uv resolves without downloading a wheel. A wheel is written once and never overwritten: a
-  release that would write a file the bucket already holds with different bytes fails. The
-  release regenerates the index pages from what the bucket holds, after the wheels and before
-  `latest`.
-- **The pin a project carries.** Every project that depends on a first-party module says where
-  it comes from, in the standard uv form, so `uv sync` resolves it with no Tatolab machinery:
+  of that project with its `#sha256=` fragment, `data-requires-python` and
+  `data-core-metadata="sha256=<hash>"` (PEP 714's spelling of PEP 658), and each wheel lives at
+  `packages/<normalized name>/<wheel file name>` with its `.metadata` file beside it, so uv
+  resolves without downloading a wheel. A wheel is written once and never overwritten: a release
+  that would write a file the bucket already holds with different bytes fails. The release
+  regenerates the index pages from what the bucket holds, after the wheels and before `latest`,
+  in one GitHub Actions concurrency group that queues and never cancels, so two releases never
+  write the pages at once and a later run's pages always list an earlier run's wheels.
+- **The index a project names.** Every project that uses a first-party module names the index in
+  its `pyproject.toml`, in the standard uv form, so `uv sync` resolves it with no Tatolab
+  machinery:
 
   ```toml
   [[tool.uv.index]]
   name = "tatolab"
   url = "https://get.tatolab.com/simple/"
-  explicit = true
-
-  [tool.uv.sources]
-  tatolab-testpattern = { index = "tatolab" }
   ```
 
-  `explicit = true` means uv asks this index only for packages pinned to it, so `numpy`, a third
-  party's module and `tatolab-stream` still come from PyPI, and a `tatolab-*` name on PyPI never
-  stands in for ours.
+  A named index takes priority over PyPI, and uv's default `first-index` strategy takes a package
+  from the first index that has it and never looks further. So every `tatolab-*` module comes from
+  ours, a direct dependency or a transitive one through a third party's module alike, and a
+  `tatolab-*` name on PyPI never stands in for it; every name our index does not serve (`numpy`,
+  `tatolab-stream`, a third party's module) answers 404 there and resolves from PyPI. A per-package
+  `explicit = true` pin is not used: uv applies `[tool.uv.sources]` only to a project's own
+  dependencies, so a first-party module reached through a third party's would miss it.
 - **Samples in the runtime unit.** The unit carries sample projects at its own version: the Linux
   tarball under `samples/<name>/`, the macOS helper bundle under `Contents/Resources/samples/<name>/`.
-  A sample is a project directory as a created project is, its first-party dependencies pinned to
-  the index. The local API lists them (`list_samples`: name, title, summary per sample) and
+  A sample is a project directory as a created project is, naming the index. The local API lists them (`list_samples`: name, title, summary per sample) and
   `create_project` takes an optional `sample` name, which copies that sample into the directory
   instead of rendering the starter, then makes the `.venv` and loads it as every create does.
   `tatolab new --sample <name>` is the same call. A sample the unit does not carry is refused by
@@ -107,17 +109,24 @@ reshapes #3216.
 - **The release order** (`reusable-distributions.yml:1-21`, `:585-711`). `publish-to-pypi`
   uploads `tatolab-stream` alone. A new `publish-to-the-tatolab-index` job uploads every module's
   wheels to the bucket and regenerates the pages. The Linux runtime publishes after both succeed,
-  because its scaffold locks against both; with one PyPI project and no new names, PyPI's
-  new-project limit no longer bites, so no partial-success path remains.
+  because its scaffold locks against both, and tatolab-app's release, which builds the macOS and
+  Linux apps from the tag, starts only once this repository's release has published both, as it
+  should wait for PyPI today. With one PyPI project and no new names, PyPI's new-project limit no
+  longer bites, so no partial-success path remains.
+- **The release proof** (`ARCHITECTURE.md:3726-3739`, the macOS proof and `main`'s scaffolded-stream
+  run). The scaffolded stream it runs is the starter, so it checks `TestPatternSource.video`
+  writing at least sixty frames in `graph` and nothing else: no effect, no encoder. It changes in
+  the same ticket as the scaffold, so a proof never looks for a node the starter lost.
 - **The scaffold lock check** (`reusable-distributions.yml:243-300`) points the `tatolab` index at
   a local index built from this run's wheels (uv's command-line `--index tatolab=<file url>`
   overrides the project's index of that name) and keeps `UV_FIND_LINKS` for `tatolab-stream`
   alone. It still fails when the lock takes any version but the one the run built.
-- **The scaffold** (`ARCHITECTURE.md:93-116`; supersedes `gateway-nodes`' scaffold bullet). The
-  starter is one stream asset holding one source node, `TestPatternSource` from `tatolab-testpattern`, which
-  the person sees in Tato Studio's viewer. The template loses `nodes/`, `HalftoneLensEffect`,
+- **The scaffold** (`ARCHITECTURE.md:93-116`). The starter is one stream asset holding one source
+  node, `TestPatternSource` from `tatolab-testpattern`, which the person sees in Tato Studio's
+  viewer. `gateway-nodes` keeps removing `H264Encoder` and `expose`; the effect and meter it left
+  are this change's to remove. The template loses `nodes/`, `HalftoneLensEffect`,
   `BrightnessMeter` and `numpy`; its dependencies are `tatolab-stream` from PyPI and
-  `tatolab-testpattern` pinned to the index, both floored at the runtime's version. Ruff, pyright
+  `tatolab-testpattern` from the index the project names, both floored at the runtime's version. Ruff, pyright
   and the cross-floor check still gate it. The pathway the old scaffold modelled (pixels on the
   GPU, logic on the CPU) moves to a sample. See decision 1 for the source.
 - **Where camera projects live** (`ARCHITECTURE.md:104-106`). "The docs' sample projects and,
@@ -126,8 +135,8 @@ reshapes #3216.
   sample; everything after the files are written is unchanged.
 - **The catalog** (#3216, read by tatolab-app's Get more, tatolab-app#133). A `package` entry
   gains `index_url`: `https://get.tatolab.com/simple/` for a first-party module, `null` for one on
-  PyPI. Import adds the requirement and, when `index_url` is set, the `[[tool.uv.index]]` table
-  once and the module's `[tool.uv.sources]` pin. Version 1 lists packages only; Get more's Samples
+  PyPI. Import adds the requirement and, when `index_url` is set and the project does not yet
+  name it, the `[[tool.uv.index]]` table. Version 1 lists packages only; Get more's Samples
   scope reads `list_samples` from the runtime, so the samples shown always match the runtime that
   will create them. `sample` entries return with remote samples.
 - **The packs OPEN** (`ARCHITECTURE.md:879-897`). Settled: the registry for first-party modules is
@@ -161,7 +170,10 @@ reshapes #3216.
 2. **Assumed unless overruled: the PyPI copies.** The first-party projects already on PyPI stay
    registered so nobody else takes the names, take no further uploads, and have every release
    yanked once the index serves the same version, so uv and pip skip them unless a project pins
-   one exactly. Yanking is reversible.
+   one exactly. Yanking is reversible. An existing project gains the `[[tool.uv.index]]` table by
+   hand, as the release note says, before its next `uv lock --upgrade`; nothing rewrites it on
+   load, since pre-1.0 the plan keeps no back-compat shims, and `project-and-assets` already
+   changes every project's shape.
 3. **Assumed unless overruled: which examples become samples.** Every converted example in
    `examples/` ships as a sample; held pre-pivot ones do not. One of them carries the old
    scaffold's pathway, the halftone lens and the brightness meter.
