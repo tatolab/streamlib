@@ -1398,10 +1398,12 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
             return;
         };
         let helper_process_id = child.id();
+        let the_helper_died = a_child_process_has_exited_without_being_reaped(helper_process_id);
+        // Read after the exit check: once the helper has exited, the board holds
+        // the calls it had under way when it died.
         let function_node_call_under_way = self
             .link_wiring
             .function_node_call_its_far_side_has_under_way();
-        let the_helper_died = a_child_process_has_exited_without_being_reaped(helper_process_id);
         let stalled_function_node_call = function_node_call_under_way
             .as_ref()
             .filter(|_| !the_helper_died)
