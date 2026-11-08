@@ -238,7 +238,7 @@ impl ProjectHistoryRepository {
     ) -> Result<Oid, ProjectRepositoryRefusal> {
         let mut root = TrackedDirectory::default();
         for (path, bytes) in tracked_files {
-            root.insert(path.split('/').collect::<Vec<_>>().as_slice(), bytes);
+            root.insert(path.split('/').collect::<Vec<_>>().as_slice(), bytes)?;
         }
         root.write_into(&self.repository)
     }
@@ -251,17 +251,32 @@ struct TrackedDirectory<'bytes> {
 }
 
 impl<'bytes> TrackedDirectory<'bytes> {
-    fn insert(&mut self, segments: &[&str], bytes: &'bytes [u8]) {
+    fn insert(
+        &mut self,
+        segments: &[&str],
+        bytes: &'bytes [u8],
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let conflict = |name: &str| ProjectRepositoryRefusal::TrackedFileAndFolderShareAName {
+            name: name.to_owned(),
+        };
         match segments {
-            [] => {}
+            [] => Ok(()),
             [file_name] => {
+                if self.directories.contains_key(*file_name) {
+                    return Err(conflict(file_name));
+                }
                 self.files.insert((*file_name).to_owned(), bytes);
+                Ok(())
             }
-            [directory, rest @ ..] => self
-                .directories
-                .entry((*directory).to_owned())
-                .or_default()
-                .insert(rest, bytes),
+            [directory, rest @ ..] => {
+                if self.files.contains_key(*directory) {
+                    return Err(conflict(directory));
+                }
+                self.directories
+                    .entry((*directory).to_owned())
+                    .or_default()
+                    .insert(rest, bytes)
+            }
         }
     }
 
@@ -323,5 +338,22 @@ mod tests {
         );
         assert_eq!(commits[0].author_name, "builder");
         assert_eq!(history.files_at_head().unwrap(), tracked_files);
+    }
+
+    #[test]
+    fn a_file_and_a_folder_of_the_same_name_are_refused_either_way_round() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let history =
+            ProjectHistoryRepository::create_for_project(project_directory.path()).unwrap();
+        for second_path in ["media", "media/intro.mp4/inner"] {
+            let mut tracked_files = BTreeMap::new();
+            tracked_files.insert("media/intro.mp4".to_owned(), b"a".to_vec());
+            tracked_files.insert(second_path.to_owned(), b"b".to_vec());
+            assert!(matches!(
+                history.commit_tracked_files(&tracked_files, &agent(), "conflict"),
+                Err(ProjectRepositoryRefusal::TrackedFileAndFolderShareAName { .. })
+            ));
+        }
+        assert_eq!(history.head_commit().unwrap(), None);
     }
 }

@@ -52,6 +52,10 @@ pub enum ProjectRepositoryRefusal {
     AuthorWithoutAName,
     #[error("the history remote {url} refused the push: {why}")]
     HistoryRemoteRefused { url: String, why: String },
+    #[error("the graph document {path} could not be read, so what it references is unknown: {why}")]
+    GraphDocumentUnreadable { path: String, why: String },
+    #[error("`{name}` cannot be both a tracked file and a tracked folder in history")]
+    TrackedFileAndFolderShareAName { name: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("the project's history refused the change: {0}")]

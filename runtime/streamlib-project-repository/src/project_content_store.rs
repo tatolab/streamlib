@@ -51,7 +51,10 @@ impl ProjectContentStore {
         let partial_path = self
             .store_directory
             .join(format!(".incoming-{}", Uuid::new_v4()));
-        let mut partial_file = File::create(&partial_path)?;
+        let mut partial_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial_path)?;
         let mut hasher = Sha256::new();
         let mut content_byte_len = 0u64;
         let mut chunk = vec![0u8; CONTENT_COPY_CHUNK_BYTE_LEN];
@@ -72,10 +75,14 @@ impl ProjectContentStore {
         }
         let content_sha256 = lowercase_hex(&hasher.finalize());
         let stored_path = self.content_path(&content_sha256);
-        if stored_path.exists() {
-            std::fs::remove_file(&partial_path)?;
+        let kept = if stored_path.exists() {
+            std::fs::remove_file(&partial_path)
         } else {
-            std::fs::rename(&partial_path, &stored_path)?;
+            std::fs::rename(&partial_path, &stored_path)
+        };
+        if let Err(not_kept) = kept {
+            let _ = std::fs::remove_file(&partial_path);
+            return Err(not_kept.into());
         }
         Ok(StoredProjectContent {
             content_sha256,
@@ -107,18 +114,28 @@ impl ProjectContentStore {
         self.store_directory.join(content_sha256)
     }
 
-    /// Put the bytes named `content_sha256` at `destination`, hard-linked when the filesystem allows, copied otherwise.
+    /// Copy the bytes named `content_sha256` to a new file at `destination`, its own copy so an
+    /// edit to it never reaches the store; a file already there is refused and left alone.
     pub fn place_content_at(
         &self,
         content_sha256: &str,
         destination: &Path,
     ) -> Result<(), ProjectRepositoryRefusal> {
-        let stored_path = self.content_path(content_sha256);
+        self.stored_content(content_sha256)?;
+        let mut stored_file = File::open(self.content_path(content_sha256))?;
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        if std::fs::hard_link(&stored_path, destination).is_err() {
-            std::fs::copy(&stored_path, destination)?;
+        let mut placed_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)?;
+        let copied =
+            std::io::copy(&mut stored_file, &mut placed_file).and_then(|_| placed_file.sync_all());
+        if let Err(not_copied) = copied {
+            drop(placed_file);
+            let _ = std::fs::remove_file(destination);
+            return Err(not_copied.into());
         }
         Ok(())
     }
@@ -154,6 +171,35 @@ mod tests {
         .unwrap()
         .collect();
         assert_eq!(held.len(), 1);
+    }
+
+    #[test]
+    fn placed_content_is_its_own_copy_and_never_overwrites_a_file() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let source = project_directory.path().join("hello.txt");
+        std::fs::write(&source, b"hello").unwrap();
+        let content_store = ProjectContentStore::of_project(project_directory.path()).unwrap();
+        let stored = content_store.store_the_file_at(&source).unwrap();
+        let placed = project_directory.path().join("media/hello.txt");
+        content_store
+            .place_content_at(&stored.content_sha256, &placed)
+            .unwrap();
+        std::fs::write(&placed, b"edited").unwrap();
+        assert_eq!(
+            std::fs::read(content_store.content_path(&stored.content_sha256)).unwrap(),
+            b"hello"
+        );
+        assert!(
+            content_store
+                .place_content_at(&stored.content_sha256, &placed)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&placed).unwrap(), b"edited");
+        assert!(
+            content_store
+                .place_content_at("../../etc/passwd", &project_directory.path().join("x"))
+                .is_err()
+        );
     }
 
     #[test]

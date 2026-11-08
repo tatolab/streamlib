@@ -12,6 +12,12 @@ use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_file::PROJECT_FILE_NAME;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
+/// What ends a stream asset's graph document: `streams/main.graph.json`.
+pub const GRAPH_DOCUMENT_FILE_SUFFIX: &str = ".graph.json";
+
+/// Folders a project's scan for sidecars and graph documents never enters, so no asset sits in one.
+pub(crate) const DIRECTORIES_A_PROJECT_SCAN_SKIPS: &[&str] = &["node_modules", "__pycache__"];
+
 /// What follows an asset's file name to name its sidecar: `intro.mp4` → `intro.mp4.asset.json`.
 pub const ASSET_SIDECAR_FILE_SUFFIX: &str = ".asset.json";
 
@@ -70,6 +76,17 @@ impl ProjectRelativeAssetPath {
                 "it is absolute; an asset path is relative to its project",
             ));
         }
+        if path.split('/').any(str::is_empty) {
+            return Err(refuse("it holds an empty segment"));
+        }
+        if path
+            .split('/')
+            .any(|segment| DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&segment))
+        {
+            return Err(refuse(
+                "a segment is `node_modules` or `__pycache__`, which a project's scan never enters",
+            ));
+        }
         for component in Path::new(path).components() {
             match component {
                 Component::Normal(segment) => {
@@ -89,6 +106,7 @@ impl ProjectRelativeAssetPath {
         if path.ends_with(ASSET_SIDECAR_FILE_SUFFIX) {
             return Err(refuse("it names an asset sidecar"));
         }
+
         if path == PROJECT_FILE_NAME {
             return Err(refuse("it names the project file"));
         }
@@ -259,6 +277,9 @@ mod tests {
             "media\\intro.mp4",
             "media/",
             "./intro.mp4",
+            "media//intro.mp4",
+            "node_modules/pkg/logo.png",
+            "media/__pycache__/x.png",
         ] {
             assert!(
                 ProjectRelativeAssetPath::parse(refused).is_err(),
