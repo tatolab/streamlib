@@ -1641,8 +1641,7 @@ impl Runner {
                 continue;
             };
             let reloaded = venv_made_outside_the_lock.and_then(|()| {
-                let graph = the_graph_the_recorded_stream_holds(&record)
-                    .map_err(Error::Runtime)?;
+                let graph = the_graph_the_recorded_stream_holds(&record).map_err(Error::Runtime)?;
                 self.load_a_recorded_stream_from_its_record(
                     &record,
                     &graph,
@@ -3889,7 +3888,10 @@ mod tests {
         runner
             .load_the_project_off_its_queue(project.run_request())
             .unwrap();
-        assert_eq!(runner.ids_of_the_loaded_streams(), std::slice::from_ref(&camera));
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&camera)
+        );
         project.remove_the_graph_document("camera");
 
         let emptied = runner
@@ -4044,7 +4046,10 @@ mod tests {
 
         assert!(refusal.contains("cannot share one id"), "{refusal}");
         assert!(refusal.contains("its own project UUID"), "{refusal}");
-        assert_eq!(runner.ids_of_the_loaded_streams(), std::slice::from_ref(&camera));
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&camera)
+        );
         assert_eq!(
             the_record_of(state_directory.path(), &camera)
                 .location
@@ -4081,7 +4086,10 @@ mod tests {
             .expect("the fixed document starts");
 
         assert_eq!(started.stream_id, camera);
-        assert_eq!(runner.ids_of_the_loaded_streams(), std::slice::from_ref(&camera));
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&camera)
+        );
         assert_eq!(
             the_record_of(state_directory.path(), &camera).failed_because,
             None
