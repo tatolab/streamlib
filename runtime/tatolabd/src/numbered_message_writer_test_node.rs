@@ -4,8 +4,7 @@
 //! A node that writes numbered messages, for the tests of the publisher: the
 //! `n`th message is the bytes `message <n>`, stamped `10 n` milliseconds — the
 //! interval it writes at — and opens a group when `n` is a multiple of three.
-//! It writes each one on both of its ports, `numbers` declaring a catalog entry
-//! and `more_numbers` none.
+//! It writes each one on both of its ports, `numbers` and `more_numbers`.
 //! Compiled into a test build alone.
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
@@ -21,11 +20,7 @@ pub const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
 
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 10),
-    output(
-        "numbers",
-        catalog = BinaryEntry { mode: Stream, mime: "text/plain" },
-        family = Records,
-    ),
+    output("numbers", family = Records),
     output("more_numbers", family = Records),
 )]
 pub struct NumberedMessageWriterTestNode {
