@@ -238,8 +238,26 @@ wrote; a node's defaults to its class's short name (`camerasource`); never an id
 name" (retired), "id", "label".
 
 **Graph** _(crosses)_: a stream's nodes, links and reference edges as one JSON shape — what a
-stream's function compiles to, and what the runtime renders live; emitted, never authored. _Avoid_: "graph description", "stream
+stream asset's graph document saves, which the runtime alone writes through transactions and renders live. _Avoid_: "graph description", "stream
 description", "snapshot", "manifest", "pipeline file".
+
+**Project** _(crosses)_: a versioned repository of assets and node code with its own history,
+which the runtime writes. _Avoid_: "app", "workspace" for one project.
+
+**Asset** _(crosses)_: one file a project tracks by UUID — a stream's graph document, media, an
+image, USD, an FMU — referenced by UUID, never by path. _Avoid_: "resource", "file" when the UUID
+is meant.
+
+**Graph document** _(crosses)_: a stream asset's canonical JSON — nodes by UUID, config, pin
+values, studio fields, links, fragments — and the stream's source of truth. _Avoid_: "stream file",
+"scene", "`stream.py`".
+
+**Fragment** _(crosses)_: a `@graph_generator` function's output stored in a graph document as one
+read-only container with its own node UUIDs, refreshed when the generator re-runs. _Avoid_:
+"nested stream", "group".
+
+**Linked dependency** _(crosses)_: another project used at a pinned revision, its assets read-only
+until forked. _Avoid_: "copy", "import" for a link.
 
 **Processor** _(engine)_: the engine's word for a node — its trait, its id, its interpreter;
 kept in Rust identifiers until the rename. _Avoid_: on any user surface.

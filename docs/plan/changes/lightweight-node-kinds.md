@@ -341,8 +341,7 @@ the device.
 - A palette: category per node type, every installed module's function nodes, `tatolab-ops`
   included, and a project's shader and function nodes listed without running their code.
 - Where each lightweight node runs: its host node, its fused group, promoted or not.
-- The source-writing edit verbs accept shader and function types and write an idiomatic
-  `stream.py` line.
+- The edit verbs accept shader and function types as transactions on the graph document.
 - Log records and state attribute a lightweight node by its own name, not its host's process.
 
 ## MODIFIED
