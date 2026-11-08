@@ -27,8 +27,22 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
         import_path.clone(),
         "graph round-trip test",
     )
-    .with_input(PortDescriptor::new(input, "", false))
-    .with_output(PortDescriptor::new(output, "", false));
+    .with_input(PortDescriptor::new(
+        input,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        output,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
@@ -714,16 +728,20 @@ fn register_a_family_type(
         "graph variable test",
     );
     for (name, family) in inputs {
-        descriptor = descriptor.with_input(
-            PortDescriptor::new(*name, "", false)
-                .with_family(PortFamilyDeclaration::of_family(*family)),
-        );
+        descriptor = descriptor.with_input(PortDescriptor::new(
+            *name,
+            "",
+            false,
+            PortFamilyDeclaration::of_family(*family),
+        ));
     }
     for (name, family) in outputs {
-        descriptor = descriptor.with_output(
-            PortDescriptor::new(*name, "", false)
-                .with_family(PortFamilyDeclaration::of_family(*family)),
-        );
+        descriptor = descriptor.with_output(PortDescriptor::new(
+            *name,
+            "",
+            false,
+            PortFamilyDeclaration::of_family(*family),
+        ));
     }
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
@@ -1069,7 +1087,10 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
             import_path.clone(),
             "graph interface test",
         )
-        .with_output(PortDescriptor::new("content", "", false).with_family(
+        .with_output(PortDescriptor::new(
+            "content",
+            "",
+            false,
             PortFamilyDeclaration {
                 family_from_config_key: Some("family".into()),
                 ..PortFamilyDeclaration::of_family(PortFamily::Packets)

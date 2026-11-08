@@ -46,8 +46,22 @@ fn register_test_type(short: &str) -> ProcessorClassImportPath {
         import_path.clone(),
         "control-plane rendering test",
     )
-    .with_input(PortDescriptor::new("_unused_in", "", false))
-    .with_output(PortDescriptor::new("_unused_out", "", false));
+    .with_input(PortDescriptor::new(
+        "_unused_in",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        "_unused_out",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

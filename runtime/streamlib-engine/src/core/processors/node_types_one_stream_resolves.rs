@@ -281,7 +281,9 @@ mod tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         }
     }
 

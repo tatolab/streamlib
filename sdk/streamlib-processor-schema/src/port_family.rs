@@ -308,7 +308,7 @@ pub const IMAGE_TEXTURE_FORMAT_WIRE_NAMES: [&str; 7] = [
 pub struct PortFamilyLinkEndpoint<'a> {
     pub node_name: &'a str,
     pub port_name: &'a str,
-    pub declaration: Option<&'a PortFamilyDeclaration>,
+    pub declaration: &'a PortFamilyDeclaration,
 }
 
 impl fmt::Display for PortFamilyLinkEndpoint<'_> {
@@ -422,18 +422,14 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str
 /// The output's family, resolved against its node's config, must be one the
 /// input takes; then the input's `requires=` is checked against the output's
 /// resolved names, `requires_codec=` against its resolved codec, and the two
-/// `formats=` sets, which must overlap. A port with no family — a
-/// decorator port, read as unchecked Records — takes any link.
+/// `formats=` sets, which must overlap.
 pub fn refusal_of_a_link_between_port_families(
     output: PortFamilyLinkEndpoint<'_>,
     output_node_config: Option<&serde_json::Value>,
     input: PortFamilyLinkEndpoint<'_>,
 ) -> Option<String> {
-    let (Some(output_declaration), Some(input_declaration)) =
-        (output.declaration, input.declaration)
-    else {
-        return None;
-    };
+    let output_declaration = output.declaration;
+    let input_declaration = input.declaration;
     let output_family =
         match output_port_family_resolved_against_config(output_declaration, output_node_config) {
             Ok(family) => family,
@@ -560,7 +556,7 @@ mod tests {
     fn endpoint<'a>(
         node_name: &'a str,
         port_name: &'a str,
-        declaration: Option<&'a PortFamilyDeclaration>,
+        declaration: &'a PortFamilyDeclaration,
     ) -> PortFamilyLinkEndpoint<'a> {
         PortFamilyLinkEndpoint {
             node_name,
@@ -590,9 +586,9 @@ mod tests {
         let image = PortFamilyDeclaration::of_family(PortFamily::Image);
         let array = PortFamilyDeclaration::of_family(PortFamily::Array);
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("camera", "video", Some(&image)),
+            endpoint("camera", "video", &image),
             None,
-            endpoint("model", "tensor", Some(&array)),
+            endpoint("model", "tensor", &array),
         )
         .expect("an Image output never feeds an Array input");
         assert!(refusal.contains("camera.video (Image)"), "{refusal}");
@@ -605,30 +601,9 @@ mod tests {
         let image = PortFamilyDeclaration::of_family(PortFamily::Image);
         assert_eq!(
             refusal_of_a_link_between_port_families(
-                endpoint("camera", "video", Some(&image)),
+                endpoint("camera", "video", &image),
                 None,
-                endpoint("display", "video", Some(&image)),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn a_decorator_port_at_either_end_takes_any_link() {
-        let image = PortFamilyDeclaration::of_family(PortFamily::Image);
-        assert_eq!(
-            refusal_of_a_link_between_port_families(
-                endpoint("camera", "video", Some(&image)),
-                None,
-                endpoint("legacy", "video", None),
-            ),
-            None
-        );
-        assert_eq!(
-            refusal_of_a_link_between_port_families(
-                endpoint("legacy", "video", None),
-                None,
-                endpoint("display", "video", Some(&image)),
+                endpoint("display", "video", &image),
             ),
             None
         );
@@ -639,9 +614,9 @@ mod tests {
         let output = channels_output_stating(&["left", "right"]);
         let input = channels_input_requiring(&["left", "rpm"]);
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("mic", "audio", Some(&output)),
+            endpoint("mic", "audio", &output),
             None,
-            endpoint("meter", "audio", Some(&input)),
+            endpoint("meter", "audio", &input),
         )
         .expect("rpm is not stated");
         assert!(
@@ -656,9 +631,9 @@ mod tests {
         let output = PortFamilyDeclaration::of_family(PortFamily::Channels);
         let input = channels_input_requiring(&["left"]);
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("mic", "audio", Some(&output)),
+            endpoint("mic", "audio", &output),
             None,
-            endpoint("meter", "audio", Some(&input)),
+            endpoint("meter", "audio", &input),
         )
         .expect("an output with no names satisfies no requirement");
         assert!(refusal.contains("states no names"), "{refusal}");
@@ -676,25 +651,25 @@ mod tests {
         let config = serde_json::json!({ "channel_names": ["rpm", "torque"] });
         assert_eq!(
             refusal_of_a_link_between_port_families(
-                endpoint("engine", "signals", Some(&output)),
+                endpoint("engine", "signals", &output),
                 Some(&config),
-                endpoint("gauge", "signals", Some(&input)),
+                endpoint("gauge", "signals", &input),
             ),
             None
         );
         let config_without_rpm = serde_json::json!({ "channel_names": ["torque"] });
         assert!(
             refusal_of_a_link_between_port_families(
-                endpoint("engine", "signals", Some(&output)),
+                endpoint("engine", "signals", &output),
                 Some(&config_without_rpm),
-                endpoint("gauge", "signals", Some(&input)),
+                endpoint("gauge", "signals", &input),
             )
             .is_some()
         );
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("engine", "signals", Some(&output)),
+            endpoint("engine", "signals", &output),
             None,
-            endpoint("gauge", "signals", Some(&input)),
+            endpoint("gauge", "signals", &input),
         )
         .expect("unset config key cannot satisfy rpm");
         assert!(refusal.contains("channel_names"), "{refusal}");
@@ -711,9 +686,9 @@ mod tests {
             ..PortFamilyDeclaration::of_family(PortFamily::Packets)
         };
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("encoder", "packets", Some(&output)),
+            endpoint("encoder", "packets", &output),
             None,
-            endpoint("publisher", "video", Some(&input)),
+            endpoint("publisher", "video", &input),
         )
         .expect("h265 is not h264");
         assert!(refusal.contains("\"h265\"") && refusal.contains("\"h264\""));
@@ -731,9 +706,9 @@ mod tests {
             ..PortFamilyDeclaration::of_family(PortFamily::Image)
         };
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("render", "video", Some(&output)),
+            endpoint("render", "video", &output),
             None,
-            endpoint("compositor", "video", Some(&input)),
+            endpoint("compositor", "video", &input),
         )
         .expect("rgba16_float never reaches an rgba8_unorm-only input");
         assert!(refusal.contains("rgba16_float") && refusal.contains("rgba8_unorm"));
@@ -743,9 +718,9 @@ mod tests {
         };
         assert_eq!(
             refusal_of_a_link_between_port_families(
-                endpoint("render", "video", Some(&output)),
+                endpoint("render", "video", &output),
                 None,
-                endpoint("compositor", "video", Some(&input_reading_both)),
+                endpoint("compositor", "video", &input_reading_both),
             ),
             None
         );
@@ -824,14 +799,14 @@ mod tests {
             ..PortFamilyDeclaration::of_family(PortFamily::Packets)
         };
         let records_input = PortFamilyDeclaration::of_family(PortFamily::Records);
-        let source = endpoint("receive", "content", Some(&output));
+        let source = endpoint("receive", "content", &output);
 
         let h264_config = serde_json::json!({"family": "packets", "codec": "h264"});
         assert_eq!(
             refusal_of_a_link_between_port_families(
                 source,
                 Some(&h264_config),
-                endpoint("decoder", "encoded_video", Some(&h264_input)),
+                endpoint("decoder", "encoded_video", &h264_input),
             ),
             None
         );
@@ -841,14 +816,14 @@ mod tests {
             refusal_of_a_link_between_port_families(
                 source,
                 Some(&records_config),
-                endpoint("sink", "records", Some(&records_input)),
+                endpoint("sink", "records", &records_input),
             ),
             None
         );
         let refusal = refusal_of_a_link_between_port_families(
             source,
             Some(&records_config),
-            endpoint("decoder", "encoded_video", Some(&h264_input)),
+            endpoint("decoder", "encoded_video", &h264_input),
         )
         .expect("a Records output into a Packets input is refused");
         assert!(
@@ -860,7 +835,7 @@ mod tests {
         let refusal = refusal_of_a_link_between_port_families(
             source,
             Some(&opus_config),
-            endpoint("decoder", "encoded_video", Some(&h264_input)),
+            endpoint("decoder", "encoded_video", &h264_input),
         )
         .expect("a codec outside the required set is refused");
         assert!(refusal.contains("\"opus\""), "got {refusal}");
@@ -869,7 +844,7 @@ mod tests {
         let refusal = refusal_of_a_link_between_port_families(
             source,
             Some(&unknown_family),
-            endpoint("sink", "records", Some(&records_input)),
+            endpoint("sink", "records", &records_input),
         )
         .expect("a family no port has is refused");
         assert!(
@@ -884,12 +859,12 @@ mod tests {
             also_takes_families: vec![PortFamily::Records],
             ..PortFamilyDeclaration::of_family(PortFamily::Packets)
         };
-        let destination = endpoint("send", "content", Some(&input));
+        let destination = endpoint("send", "content", &input);
         for family in [PortFamily::Packets, PortFamily::Records] {
             let output = PortFamilyDeclaration::of_family(family);
             assert_eq!(
                 refusal_of_a_link_between_port_families(
-                    endpoint("source", "out", Some(&output)),
+                    endpoint("source", "out", &output),
                     None,
                     destination,
                 ),
@@ -899,7 +874,7 @@ mod tests {
         }
         let image = PortFamilyDeclaration::of_family(PortFamily::Image);
         let refusal = refusal_of_a_link_between_port_families(
-            endpoint("camera", "video", Some(&image)),
+            endpoint("camera", "video", &image),
             None,
             destination,
         )
@@ -951,10 +926,10 @@ mod tests {
                 endpoint(
                     "receive",
                     "content",
-                    Some(&an_output_whose_family_and_codec_come_from_config())
+                    &an_output_whose_family_and_codec_come_from_config()
                 ),
                 Some(&config),
-                endpoint("sink", "records", Some(&records_input)),
+                endpoint("sink", "records", &records_input),
             ),
             None
         );

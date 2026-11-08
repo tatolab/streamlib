@@ -687,9 +687,17 @@ mod tests {
                 "frames_in",
                 "",
                 false,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
             ))
             .with_output(crate::core::descriptors::PortDescriptor::new(
-                "video", "", false,
+                "video",
+                "",
+                false,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
             )),
         );
         REGISTERED_CAMERA_CLASS
@@ -1076,7 +1084,12 @@ mod tests {
                     "graph snapshot test",
                 )
                 .with_output(crate::core::descriptors::PortDescriptor::new(
-                    "video", "", false,
+                    "video",
+                    "",
+                    false,
+                    crate::core::descriptors::PortFamilyDeclaration::of_family(
+                        crate::core::descriptors::PortFamily::Image,
+                    ),
                 )),
                 Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
             )
@@ -1472,16 +1485,25 @@ mod tests {
             (
                 "ImageSource",
                 IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS,
-                PortDescriptor::new("video", "", false)
-                    .with_family(PortFamilyDeclaration::of_family(PortFamily::Image)),
+                PortDescriptor::new(
+                    "video",
+                    "",
+                    false,
+                    PortFamilyDeclaration::of_family(PortFamily::Image),
+                ),
             ),
             (
                 "PacketsSink",
                 PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS,
-                PortDescriptor::new("encoded", "", false).with_family(PortFamilyDeclaration {
-                    requires_codec: vec!["h264".into()],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                }),
+                PortDescriptor::new(
+                    "encoded",
+                    "",
+                    false,
+                    PortFamilyDeclaration {
+                        requires_codec: vec!["h264".into()],
+                        ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                    },
+                ),
             ),
         ] {
             let descriptor = crate::core::descriptors::ProcessorDescriptor::new(

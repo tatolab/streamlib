@@ -15,16 +15,14 @@
 //!     built_in_node,                    // flag — type is `tatolab.stream:<struct name>`
 //!     paced_by_real_time,               // flag — paces itself on real time, as a live device does
 //!     config = crate::CameraConfig,     // typed Config alias; must derive `JsonSchema`
-//!     input("video_in", delivery_profile = "newest"),
-//!     output("video"),
+//!     input("video_in", delivery_profile = "newest", family = Image),
+//!     output("video", family = Image),
 //! )]
 //! ```
 //!
-//! A port declares a name, a description, and — on an input — a delivery
-//! profile, plus an optional `audio_window` contract on an audio input and an
-//! optional `catalog` entry on an output. It
-//! carries no type: type information belongs to the authoring language and
-//! never reaches the engine.
+//! A port declares a name, its family, a description, and — on an input — a
+//! delivery profile, plus the family's keys, an optional `audio_window`
+//! contract on an audio input and an optional `catalog` entry on an output.
 //!
 //! The attribute declares no identity. A processor is named by the import path
 //! of its type, captured by the macro at the expansion site — or, for a
@@ -105,8 +103,8 @@ pub struct ParsedPort {
     /// `None` on every input and on an output that declares none.
     pub catalog_entry: Option<CatalogEntry>,
     /// The port family the port declares with `family = …` and its family's
-    /// keys; `None` on a port that declares none.
-    pub family: Option<PortFamilyDeclaration>,
+    /// keys.
+    pub family: PortFamilyDeclaration,
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
@@ -546,7 +544,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
             if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
                 return Err(syn::Error::new(name_lit.span(), refusal));
             }
-            Some(family_keys)
+            family_keys
         }
         (None, Some(family_key_span)) => {
             return Err(syn::Error::new(
@@ -557,7 +555,15 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                 ),
             ));
         }
-        (None, None) => None,
+        (None, None) => {
+            return Err(syn::Error::new(
+                name_lit.span(),
+                format!(
+                    "port `{name}` declares no family — add `family = …`, one of {}",
+                    rendered_port_family_names()
+                ),
+            ));
+        }
     };
 
     Ok(ParsedPort {
@@ -1016,8 +1022,8 @@ mod tests {
         let parsed = parse_ok(quote! {
             execution = manual,
             scheduling = high,
-            input("video_in", delivery_profile = "newest"),
-            output("video"),
+            input("video_in", family = Image, delivery_profile = "newest"),
+            output("video", family = Image),
         });
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
@@ -1040,10 +1046,11 @@ mod tests {
             execution = manual,
             input(
                 "video_in",
+                family = Image,
                 delivery_profile = "newest",
                 description = "Frames to convert"
             ),
-            output("video", description = "Live video frames"),
+            output("video", family = Image, description = "Live video frames"),
         });
         assert_eq!(
             parsed.description.as_deref(),
@@ -1084,11 +1091,11 @@ mod tests {
     #[test]
     fn a_positional_port_schema_is_an_error() {
         // A port declares a name and keyed options only. The old
-        // `input("name", <schema>, ...)` form must fail to parse, not be
+        // `input("name", family = Image, <schema>, ...)` form must fail to parse, not be
         // silently accepted and dropped.
         let msg = parse_err(quote! {
             execution = manual,
-            input("in1", "@tatolab/core/VideoFrame", delivery_profile = "newest"),
+            input("in1", family = Image, "@tatolab/core/VideoFrame", delivery_profile = "newest"),
         });
         assert!(
             msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
@@ -1100,7 +1107,7 @@ mod tests {
     fn a_bare_any_port_schema_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("out1", any),
+            output("out1", family = Image, any),
         });
         assert!(
             msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),
@@ -1194,8 +1201,8 @@ mod tests {
     fn a_port_name_declared_twice_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("dup", delivery_profile = "newest"),
-            input("dup", delivery_profile = "newest"),
+            input("dup", family = Image, delivery_profile = "newest"),
+            input("dup", family = Image, delivery_profile = "newest"),
         });
         assert!(
             msg.contains("the port name `dup` is declared more than once"),
@@ -1207,8 +1214,8 @@ mod tests {
     fn an_input_and_an_output_sharing_a_name_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("video", delivery_profile = "newest"),
-            output("video"),
+            input("video", family = Image, delivery_profile = "newest"),
+            output("video", family = Image),
         });
         assert!(
             msg.contains("the port name `video` is declared more than once"),
@@ -1220,9 +1227,9 @@ mod tests {
     fn two_ports_that_cast_alike_are_an_error_naming_both() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("videoOut"),
-            output("video_out"),
-            output("VideoOut"),
+            output("videoOut", family = Image),
+            output("video_out", family = Image),
+            output("VideoOut", family = Image),
         });
         assert!(
             msg.contains("the ports `videoOut` and `VideoOut` both cast to `videoout`"),
@@ -1234,8 +1241,8 @@ mod tests {
     fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
         let parsed = parse_ok(quote! {
             execution = manual,
-            input("VidéoIn", delivery_profile = "newest"),
-            output("videoOut"),
+            input("VidéoIn", family = Image, delivery_profile = "newest"),
+            output("videoOut", family = Image),
         });
         assert_eq!(parsed.inputs[0].declared_marker_ident, "VidéoIn");
         assert_eq!(parsed.inputs[0].cast_name, "videoin");
@@ -1278,7 +1285,7 @@ mod tests {
     fn a_decomposed_spelling_is_declared_as_its_composed_identifier() {
         let parsed = parse_ok(quote! {
             execution = manual,
-            output("Vide\u{301}oOut"),
+            output("Vide\u{301}oOut", family = Image),
         });
         assert_eq!(parsed.outputs[0].declared_marker_ident, "Vid\u{e9}oOut");
         assert_eq!(parsed.outputs[0].cast_name, "videoout");
@@ -1288,7 +1295,7 @@ mod tests {
     fn a_port_name_casting_to_nothing_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("日本"),
+            output("日本", family = Image),
         });
         assert!(msg.contains("cannot name anything"), "got: {msg}");
     }
@@ -1316,7 +1323,7 @@ mod tests {
         // an `input(...)` and reaches the parsed port.
         let parsed = parse_ok(quote! {
             execution = manual,
-            input("video_in", delivery_profile = "ordered"),
+            input("video_in", family = Image, delivery_profile = "ordered"),
         });
         assert_eq!(
             parsed.inputs[0].delivery_profile.as_deref(),
@@ -1328,7 +1335,7 @@ mod tests {
     fn input_without_a_delivery_profile_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("video_in"),
+            input("video_in", family = Image),
         });
         assert!(
             msg.contains("input port `video_in` must declare a `delivery_profile`"),
@@ -1346,7 +1353,7 @@ mod tests {
         // profile is the correct shape, not a missing declaration.
         let parsed = parse_ok(quote! {
             execution = manual,
-            output("video"),
+            output("video", family = Image),
         });
         assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
@@ -1358,7 +1365,7 @@ mod tests {
     fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
         let msg = parse_err(quote! {
             execution = reactive,
-            input("audio", delivery_profile = "ordered", frobnicate = "yes"),
+            input("audio", family = Channels, delivery_profile = "ordered", frobnicate = "yes"),
         });
 
         assert!(msg.contains("unknown port key `frobnicate`"), "got: {msg}");
@@ -1384,6 +1391,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(
                     sample_rate = 16_000,
@@ -1415,6 +1423,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 400)
             ),
@@ -1427,7 +1436,7 @@ mod tests {
     fn the_sentinel_is_a_whole_contract() {
         let parsed = parse_ok(quote! {
             execution = manual,
-            input("audio", delivery_profile = "ordered", audio_window = match_device),
+            input("audio", family = Channels, delivery_profile = "ordered", audio_window = match_device),
         });
 
         assert_eq!(
@@ -1440,8 +1449,8 @@ mod tests {
     fn a_port_declaring_no_contract_carries_none() {
         let parsed = parse_ok(quote! {
             execution = reactive,
-            input("video_in", delivery_profile = "newest"),
-            output("video_out"),
+            input("video_in", family = Image, delivery_profile = "newest"),
+            output("video_out", family = Image),
         });
 
         assert_eq!(parsed.inputs[0].audio_window, None);
@@ -1454,6 +1463,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = 16_000, window_size = 512)
             ),
@@ -1471,6 +1481,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(
                     sample_rate = 16_000,
@@ -1494,6 +1505,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "newest",
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512)
             ),
@@ -1513,6 +1525,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512),
                 delivery_profile = "newest"
             ),
@@ -1529,7 +1542,7 @@ mod tests {
     fn the_sentinel_beside_a_skipping_delivery_profile_is_refused_too() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("audio", delivery_profile = "newest", audio_window = match_device),
+            input("audio", family = Channels, delivery_profile = "newest", audio_window = match_device),
         });
 
         assert!(
@@ -1544,6 +1557,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 0)
             ),
@@ -1563,6 +1577,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = -1, channels = 1, dtype = "f32", window_size = 512)
             ),
@@ -1580,6 +1595,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "i16", window_size = 512)
             ),
@@ -1597,6 +1613,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(
                     sample_rate = 16_000,
@@ -1618,7 +1635,7 @@ mod tests {
     fn an_unknown_sentinel_is_refused_naming_the_only_one() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("audio", delivery_profile = "ordered", audio_window = match_whatever),
+            input("audio", family = Channels, delivery_profile = "ordered", audio_window = match_whatever),
         });
 
         assert!(
@@ -1631,7 +1648,7 @@ mod tests {
     fn an_audio_window_on_an_output_is_refused() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("audio_out", audio_window = match_device),
+            output("audio_out", family = Channels, audio_window = match_device),
         });
 
         assert!(
@@ -1655,21 +1672,17 @@ mod tests {
             ),
             output("packets", family = Packets, codec = "h264"),
             output("tensor", family = Array, names = ["boxes"], residency = "gpu"),
-            output("legacy"),
         });
         let schema = parsed.to_processor_schema();
 
-        let signals = schema.inputs[0].family.as_ref().expect("Channels input");
+        let signals = &schema.inputs[0].family;
         assert_eq!(signals.family, PortFamily::Channels);
         assert_eq!(signals.requires, vec!["rpm".to_string()]);
         assert_eq!(
-            schema.inputs[1]
-                .family
-                .as_ref()
-                .map(|family| &family.formats),
-            Some(&vec!["rgba8_unorm".to_string()])
+            schema.inputs[1].family.formats,
+            vec!["rgba8_unorm".to_string()]
         );
-        let telemetry = schema.outputs[0].family.as_ref().expect("Channels output");
+        let telemetry = &schema.outputs[0].family;
         assert_eq!(
             telemetry.names,
             Some(OutputPortDeclaredNames::FromConfig {
@@ -1681,21 +1694,11 @@ mod tests {
             Some(ChannelsOutputPortSampleRate::Stated(48_000))
         );
         assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F32));
+        assert_eq!(schema.outputs[1].family.codec.as_deref(), Some("h264"));
         assert_eq!(
-            schema.outputs[1]
-                .family
-                .as_ref()
-                .and_then(|family| family.codec.as_deref()),
-            Some("h264")
-        );
-        assert_eq!(
-            schema.outputs[2]
-                .family
-                .as_ref()
-                .and_then(|family| family.residency),
+            schema.outputs[2].family.residency,
             Some(ArrayOutputPortResidency::Gpu)
         );
-        assert_eq!(schema.outputs[3].family, None);
     }
 
     #[test]
@@ -1706,6 +1709,18 @@ mod tests {
         });
         assert!(
             msg.contains("\"video\"") && msg.contains("`names=`"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_port_without_a_family_is_refused_naming_the_families() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("video"),
+        });
+        assert!(
+            msg.contains("port `video` declares no family") && msg.contains("`Records`"),
             "got {msg}"
         );
     }
@@ -1733,13 +1748,15 @@ mod tests {
             execution = manual,
             output(
                 "video",
+                family = Image,
                 catalog = VideoEntry { codec: "avc1.64001f", coded_width: 1280, coded_height: Some(720) }
             ),
             output(
                 "frames",
+                family = Image,
                 catalog = BinaryEntry { mode: CatalogDataTrackMode::Snapshot, mime: "application/msgpack" }
             ),
-            output("bare"),
+            output("bare", family = Image),
         });
         let schema = parsed.to_processor_schema();
 
@@ -1764,7 +1781,7 @@ mod tests {
     fn a_catalog_entry_on_an_input_is_refused_naming_the_port() {
         let msg = parse_err(quote! {
             execution = reactive,
-            input("video_in", delivery_profile = "newest", catalog = BinaryEntry { mode: Snapshot }),
+            input("video_in", family = Image, delivery_profile = "newest", catalog = BinaryEntry { mode: Snapshot }),
         });
 
         assert!(
@@ -1777,7 +1794,7 @@ mod tests {
     fn a_catalog_entry_missing_a_field_hang_requires_is_refused_naming_the_field() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("frames", catalog = BinaryEntry { mime: "application/msgpack" }),
+            output("frames", family = Image, catalog = BinaryEntry { mime: "application/msgpack" }),
         });
 
         assert!(
@@ -1790,7 +1807,7 @@ mod tests {
     fn a_catalog_entry_naming_a_field_its_type_lacks_is_refused_listing_the_fields_it_has() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("audio", catalog = AudioEntry { codec: "opus", sample_rate: 48000, number_of_channels: 2, bitrate: 64000 }),
+            output("audio", family = Channels, catalog = AudioEntry { codec: "opus", sample_rate: 48000, number_of_channels: 2, bitrate: 64000 }),
         });
 
         assert!(
@@ -1803,7 +1820,7 @@ mod tests {
     fn a_catalog_entry_of_an_unknown_type_or_a_non_literal_field_is_refused() {
         let unknown_type = parse_err(quote! {
             execution = manual,
-            output("video", catalog = MediaEntry { codec: "avc1.64001f" }),
+            output("video", family = Image, catalog = MediaEntry { codec: "avc1.64001f" }),
         });
         assert!(
             unknown_type.contains("`VideoEntry`") && unknown_type.contains("MediaEntry"),
@@ -1812,7 +1829,7 @@ mod tests {
 
         let computed_field = parse_err(quote! {
             execution = manual,
-            output("video", catalog = VideoEntry { codec: codec_string() }),
+            output("video", family = Image, catalog = VideoEntry { codec: codec_string() }),
         });
         assert!(
             computed_field.contains("literal"),
@@ -1824,7 +1841,7 @@ mod tests {
     fn a_second_catalog_entry_on_one_port_is_refused() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("text", catalog = TextEntry { format: "vtt" }, catalog = TextEntry { format: "ttml" }),
+            output("text", family = Image, catalog = TextEntry { format: "vtt" }, catalog = TextEntry { format: "ttml" }),
         });
 
         assert!(msg.contains("more than once"), "got {msg}");
@@ -1836,6 +1853,7 @@ mod tests {
             execution = manual,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window = match_device,
                 audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512)
@@ -1854,6 +1872,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(
                     sample_rate = 16_000,
@@ -1887,6 +1906,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(
                     sample_rate = 48_000,
@@ -1929,7 +1949,7 @@ mod tests {
         ] {
             let msg = parse_err(quote! {
                 execution = reactive,
-                input("audio", delivery_profile = "ordered", #declaration),
+                input("audio", family = Channels, delivery_profile = "ordered", #declaration),
             });
 
             assert!(
@@ -1945,6 +1965,7 @@ mod tests {
             execution = reactive,
             input(
                 "audio",
+                family = Channels,
                 delivery_profile = "ordered",
                 audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960)
             ),
@@ -1970,7 +1991,7 @@ mod tests {
     fn a_contract_less_ports_projection_carries_no_audio_window_key() {
         let parsed = parse_ok(quote! {
             execution = reactive,
-            input("video_in", delivery_profile = "newest"),
+            input("video_in", family = Image, delivery_profile = "newest"),
         });
 
         let schema = parsed.to_processor_schema();
@@ -1981,6 +2002,7 @@ mod tests {
                 "name": "video_in",
                 "description": null,
                 "delivery_profile": "newest",
+                "family": {"family": "image"},
             })
         );
     }

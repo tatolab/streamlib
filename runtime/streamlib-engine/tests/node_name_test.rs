@@ -50,8 +50,22 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClass
         import_path.clone(),
         "node name test",
     )
-    .with_input(PortDescriptor::new("_unused_in", "", false))
-    .with_output(PortDescriptor::new("_unused_out", "", false));
+    .with_input(PortDescriptor::new(
+        "_unused_in",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        "_unused_out",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

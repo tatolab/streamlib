@@ -51,8 +51,22 @@ fn register_test_type(short: &str) -> ProcessorClassImportPath {
         import_path.clone(),
         "graph readiness signal test",
     )
-    .with_input(PortDescriptor::new("bags_from_upstream", "", false))
-    .with_output(PortDescriptor::new("bags_to_downstream", "", false));
+    .with_input(PortDescriptor::new(
+        "bags_from_upstream",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        "bags_to_downstream",
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

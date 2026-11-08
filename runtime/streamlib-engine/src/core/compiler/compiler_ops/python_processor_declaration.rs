@@ -198,10 +198,17 @@ fn read_port_descriptors(
             return Err(format!("{ports_key} must hold dicts"));
         }
 
+        let port_name = read_string(declaration, "name")?;
+        let family = declaration
+            .get("family")
+            .filter(|declared| !declared.is_null())
+            .ok_or_else(|| format!("port {port_name:?} declares no family"))?;
+        let family = read_port_family_declaration(family, &port_name, direction)?;
         let mut port = PortDescriptor::new(
-            read_string(declaration, "name")?,
+            port_name,
             read_string(declaration, "description")?,
             true,
+            family,
         );
         if let Some(delivery_profile) = declaration
             .get("delivery_profile")
@@ -263,13 +270,6 @@ fn read_port_descriptors(
         {
             let catalog_entry = read_catalog_entry(catalog_entry, &port.name)?;
             port = port.with_catalog_entry(catalog_entry);
-        }
-        if let Some(family) = declaration
-            .get("family")
-            .filter(|declared| !declared.is_null())
-        {
-            let family = read_port_family_declaration(family, &port.name, direction)?;
-            port = port.with_family(family);
         }
         ports.push(port);
     }
@@ -571,7 +571,7 @@ mod tests {
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
             "input_ports": input_ports,
-            "output_ports": [{"name": "levels", "description": "the levels it measured"}],
+            "output_ports": [{"name": "levels", "family": {"family": "channels"}, "description": "the levels it measured"}],
         })
     }
 
@@ -592,7 +592,7 @@ mod tests {
     /// An audio window marker with `fields`, on a port declared `ordered`.
     fn described_with_audio_window(fields: serde_json::Value) -> serde_json::Value {
         described_node_type_with_input_ports(serde_json::json!([{
-            "name": "audio",
+            "name": "audio", "family": {"family": "channels"},
             "description": "",
             "delivery_profile": "ordered",
             "audio_window": fields,
@@ -617,7 +617,7 @@ mod tests {
     fn described_with_output_catalog_entry(catalog_entry: serde_json::Value) -> serde_json::Value {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["output_ports"] = serde_json::json!([{
-            "name": "levels",
+            "name": "levels", "family": {"family": "channels"},
             "description": "",
             "catalog_entry": catalog_entry,
         }]);
@@ -688,10 +688,7 @@ mod tests {
             "family": {"family": "channels", "requires": ["rpm"]},
         }])))
         .unwrap_or_else(|refusal| panic!("a Channels input requiring a name reads: {refusal}"));
-        let family = declaration.descriptor.inputs[0]
-            .family
-            .as_ref()
-            .expect("the family reaches the descriptor");
+        let family = &declaration.descriptor.inputs[0].family;
         assert_eq!(
             family.family,
             crate::core::descriptors::PortFamily::Channels
@@ -711,9 +708,22 @@ mod tests {
     }
 
     #[test]
+    fn a_port_declaring_no_family_is_refused_naming_the_port() {
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames",
+            "description": "",
+            "delivery_profile": "ordered",
+        }])));
+        assert!(
+            refusal.contains("\"frames\" declares no family"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
     fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refused() {
         let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
-            "name": "frames",
+            "name": "frames", "family": {"family": "records"},
             "description": "",
             "delivery_profile": "ordered",
             "borrow_quota": 5,
@@ -722,7 +732,7 @@ mod tests {
         assert_eq!(declaration.descriptor.inputs[0].borrow_quota, Some(5));
 
         let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-            "name": "frames",
+            "name": "frames", "family": {"family": "records"},
             "description": "",
             "delivery_profile": "ordered",
             "borrow_quota": MAX_INPUT_PORT_BORROW_QUOTA + 1,
@@ -736,7 +746,7 @@ mod tests {
     #[test]
     fn a_catalog_entry_on_an_input_port_is_refused_naming_the_port() {
         let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-            "name": "audio",
+            "name": "audio", "family": {"family": "channels"},
             "description": "",
             "delivery_profile": "ordered",
             "catalog_entry": {"section": "json", "entry": {"mode": "stream"}},
@@ -750,7 +760,7 @@ mod tests {
     #[test]
     fn a_described_node_type_reads_into_a_python_descriptor_and_its_execution() {
         let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
-            {"name": "audio", "description": "what it hears", "delivery_profile": "ordered"}
+            {"name": "audio", "family": {"family": "channels"}, "description": "what it hears", "delivery_profile": "ordered"}
         ])))
         .unwrap_or_else(|refusal| panic!("the described node type reads: {refusal}"));
 
@@ -852,7 +862,7 @@ mod tests {
     #[test]
     fn a_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
         let described = described_node_type_with_input_ports(serde_json::json!([{
-            "name": "audio",
+            "name": "audio", "family": {"family": "channels"},
             "description": "",
             "delivery_profile": "newest",
             "audio_window": serde_json::Value::Object(whole_declared_audio_window()),
@@ -972,7 +982,7 @@ mod tests {
     fn an_output_port_declaring_a_contract_is_refused() {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["output_ports"] = serde_json::json!([{
-            "name": "windows",
+            "name": "windows", "family": {"family": "channels"},
             "description": "",
             "audio_window": {"resolved_from": "match_device"},
         }]);
