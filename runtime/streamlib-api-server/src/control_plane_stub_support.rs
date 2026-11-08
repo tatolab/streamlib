@@ -26,7 +26,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
 
         fn open_a_viewer_of_an_output_port(
             &self,
-            node_name: String,
+            node_id: ::streamlib::sdk::graph::ProcessorUniqueId,
             port_name: String,
             _process_id_of_the_viewer: Option<u32>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
@@ -35,7 +35,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
         > {
             Box::pin(async move {
                 Err(::streamlib::sdk::error::Error::Link(format!(
-                    "the stub stream runs no node `{node_name}`, so port `{port_name}` has \
+                    "the stub stream runs no node `{node_id}`, so port `{port_name}` has \
                      nothing to view"
                 )))
             })

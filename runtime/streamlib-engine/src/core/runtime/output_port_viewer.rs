@@ -12,15 +12,17 @@ use std::time::Duration;
 
 use super::LoadedStreamInThisRuntime;
 use super::exposed_output_port_subscription::{
-    ExposedOutputPortSourceWiring, the_running_node_and_its_output_port,
-    the_source_wiring_its_answer_says,
+    ExposedOutputPortSourceWiring, the_source_wiring_its_answer_says,
 };
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
 use crate::core::error::{Error, Result};
-use crate::core::graph::OutputLinkPortRef;
+use crate::core::graph::{
+    Graph, OutputLinkPortRef, ProcessorNode, ProcessorUniqueId, names_listed_for_a_refusal,
+    port_names_listed_for_a_refusal,
+};
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
@@ -33,9 +35,11 @@ const HOW_OFTEN_AN_OPEN_ASKS_FOR_A_HELPERS_ANSWER: Duration = Duration::from_mil
 pub struct OutputPortViewerChannelHandOff {
     /// The stream the port belongs to.
     pub stream: String,
-    /// The node the port belongs to.
-    pub node: String,
-    /// The port's cast name.
+    /// The id of the node the port belongs to, as the stream's graph lists it.
+    pub node_id: ProcessorUniqueId,
+    /// The name of the node the port belongs to: its label, not its identity.
+    pub node_name: String,
+    /// The port's name.
     pub port: String,
     /// The root of the iceoryx2 domain the channel lives in.
     pub iceoryx2_domain_root: PathBuf,
@@ -132,7 +136,7 @@ impl OutputPortViewerHeldOpen {
 }
 
 impl LoadedStreamInThisRuntime {
-    /// Hold output port `port_name` of node `node_name` open for a viewer and
+    /// Hold output port `port_name` of node `node_id` open for a viewer and
     /// say how to subscribe to its channel's reserved slot. The graph is not
     /// changed. Answers once the port's source has opened its end of the
     /// channel, and refused while the node does not run or when its helper
@@ -142,7 +146,7 @@ impl LoadedStreamInThisRuntime {
     /// unless it is a running process of this user.
     pub(crate) async fn open_a_viewer_of_an_output_port_holding_its_channel(
         &self,
-        node_name: &str,
+        node_id: &ProcessorUniqueId,
         port_name: &str,
         process_id_of_the_viewer: Option<u32>,
     ) -> Result<OutputPortViewerHeldOpen> {
@@ -153,31 +157,32 @@ impl LoadedStreamInThisRuntime {
         let iceoryx2_domain_root = engine_resources.runtime_directory.iceoryx2_domain_root();
         let compiler = Arc::clone(&self.compiler);
         let stream_id = self.stream_id().to_string();
-        let node_name = node_name.to_string();
+        let node_id = node_id.clone();
         let port_name = port_name.to_string();
         // A stream's graph lock is held across a compile, which may take a
         // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
-                let (node_display_name, port_cast, source_side) =
-                    compiler.scope(|graph, _tx| -> Result<_> {
-                        let (node, port_cast) = the_running_node_and_its_output_port(
-                            graph, &stream_id, &node_name, &port_name,
-                        )?;
-                        let node_display_name = node.display_name.clone();
-                        let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
-                        let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
-                            graph,
-                            &source,
-                            &iceoryx2_node,
-                        )?;
-                        Ok((node_display_name, port_cast, source_side))
-                    })?;
+                let (node_name, source_side) = compiler.scope(|graph, _tx| -> Result<_> {
+                    let node_name = the_running_node_with_its_output_port(
+                        graph, &stream_id, &node_id, &port_name,
+                    )?
+                    .display_name
+                    .clone();
+                    let source = OutputLinkPortRef::new(node_id.clone(), port_name.as_str());
+                    let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
+                        graph,
+                        &source,
+                        &iceoryx2_node,
+                    )?;
+                    Ok((node_name, source_side))
+                })?;
                 Ok::<_, Error>(OutputPortViewerHeldOpen {
                     hand_off: OutputPortViewerChannelHandOff {
                         stream: stream_id,
-                        node: node_display_name,
-                        port: port_cast,
+                        node_id,
+                        node_name,
+                        port: port_name,
                         iceoryx2_domain_root,
                         channel_service_name: source_side.channel_service_name.clone(),
                         surface_share_address: surface_share_access_of_the_viewer
@@ -230,10 +235,52 @@ impl LoadedStreamInThisRuntime {
                 ))
             })?;
         Err(Error::Link(format!(
-            "port `{}` of node `{}` of the stream `{}` opens no viewer: {refusal}",
-            hand_off.port, hand_off.node, hand_off.stream
+            "port `{}` of node `{}` ({}) of the stream `{}` opens no viewer: {refusal}",
+            hand_off.port, hand_off.node_id, hand_off.node_name, hand_off.stream
         )))
     }
+}
+
+/// Node `node_id` of the stream's graph, refused unless it runs and has
+/// output port `port_name`.
+fn the_running_node_with_its_output_port<'graph>(
+    graph: &'graph Graph,
+    stream_id: &str,
+    node_id: &ProcessorUniqueId,
+    port_name: &str,
+) -> Result<&'graph ProcessorNode> {
+    let Some(node) = graph.traversal().v(node_id).first() else {
+        return Err(Error::ProcessorNotFound(format!(
+            "no node in the stream `{stream_id}` has the id `{node_id}`. The stream \
+             `{stream_id}` holds: {}",
+            names_listed_for_a_refusal(
+                graph
+                    .traversal()
+                    .v(())
+                    .iter()
+                    .map(|node| format!("`{}` ({})", node.id, node.display_name)),
+                "no node",
+            )
+        )));
+    };
+    if !node.has_output(port_name) {
+        return Err(Error::NodeInAStreamHasNoOutputPortNamed {
+            stream: stream_id.to_string(),
+            node: node.display_name.clone(),
+            port: port_name.to_string(),
+            output_ports_the_node_has: port_names_listed_for_a_refusal(
+                node.ports.outputs.iter().map(|output| output.name.as_str()),
+            ),
+        });
+    }
+    if !node.runs_its_processor() {
+        return Err(Error::Link(format!(
+            "node `{node_id}` ({}) of the stream `{stream_id}` is not running, so its port \
+             `{port_name}` writes nothing yet",
+            node.display_name,
+        )));
+    }
+    Ok(node)
 }
 
 #[cfg(test)]
@@ -266,6 +313,7 @@ mod tests {
     struct ARunningCameraWithNoLinks {
         _runner: Arc<Runner>,
         stream: Arc<LoadedStreamInThisRuntime>,
+        camera_id: ProcessorUniqueId,
         camera_output: Arc<OutputWriterInner>,
         async_runtime: tokio::runtime::Runtime,
         _project_directory: tempfile::TempDir,
@@ -282,7 +330,7 @@ mod tests {
                         .with_stream_id("a"),
                 )
                 .expect("the stream loads");
-            stream
+            let camera_id = stream
                 .add_processor(
                     ProcessorSpec::new(
                         MockOutputOnlyProcessor::processor_class_import_path(),
@@ -304,13 +352,6 @@ mod tests {
                 .iceoryx2_output_writer_inner()
                 .expect("an output-only mock holds an output writer");
             stream.compiler.scope(|graph, _tx| {
-                let camera_id = graph
-                    .traversal()
-                    .v_with_node_name("camera")
-                    .first()
-                    .expect("the node is in the stream")
-                    .id
-                    .clone();
                 ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
                     graph
                         .traversal_mut()
@@ -322,6 +363,7 @@ mod tests {
             Self {
                 _runner: runner,
                 stream,
+                camera_id,
                 camera_output,
                 async_runtime: tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
@@ -335,7 +377,7 @@ mod tests {
         fn open_a_viewer(&self, port_name: &str) -> Result<OutputPortViewerHeldOpen> {
             self.async_runtime
                 .block_on(self.stream.open_a_viewer_of_an_output_port(
-                    "camera".into(),
+                    self.camera_id.clone(),
                     port_name.into(),
                     None,
                 ))
@@ -385,10 +427,11 @@ mod tests {
         assert_eq!(
             (
                 hand_off.stream.as_str(),
-                hand_off.node.as_str(),
+                &hand_off.node_id,
+                hand_off.node_name.as_str(),
                 hand_off.port.as_str()
             ),
-            ("a", "camera", "out1")
+            ("a", &camera.camera_id, "camera", "out1")
         );
         assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
 
@@ -416,6 +459,38 @@ mod tests {
             "the port's channel goes with its viewer"
         );
         assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
+    }
+
+    /// A viewer names its node by id, so a name or an id the stream does not
+    /// hold is refused, listing each node's id beside its name, and a port the
+    /// node lacks is refused listing the ports it has.
+    #[test]
+    fn a_viewer_of_a_node_id_or_port_the_stream_does_not_hold_is_refused() {
+        let camera = ARunningCameraWithNoLinks::load();
+
+        let by_name = camera
+            .async_runtime
+            .block_on(camera.stream.open_a_viewer_of_an_output_port(
+                ProcessorUniqueId::from("camera".to_string()),
+                "out1".into(),
+                None,
+            ))
+            .expect_err("a node's name is not its id")
+            .to_string();
+        assert!(
+            by_name.contains("has the id `camera`")
+                && by_name.contains(&format!("`{}` (camera)", camera.camera_id)),
+            "{by_name}"
+        );
+
+        let no_such_port = camera
+            .open_a_viewer("out9")
+            .expect_err("the camera has no port out9")
+            .to_string();
+        assert!(
+            no_such_port.contains("out9") && no_such_port.contains("out1"),
+            "{no_such_port}"
+        );
     }
 
     /// A viewer that fell behind reads the latest message and counts every one

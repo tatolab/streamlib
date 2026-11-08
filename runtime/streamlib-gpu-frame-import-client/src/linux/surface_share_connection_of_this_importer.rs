@@ -28,11 +28,12 @@ pub struct SurfaceShareConnectionOfThisImporter<PoolSlotImport> {
     /// only on success, so a stream with half a frame in it is dropped rather
     /// than reused.
     open_connection: Mutex<Option<UnixStream>>,
-    /// Connections whose answer outwaited [`SURFACE_SHARE_RESPONSE_TIMEOUT`],
-    /// held open and never used again: the service releases every claim a
-    /// connection holds once it closes, and frames this importer still reads
-    /// were claimed on them.
-    connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
+    /// Connections whose request failed while the service still held them
+    /// open — an answer that outwaited [`SURFACE_SHARE_RESPONSE_TIMEOUT`], or
+    /// one this process could not take in — held open and never used again:
+    /// the service releases every claim a connection holds once it closes,
+    /// and frames this importer still reads were claimed on them.
+    connections_set_aside_after_a_failure: Mutex<Vec<UnixStream>>,
     /// Each pool slot's import, made on the first frame over the slot and
     /// reused by every later one. Holding one does not pin a slot — only a
     /// frame's checkout lease or claim does — and the service names each slot
@@ -51,7 +52,7 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
         Self {
             surface_share_socket_path,
             open_connection: Mutex::new(None),
-            connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
+            connections_set_aside_after_a_failure: Mutex::new(Vec::new()),
             pool_slot_imports_by_pool_slot: Arc::default(),
         }
     }
@@ -110,52 +111,57 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         ) {
             Ok(answered) => answered,
-            Err(io_failure)
-                if matches!(
-                    io_failure.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                self.connections_set_aside_after_a_timeout
-                    .lock()
-                    .push(stream);
+            Err(io_failure) if io_failure.kind() == std::io::ErrorKind::UnexpectedEof => {
                 self.pool_slot_imports_by_pool_slot.drop_every_import();
                 return Err(format!(
-                    "the surface-share service did not answer within {} s; this importer set \
-                     that connection aside, keeping the frames it claimed on it held until it \
-                     stops, and opens a new one on its next request",
-                    SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
+                    "the surface-share service closed the connection mid-request: {io_failure}"
                 ));
             }
             Err(io_failure) => {
+                self.connections_set_aside_after_a_failure
+                    .lock()
+                    .push(stream);
                 self.pool_slot_imports_by_pool_slot.drop_every_import();
-                return Err(format!(
-                    "the surface-share request failed mid-stream: {io_failure}"
-                ));
+                let timed_out = matches!(
+                    io_failure.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                );
+                return Err(if timed_out {
+                    format!(
+                        "the surface-share service did not answer within {} s; this importer set \
+                         that connection aside, keeping the frames it claimed on it held until it \
+                         stops, and opens a new one on its next request",
+                        SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
+                    )
+                } else {
+                    format!(
+                        "the surface-share request failed: {io_failure}; this importer set that \
+                         connection aside, keeping the frames it claimed on it held until it \
+                         stops, and opens a new one on its next request"
+                    )
+                });
             }
         };
-        self.pool_slot_imports_by_pool_slot
-            .drop_the_pool_slots_a_reply_lists_as_retired(&response);
-        let decided_while_the_connection_is_held = while_the_connection_is_held(&response);
-        *open_connection = Some(stream);
         // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
         // this process's fd table; nothing else holds them.
         let received_fds = received_raw_fds
             .into_iter()
             .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
             .collect();
+        self.pool_slot_imports_by_pool_slot
+            .drop_the_pool_slots_a_reply_lists_as_retired(&response);
+        let decided_while_the_connection_is_held = while_the_connection_is_held(&response);
+        *open_connection = Some(stream);
         Ok((response, received_fds, decided_while_the_connection_is_held))
     }
 
     fn open_a_fresh_connection(&self) -> Result<UnixStream, String> {
-        let connections_set_aside = self.connections_set_aside_after_a_timeout.lock().len();
+        let connections_set_aside = self.connections_set_aside_after_a_failure.lock().len();
         if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
             return Err(format!(
-                "the surface-share service has outwaited the {} s response timeout \
-                 {connections_set_aside} times, so this importer asks it nothing more; the \
-                 connections it set aside stay open, keeping the frames claimed on them held, \
-                 until this importer stops",
-                SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
+                "the surface-share service has failed {connections_set_aside} requests, so \
+                 this importer asks it nothing more; the connections it set aside stay open, \
+                 keeping the frames claimed on them held, until this importer stops"
             ));
         }
         let opened_stream = streamlib_surface_client::connect_to_surface_share_socket(
@@ -170,9 +176,10 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
         })?;
         opened_stream
             .set_read_timeout(Some(SURFACE_SHARE_RESPONSE_TIMEOUT))
+            .and_then(|()| opened_stream.set_write_timeout(Some(SURFACE_SHARE_RESPONSE_TIMEOUT)))
             .map_err(|timeout_failure| {
                 format!(
-                    "could not bound how long the surface-share socket at {} may take to answer: \
+                    "could not bound how long the surface-share socket at {} may take to accept a request and answer it: \
                      {timeout_failure}",
                     self.surface_share_socket_path.display(),
                 )

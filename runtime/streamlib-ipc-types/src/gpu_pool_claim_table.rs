@@ -34,6 +34,8 @@ pub const GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT: u64 = 1 << 63;
 pub const GPU_POOL_CLAIM_TABLE_ROW_PUBLISHED_GENERATION_OFFSET: usize = 0;
 /// Byte offset of [`GpuPoolClaimTableRow`]'s first claimant column count.
 pub const GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET: usize = 8;
+/// Byte offset of [`GpuPoolClaimTableRow`]'s lease number.
+pub const GPU_POOL_CLAIM_TABLE_ROW_LEASE_NUMBER_OFFSET: usize = 264;
 /// Bytes one [`GpuPoolClaimTableRow`] takes, padding to its 64-byte alignment
 /// included.
 pub const GPU_POOL_CLAIM_TABLE_ROW_BYTES: usize = 320;
@@ -49,6 +51,10 @@ pub const GPU_POOL_CLAIM_TABLE_BYTES: usize =
 pub struct GpuPoolClaimTableRow {
     published_generation: AtomicU64,
     claim_count_by_claimant_column: [AtomicU32; GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS],
+    /// How many slots the row has been leased to, the current one included:
+    /// a reader that mapped the row to a slot under an older lease knows its
+    /// mapping is stale.
+    lease_number: AtomicU64,
 }
 
 /// One interpreter's column in a claim table, below
@@ -98,6 +104,7 @@ impl GpuPoolClaimTableRow {
             published_generation: AtomicU64::new(0),
             claim_count_by_claimant_column: [const { AtomicU32::new(0) };
                 GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS],
+            lease_number: AtomicU64::new(0),
         }
     }
 
@@ -107,6 +114,7 @@ impl GpuPoolClaimTableRow {
         Self {
             published_generation: AtomicU64::new(0),
             claim_count_by_claimant_column: std::array::from_fn(|_| AtomicU32::new(0)),
+            lease_number: AtomicU64::new(0),
         }
     }
 
@@ -188,6 +196,17 @@ impl GpuPoolClaimTableRow {
             .store(generation, Ordering::SeqCst);
     }
 
+    /// Lease the row to a new slot, answering the lease's number. Run by the
+    /// table's owner before the slot publishes its first frame.
+    pub fn begin_a_lease(&self) -> u64 {
+        self.lease_number.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// The number of the row's current lease; 0 for a row never leased.
+    pub fn lease_number(&self) -> u64 {
+        self.lease_number.load(Ordering::SeqCst)
+    }
+
     /// Clear `column`'s claims: its interpreter's process has been reaped, so
     /// nothing it claimed is still read.
     pub fn clear_claimant_column(&self, column: GpuPoolClaimantColumn) {
@@ -200,7 +219,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_claim_table_row_is_a_generation_and_sixty_four_counts_on_a_cache_line_boundary() {
+    fn a_claim_table_row_is_a_generation_sixty_four_counts_and_a_lease_number_on_a_cache_line_boundary()
+     {
         assert_eq!(
             std::mem::size_of::<GpuPoolClaimTableRow>(),
             GPU_POOL_CLAIM_TABLE_ROW_BYTES
@@ -214,7 +234,20 @@ mod tests {
             std::mem::offset_of!(GpuPoolClaimTableRow, claim_count_by_claimant_column),
             GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET
         );
+        assert_eq!(
+            std::mem::offset_of!(GpuPoolClaimTableRow, lease_number),
+            GPU_POOL_CLAIM_TABLE_ROW_LEASE_NUMBER_OFFSET
+        );
         assert_eq!(GPU_POOL_CLAIM_TABLE_BYTES, 64 * 320);
+    }
+
+    #[test]
+    fn each_lease_of_a_row_is_numbered_past_the_one_before() {
+        let row = GpuPoolClaimTableRow::unpublished();
+        assert_eq!(row.lease_number(), 0);
+        assert_eq!(row.begin_a_lease(), 1);
+        assert_eq!(row.begin_a_lease(), 2);
+        assert_eq!(row.lease_number(), 2);
     }
 
     #[test]

@@ -17,6 +17,7 @@ use streamlib_ipc_types::{
     GPU_POOL_CLAIM_TABLE_ROWS, GpuPoolClaimTableRow, GpuPoolClaimTableSharedRows,
     GpuPoolClaimantColumn,
 };
+use streamlib_surface_client::GpuPoolClaimTableRowLeasedToASlot;
 
 use super::SurfaceStore;
 use crate::core::{Error, Result};
@@ -37,6 +38,8 @@ pub struct GpuPoolClaimantProcessId {
 struct GpuPoolClaimTableRowOccupant {
     /// The pool slot key of the slot the row is leased to.
     pool_slot_key: Option<String>,
+    /// The number of the row's current lease, as its shared row carries it.
+    row_lease_number: u64,
 }
 
 #[derive(Default)]
@@ -105,17 +108,21 @@ impl GpuPoolClaimTable {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Each leased row and the pool slot key of the slot holding it.
-    pub fn pool_slot_keys_by_row(&self) -> Vec<(u32, String)> {
+    /// Each leased row, the pool slot key of the slot holding it, and the
+    /// lease's number.
+    pub fn rows_leased_to_slots(&self) -> Vec<GpuPoolClaimTableRowLeasedToASlot> {
         self.bookkeeping()
             .occupant_by_row
             .iter()
             .enumerate()
             .filter_map(|(row_index, occupant)| {
-                occupant
-                    .pool_slot_key
-                    .clone()
-                    .map(|pool_slot_key| (row_index as u32, pool_slot_key))
+                occupant.pool_slot_key.clone().map(|pool_slot_key| {
+                    GpuPoolClaimTableRowLeasedToASlot {
+                        row_index: row_index as u32,
+                        pool_slot_key,
+                        row_lease_number: occupant.row_lease_number,
+                    }
+                })
             })
             .collect()
     }
@@ -164,8 +171,9 @@ impl GpuPoolClaimTable {
         let row_index = {
             let mut bookkeeping = self.bookkeeping();
             let row_index = bookkeeping.vacant_rows.pop()?;
-            bookkeeping.occupant_by_row[row_index as usize].pool_slot_key =
-                Some(pool_slot_key.to_string());
+            let occupant = &mut bookkeeping.occupant_by_row[row_index as usize];
+            occupant.pool_slot_key = Some(pool_slot_key.to_string());
+            occupant.row_lease_number = self.row(row_index).begin_a_lease();
             row_index
         };
         let generation_before_this_slot = self.row(row_index).published_generation()
@@ -380,8 +388,12 @@ mod tests {
             every_claim_table
                 .table_named(&second_table)
                 .unwrap()
-                .pool_slot_keys_by_row(),
-            vec![(0, format!("slot-{GPU_POOL_CLAIM_TABLE_ROWS}"))]
+                .rows_leased_to_slots(),
+            vec![GpuPoolClaimTableRowLeasedToASlot {
+                row_index: 0,
+                pool_slot_key: format!("slot-{GPU_POOL_CLAIM_TABLE_ROWS}"),
+                row_lease_number: 1,
+            }]
         );
     }
 
@@ -402,6 +414,11 @@ mod tests {
 
         assert_eq!(second_slot.row_index(), row_index);
         assert_eq!(second_slot.generation_before_this_slot(), 41);
+        assert_eq!(
+            second_slot.row().lease_number(),
+            2,
+            "a reader that mapped the row under the first lease sees its mapping is stale"
+        );
         assert!(
             second_slot
                 .row()

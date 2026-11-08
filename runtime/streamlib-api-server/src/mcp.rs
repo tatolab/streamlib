@@ -494,8 +494,10 @@ struct ExposePortToolArguments {
 struct OpenViewerToolArguments {
     #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
     stream: String,
-    #[schemars(description = "The node's name, as `graph` lists it.")]
-    node: String,
+    #[schemars(
+        description = "The node's id, as `graph` lists it under `id`; its name is a label, not its identity."
+    )]
+    node_id: String,
     #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
     port: String,
     #[schemars(
@@ -1000,7 +1002,7 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(OpenViewerToolArguments {
             stream,
-            node,
+            node_id,
             port,
             viewer_process_id,
         }): Parameters<OpenViewerToolArguments>,
@@ -1015,7 +1017,7 @@ impl LocalApiMcpServerHandler {
                     .to_string(),
             );
         }
-        let viewer = format!("{stream}/{node}/{port}");
+        let viewer = format!("{stream}/{node_id}/{port}");
         if self
             .viewers_this_connection_holds_open
             .viewers_by_id
@@ -1028,11 +1030,11 @@ impl LocalApiMcpServerHandler {
         }
         let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
         let viewer_held_open = stream_operations
-            .open_a_viewer_of_an_output_port(node, port, viewer_process_id)
+            .open_a_viewer_of_an_output_port(node_id.into(), port, viewer_process_id)
             .await
             .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
         let hand_off = viewer_held_open.hand_off().clone();
-        let viewer = format!("{}/{}/{}", hand_off.stream, hand_off.node, hand_off.port);
+        let viewer = format!("{}/{}/{}", hand_off.stream, hand_off.node_id, hand_off.port);
         let viewer_already_open = {
             let mut viewers_by_id = self.viewers_this_connection_holds_open.viewers_by_id.lock();
             match viewers_by_id.entry(viewer.clone()) {
@@ -1054,7 +1056,8 @@ impl LocalApiMcpServerHandler {
             &OpenViewerToolResult {
                 viewer,
                 stream: hand_off.stream,
-                node: hand_off.node,
+                node_id: hand_off.node_id.to_string(),
+                node_name: hand_off.node_name,
                 port: hand_off.port,
                 iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),
                 channel: hand_off.channel_service_name,
