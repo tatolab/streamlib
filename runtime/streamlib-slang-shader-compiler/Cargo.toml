@@ -1,0 +1,22 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-slang-shader-compiler"
+description = "The Slang shader compiler the engine and the build scripts compile shader sources with, opened by path from a staged or carried copy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_slang_shader_compiler"
+path = "src/lib.rs"
+
+[dependencies]
+libloading = "0.8"
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -24,7 +24,8 @@ jobs:
           persist-credentials: false
 
       # generate_openapi links the api-server, which pulls in streamlib-engine;
-      # its build.rs compiles GLSL with glslc and links Vulkan, its dependency
+      # its build.rs compiles its shaders through the staged Slang compiler and
+      # it links Vulkan, its dependency
       # iceoryx2-pal-posix runs bindgen — which needs libclang and clang's
       # builtin headers — and the audio path links opus. The same Linux engine dep set
       # as ci.yml.
@@ -40,7 +41,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             cmake
             ninja-build
             libopus-dev
@@ -70,6 +70,15 @@ jobs:
           VERSION=$(grep 'version = ' Cargo.toml | head -1 | sed 's/.*version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
+
+      - name: Cache the Slang compiler build
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
 
       - name: Generate OpenAPI spec
         run: |

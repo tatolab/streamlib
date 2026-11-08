@@ -31,14 +31,14 @@ pub(super) const OP_SOURCE: u32 = 3;
 pub(super) const OP_STRING: u32 = 7;
 /// `OpSource`'s opcode word, source language, version and file id; its
 /// optional source text follows them.
-pub(super) const OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT: usize = 4;
+const OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT: usize = 4;
 /// `OpString`'s opcode word, result id and an empty literal.
 const OP_STRING_WORD_COUNT_WITH_AN_EMPTY_LITERAL: usize = 3;
 
 /// Reflect a SPIR-V module with its debug source strings — the embedded
 /// shader source and the source file names — left out.
 ///
-/// Ubuntu 24.04's `glslc` (shaderc 2023.8, SPIRV-Tools 2023.6) packs a literal
+/// SPIRV-Tools 2023.6, as Ubuntu 24.04 packages it, packs a literal
 /// string's bytes sign-extended, so a non-ASCII byte fills the rest of its word
 /// with `0xFF`. `-g` puts the shader's source in `OpSource` and its file name in
 /// `OpString`, and `rspirv` refuses a module with a literal that is not UTF-8.
@@ -340,8 +340,8 @@ where
     Err(Error::GpuError(format!(
         "{kernel_kind_label}: SPIR-V {stage:?} stage binding {binding} ({kind:?}) carries no \
          name — its OpName decorations were stripped, and bindings are resolved by name. Compile \
-         with debug info retained (`glslc -g`) so the shader's own binding names survive \
-         optimization"
+         it with its names kept, or pass the shader's Slang source, which the engine compiles \
+         with them"
     )))
 }
 

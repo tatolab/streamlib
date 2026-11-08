@@ -1726,7 +1726,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
         let mut bindings: Vec<ComputeBindingSpec> = (0..input_count)
             .map(ComputeBindingSpec::storage_buffer)
             .collect();
-        // Output sits at binding 8 in every variant of test_blend.comp.
+        // Output sits at binding 8 in every variant of test_blend.slang.
         bindings.push(ComputeBindingSpec::storage_buffer(8));
         bindings
     }

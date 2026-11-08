@@ -224,7 +224,7 @@ jobs:
       extension_import_package_name: tatolab.h264
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
-      extension_build_needs_the_shader_compilers: true
+      extension_build_needs_the_slang_compiler: true
 
   build-tatolab-h265-distribution:
     needs: build-tatolab-stream-distribution
@@ -237,7 +237,7 @@ jobs:
       extension_import_package_name: tatolab.h265
       ref: ${{ inputs.tag_name }}
       tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
-      extension_build_needs_the_shader_compilers: true
+      extension_build_needs_the_slang_compiler: true
 
   # A user's `uv sync` resolves `tatolab-stream`, `tatolab-h264` and
   # `tatolab-testpattern` from PyPI,

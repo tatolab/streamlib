@@ -17,7 +17,7 @@
 //!
 //! These CPU implementations exist for unit-test reference. The same
 //! math is inlined in the converter shader (see
-//! `vulkan/rhi/shaders/color_convert_common.glsl`) — keeping the two
+//! `vulkan/rhi/shaders/color_convert_common.slang`) — keeping the two
 //! synchronized is what the `transfer_round_trip_*` tests guard.
 
 /// Shader-side transfer-function identifier. The numeric value is what

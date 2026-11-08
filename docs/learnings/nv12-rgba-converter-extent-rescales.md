@@ -23,7 +23,7 @@ degraded axis, not a colour-conversion or plane-layout bug.
 
 ## Root cause
 
-`shaders/nv12_to_rgb.comp` samples the DPB through a `sampler2D` with
+`shaders/nv12_to_rgb.slang` samples the DPB through a `sampler2D` with
 **normalized** coordinates derived from a push-constant `resolution` that is
 the *converter's own* extent:
 
@@ -80,7 +80,7 @@ until proven otherwise.
 ## Where this lives
 
 `runtime/streamlib-engine/src/vulkan/video/nv12_to_rgb.rs` (the converter and
-its push constant), `shaders/nv12_to_rgb.comp` (the normalized sample), and
+its push constant), `shaders/nv12_to_rgb.slang` (the normalized sample), and
 the two construction sites in
 `runtime/streamlib-engine/src/vulkan/video/decode/session.rs`, which both take
 the extent their own `start_video_sequence` call was handed. The window is

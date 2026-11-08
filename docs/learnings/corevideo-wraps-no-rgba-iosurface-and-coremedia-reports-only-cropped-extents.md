@@ -41,4 +41,4 @@ Measured on macOS 15, Apple Silicon (M1 Max):
 ## Orientation
 
 - `runtime/streamlib-engine/src/apple/videotoolbox_video_codec_backend/`
-- `runtime/streamlib-engine/src/vulkan/rhi/shaders/color_convert_rgba_image_to_nv12_buffer.comp`
+- `runtime/streamlib-engine/src/vulkan/rhi/shaders/color_convert_rgba_image_to_nv12_buffer.slang`

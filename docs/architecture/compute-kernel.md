@@ -78,15 +78,16 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 
 ## Adding a new compute kernel — the recipe
 
-1. **Write the GLSL** in `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>.comp`.
+1. **Write the Slang** in `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>.slang`.
    Use descriptor set 0; multi-set kernels are not supported. Keep
    binding indices in declaration order.
 
 2. **Wire the shader into `build.rs`.** Append an entry to the `shaders`
-   array in `runtime/streamlib-engine/build.rs`. The build script invokes
-   `glslc -g -O` and writes the SPIR-V into `OUT_DIR`. The `-g` is not
-   optional: `-O` strips every `OpName`, and reflection refuses a module
-   whose binding names are gone. SPIR-V is read at
+   array in `runtime/streamlib-engine/build.rs`. The build script compiles
+   it through the Slang compiler `scripts/stage_slang_compiler_libraries.sh`
+   stages under `target/slang_compiler/`, with the run-time compiler's
+   settings, and writes the SPIR-V into `OUT_DIR`. The module keeps its
+   `OpName`s, which reflection needs to bind by name. SPIR-V is read at
    compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.spv"))`. Do not
    commit `.spv` files to the source tree — they're build artifacts.

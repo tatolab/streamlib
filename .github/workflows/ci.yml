@@ -93,10 +93,9 @@ jobs:
       - name: License headers (Rust + Python)
         run: bash scripts/check-license-headers.sh
 
-      # The engine's build script compiles GLSL with glslc, the Linux engine
-      # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build aws-lc-sys's C. `timeout-minutes` is the backstop the composite
-      # action cannot declare itself.
+      # The Linux engine links Vulkan and iceoryx2's PAL crates run bindgen;
+      # cmake and ninja build aws-lc-sys's C. `timeout-minutes` is the backstop
+      # the composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -107,7 +106,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             cmake
             ninja-build
 
@@ -120,6 +118,19 @@ jobs:
           shared-key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+
+      # Slang takes minutes to build in manylinux; the staging script reuses a
+      # build whose key matches, and these two files are the key.
+      - name: Cache the Slang compiler build
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      # The engine's build script compiles its shaders through the Slang
+      # compiler this stages under target/.
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
 
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
@@ -266,7 +277,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             python3-dev
             python3-msgpack
             cmake
@@ -341,8 +351,9 @@ jobs:
           path: target/slang_compiler_cache
           key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
 
-      # The engine opens the Slang compiler at run time; a debug build's tests
-      # find it where this stages it under target/.
+      # The engine's build script compiles its shaders through the Slang
+      # compiler this stages under target/, and a debug build's tests open it
+      # there at run time.
       - name: Stage the Slang compiler
         run: bash scripts/stage_slang_compiler_libraries.sh
 
@@ -472,10 +483,9 @@ jobs:
             ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
           key: runtime-unit-linux-${{ env.RUNTIME_UNIT_CACHE_GENERATION }}-${{ steps.digest.outputs.digest }}
 
-      # The engine's build script compiles GLSL with glslc, the Linux engine
-      # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build aws-lc-sys's C. `timeout-minutes` is the backstop the composite
-      # action cannot declare itself.
+      # The Linux engine links Vulkan and iceoryx2's PAL crates run bindgen;
+      # cmake and ninja build aws-lc-sys's C. `timeout-minutes` is the backstop
+      # the composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -486,7 +496,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             cmake
             ninja-build
             python3-dev
@@ -526,11 +535,16 @@ jobs:
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
       - name: Cache the Slang compiler build
-        if: steps.restore.outputs.cache-hit != 'true'
         uses: actions/cache@v5
         with:
           path: target/slang_compiler_cache
           key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      # Staged whether or not the unit was restored: the suite's venv builds the
+      # H.264 and H.265 modules, whose Vulkan Video build script compiles its
+      # shaders through it.
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
 
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
@@ -666,8 +680,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install glslc and the C++ build tools
-        run: brew install shaderc cmake ninja
+      - name: Install the C++ build tools
+        run: brew install cmake ninja
 
       - name: Install the Rust toolchain rust-toolchain.toml pins
         run: rustup toolchain install
@@ -685,6 +699,18 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Cache the Slang compiler release
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      # The engine's build script compiles its shaders through the Slang
+      # compiler this stages under target/, and a debug build's tests open it
+      # there at run time.
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
 
       # Compiler warnings and clippy lints are errors in every first-party crate and target
       # except streamlib-adapter-skia, which is compiled but not linted.
@@ -704,19 +730,6 @@ jobs:
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
-
-      - name: Cache the Slang compiler release
-        if: github.event_name != 'pull_request'
-        uses: actions/cache@v5
-        with:
-          path: target/slang_compiler_cache
-          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
-
-      # The engine opens the Slang compiler at run time; a debug build's tests
-      # find it where this stages it under target/.
-      - name: Stage the Slang compiler
-        if: github.event_name != 'pull_request'
-        run: bash scripts/stage_slang_compiler_libraries.sh
 
       - name: Run unit tests
         if: github.event_name != 'pull_request'
@@ -887,9 +900,9 @@ jobs:
             ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
           key: runtime-unit-macos-${{ env.RUNTIME_UNIT_CACHE_GENERATION }}-${{ steps.digest.outputs.digest }}
 
-      - name: Install glslc and the C++ build tools
+      - name: Install the C++ build tools
         if: steps.restore.outputs.cache-hit != 'true'
-        run: brew install shaderc cmake ninja
+        run: brew install cmake ninja
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

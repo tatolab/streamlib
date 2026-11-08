@@ -46,7 +46,7 @@ const IMAGE_TO_BYTE_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
 ];
 
 /// Pixels one thread of the image→NV12 kernel writes, across and down:
-/// `color_convert_rgba_image_to_nv12_buffer.comp`'s 4×2 block.
+/// `color_convert_rgba_image_to_nv12_buffer.slang`'s 4×2 block.
 const IMAGE_TO_NV12_BUFFER_PIXELS_PER_THREAD: (u32, u32) = (4, 2);
 
 /// The `(group_x, group_y)` a `width` × `height` image→NV12 dispatch
@@ -622,13 +622,13 @@ mod tests {
     // test fails.
     //
     // Transfer functions stay routed through `core::color::transfer`
-    // because the GLSL has independent closed-form implementations
-    // in `color_convert_common.glsl` — Rust-vs-GLSL drift is the
+    // because the Slang has independent closed-form implementations
+    // in `color_convert_common.slang` — Rust-vs-Slang drift is the
     // failure mode the transfer-path test below catches, and that
     // requires both implementations to be independently authored.
     //
     // The math chain mirrors `convert_color` in
-    // `vulkan/rhi/shaders/color_convert_common.glsl`:
+    // `vulkan/rhi/shaders/color_convert_common.slang`:
     //   1. `c = ycbcr_byte - range_offset`
     //   2. `rgb_byte = M * c` (3×3 row-major matrix)
     //   3. `rgb = clamp(rgb_byte / 255, 0, 1)`
@@ -646,8 +646,8 @@ mod tests {
     //   - Shader's NV12 stride math (`read_byte` packed-uint
     //     extraction + `plane0_stride_bytes` / `plane1_stride_bytes`
     //     / `plane1_offset_bytes` walks).
-    //   - GLSL ↔ Rust drift in the transfer functions
-    //     (`color_convert_common.glsl` vs `core::color::transfer`).
+    //   - Slang ↔ Rust drift in the transfer functions
+    //     (`color_convert_common.slang` vs `core::color::transfer`).
     //   - `imageStore` correctness on `rgba8` storage image (UNORM
     //     rounding within ±1 of the CPU reference).
     //   - The `UNDEFINED → GENERAL` layout transition on the output
@@ -690,11 +690,11 @@ mod tests {
 
     /// CPU reference: one NV12 source pixel → one RGBA8 output pixel.
     ///
-    /// Mirrors `convert_color()` in `color_convert_common.glsl`.
+    /// Mirrors `convert_color()` in `color_convert_common.slang`.
     /// `matrix` and `offset` are passed in explicitly (hardcoded by
     /// the caller) so the reference stays independent of the
     /// production `yuv_to_rgb_matrix`. Transfer math uses
-    /// `core::color::transfer` since the GLSL closed-form is
+    /// `core::color::transfer` since the Slang closed-form is
     /// independently authored.
     fn cpu_reference_rgba(
         y_byte: u8,
@@ -1075,9 +1075,9 @@ mod tests {
     /// - `FLAG_APPLY_TRANSFER` path active (`transfer_in !=
     ///   transfer_out` → shader runs `from_linear(srgb,
     ///   to_linear(bt709, x))` per channel).
-    /// - GLSL ↔ Rust transfer-function drift. The transfer-bypass
-    ///   tests above can't catch this; here the GLSL closed-forms
-    ///   in `color_convert_common.glsl` and the Rust closed-forms in
+    /// - Slang ↔ Rust transfer-function drift. The transfer-bypass
+    ///   tests above can't catch this; here the Slang closed-forms
+    ///   in `color_convert_common.slang` and the Rust closed-forms in
     ///   `core::color::transfer` are independent implementations,
     ///   and the test fails the moment they disagree.
     /// - Mid-stream transfer change costs only push constants — no

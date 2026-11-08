@@ -121,8 +121,6 @@ topic; `CLAUDE.md` holds only what every session must load.
   frame counts and makes camera fixtures lose every claim race. Re-run quiet and A/B against main.
 - **macOS CI logs truncate.** Fetch the full zip with
   `gh api repos/tatolab/streamlib/actions/runs/<id>/logs` and grep the macOS job's file.
-- **A red only on the runner can be the toolchain.** Ubuntu's apt `glslc` corrupts non-ASCII bytes
-  in `-g` debug strings, which the rig's newer shaderc does not.
 
 ## Working in the repo
 

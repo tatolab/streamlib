@@ -19,7 +19,7 @@ jobs:
   build-linux-runtime-tarball:
     name: x86_64 Linux runtime tarball (manylinux_2_28)
     runs-on: ubuntu-latest
-    # A release build of the engine from cold, plus glslc from source.
+    # A release build of the engine from cold.
     timeout-minutes: 120
     permissions:
       contents: read

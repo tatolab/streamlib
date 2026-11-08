@@ -69,7 +69,7 @@ install_build_dependencies_with_bounded_retry() {
 	return 1
 }
 
-# libclang for iceoryx2's bindgen; cmake and ninja for aws-lc-sys and the shader compilers.
+# libclang for iceoryx2's bindgen; cmake and ninja for aws-lc-sys.
 install_build_dependencies_with_bounded_retry clang-devel cmake ninja-build pkgconfig
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
@@ -78,11 +78,6 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
 . "$HOME/.cargo/env"
 
 cargo fetch --locked
-
-# The engine's build script compiles its shaders with glslc, which AlmaLinux 8
-# does not package.
-bash "$workspace_root/scripts/install_shader_compilers_from_the_pinned_shaderc_sources.sh" /opt/shader-compilers
-export PATH="/opt/shader-compilers/bin:$PATH"
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv

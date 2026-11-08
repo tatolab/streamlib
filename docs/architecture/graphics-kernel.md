@@ -109,16 +109,17 @@ serial-dispatch contract).
 
 ## Adding a new graphics kernel — the recipe
 
-1. **Write the GLSL** in
-   `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>.{vert,frag}`. Use
+1. **Write the Slang** in
+   `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>_{vertex,fragment}.slang`. Use
    descriptor set 0; multi-set kernels are not supported. Keep
    binding indices in declaration order.
 
 2. **Wire the shaders into `build.rs`.** Append vertex + fragment
    entries to the `shaders` array in `runtime/streamlib-engine/build.rs`. The
-   build script invokes `glslc -g -O` per-stage and writes SPIR-V into
-   `OUT_DIR`. The `-g` is not optional: `-O` strips every `OpName`, and
-   a binding whose name is gone cannot be bound by name. SPIR-V is read at
+   build script compiles each stage through the Slang compiler
+   `scripts/stage_slang_compiler_libraries.sh` stages under
+   `target/slang_compiler/` and writes SPIR-V into `OUT_DIR`. The module
+   keeps its `OpName`s, which binding by name needs. SPIR-V is read at
    compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.<stage>.spv"))`.
    Do not commit `.spv` files to the source tree — they're build

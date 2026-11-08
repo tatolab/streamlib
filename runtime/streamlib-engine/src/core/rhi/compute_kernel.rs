@@ -245,8 +245,8 @@ pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>
                 return Err(Error::GpuError(format!(
                     "SPIR-V binding {binding} ({kind:?}) carries no name — its OpName \
                      decorations were stripped, and bindings are resolved by name. Compile \
-                     with debug info retained (`glslc -g`) so the shader's own binding names \
-                     survive optimization"
+                     it with its names kept, or pass the shader's Slang source, which the \
+                     engine compiles with them"
                 )));
             }
             bindings.push(ComputeBindingSpec {
@@ -286,7 +286,7 @@ mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
         move_binding_to_another_descriptor_set_in_spirv_module,
-        pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character,
+        pack_the_debug_source_strings_sign_extended_for_a_non_ascii_character,
         split_a_multi_byte_character_across_op_source_and_op_source_continued,
         strip_every_debug_name_from_spirv_module,
     };
@@ -332,8 +332,8 @@ mod tests {
                 )
             })
             .collect();
-        // The GLSL variable names, not the block type names — `in0` from
-        // `readonly buffer In0 { … } in0;`. This is the spelling a dispatch
+        // The shader's variable names, not their buffer type names — `in0`
+        // from `StructuredBuffer<uint> in0;`. This is the spelling a dispatch
         // binds against, so it is a contract, not an incidental.
         assert_eq!(named, vec![(0, "in0"), (1, "in1"), (8, "out_buf")]);
     }
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn name_stripped_spirv_is_refused_at_construction() {
-        // `glslc -O` without `-g` strips every OpName. Such a blob can reach
+        // An optimised compile without debug info can strip every OpName. Such a blob can reach
         // the engine only through the pre-compiled-SPIR-V escape hatch, and
         // it cannot be bound by name at all — so it fails here, at
         // construction, rather than confusingly at first dispatch.
@@ -450,7 +450,7 @@ mod tests {
             .expect_err("a name-stripped blob must be refused");
         let msg = format!("{err}");
         assert!(
-            msg.contains("carries no name") && msg.contains("glslc -g"),
+            msg.contains("carries no name") && msg.contains("Slang source"),
             "the refusal must name the cause and the fix, got: {msg}"
         );
     }
@@ -504,15 +504,14 @@ mod tests {
     /// Mental revert: reflect with `Reflection::new_from_spirv` directly and
     /// each module is refused with `DecodeStringFailed`.
     #[test]
-    fn a_module_ubuntu_24_04_glslc_packed_debug_strings_into_reflects_the_same_bindings() {
+    fn a_module_whose_debug_strings_pack_a_non_ascii_character_sign_extended_reflects_the_same_bindings()
+     {
         let built_module_bindings =
             derive_bindings_from_spirv(blend_spv(2)).expect("the built module reflects");
-        let packed_by_ubuntu_24_04_glslc =
-            pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character(
-                blend_spv(2),
-            );
+        let packed_sign_extended =
+            pack_the_debug_source_strings_sign_extended_for_a_non_ascii_character(blend_spv(2));
         assert_eq!(
-            bindings_of_a_module_rspirv_refuses(&packed_by_ubuntu_24_04_glslc),
+            bindings_of_a_module_rspirv_refuses(&packed_sign_extended),
             built_module_bindings
         );
         assert_eq!(

@@ -44,3 +44,7 @@ libc.workspace = true
 
 [lints]
 workspace = true
+
+[build-dependencies]
+# Compiles the codec's shaders for `include_bytes!`.
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.34" }
