@@ -313,7 +313,7 @@ fn run_manual_mode(
                 // running — a reader that saw `Running` between `setup` and
                 // here must be able to find out it was wrong.
                 tracing::error!("[{}] start() failed: {}", id, e);
-                state.transition_to(ProcessorState::Error);
+                state.fail_with(format!("start() failed: {e}"));
                 return;
             }
         }

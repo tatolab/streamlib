@@ -1499,9 +1499,46 @@ class HelperProcessLifecycle:
         if execution_mode in ("reactive", "continuous"):
             self._run_the_scheduling_loop(execution_mode, int(command.get("interval_ms") or 0))
         elif execution_mode == "manual":
-            self._hosted.call_hook("start", self._hosted.full_access_context)
+            self._start_failing_the_node_when_it_raises()
         else:
             log.warn("the parent named an unknown execution mode", mode=execution_mode)
+
+    def _start_failing_the_node_when_it_raises(self) -> None:
+        """Call a manual processor's `start()`; one that raises fails its node,
+        with what it raised as the reason the graph shows.
+
+        `run` is unanswered, so the failure reaches the parent as the node
+        failing itself rather than as a reply."""
+        assert self._hosted is not None
+        try:
+            self._hosted.call_hook_letting_failure_propagate(
+                "start", self._hosted.full_access_context
+            )
+        except KeyboardInterrupt:
+            log.warn(
+                "start() was interrupted by the engine's shutdown ladder",
+                hook="start",
+            )
+        except Exception as start_failure:
+            log.error(
+                "start() raised",
+                error=str(start_failure),
+                traceback=traceback.format_exc(),
+            )
+            self._running = False
+            try:
+                self._bridge.request_from_parent(
+                    {
+                        "op": "fail_the_node",
+                        "reason": f"start() raised: {start_failure}",
+                    }
+                )
+            except EscalateRequestError as refusal:
+                log.error(
+                    "the parent did not take this node's failure; the graph may still "
+                    "show it running",
+                    error=str(refusal),
+                )
 
     def _run_the_scheduling_loop(self, execution_mode: str, interval_ms: int) -> None:
         """Hand the processor to the engine's scheduling loop for

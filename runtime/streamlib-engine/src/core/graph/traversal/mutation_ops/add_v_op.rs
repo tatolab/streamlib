@@ -8,8 +8,8 @@ use petgraph::graph::DiGraph;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorNode,
-    ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
+    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorFailureReasonComponent,
+    ProcessorNode, ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node,
 };
@@ -93,11 +93,13 @@ impl<'a> TraversalSourceMut<'a> {
         // a reader waiting for the graph to come up can hold every processor's
         // state before `start()` has prepared any of them.
         if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
-            node_mut.insert(StateComponent::new(if registry_miss {
+            let state = StateComponent::new(if registry_miss {
                 ProcessorState::Error
             } else {
                 ProcessorState::Pending
-            }));
+            });
+            node_mut.insert(ProcessorFailureReasonComponent(state.clone_inner()));
+            node_mut.insert(state);
         }
 
         Ok(ProcessorTraversalMut {
